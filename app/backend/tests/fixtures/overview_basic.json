@@ -1,0 +1,33 @@
+﻿{
+  "equity": [
+    {"timestamp": "2026-01-01T00:00:00Z", "value": 100},
+    {"timestamp": "2026-01-02T00:00:00Z", "value": 110}
+  ],
+  "benchmark": [
+    {"timestamp": "2026-01-01T00:00:00Z", "value": 0},
+    {"timestamp": "2026-01-02T00:00:00Z", "value": 0.01}
+  ],
+  "turnover": [],
+  "daily_buy": [],
+  "daily_sell": [],
+  "expected": [
+    {
+      "date": "2026-01-01",
+      "strategy_return": 0.0,
+      "benchmark_return": 0.0,
+      "excess_daily": 0.0,
+      "turnover": null,
+      "daily_buy": null,
+      "daily_sell": null
+    },
+    {
+      "date": "2026-01-02",
+      "strategy_return": 0.1,
+      "benchmark_return": 0.01,
+      "excess_daily": 0.09,
+      "turnover": null,
+      "daily_buy": null,
+      "daily_sell": null
+    }
+  ]
+}

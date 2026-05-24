@@ -1,0 +1,11 @@
+{
+  "name": "quantbt",
+  "private": true,
+  "version": "0.1.0",
+  "scripts": {
+    "dev": "npm --prefix app run dev",
+    "start": "npm --prefix app run start",
+    "build": "npm --prefix app/frontend run build",
+    "test": "python -m pytest app/backend/tests -q"
+  }
+}

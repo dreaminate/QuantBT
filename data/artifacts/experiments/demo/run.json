@@ -1,0 +1,23 @@
+﻿{
+  "run_id": "demo",
+  "strategy_id": "demo_strategy",
+  "strategy_name": "Demo Strategy",
+  "started_at": "2026-04-05T12:00:00Z",
+  "status": "completed",
+  "record_name": "样例回测",
+  "market": "stocks_cn",
+  "frequency": "1d",
+  "benchmark": "000300.SH",
+  "metrics": {
+    "total_return": 0.128,
+    "annualized_return": 0.164,
+    "max_drawdown": -0.053,
+    "sharpe": 1.52,
+    "sortino": 2.11,
+    "alpha": 0.061,
+    "beta": 0.79,
+    "trade_count": 4,
+    "volatility": 0.182,
+    "benchmark_volatility": 0.145
+  }
+}

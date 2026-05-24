@@ -1,0 +1,6 @@
+﻿{
+  "pool_id": "example_stocks_cn",
+  "name": "Example A-share pool",
+  "market": "stocks_cn",
+  "symbols": ["000001.SZ", "600000.SH"]
+}
