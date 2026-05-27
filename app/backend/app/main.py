@@ -1,9 +1,13 @@
 ﻿from __future__ import annotations
 
-from fastapi import FastAPI, HTTPException, Query
+from typing import Any
+
+from fastapi import Body, FastAPI, HTTPException, Query
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import FileResponse
 
+from .agent import AgentRuntime, CodeReplicator, DevLocalLLM, StrategyGoalSlotFiller, TOOL_SCHEMA
+from .connectors import registry as connector_registry
 from .data_center_services import (
     get_data_files_response,
     get_data_kinds_response,
@@ -12,8 +16,13 @@ from .data_center_services import (
     get_data_preview_response,
     get_markets_response,
 )
+from .data_quality import DatasetRegistry, compute_freshness
+from .experiments import ExperimentStore, ModelRegistry, RunStore
+from .factor_factory import FactorRegistry, list_operators, register_alpha_lite
 from .jobs import InMemoryJobStore
-from .paths import ensure_runtime_dirs
+from .paths import DATA_ROOT, ensure_runtime_dirs
+from .risk import KillSwitch, RiskLimits, RiskMonitor
+from .security import InMemoryKeystore, KeystoreRecord, SecureKeystore
 from .run_detail_services import (
     artifact_download_path,
     compare_runs_response,
@@ -41,6 +50,32 @@ app.add_middleware(
 )
 
 JOB_STORE = InMemoryJobStore()
+DATASET_REGISTRY = DatasetRegistry(DATA_ROOT / "datasets" / "registry.jsonl")
+FACTOR_REGISTRY = FactorRegistry(DATA_ROOT / "factors" / "registry.json")
+if not FACTOR_REGISTRY.list():
+    register_alpha_lite(FACTOR_REGISTRY)
+EXPERIMENT_STORE = ExperimentStore(DATA_ROOT / "experiments")
+RUN_STORE = RunStore(DATA_ROOT / "experiments")
+MODEL_REGISTRY = ModelRegistry(DATA_ROOT / "experiments")
+
+# 安全：开发环境用内存 keystore；上线时切换到 keyring/fernet（由 settings 控制）
+KEYSTORE = SecureKeystore(InMemoryKeystore())
+RISK_LIMITS = RiskLimits()
+RISK_MONITOR = RiskMonitor(RISK_LIMITS)
+KILL_SWITCH = KillSwitch([])  # 实盘 venue 启用时由 settings 注入
+
+AGENT_LLM = DevLocalLLM()
+AGENT_SLOT_FILLER = StrategyGoalSlotFiller()
+CODE_REPLICATOR = CodeReplicator()
+
+
+def _agent_runtime() -> AgentRuntime:
+    runtime = AgentRuntime(AGENT_LLM)
+    # 注册若干 tool handler；正式的 backend 调用由前端继续派发
+    runtime.register_tool("strategy_goal.create", lambda _n, args: {"strategy_goal": args})
+    runtime.register_tool("factor.run_ic", lambda _n, args: {"queued": True, "args": args})
+    runtime.register_tool("code.replicate", lambda _n, args: CODE_REPLICATOR.replicate(args.get("code", ""), args.get("source_dialect", "pandas")).__dict__)
+    return runtime
 
 
 @app.on_event("startup")
@@ -51,6 +86,207 @@ def startup_event() -> None:
 @app.get("/api/health")
 def health() -> dict[str, str]:
     return {"status": "ok"}
+
+
+@app.get("/api/connectors")
+def list_connectors() -> list[dict]:
+    """所有已注册的数据 connector（内置 + DIY YAML + 用户上传）。"""
+    return connector_registry.describe_all()
+
+
+@app.get("/api/connectors/health")
+def connectors_health() -> list[dict]:
+    """对每个 connector 跑一次健康检查；freshness 板用。"""
+    return connector_registry.health_all()
+
+
+@app.get("/api/datasets")
+def list_datasets() -> list[dict]:
+    """列出所有已注册 dataset_id 与各自最新 version。"""
+    out: list[dict] = []
+    for did in DATASET_REGISTRY.list_dataset_ids():
+        latest = DATASET_REGISTRY.latest(did)
+        out.append({"dataset_id": did, "latest_version": latest.to_dict() if latest else None})
+    return out
+
+
+@app.get("/api/datasets/{dataset_id}/versions")
+def list_dataset_versions(dataset_id: str) -> list[dict]:
+    return [v.to_dict() for v in DATASET_REGISTRY.list_versions(dataset_id)]
+
+
+@app.get("/api/data/freshness")
+def data_freshness(dataset_id: str | None = Query(None), market_kind: str = Query("stocks_cn")) -> list[dict]:
+    """对单个 dataset_id 或所有 dataset 给出 green/yellow/red 报告。"""
+    ids = [dataset_id] if dataset_id else DATASET_REGISTRY.list_dataset_ids()
+    return [compute_freshness(did, market_kind, DATASET_REGISTRY).to_dict() for did in ids]
+
+
+@app.get("/api/factors/operators")
+def list_factor_operators() -> list[dict]:
+    """前端因子表达式编辑器 / Agent tool 的算子目录。"""
+    return list_operators()
+
+
+@app.get("/api/factors")
+def list_factors() -> list[dict]:
+    """全部已注册因子（含 alpha_lite 默认 30 个）。"""
+    return [f.to_dict() for f in FACTOR_REGISTRY.list()]
+
+
+@app.get("/api/factors/{factor_id}")
+def get_factor(factor_id: str, version: int | None = Query(None)) -> dict:
+    try:
+        return FACTOR_REGISTRY.get(factor_id, version).to_dict()
+    except KeyError as exc:
+        raise HTTPException(status_code=404, detail=str(exc)) from exc
+
+
+# -------- M12 实验追踪 --------
+
+@app.get("/api/experiments")
+def list_experiments() -> list[dict]:
+    return [e.to_dict() for e in EXPERIMENT_STORE.list_experiments()]
+
+
+@app.post("/api/experiments")
+def create_experiment(payload: dict = Body(...)) -> dict:
+    return EXPERIMENT_STORE.create_experiment(
+        name=payload["name"],
+        asset_class=payload.get("asset_class", "mixed"),
+        description=payload.get("description", ""),
+    ).to_dict()
+
+
+@app.get("/api/experiments/{experiment_id}/runs")
+def list_experiment_runs(experiment_id: str) -> list[dict]:
+    return [r.to_dict() for r in RUN_STORE.list_runs(experiment_id)]
+
+
+@app.get("/api/experiment_runs/{run_id}/lineage")
+def run_lineage(run_id: str) -> list[dict]:
+    try:
+        return [r.to_dict() for r in RUN_STORE.lineage(run_id)]
+    except KeyError as exc:
+        raise HTTPException(404, str(exc)) from exc
+
+
+@app.get("/api/models")
+def list_models() -> list[str]:
+    return MODEL_REGISTRY.list_models()
+
+
+@app.get("/api/models/{model_id}/versions")
+def list_model_versions(model_id: str) -> list[dict]:
+    return [v.to_dict() for v in MODEL_REGISTRY.list_versions(model_id)]
+
+
+@app.post("/api/models/{model_id}/promote")
+def promote_model(model_id: str, payload: dict = Body(...)) -> dict:
+    try:
+        return MODEL_REGISTRY.promote(model_id, int(payload["version"]), payload["stage"]).to_dict()
+    except KeyError as exc:
+        raise HTTPException(404, str(exc)) from exc
+
+
+# -------- M9.3 安全 / 风控 --------
+
+@app.get("/api/security/keystore")
+def list_keystore_names() -> dict[str, Any]:
+    return {"backend": KEYSTORE.backend_name, "names": KEYSTORE.list_names()}
+
+
+@app.post("/api/security/keystore")
+def store_keystore_record(payload: dict = Body(...)) -> dict:
+    KEYSTORE.store(
+        KeystoreRecord(
+            name=payload["name"],
+            api_key=payload["api_key"],
+            api_secret=payload["api_secret"],
+            note=payload.get("note", ""),
+        )
+    )
+    return {"stored": payload["name"], "backend": KEYSTORE.backend_name}
+
+
+@app.get("/api/risk/alerts")
+def risk_alerts() -> dict[str, Any]:
+    return {
+        "paused": RISK_MONITOR.paused,
+        "alerts": RISK_MONITOR.alerts(),
+        "limits": {
+            "per_order_max_usdt": RISK_LIMITS.per_order_max_usdt,
+            "daily_loss_limit_pct": RISK_LIMITS.daily_loss_limit_pct,
+            "daily_order_count_max": RISK_LIMITS.daily_order_count_max,
+        },
+    }
+
+
+@app.post("/api/risk/kill_switch")
+def trigger_kill_switch(payload: dict = Body(default_factory=dict)) -> dict:
+    close = bool(payload.get("close_positions", True))
+    return KILL_SWITCH.trigger(close_positions=close)
+
+
+# -------- M14 Agent --------
+
+@app.get("/api/agent/tools")
+def agent_tools() -> dict[str, Any]:
+    return {"functions": TOOL_SCHEMA, "llm_provider": AGENT_LLM.provider}
+
+
+@app.post("/api/agent/chat")
+def agent_chat(payload: dict = Body(...)) -> dict[str, Any]:
+    user_input = str(payload.get("message", "")).strip()
+    if not user_input:
+        raise HTTPException(400, "message 不能为空")
+    runtime = _agent_runtime()
+    turn = runtime.run(user_input)
+    return {
+        "final_message": turn.final_message,
+        "succeeded": turn.succeeded,
+        "steps": [s.to_dict() for s in turn.steps],
+    }
+
+
+@app.post("/api/agent/slot_fill")
+def agent_slot_fill(payload: dict = Body(...)) -> dict[str, Any]:
+    text = str(payload.get("text", ""))
+    name = payload.get("name")
+    goal = AGENT_SLOT_FILLER.fill(text, name=name)
+    return goal.model_dump(mode="json")
+
+
+@app.post("/api/agent/replicate")
+def agent_replicate(payload: dict = Body(...)) -> dict[str, Any]:
+    dialect = payload.get("source_dialect", "pandas")
+    code = payload.get("code", "")
+    report = CODE_REPLICATOR.replicate(code, dialect=dialect)
+    return {"dialect": report.dialect, "target_code": report.target_code, "notes": report.notes}
+
+
+# -------- P3.5 setup 向导状态 --------
+
+@app.get("/api/setup/status")
+def setup_status() -> dict[str, Any]:
+    """引导式 setup 向导用：告诉前端哪几步还没完成。"""
+    import os
+    tushare_ok = bool(os.environ.get("TUSHARE_TOKEN"))
+    keystore_names = KEYSTORE.list_names()
+    demo_run_exists = (DATA_ROOT / "artifacts" / "experiments" / "quant1-demo").exists()
+    return {
+        "tushare_token_configured": tushare_ok,
+        "binance_keystore_configured": any("binance" in n.lower() for n in keystore_names),
+        "demo_run_exists": demo_run_exists,
+        "factors_count": len(FACTOR_REGISTRY.list()),
+        "connectors_count": len(connector_registry.names()),
+        "next_step": (
+            "configure_tushare" if not tushare_ok
+            else "configure_binance" if not keystore_names
+            else "run_demo" if not demo_run_exists
+            else "ready"
+        ),
+    }
 
 
 @app.get("/api/data/markets")

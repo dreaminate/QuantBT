@@ -1,0 +1,35 @@
+version: "3.9"
+
+# QuantBT 一行命令上手：docker compose up -d
+# - backend: FastAPI 8000
+# - frontend: Vite dev 5173 (或 build → nginx)
+# 数据目录通过 volume 挂载到 ./data，便于审计与备份
+
+services:
+  backend:
+    build:
+      context: .
+      dockerfile: deploy/backend.Dockerfile
+    image: quantbt/backend:dev
+    container_name: quantbt-backend
+    environment:
+      - BACKTEST_DATA_ROOT=/data
+      - TUSHARE_TOKEN=${TUSHARE_TOKEN:-}
+      - QUANTBT_KEYSTORE_INDEX=/data/keystore_index.json
+    volumes:
+      - ./data:/data
+    ports:
+      - "8000:8000"
+
+  frontend:
+    build:
+      context: .
+      dockerfile: deploy/frontend.Dockerfile
+    image: quantbt/frontend:dev
+    container_name: quantbt-frontend
+    environment:
+      - VITE_API_BASE=http://backend:8000
+    ports:
+      - "5173:5173"
+    depends_on:
+      - backend

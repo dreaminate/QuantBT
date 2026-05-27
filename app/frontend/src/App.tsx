@@ -3,6 +3,7 @@ import { ComparePage } from "./pages/ComparePage";
 import { DataPage } from "./pages/DataPage";
 import { RunsPage } from "./pages/RunsPage";
 import { RunDetailPage } from "./pages/RunDetailPage";
+import { WorkbenchPage } from "./pages/WorkbenchPage";
 
 /** `/runs/:runId` 回测详情页，主区域使用宽屏布局（见 `.jq-main--wide`） */
 function useRunDetailWideLayout(): boolean {
@@ -37,6 +38,9 @@ export default function App() {
             <NavLink to="/runs" className={researchActive(location.pathname) ? "jq-nav-item active" : "jq-nav-item"}>
               回测研究
             </NavLink>
+            <NavLink to="/workbench" className={location.pathname.startsWith("/workbench") ? "jq-nav-item active" : "jq-nav-item"}>
+              工坊
+            </NavLink>
           </nav>
         </div>
       </header>
@@ -62,6 +66,7 @@ export default function App() {
           <Route path="/runs/:runId" element={<RunDetailPage />} />
           <Route path="/compare" element={<ComparePage />} />
           <Route path="/data" element={<DataPage />} />
+          <Route path="/workbench" element={<WorkbenchPage />} />
         </Routes>
       </main>
     </div>

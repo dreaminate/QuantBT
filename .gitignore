@@ -19,6 +19,12 @@ config/secrets/
 # Generated local data and package artifacts
 data/.cache/
 data/market/
+data/datasets/
+data/factors/
+data/experiments/
+data/audit/
+data/raw/
+data/keystore_index.json
 *.zip
 
 # Local editor state
