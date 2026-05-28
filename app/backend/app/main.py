@@ -103,6 +103,8 @@ EVENT_SERVICE = EventService(_COMMUNITY_DB)  # 复用 community.db，单文件�
 CHAT_SERVICE = ChatService(_COMMUNITY_DB)  # v0.8.6 · Mode 2 多轮对话
 from .trading import SafetyService, SafetyServiceError  # noqa: E402
 SAFETY_SERVICE = SafetyService(_COMMUNITY_DB)  # v0.8.8 · 实盘安全阶梯
+from .community.compliance import ComplianceService, check_content_for_forbidden  # noqa: E402
+COMPLIANCE_SERVICE = ComplianceService(_COMMUNITY_DB)  # v0.8.8.1 · 帖子合规
 
 _main_logger = logging.getLogger(__name__)
 
@@ -1612,6 +1614,52 @@ def runs_coach_suggestion(run_id: str) -> dict[str, Any]:
     if sugg is None:
         return {"suggestion": None, "risk_summary": rs}
     return {"suggestion": sugg.to_dict(), "risk_summary": rs}
+
+
+@app.post("/api/community/posts/{post_id}/check_compliance")
+def community_post_compliance(post_id: str, user=Depends(require_user_dependency)) -> dict[str, Any]:
+    """v0.8.8.1 · 复检帖子合规（含 risk_summary snapshot）。"""
+    try:
+        post = COMMUNITY_SERVICE.get_post(post_id, current_user_id=user.user_id)
+    except Exception as exc:
+        raise HTTPException(status_code=404, detail=str(exc)) from exc
+    risk_summary = None
+    if post.get("attached_run_id"):
+        try:
+            run_resp = get_run_response(post["attached_run_id"])
+            combined: dict[str, Any] = {}
+            combined.update(run_resp.get("metrics") or {})
+            combined.update(run_resp.get("jq_overview_metrics") or {})
+            from .eval.risk_summary import compute_risk_summary
+            risk_summary = compute_risk_summary(combined).to_dict()
+        except FileNotFoundError:
+            pass
+    result = COMPLIANCE_SERVICE.record_compliance(
+        post_id,
+        content=post.get("content", ""),
+        attached_run_id=post.get("attached_run_id"),
+        risk_summary=risk_summary,
+    )
+    return result.to_dict()
+
+
+@app.get("/api/community/posts/{post_id}/compliance")
+def community_post_compliance_get(post_id: str) -> dict[str, Any]:
+    rec = COMPLIANCE_SERVICE.get_compliance(post_id)
+    if rec is None:
+        return {"post_id": post_id, "passed": True, "checked": False}
+    return {**rec.to_dict(), "checked": True}
+
+
+@app.post("/api/community/check_text")
+def community_check_text(payload: dict = Body(...)) -> dict[str, Any]:
+    """前端发帖时调，提前预检文本是否含禁词。"""
+    content = payload.get("content", "")
+    forbidden = check_content_for_forbidden(content)
+    return {
+        "passed": len(forbidden) == 0,
+        "forbidden_phrases_found": forbidden,
+    }
 
 
 # ============================================================
