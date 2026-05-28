@@ -31,6 +31,7 @@ from .agent.conversations import (
     message_to_dict,
     thread_to_dict,
 )
+from .agent.coach import classify_response_mode, suggest_from_risk_summary
 from .agent.prompts import build_mode2_prompt
 from .agent.rag import format_rag_context, format_run_context, retrieve
 from .events import EventService, EventTrackError
@@ -1549,6 +1550,24 @@ def events_track(payload: dict = Body(...), current=Depends(current_user_depende
     except EventTrackError as exc:
         raise HTTPException(status_code=400, detail=str(exc)) from exc
     return {"event_id": rec.event_id, "ok": True}
+
+
+@app.get("/api/runs/{run_id}/coach_suggestion")
+def runs_coach_suggestion(run_id: str) -> dict[str, Any]:
+    """v0.8.6.1 · 基于 risk_summary 给出主动建议 (RunDetail 顶部浮卡片用)。"""
+    try:
+        resp = get_run_response(run_id)
+    except FileNotFoundError as exc:
+        raise HTTPException(status_code=404, detail=str(exc)) from exc
+    combined: dict[str, Any] = {}
+    combined.update(resp.get("metrics") or {})
+    combined.update(resp.get("jq_overview_metrics") or {})
+    from .eval.risk_summary import compute_risk_summary
+    rs = compute_risk_summary(combined).to_dict()
+    sugg = suggest_from_risk_summary(rs)
+    if sugg is None:
+        return {"suggestion": None, "risk_summary": rs}
+    return {"suggestion": sugg.to_dict(), "risk_summary": rs}
 
 
 # ============================================================

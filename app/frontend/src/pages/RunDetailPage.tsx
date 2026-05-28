@@ -28,6 +28,7 @@ import { buildJqSummaryRows } from "../jqOverviewSummary";
 import { getGlossarySlugForMetric } from "../features/glossary/metricGlossaryMap";
 import { GlossaryInfoButton } from "../features/glossary/GlossaryInfoButton";
 import { RiskSummaryChip } from "../features/glossary/RiskSummaryChip";
+import { CoachSuggestionBanner } from "../features/glossary/CoachSuggestionBanner";
 import { trackEvent } from "../features/glossary/trackEvent";
 import { formatFileSize, formatNumber, formatPct } from "../utils";
 
@@ -1055,6 +1056,7 @@ function RunOverviewTab({
           <RiskSummaryChip riskSummary={run.risk_summary} />
         </h2>
       </header>
+      <CoachSuggestionBanner runId={run.run_id} />
 
       <div className="jq-run-overview-summary-board jq-run-overview-summary-board--metrics-only">
         <div className="jq-run-overview-metrics-board">
