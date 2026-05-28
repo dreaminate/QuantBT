@@ -650,6 +650,10 @@ function buildOverviewOption(
         zoomOnMouseWheel: true,
         moveOnMouseWheel: false,
         moveOnMouseMove: true,
+        // 最小可视窗口：避免滚轮一缩压成 1 个 category → 三联图全变一根竖线
+        // minValueSpan = 5 个 category（约 5 个交易日）；minSpan = 2% 兜底
+        minValueSpan: Math.min(5, Math.max(1, categories.length - 1)),
+        minSpan: 2,
         ...dzProps,
       },
       {
@@ -662,6 +666,9 @@ function buildOverviewOption(
         backgroundColor: "#f5f5f5",
         fillerColor: "rgba(76, 120, 168, 0.22)",
         handleStyle: { color: "#fff", borderColor: "#9aa5b1" },
+        // slider 两个 handle 拖到一起也会触发同一 bug；同样的最小窗口
+        minValueSpan: Math.min(5, Math.max(1, categories.length - 1)),
+        minSpan: 2,
         ...dzProps,
       },
     ],
