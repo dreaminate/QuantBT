@@ -535,6 +535,20 @@ def auth_register(payload: dict = Body(...)) -> dict[str, Any]:
             display_name=payload.get("display_name", ""),
         )
         _u, token = AUTH_SERVICE.login(payload["username"], payload["password"])
+        # v0.9.x · funnel 埋点 (patch2 §H.b)
+        try:
+            EVENT_SERVICE.track(
+                "user_registered",
+                user_id=user.user_id,
+                properties={
+                    "auth_method": "password",
+                    "persona_hint": payload.get("persona_hint", "unknown"),
+                    "referrer": payload.get("referrer"),
+                    "client_tz": payload.get("client_tz"),
+                },
+            )
+        except Exception:  # noqa: BLE001 - 埋点失败不阻塞注册
+            pass
         return {"user": user.to_dict(), "token": token}
     except AuthError as exc:
         raise HTTPException(400, str(exc))
@@ -1428,6 +1442,27 @@ def ide_promote_run(run_id: str, payload: dict = Body(default_factory=dict), use
     except PromoteError as exc:
         raise HTTPException(status_code=400, detail=str(exc)) from exc
 
+    # v0.9.x · funnel 埋点 - run_completed
+    try:
+        sharpe = promoted.metrics.get("sharpe")
+        EVENT_SERVICE.track(
+            "run_completed",
+            user_id=user.user_id,
+            properties={
+                "run_id": promoted.run_id,
+                "strategy_id": ide_run.strategy_id,
+                "market_mode": "ide_sandbox",
+                "duration_ms": int(ide_run.duration_s * 1000),
+                "status": "success",
+                "sharpe": sharpe,
+                "max_drawdown": promoted.metrics.get("max_drawdown"),
+                "total_return": promoted.metrics.get("total_return"),
+                "trigger": "promote_ide_run",
+            },
+        )
+    except Exception:  # noqa: BLE001
+        pass
+
     return {
         "run_id": promoted.run_id,
         "run_url": f"/runs/{promoted.run_id}",
@@ -1705,6 +1740,24 @@ def safety_safekey_check(payload: dict = Body(...), user=Depends(require_user_de
         enable_futures=bool(payload.get("enable_futures", True)),
         ip_restricted=bool(payload.get("ip_restricted", True)),
     )
+    # v0.9.x · funnel 埋点
+    try:
+        EVENT_SERVICE.track(
+            "safekey_check_completed",
+            user_id=user.user_id,
+            properties={
+                "venue": payload.get("venue", "binance_um_futures"),
+                "key_id_hash": rec.key_id_hash,
+                "passed": rec.passed,
+                "enable_withdrawals": rec.enable_withdrawals,
+                "enable_futures": rec.enable_futures,
+                "enable_margin": rec.enable_margin,
+                "ip_restricted": rec.ip_restricted,
+                "failure_reason": (rec.failures[0] if rec.failures else None),
+            },
+        )
+    except Exception:  # noqa: BLE001
+        pass
     return rec.to_dict()
 
 
@@ -1750,7 +1803,58 @@ def safety_ladder_promote(user=Depends(require_user_dependency)) -> dict[str, An
 @app.post("/api/trading/safety/ladder/demote")
 def safety_ladder_demote(payload: dict = Body(...), user=Depends(require_user_dependency)) -> dict[str, Any]:
     reason = payload.get("reason", "manual demote")
-    return SAFETY_SERVICE.demote(user.user_id, reason).to_dict()
+    state = SAFETY_SERVICE.demote(user.user_id, reason)
+    # v0.9.x · kill_switch_triggered 事件（降级通常由 kill switch 触发）
+    try:
+        EVENT_SERVICE.track(
+            "kill_switch_triggered",
+            user_id=user.user_id,
+            properties={
+                "venue": payload.get("venue", "binance_um_futures"),
+                "trigger_type": reason,
+                "severity": payload.get("severity", "critical"),
+                "action_taken": "demote_ladder",
+                "blocked_until": state.promotion_blocked_until_utc,
+            },
+        )
+    except Exception:  # noqa: BLE001
+        pass
+    return state.to_dict()
+
+
+@app.post("/api/trading/safety/matrix_attempt_e2e")
+def safety_matrix_attempt_e2e(payload: dict = Body(...), user=Depends(require_user_dependency)) -> dict[str, Any]:
+    """v0.9.x · testnet matrix 完整 e2e 一次性记录（含埋点）。"""
+    cell = SAFETY_SERVICE.record_matrix_attempt(
+        user_id=user.user_id,
+        order_type=payload.get("order_type", ""),
+        side=payload.get("side", ""),
+        place_ok=bool(payload.get("place_ok", False)),
+        query_ok=bool(payload.get("query_ok", False)),
+        cancel_ok=bool(payload.get("cancel_ok", False)),
+        reconcile_ok=bool(payload.get("reconcile_ok", False)),
+        error_code=payload.get("error_code"),
+    )
+    try:
+        EVENT_SERVICE.track(
+            "testnet_order_e2e_completed",
+            user_id=user.user_id,
+            properties={
+                "venue": payload.get("venue", "binance_um_futures"),
+                "symbol": payload.get("symbol", "BTC-USDT"),
+                "order_type": cell.order_type,
+                "side": cell.side,
+                "place_ok": cell.place_ok,
+                "query_ok": cell.query_ok,
+                "cancel_ok": cell.cancel_ok,
+                "reconcile_ok": cell.reconcile_ok,
+                "latency_ms": payload.get("latency_ms"),
+                "error_code": cell.error_code,
+            },
+        )
+    except Exception:  # noqa: BLE001
+        pass
+    return cell.to_dict()
 
 
 # ============================================================

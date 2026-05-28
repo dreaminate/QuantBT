@@ -48,15 +48,17 @@ export function Mode2ChatPage() {
   const me = getStoredUser();
   const [searchParams] = useSearchParams();
   const bindRunId = searchParams.get("run");
+  const initialQuery = searchParams.get("q");
 
   const [threads, setThreads] = useState<ChatThread[]>([]);
   const [activeThreadId, setActiveThreadId] = useState<string | null>(null);
   const [activeThread, setActiveThread] = useState<ChatThread | null>(null);
   const [messages, setMessages] = useState<ChatMessage[]>([]);
-  const [input, setInput] = useState("");
+  const [input, setInput] = useState(initialQuery ?? "");
   const [sending, setSending] = useState(false);
   const [marketMode, setMarketMode] = useState("ashare_research");
   const messagesEndRef = useRef<HTMLDivElement | null>(null);
+  const autoOpenedRef = useRef(false);
 
   const reloadThreads = useCallback(async () => {
     if (!me) return;
@@ -84,6 +86,28 @@ export function Mode2ChatPage() {
   useEffect(() => {
     reloadThreads();
   }, [reloadThreads]);
+
+  // v0.9.x · 若 URL 带 ?run=&q= → 自动新建 thread + 填充 query (来自 CoachSuggestionBanner)
+  useEffect(() => {
+    if (autoOpenedRef.current) return;
+    if (!me) return;
+    if (!bindRunId && !initialQuery) return;
+    autoOpenedRef.current = true;
+    void (async () => {
+      const body: Record<string, unknown> = { market_mode: marketMode };
+      if (bindRunId) body.active_run_id = bindRunId;
+      const r = await authFetch("/api/agent/chat/start", {
+        method: "POST",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify(body),
+      });
+      const data = await r.json();
+      if (data.thread_id) {
+        setActiveThreadId(data.thread_id);
+        reloadThreads();
+      }
+    })();
+  }, [me, bindRunId, initialQuery, marketMode, reloadThreads]);
 
   useEffect(() => {
     if (activeThreadId) loadThread(activeThreadId);
