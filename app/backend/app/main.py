@@ -105,6 +105,8 @@ from .trading import SafetyService, SafetyServiceError  # noqa: E402
 SAFETY_SERVICE = SafetyService(_COMMUNITY_DB)  # v0.8.8 · 实盘安全阶梯
 from .community.compliance import ComplianceService, check_content_for_forbidden  # noqa: E402
 COMPLIANCE_SERVICE = ComplianceService(_COMMUNITY_DB)  # v0.8.8.1 · 帖子合规
+from .copy_trade.beta import CopyTradeBetaService  # noqa: E402
+CT_BETA_SERVICE = CopyTradeBetaService(_COMMUNITY_DB)  # v0.8.9 · 跟单灰度
 
 _main_logger = logging.getLogger(__name__)
 
@@ -1614,6 +1616,29 @@ def runs_coach_suggestion(run_id: str) -> dict[str, Any]:
     if sugg is None:
         return {"suggestion": None, "risk_summary": rs}
     return {"suggestion": sugg.to_dict(), "risk_summary": rs}
+
+
+@app.post("/api/copy_trade/beta/apply")
+def ct_beta_apply(payload: dict = Body(...), user=Depends(require_user_dependency)) -> dict[str, Any]:
+    role = payload.get("role", "follower")
+    s = CT_BETA_SERVICE.apply_for_beta(user.user_id, role)
+    return s.to_dict()
+
+
+@app.get("/api/copy_trade/beta/status")
+def ct_beta_status(role: str = Query("follower"), user=Depends(require_user_dependency)) -> dict[str, Any] | None:
+    s = CT_BETA_SERVICE.get_beta_status(user.user_id, role)
+    return s.to_dict() if s else None
+
+
+@app.get("/api/copy_trade/beta/summary")
+def ct_beta_summary() -> dict[str, Any]:
+    return CT_BETA_SERVICE.waitlist_summary()
+
+
+@app.get("/api/copy_trade/beta/dispatches")
+def ct_beta_dispatches(user=Depends(require_user_dependency)) -> list[dict[str, Any]]:
+    return [d.to_dict() for d in CT_BETA_SERVICE.list_dispatches(user.user_id, limit=100)]
 
 
 @app.post("/api/community/posts/{post_id}/check_compliance")
