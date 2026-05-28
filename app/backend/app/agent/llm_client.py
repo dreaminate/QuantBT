@@ -50,6 +50,24 @@ class LLMClient(ABC):
         temperature: float = 0.2,
     ) -> LLMResponse: ...
 
+    def stream_chat(
+        self,
+        messages: list[LLMMessage],
+        *,
+        model: str | None = None,
+        temperature: float = 0.2,
+    ) -> "Any":  # Iterator[str]
+        """v0.9.8 · 默认 fallback: 调用 chat() 后整段分块。
+
+        真 streaming 由 provider 子类 override (OpenAILLM / AnthropicLLM 等)。
+        Iterator 每次 yield 一个 token chunk (str)。
+        """
+        resp = self.chat(messages, model=model, temperature=temperature)
+        text = resp.content or ""
+        # 模拟分块每 20 字符（DevLocalLLM 走这个）
+        for i in range(0, len(text), 20):
+            yield text[i:i + 20]
+
 
 DevTemplate = Callable[[str, list[LLMMessage], list[dict[str, Any]] | None], LLMResponse]
 

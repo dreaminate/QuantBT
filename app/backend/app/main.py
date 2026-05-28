@@ -2213,24 +2213,24 @@ def chat_stream(thread_id: str, q: str = Query(..., description="user message"),
         yield f"event: rag\ndata: {_json.dumps({'hits': [{'kind': h.kind, 'slug': h.slug, 'title': h.title} for h in hits]})}\n\n"
 
         from .agent.llm_client import LLMMessage
+        full_text = ""
         try:
             client = _current_agent_llm()
-            reply = client.chat([
+            # v0.9.8 · 真 streaming - 调 stream_chat() iterator
+            for token in client.stream_chat([
                 LLMMessage(role="system", content=sys_prompt),
                 LLMMessage(role="user", content=user_text),
-            ])
-            reply_text = reply.content or "(LLM 无内容)"
+            ]):
+                full_text += token
+                yield f"data: {_json.dumps({'chunk': token}, ensure_ascii=False)}\n\n"
         except Exception as exc:  # noqa: BLE001
-            reply_text = f"[LLM 错误] {exc}"
-
-        # 分块输出模拟 streaming（每 30 字符）
-        for i in range(0, len(reply_text), 30):
-            chunk = reply_text[i:i + 30]
-            yield f"data: {_json.dumps({'chunk': chunk})}\n\n"
+            err_text = f"[LLM 错误] {exc}"
+            full_text = full_text or err_text
+            yield f"data: {_json.dumps({'chunk': err_text, 'error': True}, ensure_ascii=False)}\n\n"
 
         # 持久化 + done
         msg = CHAT_SERVICE.add_message(
-            thread_id, "assistant", reply_text,
+            thread_id, "assistant", full_text,
             metadata={"rag_hits": [{"kind": h.kind, "slug": h.slug} for h in hits], "streamed": True},
         )
         CHAT_SERVICE.update_state(thread_id, "FOLLOW_UP_UPDATE")

@@ -139,7 +139,7 @@ export function Mode2ChatPage() {
     setInput("");
     // 乐观先渲染 user 消息
     const optimisticUser: ChatMessage = {
-      message_id: "optimistic_" + Date.now(),
+      message_id: "optimistic_user_" + Date.now(),
       thread_id: activeThreadId,
       role: "user",
       content: userText,
@@ -147,14 +147,94 @@ export function Mode2ChatPage() {
       created_at_utc: new Date().toISOString(),
     };
     setMessages((ms) => [...ms, optimisticUser]);
+
+    // v0.9.8 · 真 SSE streaming
+    const assistantId = "optimistic_assistant_" + Date.now();
+    const optimisticAssistant: ChatMessage = {
+      message_id: assistantId,
+      thread_id: activeThreadId,
+      role: "assistant",
+      content: "",
+      metadata: {},
+      created_at_utc: new Date().toISOString(),
+    };
+    setMessages((ms) => [...ms, optimisticAssistant]);
+
     try {
-      await authFetch(`/api/agent/chat/${activeThreadId}/message`, {
-        method: "POST",
-        headers: { "content-type": "application/json" },
-        body: JSON.stringify({ content: userText }),
-      });
-      // 重新拉一次确保 server-side 持久化的 user + assistant 都拿到
+      const token = localStorage.getItem("qb-token");
+      const headers: Record<string, string> = {};
+      if (token) headers["authorization"] = `Bearer ${token}`;
+      const url = `/api/agent/chat/${activeThreadId}/stream?q=${encodeURIComponent(userText)}`;
+      const res = await fetch(url, { headers });
+      if (!res.ok || !res.body) {
+        throw new Error(`SSE 启动失败: HTTP ${res.status}`);
+      }
+
+      const reader = res.body.getReader();
+      const decoder = new TextDecoder();
+      let buffer = "";
+      let ragHits: any[] = [];
+
+      while (true) {
+        const { value, done } = await reader.read();
+        if (done) break;
+        buffer += decoder.decode(value, { stream: true });
+        // SSE 事件以 \n\n 分隔
+        const events = buffer.split("\n\n");
+        buffer = events.pop() || "";
+        for (const evt of events) {
+          if (!evt.trim()) continue;
+          const lines = evt.split("\n");
+          let eventName = "message";
+          let dataStr = "";
+          for (const line of lines) {
+            if (line.startsWith("event: ")) eventName = line.slice(7).trim();
+            else if (line.startsWith("data: ")) dataStr += line.slice(6);
+          }
+          if (!dataStr) continue;
+          try {
+            const data = JSON.parse(dataStr);
+            if (eventName === "rag") {
+              ragHits = data.hits || [];
+              setMessages((ms) => ms.map((m) =>
+                m.message_id === assistantId
+                  ? { ...m, metadata: { ...m.metadata, rag_hits: ragHits } }
+                  : m,
+              ));
+            } else if (eventName === "done") {
+              // 不动；最后 reloadThread 同步真正的 message_id
+            } else if (data.chunk) {
+              // 逐 token 拼接
+              setMessages((ms) => ms.map((m) =>
+                m.message_id === assistantId
+                  ? { ...m, content: (m.content || "") + data.chunk }
+                  : m,
+              ));
+            }
+          } catch {
+            // 单条 SSE 解析失败跳过
+          }
+        }
+      }
+
+      // 重新拉 thread 同步 server-side message_id
       await loadThread(activeThreadId);
+    } catch (err) {
+      // streaming 失败 fallback 到非流式
+      try {
+        await authFetch(`/api/agent/chat/${activeThreadId}/message`, {
+          method: "POST",
+          headers: { "content-type": "application/json" },
+          body: JSON.stringify({ content: userText }),
+        });
+        await loadThread(activeThreadId);
+      } catch {
+        setMessages((ms) => ms.map((m) =>
+          m.message_id === assistantId
+            ? { ...m, content: `[流式失败] ${err}` }
+            : m,
+        ));
+      }
     } finally {
       setSending(false);
     }

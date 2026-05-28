@@ -243,6 +243,54 @@ class OpenAILLM(LLMClient):
         ]
         return LLMResponse(content=message.get("content") or "", tool_calls=tool_calls, raw=data)
 
+    def stream_chat(self, messages, *, model=None, temperature=0.2):
+        """v0.9.8 · 真 OpenAI SSE streaming (chat.completions.stream=True)."""
+        import json as _json
+
+        oai_messages: list[dict[str, Any]] = []
+        for m in messages:
+            entry: dict[str, Any] = {"role": m.role, "content": m.content}
+            if m.role == "tool":
+                entry["tool_call_id"] = m.tool_call_id
+                if m.name:
+                    entry["name"] = m.name
+            oai_messages.append(entry)
+
+        payload = {
+            "model": model or self._model,
+            "messages": oai_messages,
+            "temperature": temperature,
+            "stream": True,
+        }
+        with self._http.post(
+            f"{self._base}/chat/completions",
+            json=payload,
+            headers={"Authorization": f"Bearer {self._key}", "content-type": "application/json"},
+            stream=True,
+            timeout=120,
+        ) as r:
+            r.raise_for_status()
+            for raw_line in r.iter_lines():
+                if not raw_line:
+                    continue
+                line = raw_line.decode("utf-8", errors="replace").strip()
+                if not line.startswith("data: "):
+                    continue
+                payload_str = line[6:].strip()
+                if payload_str == "[DONE]":
+                    return
+                try:
+                    chunk = _json.loads(payload_str)
+                except _json.JSONDecodeError:
+                    continue
+                choices = chunk.get("choices") or []
+                if not choices:
+                    continue
+                delta = choices[0].get("delta", {}) or {}
+                token = delta.get("content")
+                if token:
+                    yield token
+
 
 # ============ Qwen (DashScope) ============
 
@@ -277,11 +325,7 @@ class QwenLLM(LLMClient):
 # ============ Custom / Generic OpenAI-Compatible ============
 
 class OpenAICompatibleLLM(LLMClient):
-    """任意 OpenAI 协议端点 —— 本地 ollama / vLLM / 第三方代理 / 私有 LLM 都行。
-
-    用户在 secrets.yaml `llm.custom` 段填 base_url + model + api_key (本地服务可填随便)，
-    或在 UI 工坊→系统设置直接填表单。
-    """
+    """任意 OpenAI 协议端点 —— 本地 ollama / vLLM / 第三方代理 / 私有 LLM 都行。"""
 
     provider = "custom"
 
@@ -312,6 +356,9 @@ class OpenAICompatibleLLM(LLMClient):
         temperature: float = 0.2,
     ) -> LLMResponse:
         return self._inner.chat(messages, tools=tools, model=model, temperature=temperature)
+
+    def stream_chat(self, messages, *, model=None, temperature=0.2):
+        yield from self._inner.stream_chat(messages, model=model, temperature=temperature)
 
 
 # ============ 工厂 + 优雅 fallback ============
