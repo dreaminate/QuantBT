@@ -101,6 +101,8 @@ COPY_TRADE_SERVICE = CopyTradeService(_COMMUNITY_DB)
 IDE_SERVICE = IDEService(DATA_ROOT / "ide_strategies.db", run_root=DATA_ROOT / "ide_runs")
 EVENT_SERVICE = EventService(_COMMUNITY_DB)  # 复用 community.db，单文件好查
 CHAT_SERVICE = ChatService(_COMMUNITY_DB)  # v0.8.6 · Mode 2 多轮对话
+from .trading import SafetyService, SafetyServiceError  # noqa: E402
+SAFETY_SERVICE = SafetyService(_COMMUNITY_DB)  # v0.8.8 · 实盘安全阶梯
 
 _main_logger = logging.getLogger(__name__)
 
@@ -1610,6 +1612,72 @@ def runs_coach_suggestion(run_id: str) -> dict[str, Any]:
     if sugg is None:
         return {"suggestion": None, "risk_summary": rs}
     return {"suggestion": sugg.to_dict(), "risk_summary": rs}
+
+
+# ============================================================
+# v0.8.8 · Binance 安全阶梯 (SafeKey wizard + testnet matrix + live ladder)
+# ============================================================
+
+
+@app.post("/api/trading/safety/safekey_check")
+def safety_safekey_check(payload: dict = Body(...), user=Depends(require_user_dependency)) -> dict[str, Any]:
+    """记录 SafeKey wizard 检查结果。"""
+    rec = SAFETY_SERVICE.record_safekey_check(
+        user_id=user.user_id,
+        key_id_hash=payload.get("key_id_hash", ""),
+        enable_withdrawals=bool(payload.get("enable_withdrawals", False)),
+        enable_internal_transfer=bool(payload.get("enable_internal_transfer", False)),
+        enable_universal_transfer=bool(payload.get("enable_universal_transfer", False)),
+        enable_margin=bool(payload.get("enable_margin", False)),
+        enable_futures=bool(payload.get("enable_futures", True)),
+        ip_restricted=bool(payload.get("ip_restricted", True)),
+    )
+    return rec.to_dict()
+
+
+@app.get("/api/trading/safety/safekey_latest")
+def safety_safekey_latest(user=Depends(require_user_dependency)) -> dict[str, Any] | None:
+    rec = SAFETY_SERVICE.get_latest_safekey(user.user_id)
+    return rec.to_dict() if rec else None
+
+
+@app.post("/api/trading/safety/matrix_attempt")
+def safety_matrix_attempt(payload: dict = Body(...), user=Depends(require_user_dependency)) -> dict[str, Any]:
+    cell = SAFETY_SERVICE.record_matrix_attempt(
+        user_id=user.user_id,
+        order_type=payload.get("order_type", ""),
+        side=payload.get("side", ""),
+        place_ok=bool(payload.get("place_ok", False)),
+        query_ok=bool(payload.get("query_ok", False)),
+        cancel_ok=bool(payload.get("cancel_ok", False)),
+        reconcile_ok=bool(payload.get("reconcile_ok", False)),
+        error_code=payload.get("error_code"),
+    )
+    return cell.to_dict()
+
+
+@app.get("/api/trading/safety/matrix")
+def safety_matrix(user=Depends(require_user_dependency)) -> dict[str, Any]:
+    return SAFETY_SERVICE.get_matrix(user.user_id).to_dict()
+
+
+@app.get("/api/trading/safety/ladder")
+def safety_ladder(user=Depends(require_user_dependency)) -> dict[str, Any]:
+    return SAFETY_SERVICE.get_ladder(user.user_id).to_dict()
+
+
+@app.post("/api/trading/safety/ladder/promote")
+def safety_ladder_promote(user=Depends(require_user_dependency)) -> dict[str, Any]:
+    try:
+        return SAFETY_SERVICE.promote_level(user.user_id).to_dict()
+    except SafetyServiceError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+
+
+@app.post("/api/trading/safety/ladder/demote")
+def safety_ladder_demote(payload: dict = Body(...), user=Depends(require_user_dependency)) -> dict[str, Any]:
+    reason = payload.get("reason", "manual demote")
+    return SAFETY_SERVICE.demote(user.user_id, reason).to_dict()
 
 
 # ============================================================
