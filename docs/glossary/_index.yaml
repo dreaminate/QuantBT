@@ -1,0 +1,137 @@
+# Glossary 30 条 baseline 词条索引 (v0.8.4)
+#
+# 由 docs/glossary/_PROMPT_FOR_GPT_PRO.md 中 6 个批次定义。
+# scripts/validate_glossary.py --min-count 30 校验时检查每个 slug 对应文件存在。
+
+terms:
+  # ---- 批次 1 · 绩效指标 (5) ----
+  - slug: sharpe_ratio
+    display: 夏普比率 (Sharpe Ratio)
+    category: metric
+    batch: 1
+  - slug: sortino_ratio
+    display: 索提诺比率 (Sortino Ratio)
+    category: metric
+    batch: 1
+  - slug: information_ratio
+    display: 信息比率 (Information Ratio)
+    category: metric
+    batch: 1
+  - slug: max_drawdown
+    display: 最大回撤 (Max Drawdown)
+    category: metric
+    batch: 1
+  - slug: calmar_ratio
+    display: 卡玛比率 (Calmar Ratio)
+    category: metric
+    batch: 1
+
+  # ---- 批次 2 · 风险 (5) ----
+  - slug: volatility
+    display: 波动率 (Volatility, 年化)
+    category: risk
+    batch: 2
+  - slug: alpha
+    display: Jensen Alpha
+    category: metric
+    batch: 2
+  - slug: beta
+    display: 市场 Beta
+    category: metric
+    batch: 2
+  - slug: var_cvar
+    display: VaR / CVaR
+    category: risk
+    batch: 2
+  - slug: tail_risk
+    display: 尾部风险 (Tail Risk)
+    category: risk
+    batch: 2
+
+  # ---- 批次 3 · 过拟合证伪 (5) ----
+  - slug: pbo
+    display: 回测过拟合概率 (PBO / CSCV)
+    category: risk
+    batch: 3
+  - slug: deflated_sharpe
+    display: 折减夏普比 (DSR)
+    category: metric
+    batch: 3
+  - slug: bootstrap_sharpe_ci
+    display: 自助法夏普置信区间 (Bootstrap SR CI)
+    category: metric
+    batch: 3
+  - slug: purged_kfold
+    display: 净化交叉验证 (Purged k-fold)
+    category: model
+    batch: 3
+  - slug: embargo
+    display: 禁运期 (Embargo)
+    category: model
+    batch: 3
+
+  # ---- 批次 4 · 因子信号 (5) ----
+  - slug: ic
+    display: 信息系数 (IC)
+    category: factor
+    batch: 4
+  - slug: rank_ic
+    display: Rank IC
+    category: factor
+    batch: 4
+  - slug: ic_ir
+    display: IC 信息率 (IC-IR)
+    category: factor
+    batch: 4
+  - slug: alpha101_concept
+    display: WorldQuant Alpha101 体系
+    category: factor
+    batch: 4
+  - slug: triple_barrier
+    display: 三重障碍标签 (Triple Barrier)
+    category: model
+    batch: 4
+
+  # ---- 批次 5 · 组合优化 (5) ----
+  - slug: mean_variance
+    display: Markowitz 均值方差
+    category: portfolio
+    batch: 5
+  - slug: hrp
+    display: 层次风险平价 (HRP)
+    category: portfolio
+    batch: 5
+  - slug: risk_parity
+    display: 风险平价 (Risk Parity)
+    category: portfolio
+    batch: 5
+  - slug: kelly_fraction
+    display: Kelly 仓位
+    category: portfolio
+    batch: 5
+  - slug: brinson_attribution
+    display: Brinson 归因
+    category: portfolio
+    batch: 5
+
+  # ---- 批次 6 · 数据陷阱 + 执行 (5) ----
+  - slug: survivorship_bias
+    display: 幸存者偏差 (Survivorship Bias)
+    category: data
+    batch: 6
+  - slug: look_ahead_bias
+    display: 前视偏差 (Look-ahead Bias)
+    category: data
+    batch: 6
+  - slug: slippage
+    display: 滑点 (Slippage)
+    category: execution
+    batch: 6
+  - slug: funding_rate
+    display: 资金费率 (Funding Rate, 永续)
+    category: execution
+    batch: 6
+  - slug: walk_forward
+    display: 滚动样本外测试 (Walk-Forward)
+    category: model
+    batch: 6
