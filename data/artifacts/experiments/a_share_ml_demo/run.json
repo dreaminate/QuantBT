@@ -1,0 +1,61 @@
+{
+  "run_id": "a_share_ml_demo",
+  "started_at": "2026-05-28T00:24:57.364996+00:00",
+  "status": "completed",
+  "started_at_utc": "2026-05-28T00:24:57.364996+00:00",
+  "strategy_id": "a_share_ml_demo",
+  "strategy_name": "A股 ML demo (alpha_lite × LGBM × HRP × Brinson)",
+  "market": "stocks_cn",
+  "frequency": "1d",
+  "benchmark": "synthetic_equal_weight",
+  "strategy_mode": "ml",
+  "analysis_start": "2023-01-01",
+  "analysis_end": "2023-08-28",
+  "execution_profile": "full_backtest",
+  "execution_model": "next_bar_open",
+  "instrument_type": "equity_cn",
+  "model_used": true,
+  "factor_ids": [
+    "alpha_mom_5d",
+    "alpha_mom_20d",
+    "alpha_vol_20d",
+    "alpha_sma_dev_20d",
+    "alpha_amount_zscore_20d"
+  ],
+  "top_n": 5,
+  "asset_class": "equity_cn",
+  "metrics": {
+    "total_return": 1.4780286742691295,
+    "annualized_return": 1.6034130249805347,
+    "sharpe": 7.982395601056123,
+    "max_drawdown": -0.02201650484924781,
+    "pbo": {
+      "pbo": 0.3333333333333333,
+      "n_strategies": 5,
+      "n_combinations": 6,
+      "s_blocks": 4
+    },
+    "deflated_sharpe": 0.9999998071340216,
+    "bootstrap_sharpe_ci": {
+      "estimate": 7.982395601056123,
+      "lower": 5.9661648234954265,
+      "upper": 10.332666725491965,
+      "n_boot": 200
+    },
+    "brinson_total": {
+      "allocation": 0.016451723344269167,
+      "selection": 0.11874750145864973,
+      "interaction": 0.08393761778153522,
+      "active_return": 0.21913684258445412
+    },
+    "train_oos": {
+      "mse": 0.09634939964367611,
+      "r2": -0.0815997121290093,
+      "sharpe_proxy": -0.0005343315667137631
+    },
+    "n_factors": 5,
+    "n_symbols": 30,
+    "n_days": 215,
+    "trade_count": 1216
+  }
+}

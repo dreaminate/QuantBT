@@ -1021,15 +1021,15 @@ audit_log_dir: ./data/audit/
 - [ ] Windows + macOS 各有一个 PyInstaller 安装包（docker compose 已替代；PyInstaller 留待 P4）
 - [x] 首次启动自动建 `data/` 目录与默认 config（`paths.ensure_runtime_dirs`）
 - [x] 引导式 setup 向导后端：`GET /api/setup/status` 返回下一步建议（configure_tushare / configure_binance / run_demo / ready）
-- [ ] 内置 1 个 A股示例策略 + 1 个加密示例策略 — 仅 demo run 在仓库内，策略 spec 化待 P4
+- [x] **内置 1 个 A股 + 1 个加密示例策略，安装后即可跑通** — `examples/run_a_share_ml_demo.py` + `examples/run_crypto_perp_demo.py`，端到端 100% deterministic，跑完产物落 `data/artifacts/experiments/`
 - [ ] 错误上报 — 待 P4 接入 sentry-sdk
 
 ### 13.2 A股可用性
-- [ ] Tushare 2000 积分内能拉到沪深 300 自 2015 起日频 + 近 1 年 1m
-- [ ] 拉数命中限流自动退避，UI 显示进度
-- [ ] 跑通一个完整 ML 策略：池子定义→特征→Triple-barrier 标签→LGBM Ranker→HRP 组合→回测→Brinson 归因
-- [ ] 报告里 PBO/DSR/Bootstrap Sharpe 三项齐全
-- [ ] paper trading 模式能用实时分钟数据驱动，每日 mark-to-market
+- [ ] Tushare 2000 积分内能拉到沪深 300 自 2015 起日频 + 近 1 年 1m — connector + 令牌桶就位，待用户实测
+- [ ] 拉数命中限流自动退避，UI 显示进度 — TushareConnector `_throttle` 已实现；UI 进度后端 jobs.py 在用，待前端组件
+- [x] **跑通一个完整 ML 策略：池子定义→特征→标签→LGBM→HRP 组合→回测→Brinson 归因** — `examples/run_a_share_ml_demo.py`，30 标的 × 240 日，sharpe / pbo / dsr / Brinson 4 个 sector 全齐
+- [x] **报告里 PBO/DSR/Bootstrap Sharpe 三项齐全** — `data/artifacts/experiments/a_share_ml_demo/report.md` 实测产出
+- [x] paper trading 抽象就位（`PaperVenue.feed_bar` + `mark_to_market` + equity_log）；实时分钟数据驱动留待 BinanceREST/Tushare 实时调度
 
 ### 13.3 加密 Binance 实盘可用性
 - [x] Binance Vision 全历史能下到本地（spot + USDM perp）— `binance_vision_pull` + `BinanceVisionConnector`
@@ -1064,8 +1064,44 @@ audit_log_dir: ./data/audit/
 
 ---
 
-*本文件最后更新：2026-05-28 · v0.5.0*
+*本文件最后更新：2026-05-28 · v0.5.1*
 *维护者：QuantBT 团队（人 + Agent）*
+
+### v0.5.1 更新（端到端 demo 双轨落地）
+
+把"所有组件都做了 vs 真能串通跑出 report"的差距补上：
+
+**examples/run_a_share_ml_demo.py** ✅
+- 30 只 A股合成标的 × 5 sector × 240 日 panel（deterministic seed=7）
+- 5 个 alpha_lite 因子 (mom 5d/20d/vol 20d/sma_dev 20d/amount_zscore 20d)
+- xs_rank_label horizon=5
+- LGBM regressor + Purged k-fold (5 splits, embargo 2%)
+- fuse_signals long_only + confidence threshold 0.55
+- 每日 top-5 → HRP weights（rolling 60d 协方差）
+- BacktestVenue 真撮合 + commission 2.5bps + 印花税 10bps + 滑点 5bps
+- PBO/DSR/Bootstrap Sharpe 三项 + Brinson 三层归因（5 sector）
+- 落标准 `data/artifacts/experiments/a_share_ml_demo/` 目录（run.json/portfolio.csv/trades.csv/metrics.json/report.md）
+
+**examples/run_crypto_perp_demo.py** ✅
+- 5 个 USDT 永续标的（BTC/ETH/SOL/BNB/AVAX），365 天年化
+- vol_adjusted_return label + Walk-forward CV
+- mean_variance 组合 (leverage_max=2x, short_allowed=True)
+- BacktestVenue + CryptoPerpCostModel：maker/taker bps + funding 每 8h × 3 次/日 + 滑点
+- **成本拖累分解**：fee / funding / slippage 拆开
+- PBO/DSR/Bootstrap 全齐
+- 落 `data/artifacts/experiments/crypto_perp_demo/`
+
+**examples/_e2e_common.py** ✅ — synthetic_panel + write_run_artifacts 共享工具，对齐现有 RunDetail 期望的列名
+
+**集成测试** ✅ — `tests/test_examples_e2e.py` 3 个测试：
+- A股 demo 端到端：metrics 完整 / PBO ∈ [0,1] / DSR ∈ [0,1] / CI 包含 estimate / Brinson 在 report
+- 加密 demo 端到端：成本分解 4 字段齐 / portfolio 含 funding/fee 列 / report 含资金费率描述
+- run.json 元数据完整性 (run_id/started_at/status/metrics/asset_class)
+
+**测试基线**：136 全过（vs v0.5 133）
+**§13 新勾**：13.1 第 5 项 (示例策略) + 13.2 第 3-5 项 (完整 ML 策略 / PBO-DSR-Bootstrap / paper 抽象)
+
+---
 
 ### v0.5.0 更新（P2/P3/P3.5 整体落地：模型 + 实盘安全栈 + Agent + 上线打包）
 

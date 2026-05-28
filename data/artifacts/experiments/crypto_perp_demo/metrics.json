@@ -1,0 +1,34 @@
+{
+  "total_return": 5.130399826281594,
+  "annualized_return": 14.945944925530636,
+  "sharpe": 10.230222664931835,
+  "max_drawdown": -0.04393888248113559,
+  "pbo": {
+    "pbo": 0.0,
+    "n_strategies": 4,
+    "n_combinations": 6,
+    "s_blocks": 4
+  },
+  "deflated_sharpe": 0.9999998425071941,
+  "bootstrap_sharpe_ci": {
+    "estimate": 10.230222664931835,
+    "lower": 7.087189480397392,
+    "upper": 13.385303803142419,
+    "n_boot": 200
+  },
+  "cost_breakdown": {
+    "total_fee": 173530.97035191674,
+    "total_funding": 204392.4891181594,
+    "total_slippage": 69412.38814076693,
+    "total_cost": 447335.8476108431
+  },
+  "train_oos": {
+    "mse": 1.2745842998062589,
+    "r2": -0.19720467195069857,
+    "sharpe_proxy": -0.40880912930016894
+  },
+  "n_factors": 5,
+  "n_symbols": 5,
+  "n_days": 219,
+  "trade_count": 453
+}
