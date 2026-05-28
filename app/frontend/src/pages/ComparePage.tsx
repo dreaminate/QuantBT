@@ -272,6 +272,7 @@ export function ComparePage() {
                   <tr>
                     <th>{text.comparePage.run}</th>
                     <th>{text.comparePage.strategy}</th>
+                    <th>可信度</th>
                     <th>{text.comparePage.totalReturn}</th>
                     <th>{text.comparePage.sharpe}</th>
                     <th>{text.comparePage.maxDrawdown}</th>
@@ -298,6 +299,29 @@ export function ComparePage() {
                         <td>
                           <strong>{run.strategy_name}</strong>
                           <span className="row-subtitle">{summarizeDatasetVersions(run.dataset_versions ?? {})}</span>
+                        </td>
+                        <td>
+                          {(() => {
+                            const rs = (run as any).risk_summary as { trust_level?: string; flags?: any[] } | undefined;
+                            if (!rs) return <span style={{ color: "#888" }}>—</span>;
+                            const colorMap: Record<string, string> = {
+                              ok: "#1f9a52", caution: "#c98a14", high_risk: "#cc3344", insufficient_data: "#888",
+                            };
+                            const labelMap: Record<string, string> = {
+                              ok: "可信", caution: "存疑", high_risk: "高风险", insufficient_data: "信息不足",
+                            };
+                            const color = colorMap[rs.trust_level || "insufficient_data"];
+                            const label = labelMap[rs.trust_level || "insufficient_data"];
+                            return (
+                              <span title={(rs.flags || []).map((f: any) => f.message).join(" · ")}
+                                    style={{ color, fontWeight: 600, fontSize: 12 }}>
+                                ● {label}
+                                {rs.flags && rs.flags.length > 0 && (
+                                  <span style={{ marginLeft: 4, fontWeight: 400, fontSize: 10 }}>({rs.flags.length})</span>
+                                )}
+                              </span>
+                            );
+                          })()}
                         </td>
                         <td>{formatPct(metrics.total_return)}</td>
                         <td>{formatNumber(metrics.sharpe)}</td>

@@ -1130,7 +1130,24 @@ def query_runs(request: RunQueryRequest) -> dict:
     return query_runs_response(request.model_dump())
 
 
-@app.get("/api/runs/compare")
+@app.get("/api/runs/compare")  # type: ignore[misc]
+def _compare_runs_with_risk(run_ids: list[str] = Query(...)) -> dict:  # type: ignore[assignment]
+    """v0.9.4 · 在 compare 响应每个 run 上追加 risk_summary，便于 ComparePage 显示信任色块。"""
+    resp = compare_runs_response(run_ids)
+    from .eval.risk_summary import compute_risk_summary
+    runs = resp.get("runs") or []
+    for r in runs:
+        # 合并 metrics + jq_overview_metrics + overall (compare 用 overall snapshot)
+        combined: dict[str, Any] = {}
+        for src_key in ("metrics", "jq_overview_metrics", "overall", "out_of_sample"):
+            v = r.get(src_key)
+            if isinstance(v, dict):
+                combined.update(v)
+        r["risk_summary"] = compute_risk_summary(combined).to_dict()
+    return resp
+
+
+@app.get("/api/runs/compare_legacy")
 def compare_runs(run_ids: list[str] = Query(...)) -> dict:
     return compare_runs_response(run_ids)
 
