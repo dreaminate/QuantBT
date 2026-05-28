@@ -1220,13 +1220,57 @@ audit_log_dir: ./data/audit/
 - [x] `/pricing` 三档订阅页 (Community ¥0 / Learn ¥49 月 ¥499 年 / Live Pro ¥149 月 ¥1499 年) + 价格锚点说明
 - [x] 信任阶梯 L0-L7 与三档订阅映射明确
 - [x] `scripts/release_check.py` 7 项自动校验 (pytest/glossary/tsc/vite/notes/GOAL/git clean)
-- [ ] 真支付集成 (stripe / 微信 / 支付宝) — v1.0 前不做
+- [x] Stripe billing scaffold (v1.0.3): 3 plan + webhook (created/updated/deleted/payment_failed) — 等用户填 6 个 price_id
+- [x] PricingPage 接 `/api/billing/me` + `/upgrade_request` (v1.0.5)
 - [ ] 用户 funnel 真实数据 (需要先有 ≥50 种子用户)
+
+### 13.12 Mainnet 防御 (v1.0 新增)
+- [x] `MainnetGuardsService` 7 项防御 (Per-user Fernet / TOTP / IP 白名单 / 单日额度 / per-order 密码 / audit log / 紧急平仓)
+- [x] `/settings/security` 前端 UI: 2FA QR + IP textarea + 额度 input + audit table + 紧急平仓按钮
+- [x] 26 unit test PASS + Mock encryption keys 流程
+- [x] 用户配置项: `QUANTBT_MASTER_KEY` env (生产用 Fernet.generate_key() 32-byte)
+
+### 13.13 全栈交付 (v1.0 新增)
+- [x] PWA: manifest + service worker + 移动端 200 行 media query + 汉堡菜单
+- [x] Tauri 桌面 scaffold (Cargo.toml + tauri.conf + main.rs spawn backend + README)
+- [x] 阿里云轻量香港部署 (docker-compose + Caddy 自动 HTTPS + Postgres + README 11 节)
+- [x] 真 LLM SSE streaming (OpenAILLM.stream_chat + 前端 fetch + ReadableStream)
+
+### 13.14 学术 audit (v0.9.7 新增, Lopez de Prado patch1 §G.a)
+- [x] walk_forward_v2: window selection log + `detect_gridsearch_leak`
+- [x] factor_factory/audit: shift-invariance contract test
+- [x] portfolio/hrp_audit: 协方差奇异性 fallback ladder
+- [x] data_hash: SHA-256 manifest + FactorBinding 复合主键
 
 ---
 
-*本文件最后更新：2026-05-29 · v0.9.0 (24h sprint 11 tag 全过)*
+*本文件最后更新：2026-05-29 · v1.0.0-rc1 (24h sprint v0.9.6 → v1.0.5 推到"只剩用户信息"状态)*
 *维护者：QuantBT 团队（人 + Agent）*
+
+### v1.0.0-rc1 更新（24h sprint · v0.9.6-v1.0.5 全栈推进）
+
+完整 release notes 见 `docs/releases/v1.0.0-rc1.md`。一句话总结:
+真 LLM streaming + PWA + Mainnet 7 项防御 + Tauri/Cloud/Stripe scaffold +
+Lopez de Prado 学术 audit 4 项 + Binance USDM testnet 12 cell e2e + Glossary 30 词条。
+
+| tag | 主题 | 备注 |
+|---|---|---|
+| v0.9.6 | `/api/security/binance/verify` endpoint | 真测试用户 key, USDT 5027.87 ✓ |
+| v0.9.7 | 学术 audit 4 项 | +28 tests |
+| v0.9.8 | 真 LLM SSE streaming | iter_lines token-by-token |
+| v0.9.9 | PWA + 移动端 | manifest + sw + 200 行 media |
+| v0.9.10 | Binance testnet 12 cell e2e | conftest 默认 skip, -m testnet 触发 |
+| v0.9.11 | Glossary 30 词条 (27 stub) | strict_related PASS |
+| v1.0.0-alpha | Mainnet 7 项防御 | +26 tests |
+| v1.0.1-scaffold | Tauri 桌面 | 等 Apple/Win 签名证书 |
+| v1.0.2-scaffold | 阿里云部署 | 等用户开机 + 域名 |
+| v1.0.3-scaffold | Stripe billing | +11 tests, 等 Stripe price_id |
+| v1.0.4 | 前端 Mainnet Settings UI | 7 面板 |
+| v1.0.5 | Stripe 前端接入 | PricingPage 接 upgrade_request |
+
+测试基线 498 → 579 全过 (+ 13 testnet skipped by default)。
+
+用户接手清单：见 `docs/releases/v1.0.0-rc1.md` "用户接手清单" 7 条。
 
 ### v0.9.0 更新（24h sprint · patch2 §C 12 周路线一次性交付）
 
