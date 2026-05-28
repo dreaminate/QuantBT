@@ -21,6 +21,7 @@ import { GlossaryIndexPage } from "./pages/community/GlossaryIndexPage";
 import { GlossaryDetailPage } from "./pages/community/GlossaryDetailPage";
 import { FunnelDashboardPage } from "./pages/FunnelDashboardPage";
 import { PricingPage } from "./pages/PricingPage";
+import { StrategyTemplatesPage } from "./pages/StrategyTemplatesPage";
 import { Shell } from "./components/shell/Shell";
 
 /**
@@ -73,6 +74,7 @@ export default function App() {
         <Route path="/glossary/:slug" element={<GlossaryDetailPage />} />
         <Route path="/metrics/funnel" element={<FunnelDashboardPage />} />
         <Route path="/pricing" element={<PricingPage />} />
+        <Route path="/templates" element={<StrategyTemplatesPage />} />
         <Route path="/u/:username" element={<UserProfilePage />} />
       </Routes>
     </Shell>

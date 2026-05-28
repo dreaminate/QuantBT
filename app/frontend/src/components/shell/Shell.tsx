@@ -28,6 +28,7 @@ const SIDEBAR_BY_AREA: Record<string, SidebarItem[]> = {
     { to: "/chat", label: "Mode 2 · 量化教练", icon: "💬" },
     { to: "/agent", label: "Agent 工作台", icon: "◉" },
     { to: "/factors", label: "因子市场", icon: "∑" },
+    { to: "/templates", label: "策略模板", icon: "≣" },
     { to: "/trading", label: "Binance 交易台", icon: "$" },
     { to: "/experiments", label: "实验追踪", icon: "⌥" },
   ],
@@ -214,7 +215,7 @@ function StatusBar() {
         <span className="cc-status-dot" /> secrets: {info.loadedSecrets.length} loaded
       </span>
       <span className="cc-status-spacer" />
-      <span className="cc-status-item">v0.9.0</span>
+      <span className="cc-status-item">v0.9.3</span>
     </footer>
   );
 }
@@ -267,6 +268,7 @@ function areaOf(pathname: string): string {
     pathname.startsWith("/workshop") ||
     pathname.startsWith("/agent") ||
     pathname.startsWith("/factors") ||
+    pathname.startsWith("/templates") ||
     pathname.startsWith("/trading") ||
     pathname.startsWith("/experiments") ||
     pathname.startsWith("/ide") ||

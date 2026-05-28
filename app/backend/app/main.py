@@ -1669,6 +1669,33 @@ def strategies_template_detail(template_id: str) -> dict[str, Any]:
     return t.to_dict()
 
 
+@app.post("/api/strategies/templates/{template_id}/fork_to_ide")
+def strategies_template_fork(
+    template_id: str,
+    payload: dict = Body(default_factory=dict),
+    user=Depends(require_user_dependency),
+) -> dict[str, Any]:
+    """v0.9.3 · 把策略模板 fork 到用户 IDE 名下，可立刻在 /ide 改 + 跑。"""
+    t = get_strategy_template(template_id)
+    if t is None:
+        raise HTTPException(status_code=404, detail=f"template 不存在: {template_id}")
+    new_name = payload.get("name") or f"{t.template_id}_fork"
+    description = payload.get("description") or f"forked from template {t.template_id}"
+    try:
+        strategy = IDE_SERVICE.save_strategy(
+            user.username, new_name, t.code,
+            asset_class=t.asset_class, description=description,
+        )
+    except IDEError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+    return {
+        "strategy_id": strategy.strategy_id,
+        "name": strategy.name,
+        "ide_url": f"/ide?open={strategy.name}",
+        "expected_metrics": t.expected_metrics,
+    }
+
+
 @app.get("/api/runs/{run_id}/coach_suggestion")
 def runs_coach_suggestion(run_id: str) -> dict[str, Any]:
     """v0.8.6.1 · 基于 risk_summary 给出主动建议 (RunDetail 顶部浮卡片用)。"""
