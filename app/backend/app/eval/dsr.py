@@ -21,9 +21,13 @@ from scipy.stats import norm
 
 def sharpe_ratio(returns: np.ndarray, periods_per_year: int = 252) -> float:
     arr = np.asarray(returns, dtype=float)
-    if arr.size < 2 or arr.std(ddof=1) == 0:
+    if arr.size < 2:
         return 0.0
-    return float(arr.mean() / arr.std(ddof=1) * math.sqrt(periods_per_year))
+    sd = arr.std(ddof=1)
+    # v0.8.7.1 学术 audit · 用 1e-12 阈值避免浮点噪声 (np.ones * c 的 std ≈ 2e-19)
+    if sd < 1e-12:
+        return 0.0
+    return float(arr.mean() / sd * math.sqrt(periods_per_year))
 
 
 def _expected_max_sr(n_trials: int) -> float:

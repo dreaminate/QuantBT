@@ -14,6 +14,8 @@ import type { RiskSummary } from "../../types";
 
 interface Props {
   riskSummary?: RiskSummary | null;
+  /** v0.8.7.1: 显示"已过学术审计"小绿勾 */
+  auditedMetrics?: boolean;
 }
 
 const TRUST_PRESET = {
@@ -23,7 +25,7 @@ const TRUST_PRESET = {
   insufficient_data: { label: "信息不足", color: "#888888", bg: "rgba(136, 136, 136, 0.12)" },
 } as const;
 
-export function RiskSummaryChip({ riskSummary }: Props) {
+export function RiskSummaryChip({ riskSummary, auditedMetrics = true }: Props) {
   const [open, setOpen] = useState(false);
   const boxRef = useRef<HTMLSpanElement | null>(null);
 
@@ -82,6 +84,27 @@ export function RiskSummaryChip({ riskSummary }: Props) {
           <span style={{ opacity: 0.85, fontWeight: 400 }}>· {riskSummary.flags.length}</span>
         )}
       </button>
+      {auditedMetrics && (
+        <span
+          title="PBO / DSR / Purged k-fold 经 v0.8.7.1 学术 audit 单测覆盖"
+          style={{
+            display: "inline-flex",
+            alignItems: "center",
+            gap: 2,
+            marginLeft: 4,
+            padding: "1px 6px",
+            background: "rgba(31, 154, 82, 0.12)",
+            color: "#1f9a52",
+            border: "1px solid #1f9a52",
+            borderRadius: 10,
+            fontSize: 10,
+            fontWeight: 500,
+            verticalAlign: "middle",
+          }}
+        >
+          ✓ audited
+        </span>
+      )}
       {open && (
         <div
           role="dialog"

@@ -214,7 +214,7 @@ function StatusBar() {
         <span className="cc-status-dot" /> secrets: {info.loadedSecrets.length} loaded
       </span>
       <span className="cc-status-spacer" />
-      <span className="cc-status-item">v0.8.7</span>
+      <span className="cc-status-item">v0.8.7.1</span>
     </footer>
   );
 }
