@@ -1122,9 +1122,16 @@ def delete_run(run_id: str) -> dict[str, str]:
 @app.get("/api/runs/{run_id}")
 def get_run(run_id: str) -> dict:
     try:
-        return get_run_response(run_id)
+        resp = get_run_response(run_id)
     except FileNotFoundError as exc:
         raise HTTPException(status_code=404, detail=str(exc)) from exc
+    # v0.8.4 Day 4 · 计算 risk_summary 挂到响应（不改 run.json on-disk schema）
+    from .eval.risk_summary import compute_risk_summary
+    combined: dict[str, Any] = {}
+    combined.update(resp.get("metrics") or {})
+    combined.update(resp.get("jq_overview_metrics") or {})
+    resp["risk_summary"] = compute_risk_summary(combined).to_dict()
+    return resp
 
 
 @app.get("/api/runs/{run_id}/series")

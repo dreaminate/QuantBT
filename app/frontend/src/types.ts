@@ -268,6 +268,24 @@ export type RunDetail = {
   analysis_start?: string | null;
   analysis_end?: string | null;
   duration_seconds?: number | null;
+  /** v0.8.4 · 服务端计算的可信度风险摘要（不入 run.json on-disk） */
+  risk_summary?: RiskSummary | null;
+};
+
+export type RiskFlag = {
+  name: string;
+  severity: "high" | "medium" | "low";
+  message: string;
+  metric_name: string;
+  metric_value: number | null;
+  threshold: number;
+};
+
+export type RiskSummary = {
+  trust_level: "ok" | "caution" | "high_risk" | "insufficient_data";
+  flags: RiskFlag[];
+  summary: string;
+  checked_metrics: string[];
 };
 
 export type RunSummary = {

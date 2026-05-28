@@ -27,6 +27,7 @@ import type {
 import { buildJqSummaryRows } from "../jqOverviewSummary";
 import { getGlossarySlugForMetric } from "../features/glossary/metricGlossaryMap";
 import { GlossaryInfoButton } from "../features/glossary/GlossaryInfoButton";
+import { RiskSummaryChip } from "../features/glossary/RiskSummaryChip";
 import { formatFileSize, formatNumber, formatPct } from "../utils";
 
 type DetailContentTab =
@@ -1048,7 +1049,10 @@ function RunOverviewTab({
   return (
     <section className="jq-run-panel-section jq-run-overview-module jq-run-overview-jq-page">
       <header className="jq-run-overview-page-head" aria-label="收益概述">
-        <h2 className="jq-run-overview-page-title">收益概述</h2>
+        <h2 className="jq-run-overview-page-title">
+          收益概述
+          <RiskSummaryChip riskSummary={run.risk_summary} />
+        </h2>
       </header>
 
       <div className="jq-run-overview-summary-board jq-run-overview-summary-board--metrics-only">
