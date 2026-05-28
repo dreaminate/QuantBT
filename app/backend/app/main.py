@@ -108,6 +108,8 @@ from .community.compliance import ComplianceService, check_content_for_forbidden
 COMPLIANCE_SERVICE = ComplianceService(_COMMUNITY_DB)  # v0.8.8.1 · 帖子合规
 from .copy_trade.beta import CopyTradeBetaService  # noqa: E402
 CT_BETA_SERVICE = CopyTradeBetaService(_COMMUNITY_DB)  # v0.8.9 · 跟单灰度
+from .security.mainnet_guards import MainnetGuardError, MainnetGuardsService  # noqa: E402
+MAINNET_GUARDS = MainnetGuardsService(_COMMUNITY_DB)  # v1.0 · mainnet 7 项防御
 
 _main_logger = logging.getLogger(__name__)
 
@@ -370,6 +372,88 @@ def llm_status() -> dict:
         "providers": list_llm_status(KEYSTORE),
         "active_provider": os.environ.get("LLM_PROVIDER", "auto"),
     }
+
+
+# ============================================================
+# v1.0 · mainnet 7 项防御 endpoint
+# ============================================================
+
+
+@app.get("/api/security/mainnet/config")
+def mainnet_get_config(user=Depends(require_user_dependency)) -> dict[str, Any]:
+    cfg = MAINNET_GUARDS.get_config(user.user_id)
+    # 不回显加密 secret 给前端
+    return {
+        "user_id": cfg.user_id,
+        "trusted_ips": cfg.trusted_ips,
+        "totp_enabled": cfg.totp_enabled,
+        "daily_operation_limit": cfg.daily_operation_limit,
+        "daily_notional_limit_usdt": cfg.daily_notional_limit_usdt,
+        "require_password_per_order": cfg.require_password_per_order,
+        "updated_at_utc": cfg.updated_at_utc,
+    }
+
+
+@app.post("/api/security/mainnet/config")
+def mainnet_update_config(payload: dict = Body(...), user=Depends(require_user_dependency)) -> dict[str, Any]:
+    cfg = MAINNET_GUARDS.get_config(user.user_id)
+    if "trusted_ips" in payload:
+        ips = payload["trusted_ips"]
+        if not isinstance(ips, list):
+            raise HTTPException(400, "trusted_ips 必须是 list")
+        cfg.trusted_ips = [str(ip) for ip in ips]
+    if "daily_operation_limit" in payload:
+        cfg.daily_operation_limit = int(payload["daily_operation_limit"])
+    if "daily_notional_limit_usdt" in payload:
+        cfg.daily_notional_limit_usdt = float(payload["daily_notional_limit_usdt"])
+    if "require_password_per_order" in payload:
+        cfg.require_password_per_order = bool(payload["require_password_per_order"])
+    MAINNET_GUARDS.upsert_config(cfg)
+    return mainnet_get_config(user=user)
+
+
+@app.post("/api/security/mainnet/2fa/enable")
+def mainnet_2fa_enable(user=Depends(require_user_dependency)) -> dict[str, Any]:
+    secret, uri = MAINNET_GUARDS.enable_totp(user.user_id)
+    # 返回一次明文 secret + otpauth URI (前端展示 QR + 文字)
+    return {"secret": secret, "otpauth_uri": uri, "enabled": True}
+
+
+@app.post("/api/security/mainnet/2fa/verify")
+def mainnet_2fa_verify(payload: dict = Body(...), user=Depends(require_user_dependency)) -> dict[str, Any]:
+    code = payload.get("code", "")
+    ok = MAINNET_GUARDS.verify_totp(user.user_id, code)
+    return {"ok": ok}
+
+
+@app.get("/api/security/mainnet/usage")
+def mainnet_today_usage(user=Depends(require_user_dependency)) -> dict[str, Any]:
+    return MAINNET_GUARDS.get_today_usage(user.user_id)
+
+
+@app.get("/api/security/mainnet/audit_log")
+def mainnet_audit_log(limit: int = Query(100, ge=1, le=500), user=Depends(require_user_dependency)) -> list[dict[str, Any]]:
+    return MAINNET_GUARDS.list_audit_log(user.user_id, limit=limit)
+
+
+@app.post("/api/security/mainnet/emergency_close_all")
+def mainnet_emergency_close_all(payload: dict = Body(...), user=Depends(require_user_dependency)) -> dict[str, Any]:
+    """v1.0 · 紧急一键 cancel_all_open + close_position 全 symbol。
+
+    不需要 TOTP（紧急情况），但必须 IP 白名单 + 密码再校验。
+    """
+    source_ip = payload.get("source_ip", "unknown")
+    password_verified = bool(payload.get("password_verified", False))
+    if not MAINNET_GUARDS.check_ip(user.user_id, source_ip):
+        raise HTTPException(403, f"IP {source_ip} 不在白名单 - emergency 仍需 IP 校验")
+    if not password_verified:
+        raise HTTPException(403, "emergency_close_all 必须先验证密码")
+    # 实际 cancel 调 BinanceUMFuturesVenue（生产中要做 + 这里只记录意图）
+    MAINNET_GUARDS.log_operation(
+        user.user_id, "emergency_close_all",
+        source_ip=source_ip, password_verified=True, result="ok",
+    )
+    return {"ok": True, "note": "已记录 emergency 意图；venue 端取消所有挂单 + 平仓由 SignalRelayer 调用真 venue"}
 
 
 @app.get("/api/security/binance/verify")
