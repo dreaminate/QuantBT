@@ -1045,7 +1045,7 @@ audit_log_dir: ./data/audit/
 
 ### 13.4 Agent 可用性
 - [x] 低配版：用户在 UI 用 DevLocalLLM 对话触发 StrategyGoal slot-fill — Workbench → Agent tab
-- [x] 完整版骨架：StrategyGoal slot-filling + 13 工具 schema + reAct 状态机；接 Anthropic 真模型只需替换 `LLMClient`
+- [x] **完整版实测通过**：真 LLM（OpenAI 协议任意 base_url；本次用 highway API + claude-opus-4-7）→ 多轮 tool 串联 (strategy_goal.create / factor.run_ic / code.replicate) → `/api/agent/chat` 返回完整 steps[user → assistant(tool_calls) → tool → assistant(终态)]；含 5xx/timeout 自动指数退避重试 + 4 个 mock e2e 测试锁定协议
 - [x] CodeReplicator：pandas/backtrader/vnpy/qlib AST 改写为 QuantBT predict 模板 — 单测通过
 
 ### 13.5 文档与可维护性

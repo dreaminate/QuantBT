@@ -26,6 +26,7 @@ def test_openai_compatible_requires_base_url_and_model() -> None:
 def test_openai_compatible_hits_user_supplied_base_url() -> None:
     session = MagicMock()
     resp = MagicMock()
+    resp.status_code = 200
     resp.json.return_value = {"choices": [{"message": {"role": "assistant", "content": "hi"}}]}
     resp.raise_for_status.return_value = None
     session.post.return_value = resp

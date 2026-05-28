@@ -77,13 +77,22 @@ RISK_LIMITS = RiskLimits()
 RISK_MONITOR = RiskMonitor(RISK_LIMITS)
 KILL_SWITCH = KillSwitch([])  # 实盘 venue 启用时由 settings 注入
 
-AGENT_LLM = DevLocalLLM()
 AGENT_SLOT_FILLER = StrategyGoalSlotFiller()
 CODE_REPLICATOR = CodeReplicator()
 
 
+def _current_agent_llm():
+    """按 keystore + env 选最优 provider；都失败 fallback DevLocalLLM。
+    不缓存 client，让 secrets 热加载立即生效。"""
+    return make_llm_client(keystore=KEYSTORE)
+
+
+# 启动时探一次，仅用于 /api/agent/tools status 显示
+AGENT_LLM = _current_agent_llm()
+
+
 def _agent_runtime() -> AgentRuntime:
-    runtime = AgentRuntime(AGENT_LLM)
+    runtime = AgentRuntime(_current_agent_llm())
     # 注册若干 tool handler；正式的 backend 调用由前端继续派发
     runtime.register_tool("strategy_goal.create", lambda _n, args: {"strategy_goal": args})
     runtime.register_tool("factor.run_ic", lambda _n, args: {"queued": True, "args": args})

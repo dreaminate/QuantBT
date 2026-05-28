@@ -122,7 +122,7 @@ class AnthropicLLM(LLMClient):
                 "anthropic-version": "2023-06-01",
                 "content-type": "application/json",
             },
-            timeout=60,
+            timeout=120,
         )
         r.raise_for_status()
         data = r.json()
@@ -206,13 +206,29 @@ class OpenAILLM(LLMClient):
                 for t in tools
             ]
 
-        r = self._http.post(
-            f"{self._base}/chat/completions",
-            json=payload,
-            headers={"Authorization": f"Bearer {self._key}", "content-type": "application/json"},
-            timeout=60,
-        )
-        r.raise_for_status()
+        # 5xx / timeout 自动指数退避重试（上游代理偶发抽风）
+        import time as _time
+        last_exc: Exception | None = None
+        for attempt in range(3):
+            try:
+                r = self._http.post(
+                    f"{self._base}/chat/completions",
+                    json=payload,
+                    headers={"Authorization": f"Bearer {self._key}", "content-type": "application/json"},
+                    timeout=120,
+                )
+                if 500 <= r.status_code < 600:
+                    raise requests.HTTPError(f"{r.status_code} {r.reason}", response=r)
+                r.raise_for_status()
+                break
+            except (requests.Timeout, requests.ConnectionError, requests.HTTPError) as exc:
+                last_exc = exc
+                if attempt >= 2:
+                    raise
+                _time.sleep(2 ** attempt)
+        else:
+            if last_exc:
+                raise last_exc
         data = r.json()
         choice = (data.get("choices") or [{}])[0]
         message = choice.get("message", {})
