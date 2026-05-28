@@ -1,26 +1,46 @@
 {
-  "total_return": 1.4780286742691295,
-  "annualized_return": 1.6034130249805347,
-  "sharpe": 7.982395601056123,
-  "max_drawdown": -0.02201650484924781,
+  "total_return": 1.4780286742691282,
+  "annualized_return": 1.6034130249805334,
+  "strategy_annual_return": 1.6034130249805334,
+  "benchmark_return": -0.05757771132901046,
+  "excess_return": 1.629424944696142,
+  "sharpe": 7.504657973972028,
+  "sortino": 12.23368752477977,
+  "information_ratio": 9.162348428204192,
+  "alpha": 1.0288604105835106,
+  "beta": 1.0230440802773402,
+  "max_drawdown": -0.022016504849247776,
+  "volatility": 0.1288345809865205,
+  "strategy_volatility": 0.1288345809865205,
+  "benchmark_volatility": 0.06201428834450851,
+  "win_rate": 0.7168949771689498,
+  "daily_win_rate": 0.6569037656903766,
+  "trade_win_rate": 0.7168949771689498,
+  "profit_loss_ratio": 1.4910157568933728,
+  "profit_count": 157,
+  "loss_count": 62,
+  "trade_count": 1216,
+  "avg_daily_return": 0.0038367439108088733,
+  "avg_daily_excess_return": 0.004077237454549286,
+  "excess_sharpe_ratio": 9.162348428204192,
   "pbo": {
     "pbo": 0.3333333333333333,
     "n_strategies": 5,
     "n_combinations": 6,
     "s_blocks": 4
   },
-  "deflated_sharpe": 0.9999998071340216,
+  "deflated_sharpe": 0.9999992855978254,
   "bootstrap_sharpe_ci": {
-    "estimate": 7.982395601056123,
-    "lower": 5.9661648234954265,
-    "upper": 10.332666725491965,
+    "estimate": 7.504657973972028,
+    "lower": 5.627929214036975,
+    "upper": 9.588354577859421,
     "n_boot": 200
   },
   "brinson_total": {
-    "allocation": 0.016451723344269167,
+    "allocation": 0.016451723344269156,
     "selection": 0.11874750145864973,
-    "interaction": 0.08393761778153522,
-    "active_return": 0.21913684258445412
+    "interaction": 0.08393761778153523,
+    "active_return": 0.21913684258445415
   },
   "train_oos": {
     "mse": 0.09634939964367611,
@@ -29,6 +49,5 @@
   },
   "n_factors": 5,
   "n_symbols": 30,
-  "n_days": 215,
-  "trade_count": 1216
+  "n_days": 215
 }

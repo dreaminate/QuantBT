@@ -27,7 +27,12 @@ import numpy as np
 import pandas as pd
 import polars as pl
 
-from _e2e_common import synthetic_panel, write_run_artifacts  # type: ignore[import-not-found]
+from _e2e_common import (  # type: ignore[import-not-found]
+    compute_run_metrics,
+    enrich_portfolio_with_metrics,
+    synthetic_panel,
+    write_run_artifacts,
+)
 
 # 这些 import 走 _e2e_common 里塞进 sys.path 的 backend
 from app.eval import (
@@ -173,6 +178,8 @@ def _run_backtest(
     prev_weights: dict[str, float] = {}
     bench_equity = initial_cash
     peak = initial_cash
+    prev_equity = initial_cash
+    prev_bench_equity = initial_cash
     for idx, ts in enumerate(timestamps[:-1]):
         next_ts = timestamps[idx + 1]
         bar = panel_pd[panel_pd["ts"] == ts]
@@ -221,17 +228,22 @@ def _run_backtest(
         bench_equity *= 1 + bench_returns.loc[next_ts]
         peak = max(peak, equity)
         dd = (equity - peak) / peak
+        daily_strat = (equity / prev_equity - 1.0) if prev_equity else 0.0
+        daily_bench = (bench_equity / prev_bench_equity - 1.0) if prev_bench_equity else 0.0
         rows.append(
             {
                 "timestamp": next_ts,
                 "equity": equity,
-                "net_return": (equity / initial_cash) - 1,
-                "benchmark_return": (bench_equity / initial_cash) - 1,
+                # 注意：以下两个是「日收益」(GOAL/RunDetail 期望)，不是累计
+                "net_return": daily_strat,
+                "benchmark_return": daily_bench,
                 "turnover": sum(abs(target.get(s, 0.0) - prev_weights.get(s, 0.0)) for s in all_symbols),
                 "drawdown": dd,
             }
         )
         prev_weights = target
+        prev_equity = equity
+        prev_bench_equity = bench_equity
     portfolio = pd.DataFrame(rows)
     trades = pd.DataFrame(fills)
     if not trades.empty:
@@ -299,36 +311,33 @@ def _metrics_and_report(
     train_metrics: dict[str, Any],
 ) -> tuple[dict[str, Any], str]:
     portfolio = artifacts.portfolio
-    daily_returns = portfolio["net_return"].diff().fillna(portfolio["net_return"].iloc[0]).values
-    sr = sharpe_ratio(daily_returns)
+    # net_return 已经是日收益（修复后），直接喂给所有评估
+    daily_returns = portfolio["net_return"].astype(float).values
     boot = bootstrap_sharpe_ci(daily_returns, n_boot=200, seed=42)
     dsr = deflated_sharpe_ratio(daily_returns, n_trials=30)
     grid = _strategy_grid(panel_with_score, choices=[3, 5, 8, 10, 15])
     pbo = cscv_pbo(grid, s_blocks=4, max_combinations=40)
     port_panel, bench_panel = _brinson_panels(panel, weight_df)
     brinson = brinson_attribution(port_panel, bench_panel, group_col="sector")
-    final_equity = portfolio["equity"].iloc[-1] if len(portfolio) else 0.0
-    initial_equity = portfolio["equity"].iloc[0] if len(portfolio) else 0.0
-    total_return = (final_equity / initial_equity) - 1 if initial_equity else 0.0
-    max_dd = portfolio["drawdown"].min() if len(portfolio) else 0.0
 
-    metrics = {
-        "total_return": total_return,
-        "annualized_return": (1 + total_return) ** (252 / max(len(portfolio), 1)) - 1 if len(portfolio) else 0.0,
-        "sharpe": sr,
-        "max_drawdown": max_dd,
-        "pbo": pbo.to_dict(),
-        "deflated_sharpe": dsr,
-        "bootstrap_sharpe_ci": boot.to_dict(),
-        "brinson_total": brinson.total,
-        "train_oos": train_metrics.get("oos_metrics", {}),
-        "n_factors": 5,
-        "n_symbols": int(panel_with_score["symbol"].nunique()),
-        "n_days": int(panel_with_score["ts"].nunique()),
-        "trade_count": int(len(artifacts.trades)),
-    }
-    md = _render_report(metrics)
-    return metrics, md
+    # compute_run_metrics 走 _e2e_common，统一口径
+    base = compute_run_metrics(
+        portfolio,
+        trades=artifacts.trades,
+        periods_per_year=252,
+        extra={
+            "pbo": pbo.to_dict(),
+            "deflated_sharpe": dsr,
+            "bootstrap_sharpe_ci": boot.to_dict(),
+            "brinson_total": brinson.total,
+            "train_oos": train_metrics.get("oos_metrics", {}),
+            "n_factors": 5,
+            "n_symbols": int(panel_with_score["symbol"].nunique()),
+            "n_days": int(panel_with_score["ts"].nunique()),
+        },
+    )
+    md = _render_report(base)
+    return base, md
 
 
 def _render_report(metrics: dict[str, Any]) -> str:
@@ -342,6 +351,15 @@ def _render_report(metrics: dict[str, Any]) -> str:
 - 年化收益: {metrics['annualized_return']:.4%}
 - 最大回撤: {metrics['max_drawdown']:.4%}
 - 夏普: {metrics['sharpe']:.4f}
+- Sortino: {metrics.get('sortino', 0):.4f}
+- 信息比率: {metrics.get('information_ratio', 0):.4f}
+- Alpha (年化): {metrics.get('alpha', 0):.4f}
+- Beta: {metrics.get('beta', 0):.4f}
+- 基准收益: {metrics.get('benchmark_return', 0):.4%}
+- 超额收益: {metrics.get('excess_return', 0):.4%}
+- 策略波动率: {metrics.get('strategy_volatility', 0):.4%}
+- 基准波动率: {metrics.get('benchmark_volatility', 0):.4%}
+- 日均胜率: {metrics.get('daily_win_rate', 0):.4%}
 
 ## 过拟合证伪（GOAL §6.1 强制）
 - **PBO**: {pbo['pbo']:.4f} (s_blocks={pbo['s_blocks']}, 策略数={pbo['n_strategies']})
@@ -388,6 +406,12 @@ def run(
     df_with_score, train_result = _train(panel_with_label, factor_ids)
     weight_df = _per_day_weights(df_with_score, top_n=top_n)
     artifacts = _run_backtest(panel, weight_df)
+    # 把 portfolio 扩展成完整 schema（alpha/beta/sharpe/sortino/IR/volatility 滚动列）
+    artifacts.portfolio = enrich_portfolio_with_metrics(
+        artifacts.portfolio,
+        benchmark_daily=artifacts.portfolio["benchmark_return"].astype(float).values,
+        periods_per_year=252,
+    )
     metrics, report_md = _metrics_and_report(
         artifacts, df_with_score, panel, weight_df, train_metrics=train_result.to_dict()
     )

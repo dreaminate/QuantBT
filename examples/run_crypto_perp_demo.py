@@ -20,7 +20,12 @@ import numpy as np
 import pandas as pd
 import polars as pl
 
-from _e2e_common import synthetic_panel, write_run_artifacts  # type: ignore[import-not-found]
+from _e2e_common import (  # type: ignore[import-not-found]
+    compute_run_metrics,
+    enrich_portfolio_with_metrics,
+    synthetic_panel,
+    write_run_artifacts,
+)
 
 from app.eval import bootstrap_sharpe_ci, cscv_pbo, deflated_sharpe_ratio, sharpe_ratio
 from app.execution import BacktestCostModel, BacktestVenue, Order
@@ -143,6 +148,9 @@ def _run_backtest(
     panel_pd = panel.to_pandas()
     timestamps = sorted(panel_pd["ts"].unique())
     weight_idx = weight_df.set_index(["ts", "symbol"])["weight"] if len(weight_df) else pd.Series(dtype=float)
+    # BTC 作为加密 benchmark（buy & hold）
+    bench_price = panel_pd[panel_pd["symbol"] == "BTCUSDT"].set_index("ts")["close"]
+    bench_returns = bench_price.pct_change().fillna(0.0)
     prev_weights: dict[str, float] = {}
     rows: list[dict[str, Any]] = []
     fills: list[dict[str, Any]] = []
@@ -150,6 +158,9 @@ def _run_backtest(
     fee_total = 0.0
     slippage_total = 0.0
     peak = initial_cash
+    prev_equity = initial_cash
+    bench_equity = initial_cash
+    prev_bench_equity = initial_cash
     for idx, ts in enumerate(timestamps[:-1]):
         next_ts = timestamps[idx + 1]
         bar = panel_pd[panel_pd["ts"] == ts]
@@ -198,12 +209,15 @@ def _run_backtest(
         equity = cash + position_value - (funding_total)  # funding 扣到权益
         peak = max(peak, equity)
         dd = (equity - peak) / peak if peak else 0.0
+        bench_equity *= 1.0 + float(bench_returns.get(next_ts, 0.0))
+        daily_strat = (equity / prev_equity - 1.0) if prev_equity else 0.0
+        daily_bench = (bench_equity / prev_bench_equity - 1.0) if prev_bench_equity else 0.0
         rows.append(
             {
                 "timestamp": next_ts,
                 "equity": equity,
-                "net_return": (equity / initial_cash) - 1,
-                "benchmark_return": 0.0,
+                "net_return": daily_strat,  # 日策略收益
+                "benchmark_return": daily_bench,  # BTC buy&hold 日收益
                 "turnover": sum(abs(target.get(s, 0.0) - prev_weights.get(s, 0.0)) for s in all_symbols),
                 "drawdown": dd,
                 "funding_total": funding_total,
@@ -211,6 +225,8 @@ def _run_backtest(
             }
         )
         prev_weights = target
+        prev_equity = equity
+        prev_bench_equity = bench_equity
     portfolio = pd.DataFrame(rows)
     trades = pd.DataFrame(fills)
     if not trades.empty:
@@ -261,31 +277,28 @@ def _metrics_and_report(
                 "bootstrap_sharpe_ci": {"estimate": 0, "lower": 0, "upper": 0, "n_boot": 0},
                 "cost_breakdown": artifacts.cost_breakdown, "train_oos": train_metrics.get("oos_metrics", {}),
                 "trade_count": 0}, "（无可用 portfolio）"
-    daily_returns = portfolio["net_return"].diff().fillna(portfolio["net_return"].iloc[0]).values
-    sr = sharpe_ratio(daily_returns, periods_per_year=365)
+    # 已修正：net_return 是日收益，直接喂
+    daily_returns = portfolio["net_return"].astype(float).values
     boot = bootstrap_sharpe_ci(daily_returns, n_boot=200, seed=42, periods_per_year=365)
     dsr = deflated_sharpe_ratio(daily_returns, n_trials=20, periods_per_year=365)
     grid = _strategy_grid(df_score, choices=[-0.5, 0.0, 0.5, 1.0])
     pbo = cscv_pbo(grid, s_blocks=4, max_combinations=20)
-    final_equity = portfolio["equity"].iloc[-1]
-    initial_equity = portfolio["equity"].iloc[0]
-    total_return = (final_equity / initial_equity) - 1 if initial_equity else 0.0
-    max_dd = portfolio["drawdown"].min()
-    metrics = {
-        "total_return": total_return,
-        "annualized_return": (1 + total_return) ** (365 / max(len(portfolio), 1)) - 1,
-        "sharpe": sr,
-        "max_drawdown": max_dd,
-        "pbo": pbo.to_dict(),
-        "deflated_sharpe": dsr,
-        "bootstrap_sharpe_ci": boot.to_dict(),
-        "cost_breakdown": artifacts.cost_breakdown,
-        "train_oos": train_metrics.get("oos_metrics", {}),
-        "n_factors": 5,
-        "n_symbols": int(df_score["symbol"].nunique()),
-        "n_days": int(df_score["ts"].nunique()),
-        "trade_count": int(len(artifacts.trades)),
-    }
+
+    metrics = compute_run_metrics(
+        portfolio,
+        trades=artifacts.trades,
+        periods_per_year=365,
+        extra={
+            "pbo": pbo.to_dict(),
+            "deflated_sharpe": dsr,
+            "bootstrap_sharpe_ci": boot.to_dict(),
+            "cost_breakdown": artifacts.cost_breakdown,
+            "train_oos": train_metrics.get("oos_metrics", {}),
+            "n_factors": 5,
+            "n_symbols": int(df_score["symbol"].nunique()),
+            "n_days": int(df_score["ts"].nunique()),
+        },
+    )
     md = _render_report(metrics)
     return metrics, md
 
@@ -301,6 +314,15 @@ def _render_report(metrics: dict[str, Any]) -> str:
 - 年化收益: {metrics['annualized_return']:.4%}
 - 最大回撤: {metrics['max_drawdown']:.4%}
 - 夏普 (365 天年化): {metrics['sharpe']:.4f}
+- Sortino: {metrics.get('sortino', 0):.4f}
+- 信息比率: {metrics.get('information_ratio', 0):.4f}
+- Alpha (年化): {metrics.get('alpha', 0):.4f}
+- Beta: {metrics.get('beta', 0):.4f}
+- 基准 (BTC buy&hold) 收益: {metrics.get('benchmark_return', 0):.4%}
+- 超额收益: {metrics.get('excess_return', 0):.4%}
+- 策略波动率: {metrics.get('strategy_volatility', 0):.4%}
+- 基准波动率: {metrics.get('benchmark_volatility', 0):.4%}
+- 日均胜率: {metrics.get('daily_win_rate', 0):.4%}
 
 ## 过拟合证伪（GOAL §6.1 强制）
 - **PBO**: {pbo['pbo']:.4f} (s_blocks={pbo['s_blocks']}, 策略数={pbo['n_strategies']})
@@ -343,6 +365,12 @@ def run(run_id: str = "crypto_perp_demo", days: int = 240) -> dict[str, Any]:
     df_score, train_metrics = _train(panel, feats, factor_ids)
     weight_df = _per_day_target_weights(df_score, leverage_max=2.0, short_allowed=True)
     artifacts = _run_backtest(panel, weight_df)
+    # 扩展 portfolio 到 RunDetail 期望的完整 schema
+    artifacts.portfolio = enrich_portfolio_with_metrics(
+        artifacts.portfolio,
+        benchmark_daily=artifacts.portfolio["benchmark_return"].astype(float).values,
+        periods_per_year=365,
+    )
     metrics, report_md = _metrics_and_report(artifacts, df_score, train_metrics)
     run_meta = {
         "started_at_utc": datetime.now(UTC).isoformat(),

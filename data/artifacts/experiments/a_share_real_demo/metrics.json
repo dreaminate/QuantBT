@@ -1,26 +1,46 @@
 {
-  "total_return": 3.407691211382577,
-  "annualized_return": 6.71099554289706,
-  "sharpe": 5.835133580357045,
-  "max_drawdown": -0.10625930468906296,
+  "total_return": 3.4076912113825752,
+  "annualized_return": 6.710995542897056,
+  "strategy_annual_return": 6.710995542897056,
+  "benchmark_return": 0.5472883711523706,
+  "excess_return": 1.8486552950048147,
+  "sharpe": 6.23452114732511,
+  "sortino": 12.776162049903709,
+  "information_ratio": 6.305996311195939,
+  "alpha": 1.4719007029131388,
+  "beta": 1.006732771622927,
+  "max_drawdown": -0.10625930468906297,
+  "volatility": 0.3379478911288765,
+  "strategy_volatility": 0.3379478911288765,
+  "benchmark_volatility": 0.24212179661975158,
+  "win_rate": 0.656441717791411,
+  "daily_win_rate": 0.5846994535519126,
+  "trade_win_rate": 0.656441717791411,
+  "profit_loss_ratio": 1.5825463336643641,
+  "profit_count": 107,
+  "loss_count": 56,
+  "trade_count": 811,
+  "avg_daily_return": 0.00836088600768613,
+  "avg_daily_excess_return": 0.005857728989748966,
+  "excess_sharpe_ratio": 6.305996311195939,
   "pbo": {
     "pbo": 0.0,
     "n_strategies": 5,
     "n_combinations": 6,
     "s_blocks": 4
   },
-  "deflated_sharpe": 0.9994208473132327,
+  "deflated_sharpe": 0.9996989430465267,
   "bootstrap_sharpe_ci": {
-    "estimate": 5.835133580357045,
-    "lower": 3.6819110447072356,
-    "upper": 7.821578571767274,
+    "estimate": 6.23452114732511,
+    "lower": 4.01919212396179,
+    "upper": 8.349909226979229,
     "n_boot": 200
   },
   "brinson_total": {
-    "allocation": 0.4087459888417431,
+    "allocation": 0.408745988841743,
     "selection": -0.1923775800648422,
-    "interaction": 0.21231251114736824,
-    "active_return": 0.42868091992426915
+    "interaction": 0.21231251114736827,
+    "active_return": 0.42868091992426904
   },
   "train_oos": {
     "mse": 0.10263178574451674,
@@ -29,6 +49,5 @@
   },
   "n_factors": 5,
   "n_symbols": 30,
-  "n_days": 159,
-  "trade_count": 811
+  "n_days": 159
 }

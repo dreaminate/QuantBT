@@ -41,66 +41,117 @@ export function ExperimentTrackingPage() {
   }, [selectedExp]);
 
   return (
-    <div style={{ padding: 16, display: "grid", gridTemplateColumns: "1fr 2fr", gap: 16 }}>
-      <section>
-        <h3>实验 ({experiments.length})</h3>
-        {err && <pre style={{ color: "crimson" }}>{err}</pre>}
-        {experiments.length === 0 ? (
-          <p style={{ color: "#666" }}>暂无实验。Agent 跑回测会自动建实验。</p>
-        ) : (
-          <ul style={{ listStyle: "none", padding: 0 }}>
-            {experiments.map((e) => (
-              <li
-                key={e.experiment_id}
-                style={{
-                  padding: 8,
-                  borderBottom: "1px solid #eee",
-                  cursor: "pointer",
-                  background: selectedExp === e.experiment_id ? "#eef" : "transparent",
-                }}
-                onClick={() => setSelectedExp(e.experiment_id)}
-              >
-                <div><strong>{e.name}</strong></div>
-                <div style={{ fontSize: 12, color: "#666" }}>
-                  {e.asset_class} · {e.created_at_utc.slice(0, 19)}
-                </div>
-              </li>
-            ))}
-          </ul>
-        )}
-      </section>
-      <section>
-        <h3>{selectedExp ? `Runs of ${selectedExp}` : "选一个实验"}</h3>
-        {runs.length === 0 ? (
-          <p style={{ color: "#666" }}>无 run</p>
-        ) : (
-          <table style={{ width: "100%", borderCollapse: "collapse", fontSize: 13 }}>
-            <thead>
-              <tr style={{ borderBottom: "1px solid #ddd" }}>
-                <th align="left">run_id</th>
-                <th align="left">status</th>
-                <th align="right">sharpe</th>
-                <th align="right">pbo</th>
-                <th align="right">dsr</th>
-                <th align="left">started</th>
-              </tr>
-            </thead>
-            <tbody>
-              {runs.map((r) => (
-                <tr key={r.run_id} style={{ borderBottom: "1px solid #f0f0f0" }}>
-                  <td style={{ fontFamily: "monospace", fontSize: 12 }}>{r.run_id}</td>
-                  <td>{r.status}</td>
-                  <td align="right">{r.metrics?.sharpe?.toFixed(3) ?? "—"}</td>
-                  <td align="right">{r.metrics?.pbo?.toFixed(3) ?? "—"}</td>
-                  <td align="right">{r.metrics?.deflated_sharpe?.toFixed(3) ?? "—"}</td>
-                  <td style={{ fontSize: 12, color: "#666" }}>{r.started_at_utc.slice(0, 19)}</td>
-                </tr>
+    <>
+      <div className="cc-page-header">
+        <div>
+          <h1 className="cc-page-title">
+            <span className="cc-prompt">$</span>experiments ({experiments.length})
+          </h1>
+          <p className="cc-page-subtitle">
+            嵌入式 lineage · Model stage 提升 (dev → staging → production → archived)
+          </p>
+        </div>
+      </div>
+
+      {err && <div className="cc-chip cc-chip--danger">{err}</div>}
+
+      <div style={{ display: "grid", gridTemplateColumns: "260px 1fr", gap: 16 }}>
+        <aside className="cc-card" style={{ padding: 12, minHeight: 400 }}>
+          <div className="cc-section-title" style={{ marginBottom: 8 }}>
+            experiments
+          </div>
+          {experiments.length === 0 ? (
+            <div className="cc-dim" style={{ fontSize: 12 }}>
+              暂无实验。Agent 跑回测会自动建。
+            </div>
+          ) : (
+            <ul style={{ listStyle: "none", padding: 0, margin: 0 }}>
+              {experiments.map((e) => (
+                <li key={e.experiment_id} style={{ marginBottom: 4 }}>
+                  <button
+                    type="button"
+                    onClick={() => setSelectedExp(e.experiment_id)}
+                    className={`cc-btn cc-btn--ghost cc-btn--sm`}
+                    style={{
+                      width: "100%",
+                      justifyContent: "flex-start",
+                      background:
+                        selectedExp === e.experiment_id ? "var(--cc-accent-soft)" : "transparent",
+                      color: selectedExp === e.experiment_id ? "var(--cc-accent)" : undefined,
+                    }}
+                  >
+                    <span style={{ flex: 1, textAlign: "left" }}>{e.name}</span>
+                    <span className="cc-dim" style={{ fontSize: 10 }}>
+                      {e.asset_class}
+                    </span>
+                  </button>
+                </li>
               ))}
-            </tbody>
-          </table>
-        )}
-      </section>
-    </div>
+            </ul>
+          )}
+        </aside>
+
+        <section>
+          <div className="cc-section-title" style={{ marginBottom: 12 }}>
+            {selectedExp ? `runs of ${selectedExp}` : "← 选一个 experiment"}
+          </div>
+          {selectedExp && (
+            <table className="cc-table">
+              <thead>
+                <tr>
+                  <th>run_id</th>
+                  <th>status</th>
+                  <th style={{ textAlign: "right" }}>sharpe</th>
+                  <th style={{ textAlign: "right" }}>pbo</th>
+                  <th style={{ textAlign: "right" }}>dsr</th>
+                  <th>started</th>
+                </tr>
+              </thead>
+              <tbody>
+                {runs.length === 0 ? (
+                  <tr>
+                    <td colSpan={6} className="cc-dim">
+                      no runs
+                    </td>
+                  </tr>
+                ) : (
+                  runs.map((r) => (
+                    <tr key={r.run_id}>
+                      <td className="cc-mono" style={{ fontSize: 11 }}>
+                        {r.run_id}
+                      </td>
+                      <td>
+                        <span
+                          className={`cc-chip ${
+                            r.status === "succeeded"
+                              ? "cc-chip--success"
+                              : r.status === "failed"
+                                ? "cc-chip--danger"
+                                : ""
+                          }`}
+                        >
+                          {r.status}
+                        </span>
+                      </td>
+                      <td style={{ textAlign: "right" }}>
+                        {r.metrics?.sharpe?.toFixed(3) ?? "—"}
+                      </td>
+                      <td style={{ textAlign: "right" }}>{r.metrics?.pbo?.toFixed(3) ?? "—"}</td>
+                      <td style={{ textAlign: "right" }}>
+                        {r.metrics?.deflated_sharpe?.toFixed(3) ?? "—"}
+                      </td>
+                      <td className="cc-dim" style={{ fontSize: 11 }}>
+                        {r.started_at_utc.slice(0, 19)}
+                      </td>
+                    </tr>
+                  ))
+                )}
+              </tbody>
+            </table>
+          )}
+        </section>
+      </div>
+    </>
   );
 }
 

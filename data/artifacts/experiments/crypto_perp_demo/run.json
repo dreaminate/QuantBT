@@ -1,8 +1,8 @@
 {
   "run_id": "crypto_perp_demo",
-  "started_at": "2026-05-28T00:26:46.919937+00:00",
+  "started_at": "2026-05-28T02:17:46.190678+00:00",
   "status": "completed",
-  "started_at_utc": "2026-05-28T00:26:46.919937+00:00",
+  "started_at_utc": "2026-05-28T02:17:46.190678+00:00",
   "strategy_id": "crypto_perp_demo",
   "strategy_name": "加密永续 demo (alpha_lite × LGBM × MVO × CryptoPerpCost)",
   "market": "binanceusdm",
@@ -25,21 +25,41 @@
   "leverage_max": 2.0,
   "asset_class": "crypto_perp",
   "metrics": {
-    "total_return": 5.130399826281594,
-    "annualized_return": 14.945944925530636,
-    "sharpe": 10.230222664931835,
-    "max_drawdown": -0.04393888248113559,
+    "total_return": 5.1303998262815975,
+    "annualized_return": 14.94594492553065,
+    "strategy_annual_return": 14.94594492553065,
+    "benchmark_return": -0.04442927065107449,
+    "excess_return": 5.415432827728536,
+    "sharpe": 12.589295864172374,
+    "sortino": 20.745391299158946,
+    "information_ratio": 5.474532901383333,
+    "alpha": 2.7985319922662697,
+    "beta": 0.0995890507181939,
+    "max_drawdown": -0.043938882481135644,
+    "volatility": 0.22274282384218486,
+    "strategy_volatility": 0.22274282384218486,
+    "benchmark_volatility": 0.5025591298050758,
+    "win_rate": 0.8148148148148148,
+    "daily_win_rate": 0.6443514644351465,
+    "trade_win_rate": 0.8148148148148148,
+    "profit_loss_ratio": 1.8572282050433149,
+    "profit_count": 154,
+    "loss_count": 35,
+    "trade_count": 453,
+    "avg_daily_return": 0.007682672084850668,
+    "avg_daily_excess_return": 0.007527422616928635,
+    "excess_sharpe_ratio": 5.474532901383333,
     "pbo": {
       "pbo": 0.0,
       "n_strategies": 4,
       "n_combinations": 6,
       "s_blocks": 4
     },
-    "deflated_sharpe": 0.9999998425071941,
+    "deflated_sharpe": 1.0,
     "bootstrap_sharpe_ci": {
-      "estimate": 10.230222664931835,
-      "lower": 7.087189480397392,
-      "upper": 13.385303803142419,
+      "estimate": 12.589295864172374,
+      "lower": 10.433309611226804,
+      "upper": 15.222509619702786,
       "n_boot": 200
     },
     "cost_breakdown": {
@@ -55,7 +75,6 @@
     },
     "n_factors": 5,
     "n_symbols": 5,
-    "n_days": 219,
-    "trade_count": 453
+    "n_days": 219
   }
 }
