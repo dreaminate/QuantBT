@@ -38,6 +38,10 @@ _FUTURES_TYPE_MAP = {
     "trailing_stop_market": "TRAILING_STOP_MARKET",
 }
 
+# Binance 2025-12-09 强制迁移：5 类条件单走 /fapi/v1/algoOrder（algoType=CONDITIONAL）
+# 旧 /fapi/v1/order 收到这些类型返回 -4120。
+_CONDITIONAL_TYPES = {"STOP_MARKET", "TAKE_PROFIT_MARKET", "STOP", "TAKE_PROFIT", "TRAILING_STOP_MARKET"}
+
 
 @dataclass
 class FuturesSymbolFilters:
@@ -115,6 +119,11 @@ class BinanceUMFuturesVenue(ExecutionVenue):
         qty = _quantize_down(order.quantity, filt.step_size) if filt.step_size else order.quantity
         if filt.min_qty and qty < filt.min_qty:
             raise PermissionError(f"qty {qty} 低于 {sym} minQty {filt.min_qty}")
+
+        # v0.8.3.1 hotfix · 2025-12-09 起条件单必须走 /fapi/v1/algoOrder
+        if binance_type in _CONDITIONAL_TYPES:
+            return self._place_algo_order(order, binance_type, sym, qty, filt)
+
         params: dict[str, Any] = {
             "symbol": sym,
             "side": order.side.upper(),
@@ -141,6 +150,70 @@ class BinanceUMFuturesVenue(ExecutionVenue):
         )
         self._audit.log("binance_um_place", {"order": order.to_dict(), "ack": ack.to_dict()})
         return ack
+
+    def _place_algo_order(
+        self,
+        order: Order,
+        binance_type: str,
+        sym: str,
+        qty: float,
+        filt: FuturesSymbolFilters,
+    ) -> OrderAck:
+        """USDM 条件单专用 endpoint（Binance 2025-12-09 强制）。
+
+        与旧 endpoint 关键差异：
+          - path: /fapi/v1/algoOrder
+          - 必填 algoType=CONDITIONAL
+          - clientAlgoId 替代 newClientOrderId
+          - triggerPrice 替代 stopPrice
+          - 响应 algoId / algoStatus 替代 orderId / status
+        """
+
+        client_algo_id = order.client_order_id or str(uuid.uuid4())
+        params: dict[str, Any] = {
+            "algoType": "CONDITIONAL",
+            "symbol": sym,
+            "side": order.side.upper(),
+            "type": binance_type,
+            "clientAlgoId": client_algo_id,
+        }
+        # quantity 与 closePosition=true 互斥
+        if not order.close_position:
+            params["quantity"] = qty
+        if order.price is not None:
+            params["price"] = _quantize_down(order.price, filt.tick_size) if filt.tick_size else order.price
+        if order.stop_price is not None:
+            params["triggerPrice"] = _quantize_down(order.stop_price, filt.tick_size) if filt.tick_size else order.stop_price
+        if order.reduce_only:
+            params["reduceOnly"] = "true"
+        if order.close_position:
+            params["closePosition"] = "true"
+        # TRAILING_STOP_MARKET 需要 callbackRate（Order 没明确字段 → 默认 1%；调用方可在后续版本扩展）
+        if binance_type == "TRAILING_STOP_MARKET":
+            params.setdefault("callbackRate", 1.0)
+            if order.price is not None:
+                params["activatePrice"] = params.pop("price", None)
+        resp = self._client.signed("POST", "/fapi/v1/algoOrder", params)
+        algo_id = str(resp.get("algoId") or client_algo_id)
+        ack = OrderAck(
+            order_id=algo_id,
+            client_order_id=client_algo_id,
+            status=str(resp.get("algoStatus", "new")).lower(),
+            raw={**resp, "_qb_algo": True},
+        )
+        self._audit.log("binance_um_place_algo", {"order": order.to_dict(), "ack": ack.to_dict()})
+        return ack
+
+    def cancel_algo_order(self, algo_id: str, symbol: str) -> CancelAck:
+        """取消条件单。需要 algoId（不是 orderId）。"""
+
+        resp = self._client.signed(
+            "DELETE",
+            "/fapi/v1/algoOrder",
+            {"algoId": algo_id, "symbol": symbol.upper()},
+        )
+        self._audit.log("binance_um_cancel_algo", {"algo_id": algo_id, "raw": resp})
+        return CancelAck(order_id=algo_id, raw={**resp, "_qb_algo": True})
 
     def cancel_order(self, order_id: str, symbol: str | None = None) -> CancelAck:  # type: ignore[override]
         params: dict[str, Any] = {"orderId": order_id}

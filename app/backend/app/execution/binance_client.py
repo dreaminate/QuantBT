@@ -54,7 +54,16 @@ class BinanceCredentials:
 
 
 class BinanceWithdrawPermissionError(PermissionError):
-    """API key 检测到 withdraw 权限 → 立即停。"""
+    """API key 检测到资金外流类权限 → 立即停。
+
+    v0.8.3.1 起拦截范围扩展到 withdraw / internalTransfer / universalTransfer 三类。
+    """
+
+
+# 资金外流类权限：含此关键字的 permission 名（小写比较）→ 必拦。
+_FUND_DRAIN_KEYWORDS = ("withdraw", "internaltransfer", "universaltransfer")
+# 高风险但 trading-only key 可能合理开启的权限：警告但不拦截
+_HIGH_RISK_KEYWORDS = ("margin",)
 
 
 class BinanceClient:
@@ -94,7 +103,15 @@ class BinanceClient:
         return self._time_offset_ms
 
     def assert_safe_startup(self) -> dict[str, Any]:
-        """读 apiRestrictions / apiKey permissions，若有 withdraw 立即 raise。"""
+        """读 apiRestrictions / apiKey permissions，分级校验:
+
+        - 资金外流类（withdraw / internalTransfer / universalTransfer）→ raise
+        - margin 借贷类 → 仅 warn，记入返回的 warnings 列表
+        - ipRestrict=false → warn（推荐用户加 IP 白名单）
+
+        v0.8.3.1 hotfix：旧实现只匹配 "withdraw" 子串，漏掉 internalTransfer / universalTransfer
+        / margin / ipRestrict 等关键 surface。
+        """
 
         try:
             self.sync_time()
@@ -106,14 +123,42 @@ class BinanceClient:
             else "/sapi/v1/account/apiRestrictions"
         )
         payload = self._signed("GET", path, {})
-        withdraw_keys = [k for k in payload if "withdraw" in str(k).lower()]
-        for key in withdraw_keys:
-            if bool(payload.get(key)):
-                raise BinanceWithdrawPermissionError(
-                    f"Binance {self._product} API key 含 {key}=True，拒绝启动。"
-                    " 请到 Binance 网页 → API 管理 → 编辑限制 → 取消 withdraw / universal-transfer 权限后重启。"
-                )
-        return {"ok": True, "network": self._cred.network, "product": self._product, "raw": payload}
+        warnings: list[str] = []
+        permission_state: dict[str, bool] = {}
+        drained_blockers: list[str] = []
+        for raw_key, raw_val in payload.items():
+            if not isinstance(raw_val, bool):
+                continue
+            permission_state[raw_key] = raw_val
+            key_norm = str(raw_key).lower()
+            if any(kw in key_norm for kw in _FUND_DRAIN_KEYWORDS) and raw_val:
+                drained_blockers.append(raw_key)
+            elif any(kw in key_norm for kw in _HIGH_RISK_KEYWORDS) and raw_val:
+                warnings.append(f"{raw_key}=True（margin 借贷开启，被攻破时可能放大损失）")
+
+        if drained_blockers:
+            joined = ", ".join(drained_blockers)
+            raise BinanceWithdrawPermissionError(
+                f"Binance {self._product} API key 含资金外流权限 [{joined}]，拒绝启动。"
+                " 请到 Binance 网页 → API 管理 → 编辑限制 → 取消"
+                " withdraw / internalTransfer / universalTransfer 等权限后重启。"
+            )
+
+        # ipRestrict：字段名可能是 ipRestrict / ipRestricted / ipWhiteList
+        ip_keys = [k for k in payload if "iprestrict" in str(k).lower() or "ipwhitelist" in str(k).lower()]
+        ip_restricted = any(bool(payload.get(k)) for k in ip_keys)
+        if ip_keys and not ip_restricted:
+            warnings.append("ipRestrict=False（建议在 Binance API 管理加 IP 白名单）")
+
+        return {
+            "ok": True,
+            "network": self._cred.network,
+            "product": self._product,
+            "permission_state": permission_state,
+            "warnings": warnings,
+            "ip_restricted": ip_restricted if ip_keys else None,
+            "raw": payload,
+        }
 
     def signed(self, method: str, path: str, params: dict[str, Any] | None = None) -> Any:
         return self._signed(method, path, params or {})
