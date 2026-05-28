@@ -1067,7 +1067,36 @@ audit_log_dir: ./data/audit/
 
 ---
 
-*本文件最后更新：2026-05-28 · v0.8.3*
+*本文件最后更新：2026-05-29 · v0.9.0*
+*维护者：QuantBT 团队（人 + Agent）*
+
+### v0.9.0 更新（24h sprint · patch2 §C 12 周路线一次性交付）
+
+按 GPT Pro patch1 + patch2 战略方案，单次 24h 推完 W3-W12 全部 10 个 tag：
+
+| tag | 主题 | 测试 delta |
+|---|---|---|
+| v0.8.5 | 分层信息 (/glossary 词典页 + 全文页) | 0 |
+| v0.8.5.1 | 漏斗 + onboarding | 0 |
+| v0.8.6 | Mode 2 对话骨架 (conversations + RAG + SSE) | +22 |
+| v0.8.6.1 | 教练闭环 (主动建议 + Socratic) | +18 |
+| v0.8.7 | 样例资产 (BTC/ETH/A股 sample + 3 策略模板) | +19 |
+| v0.8.7.1 | **学术 audit** (PBO/DSR/Purged k-fold 修) | +20 |
+| v0.8.8 | 安全阶梯 (SafeKey wizard + matrix + ladder) | +19 |
+| v0.8.8.1 | 复现社区 (合规 + risk_summary snapshot) | +13 |
+| v0.8.9 | 跟单灰度 (idempotency + follower cap + 5/50 quota) | +19 |
+| **v0.9.0** | **发布收口** (release_check.py + /pricing 三档 + release notes) | 0 |
+
+测试基线 **278 → 498** (+220) 全过。
+
+patch1 9 条核心技术债 100% 偿还（详见 docs/releases/v0.9.0.md）。
+
+新增 M19-M21 模块（详见模块清单）:
+- M19 Glossary + Coach (Mode 2 RAG hybrid)
+- M20 Trading Safety (SafeKey/matrix/ladder)
+- M21 Beta Gate (copy-trade idempotency + leverage cap)
+
+### v0.8.3 时点（24h sprint 前）
 *维护者：QuantBT 团队（人 + Agent）*
 
 ### v0.8.3 更新（IDE 沙箱 → 正式 Run + AI 喂饱上下文）
