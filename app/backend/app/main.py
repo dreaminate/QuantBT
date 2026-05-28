@@ -19,6 +19,7 @@ from .auth import AuthError, AuthService, current_user_dependency, require_user_
 from .auth.service import set_service as set_auth_service
 from .community import CommunityService
 from .connectors import registry as connector_registry
+from .copy_trade import CopyTradeError, CopyTradeService, SignalRelayer
 from .sharing import SharingService
 from .data_center_services import (
     get_data_files_response,
@@ -79,6 +80,36 @@ AUTH_SERVICE = AuthService(_COMMUNITY_DB)
 set_auth_service(AUTH_SERVICE)
 COMMUNITY_SERVICE = CommunityService(_COMMUNITY_DB)
 SHARING_SERVICE = SharingService(_COMMUNITY_DB, DATA_ROOT / "artifacts" / "experiments")
+COPY_TRADE_SERVICE = CopyTradeService(_COMMUNITY_DB)
+
+
+def _binance_venue_for_follower(follower, keystore):
+    """生产 venue factory：follower 自己 keystore 名字 → BinanceSpot/UMFuturesVenue。
+
+    实际生产用；测试中由 mock factory 替代。
+    """
+    from .execution.binance_client import BinanceClient, BinanceCredentials
+    try:
+        record = keystore.fetch(follower.binance_keystore_name)
+    except Exception:  # noqa: BLE001
+        return None
+    network = follower.binance_network if follower.binance_network in {"testnet", "mainnet"} else "testnet"
+    cred = BinanceCredentials(api_key=record.api_key, api_secret=record.api_secret, network=network)
+    # crypto_perp → USDM；crypto_spot → spot；equity_cn 不联实盘
+    master = COPY_TRADE_SERVICE.get_master(follower.master_id)
+    if master is None:
+        return None
+    if master.asset_class == "crypto_perp":
+        from .execution.binance_um_futures import BinanceUMFuturesVenue
+        client = BinanceClient(cred, product="usdm_futures")
+        venue = BinanceUMFuturesVenue(client)
+        return venue
+    if master.asset_class == "crypto_spot":
+        from .execution.binance_spot import BinanceSpotVenue
+        client = BinanceClient(cred, product="spot")
+        venue = BinanceSpotVenue(client)
+        return venue
+    return None  # equity_cn 等不联实盘
 
 # 安全：开发环境用内存 keystore；上线时切换到 keyring/fernet（由 settings 控制）
 KEYSTORE = SecureKeystore(InMemoryKeystore())
@@ -693,6 +724,223 @@ def sharing_delete(share_id: str, user=Depends(require_user_dependency)) -> dict
         return {"deleted": SHARING_SERVICE.delete_strategy(share_id, user.user_id)}
     except PermissionError as exc:
         raise HTTPException(403, str(exc))
+
+
+# ============ COPY TRADE ============
+
+@app.get("/api/copy_trade/masters")
+def ct_list_masters(
+    asset_class: str | None = None,
+    sort_by: str = "followers",
+    invite_only: bool | None = None,
+    limit: int = 50,
+) -> list[dict[str, Any]]:
+    masters = COPY_TRADE_SERVICE.list_masters(
+        asset_class=asset_class, sort_by=sort_by,
+        invite_only=invite_only, limit=limit,
+    )
+    cache: dict[str, dict[str, str]] = {}
+    out: list[dict[str, Any]] = []
+    for m in masters:
+        if m.user_id not in cache:
+            u = AUTH_SERVICE.get_user_by_id(m.user_id)
+            cache[m.user_id] = (
+                {"author_username": u.username, "author_display_name": u.display_name}
+                if u else {"author_username": "unknown", "author_display_name": "unknown"}
+            )
+        d = m.to_dict()
+        d.update(cache[m.user_id])
+        # 私域不回显 invite_code（仅 owner 看得到，走单独 endpoint）
+        if d.get("is_invite_only"):
+            d["invite_code"] = ""
+        out.append(d)
+    return out
+
+
+@app.get("/api/copy_trade/masters/{master_id}")
+def ct_get_master(master_id: str, current=Depends(current_user_dependency)) -> dict[str, Any]:
+    m = COPY_TRADE_SERVICE.get_master(master_id)
+    if m is None:
+        raise HTTPException(404, "master 不存在")
+    d = m.to_dict()
+    # 私域：非 owner 看不到 invite_code
+    if d.get("is_invite_only") and (current is None or current.user_id != m.user_id):
+        d["invite_code"] = ""
+    u = AUTH_SERVICE.get_user_by_id(m.user_id)
+    if u:
+        d["author_username"] = u.username
+        d["author_display_name"] = u.display_name
+    return d
+
+
+@app.post("/api/copy_trade/masters")
+def ct_register_master(payload: dict = Body(...), user=Depends(require_user_dependency)) -> dict[str, Any]:
+    try:
+        m = COPY_TRADE_SERVICE.register_master(
+            user_id=user.user_id,
+            display_name=payload.get("display_name") or user.display_name,
+            description=payload.get("description", ""),
+            asset_class=payload.get("asset_class", "crypto_perp"),
+            profit_share_pct=float(payload.get("profit_share_pct", 0.10)),
+            is_invite_only=bool(payload.get("is_invite_only", False)),
+            risk_params=payload.get("risk_params") or {},
+        )
+        return m.to_dict()
+    except CopyTradeError as exc:
+        raise HTTPException(400, str(exc))
+
+
+@app.patch("/api/copy_trade/masters/{master_id}")
+def ct_update_master(master_id: str, payload: dict = Body(...), user=Depends(require_user_dependency)) -> dict[str, Any]:
+    try:
+        m = COPY_TRADE_SERVICE.update_master(
+            master_id, user.user_id,
+            description=payload.get("description"),
+            profit_share_pct=payload.get("profit_share_pct"),
+            is_invite_only=payload.get("is_invite_only"),
+            risk_params=payload.get("risk_params"),
+        )
+        return m.to_dict()
+    except PermissionError as exc:
+        raise HTTPException(403, str(exc))
+    except CopyTradeError as exc:
+        raise HTTPException(400, str(exc))
+
+
+@app.post("/api/copy_trade/masters/{master_id}/rotate_invite")
+def ct_rotate_invite(master_id: str, user=Depends(require_user_dependency)) -> dict[str, str]:
+    try:
+        code = COPY_TRADE_SERVICE.rotate_invite_code(master_id, user.user_id)
+        return {"invite_code": code}
+    except PermissionError as exc:
+        raise HTTPException(403, str(exc))
+    except CopyTradeError as exc:
+        raise HTTPException(400, str(exc))
+
+
+@app.post("/api/copy_trade/masters/{master_id}/redeem")
+def ct_redeem(master_id: str, payload: dict = Body(...), user=Depends(require_user_dependency)) -> dict[str, bool]:
+    try:
+        ok = COPY_TRADE_SERVICE.redeem_invite(user.user_id, master_id, payload.get("invite_code", ""))
+        return {"redeemed": ok}
+    except CopyTradeError as exc:
+        raise HTTPException(400, str(exc))
+
+
+@app.post("/api/copy_trade/masters/{master_id}/subscribe")
+def ct_subscribe(master_id: str, payload: dict = Body(...), user=Depends(require_user_dependency)) -> dict[str, Any]:
+    try:
+        f = COPY_TRADE_SERVICE.subscribe(
+            user_id=user.user_id,
+            master_id=master_id,
+            invest_amount=float(payload.get("invest_amount", 0)),
+            binance_keystore_name=payload.get("binance_keystore_name", ""),
+            binance_network=payload.get("binance_network", "testnet"),
+            per_order_max_usdt=float(payload.get("per_order_max_usdt", 100)),
+            daily_loss_limit_pct=float(payload.get("daily_loss_limit_pct", 0.05)),
+            max_positions=int(payload.get("max_positions", 5)),
+        )
+        return f.to_dict()
+    except CopyTradeError as exc:
+        raise HTTPException(400, str(exc))
+
+
+@app.post("/api/copy_trade/masters/{master_id}/unsubscribe")
+def ct_unsubscribe(master_id: str, user=Depends(require_user_dependency)) -> dict[str, bool]:
+    return {"unsubscribed": COPY_TRADE_SERVICE.unsubscribe(user.user_id, master_id)}
+
+
+@app.post("/api/copy_trade/masters/{master_id}/pause")
+def ct_pause(master_id: str, payload: dict = Body(default_factory=dict), user=Depends(require_user_dependency)) -> dict[str, bool]:
+    paused = bool(payload.get("paused", True))
+    return {"updated": COPY_TRADE_SERVICE.pause_subscription(user.user_id, master_id, paused=paused)}
+
+
+@app.get("/api/copy_trade/me/subscriptions")
+def ct_my_subscriptions(user=Depends(require_user_dependency)) -> list[dict[str, Any]]:
+    subs = COPY_TRADE_SERVICE.list_subscriptions(user.user_id)
+    out: list[dict[str, Any]] = []
+    for s in subs:
+        d = s.to_dict()
+        m = COPY_TRADE_SERVICE.get_master(s.master_id)
+        if m:
+            d["master_display_name"] = m.display_name
+            d["master_asset_class"] = m.asset_class
+        out.append(d)
+    return out
+
+
+@app.get("/api/copy_trade/me/master")
+def ct_my_master(user=Depends(require_user_dependency)) -> dict[str, Any] | None:
+    m = COPY_TRADE_SERVICE.get_master_by_user(user.user_id)
+    return m.to_dict() if m else None
+
+
+@app.get("/api/copy_trade/masters/{master_id}/followers")
+def ct_master_followers(master_id: str, user=Depends(require_user_dependency)) -> list[dict[str, Any]]:
+    m = COPY_TRADE_SERVICE.get_master(master_id)
+    if m is None:
+        raise HTTPException(404)
+    if m.user_id != user.user_id:
+        raise HTTPException(403, "只有 master 自己看得到 follower 列表")
+    followers = COPY_TRADE_SERVICE.list_followers(master_id, active_only=False)
+    out: list[dict[str, Any]] = []
+    for f in followers:
+        d = f.to_dict()
+        # 隐藏 keystore 名字（敏感引用）
+        d["binance_keystore_name"] = "***"
+        u = AUTH_SERVICE.get_user_by_id(f.user_id)
+        if u:
+            d["username"] = u.username
+        out.append(d)
+    return out
+
+
+@app.post("/api/copy_trade/signals")
+def ct_publish_signal(payload: dict = Body(...), user=Depends(require_user_dependency)) -> dict[str, Any]:
+    master = COPY_TRADE_SERVICE.get_master_by_user(user.user_id)
+    if master is None:
+        raise HTTPException(400, "请先注册成 master")
+    try:
+        sig = COPY_TRADE_SERVICE.publish_signal(
+            master_id=master.master_id,
+            user_id=user.user_id,
+            symbol=payload["symbol"],
+            side=payload["side"],
+            quantity=float(payload["quantity"]),
+            price=payload.get("price"),
+            order_type=payload.get("order_type", "market"),
+            stop_loss=payload.get("stop_loss"),
+            take_profit=payload.get("take_profit"),
+            note=payload.get("note", ""),
+        )
+    except (CopyTradeError, KeyError, ValueError) as exc:
+        raise HTTPException(400, str(exc))
+    # relay → 所有 active follower 真下单
+    relayer = SignalRelayer(COPY_TRADE_SERVICE, KEYSTORE, _binance_venue_for_follower)
+    relay_results = relayer.relay(sig)
+    return {"signal": sig.to_dict(), "relay": relay_results}
+
+
+@app.delete("/api/copy_trade/signals/{signal_id}")
+def ct_cancel_signal(signal_id: str, user=Depends(require_user_dependency)) -> dict[str, bool]:
+    try:
+        return {"canceled": COPY_TRADE_SERVICE.cancel_signal(signal_id, user.user_id)}
+    except PermissionError as exc:
+        raise HTTPException(403, str(exc))
+
+
+@app.get("/api/copy_trade/signals")
+def ct_list_signals(master_id: str | None = None, limit: int = 100) -> list[dict[str, Any]]:
+    return [s.to_dict() for s in COPY_TRADE_SERVICE.list_signals(master_id=master_id, limit=limit)]
+
+
+@app.get("/api/copy_trade/executions")
+def ct_list_executions(signal_id: str | None = None, follower_id: str | None = None, limit: int = 200) -> list[dict[str, Any]]:
+    return [
+        e.to_dict()
+        for e in COPY_TRADE_SERVICE.list_executions(signal_id=signal_id, follower_id=follower_id, limit=limit)
+    ]
 
 
 # -------- P3.5 setup 向导状态 --------

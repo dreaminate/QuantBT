@@ -10,6 +10,11 @@ import { BinanceTradingPage } from "./pages/workshop/BinanceTradingPage";
 import { ExperimentTrackingPage } from "./pages/workshop/ExperimentTrackingPage";
 import { HomePage } from "./pages/HomePage";
 import { StrategyIndexPage } from "./pages/StrategyIndexPage";
+import { LoginPage } from "./pages/community/LoginPage";
+import { CommunityFeedPage } from "./pages/community/CommunityFeedPage";
+import { SharedStrategiesPage } from "./pages/community/SharedStrategiesPage";
+import { UserProfilePage } from "./pages/community/UserProfilePage";
+import { CopyTradePage } from "./pages/community/CopyTradePage";
 import { Shell } from "./components/shell/Shell";
 
 /**
@@ -50,6 +55,13 @@ export default function App() {
         <Route path="/factors" element={<FactorMarketPage />} />
         <Route path="/trading" element={<BinanceTradingPage />} />
         <Route path="/experiments" element={<ExperimentTrackingPage />} />
+        {/* 社区 + 私域带单 */}
+        <Route path="/login" element={<LoginPage mode="login" />} />
+        <Route path="/register" element={<LoginPage mode="register" />} />
+        <Route path="/community" element={<CommunityFeedPage />} />
+        <Route path="/square" element={<SharedStrategiesPage />} />
+        <Route path="/copy-trade" element={<CopyTradePage />} />
+        <Route path="/u/:username" element={<UserProfilePage />} />
       </Routes>
     </Shell>
   );

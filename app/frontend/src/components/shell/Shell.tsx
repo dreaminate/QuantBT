@@ -32,6 +32,7 @@ const SIDEBAR_BY_AREA: Record<string, SidebarItem[]> = {
   community: [
     { to: "/community", label: "社区广场", icon: "#" },
     { to: "/square", label: "策略广场", icon: "★" },
+    { to: "/copy-trade", label: "带单大厅", icon: "⇆" },
   ],
 };
 
@@ -210,7 +211,7 @@ function StatusBar() {
         <span className="cc-status-dot" /> secrets: {info.loadedSecrets.length} loaded
       </span>
       <span className="cc-status-spacer" />
-      <span className="cc-status-item">v0.6.2</span>
+      <span className="cc-status-item">v0.8.1</span>
     </footer>
   );
 }
@@ -270,6 +271,7 @@ function areaOf(pathname: string): string {
   if (
     pathname.startsWith("/community") ||
     pathname.startsWith("/square") ||
+    pathname.startsWith("/copy-trade") ||
     pathname.startsWith("/u/") ||
     pathname === "/login" ||
     pathname === "/register"
