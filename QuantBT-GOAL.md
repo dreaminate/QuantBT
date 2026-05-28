@@ -919,7 +919,10 @@ schema_target: ohlcv  # 必须能映射到统一 schema
 | M12 实验 / 模型注册表 | 🟢 v0.5 完成：**MLflow-lite 嵌入** · ExperimentStore + RunStore（含 lineage parent_run_id / forked_from）+ ModelRegistry (dev→staging→production→archived stage 提升) + 5 个 REST endpoint | UI lineage 树 + run 自动跨 backtest 注册 | `experiments/` |
 | M13 任务编排 | 🟢 v0.5 完成：**百行级 DAG 引擎**（YAML 定义 / 依赖拓扑 / 指数退避重试 / 超时 / SLA 告警 / 幂等键 / Scheduler 用 croniter 软依赖） | UI 调度看板 / Prefect/Dagster 适配器 | `dag/` |
 | M14 Agent | 🟢 v0.6/v0.6.2 完成：**LLMClient 抽象** + **4 档真实 client (Anthropic/OpenAI/Qwen + OpenAICompatibleLLM 任意 base_url 含本地 ollama/第三方代理)** + **make_llm_client 自动 fallback DevLocalLLM** + **5xx/timeout 3 次指数退避自愈** + tool_schema (13 个 OpenAPI 工具) + StrategyGoalSlotFiller + CodeReplicator (vnpy/backtrader/pandas/qlib → QuantBT 模板) + AgentRuntime reAct loop + **真 LLM 多轮 tool 串联实测通过** + UI `/api/llm/configure` 表单一键填 base_url+key+model | 更多 provider 留扩展 (Gemini / Ollama 原生协议) | `agent/` |
-| M15 前端 | 🟢 v0.7 完成：**Claude Code 风深色 shell** (`theme-cc.css` 766 行 + Shell.tsx 顶 nav/sidebar/status bar + dark/light 主题 toggle) + **quantpedia 风首页 + 策略索引** (HomePage / StrategyIndexPage 卡片网格按 asset_class 分组) + **5 个独立 SPA 页** (StrategyWorkshop / AgentChat 含 LLM provider 测试 / FactorMarket 按 lifecycle 分组 / BinanceTrading 含 testnet/mainnet 色块 + 二次确认 modal / ExperimentTracking) + 数据中心 / 回测列表 / 对比 (jq-* 保留) · **RunDetailPage.tsx 0 行变更** · 三联图 dataZoom minValueSpan 防压扁 | DataPage retheme / RunDetail 接入新 metrics 字段 (M10) | `app/frontend/src/`, `theme-cc.css`, `components/shell/` |
+| M15 前端 | 🟢 v0.7 完成：**Claude Code 风深色 shell** (`theme-cc.css` 766 行 + Shell.tsx 顶 nav/sidebar/status bar + dark/light 主题 toggle) + **quantpedia 风首页 + 策略索引** (HomePage / StrategyIndexPage 卡片网格按 asset_class 分组) + **5 个独立 SPA 页** (StrategyWorkshop / AgentChat 含 LLM provider 测试 / FactorMarket 按 lifecycle 分组 / BinanceTrading 含 testnet/mainnet 色块 + 二次确认 modal / ExperimentTracking) + 数据中心 / 回测列表 / 对比 (jq-* 保留) · **RunDetailPage.tsx 0 行变更** · 三联图 dataZoom minValueSpan 防压扁 + v0.8 新增 6 个社区/IDE 页 (Login / CommunityFeed / SharedStrategies / UserProfile / CopyTrade / IDE) | DataPage retheme / RunDetail 接入新 metrics 字段 (M10) | `app/frontend/src/`, `theme-cc.css`, `components/shell/` |
+| M16 社区 & 策略分享 | 🟢 v0.8.0 完成：**Auth 本地 sqlite** (PBKDF2-HMAC-SHA256 200k iter + bearer token sessions, 无 bcrypt/jwt 依赖) + **Community** (post/comment/like/follow + Square 风 feed recent/hot/following/by_author + #tag 自动提取) + **Sharing** (publish_strategy / fork / leaderboard, snapshot run.metrics 字段 sharpe/total_return/max_dd/pbo/dsr 避免每次重读 run.json) · 共享一个 sqlite `data/community.db` (c_*/s_* 前缀) · 17 个 REST endpoint + 19 测试 | 评论嵌套层级 / @mention 通知 / 关注 timeline 推送 | `auth/`, `community/`, `sharing/` |
+| M17 私域带单 | 🟢 v0.8.1 完成：**CopyTradeService** (5 表 ct_* prefix) + **invite_only 私域门 + invite_code 旋转 + redeemed 记录** + **SignalRelayer** (master 发单 → 给每个 active follower 跑自己的 RiskMonitor + 走自己的 BinanceVenue → master 永远拿不到 follower key) + master 风控参数 + follower 个人风控 (per_order_max / daily_loss_pct) · 14 个 REST endpoint + 21 测试 (含 mock venue dispatch + risk reject + venue exception 全覆盖) | 跟单分润结算 / master 排行实盘 metrics 自动算 / WS push 跟单实时通知 | `copy_trade/` |
+| M18 聚宽风 IDE & BigQuant 风 AI | 🟢 v0.8.2 完成：**IDESandbox** (subprocess + resource.setrlimit CPU/RSS/FSIZE/NOFILE + socket monkey-patch + os.system/subprocess/chdir/fork 全 raise PermissionError + isolated python -I + chdir tempdir + wallclock 30s timeout + stdout 截断 1MB) + **emit_result JSON 协议** (用户代码末尾 quantbt.emit_result({...}) → 主进程解析 stdout) + **IDEService** (i_strategies / i_runs sqlite + 串行 lock 防 fork bomb) + **AI 辅助** (write/explain/fix 三模式调 LLM 写代码) + 前端 IDEPage (策略文件树 + textarea + 行号槽 + 右侧 AI panel + 沙箱 banner) · 9 个 REST endpoint + 22 测试 | hardened sandbox (Linux namespace) / 真回测 pipeline 接入 (用户 emit_result 落 run.json) / Monaco editor 升级 | `ide/` |
 
 ---
 
@@ -1064,8 +1067,57 @@ audit_log_dir: ./data/audit/
 
 ---
 
-*本文件最后更新：2026-05-28 · v0.6.0*
+*本文件最后更新：2026-05-28 · v0.8.2*
 *维护者：QuantBT 团队（人 + Agent）*
+
+### v0.8.2 更新（聚宽风 IDE + BigQuant 风 AI 辅助）
+
+**M18 · IDE + sandbox** ✅
+- `ide/sandbox.py` — 子进程沙箱 (subprocess + resource.setrlimit + socket/subprocess/os.system/chdir monkey-patch + wallclock 30s + isolated python -I + stdout 截断 1MB)
+- `ide/service.py` — IDEService (i_strategies / i_runs sqlite + 串行 lock 防 fork bomb)
+- main.py 接入 9 个 REST endpoint (CRUD + run + ai_complete)
+- 前端 IDEPage 三栏 (策略列表 / 编辑器 + 行号槽 + Tab 缩进 / 右侧 AI panel)
+- emit_result JSON 协议 → 主进程解析最后一行 `__QUANTBT_RESULT__` 写 result.json
+- AI write/explain/fix 三模式调现有 LLM 客户端
+- **22 新测试全过**（含 socket/subprocess/os.system/chdir block + wallclock timeout + CRUD owner namespace 隔离）
+
+测试基线 **229 → 251** / tsc 0 / vite build pass
+
+§8 差距表新增 M18 行（聚宽风 IDE & BigQuant 风 AI）
+
+### v0.8.1 更新（私域带单 master signal + follower 真 Binance 下单）
+
+**M17 · CopyTradeService + SignalRelayer** ✅
+- `copy_trade/service.py` — 5 sqlite 表 (ct_masters/ct_followers/ct_signals/ct_executions/ct_invites_redeemed)
+- invite_only 私域门 + invite_code 旋转 + redeemed 记录
+- master 风控参数 + follower 个人风控 (per_order_max / daily_loss_pct)
+- `copy_trade/executor.py` — SignalRelayer
+  - **follower 永远走自己 keystore + 自己 BinanceVenue（master 永远拿不到 key）**
+  - 每单都过 follower 自己的 RiskMonitor.pre_trade
+  - 失败/risk reject/skip 全部 record execution + 继续下一个 follower
+- main.py 接入 14 个 REST endpoint
+- 前端 CopyTradePage (master 排行 + 私域 redeem 两步 + 发单 modal 含 relay 结果表)
+- **21 新测试全过**（含 mock venue dispatch + risk reject + venue exception 全覆盖）
+
+测试基线 **208 → 229** / tsc 0 / vite build pass
+
+§8 差距表新增 M17 行（私域带单）
+
+### v0.8.0 更新（社区 + 策略分享）
+
+**M16 · Auth + Community + Sharing** ✅
+- `auth/service.py` — sqlite users + PBKDF2-HMAC-SHA256 200k iter + bearer token sessions（无 bcrypt/jwt 依赖）
+- `community/service.py` — post/comment/like/follow/repost + Square 风 feed (recent/hot/following/by_author)
+- `sharing/service.py` — publish_strategy/fork/leaderboard，snapshot run.metrics 字段（sharpe/total_return/max_dd/pbo/dsr）
+- 共享 `data/community.db` (c_*/s_* 前缀)
+- main.py 接入 17 个 REST endpoint
+- 前端 4 新页 + auth client (LoginPage / CommunityFeedPage Binance Square 风 / SharedStrategiesPage 聚宽社区风 / UserProfilePage)
+- Shell 接入 Community nav + UserMenu
+- **19 新测试全过**
+
+测试基线 **189 → 208** / tsc 0 / vite build pass
+
+§8 差距表新增 M16 行（社区 & 策略分享）
 
 ### v0.6.0 更新（P4 收尾 · 12 个工程闭环 task 一鼓作气交付）
 
