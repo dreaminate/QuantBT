@@ -25,6 +25,8 @@ import type {
   SeriesName,
 } from "../types";
 import { buildJqSummaryRows } from "../jqOverviewSummary";
+import { getGlossarySlugForMetric } from "../features/glossary/metricGlossaryMap";
+import { GlossaryInfoButton } from "../features/glossary/GlossaryInfoButton";
 import { formatFileSize, formatNumber, formatPct } from "../utils";
 
 type DetailContentTab =
@@ -843,7 +845,10 @@ function OverviewMetricsJq({ metrics }: { metrics?: JqOverviewMetrics | null }) 
       <div className="jq-run-overview-metrics-row">
         {row1.map((item) => (
           <div key={item.key} className="jq-run-overview-metric-block">
-            <span>{item.label}</span>
+            <span>
+              {item.label}
+              <GlossaryInfoButton slug={getGlossarySlugForMetric(item.key)} ariaLabel={`查看 ${item.label} 术语解释`} />
+            </span>
             <strong className={item.tone !== "normal" ? item.tone : ""}>{item.display}</strong>
           </div>
         ))}
@@ -858,7 +863,10 @@ function OverviewMetricsJq({ metrics }: { metrics?: JqOverviewMetrics | null }) 
                 : "jq-run-overview-metric-block"
             }
           >
-            <span>{item.label}</span>
+            <span>
+              {item.label}
+              <GlossaryInfoButton slug={getGlossarySlugForMetric(item.key)} ariaLabel={`查看 ${item.label} 术语解释`} />
+            </span>
             <strong className={item.tone !== "normal" ? item.tone : ""}>{item.display}</strong>
           </div>
         ))}
