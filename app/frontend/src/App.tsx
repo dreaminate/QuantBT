@@ -3,7 +3,6 @@ import { ComparePage } from "./pages/ComparePage";
 import { DataPage } from "./pages/DataPage";
 import { RunsPage } from "./pages/RunsPage";
 import { RunDetailPage } from "./pages/RunDetailPage";
-import { WorkbenchPage } from "./pages/WorkbenchPage";
 import { StrategyWorkshopPage } from "./pages/workshop/StrategyWorkshopPage";
 import { AgentChatPage } from "./pages/workshop/AgentChatPage";
 import { FactorMarketPage } from "./pages/workshop/FactorMarketPage";
@@ -51,8 +50,6 @@ export default function App() {
         <Route path="/factors" element={<FactorMarketPage />} />
         <Route path="/trading" element={<BinanceTradingPage />} />
         <Route path="/experiments" element={<ExperimentTrackingPage />} />
-        {/* 兼容旧入口 */}
-        <Route path="/workbench" element={<WorkbenchPage />} />
       </Routes>
     </Shell>
   );

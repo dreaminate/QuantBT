@@ -1617,30 +1617,6 @@ textarea {
   padding: 0 20px 20px;
 }
 
-.workbench-shortcut {
-  display: grid;
-  gap: 6px;
-  padding: 14px 16px;
-  border-radius: 4px;
-  border: 1px solid var(--line);
-  background: var(--panel-soft);
-  text-decoration: none;
-  transition: border-color 120ms;
-}
-
-.workbench-shortcut:hover {
-  border-color: var(--accent);
-}
-
-.workbench-shortcut strong {
-  color: var(--text);
-}
-
-.workbench-shortcut span {
-  color: var(--muted);
-  font-size: 12px;
-}
-
 .inline-stat-row {
   display: flex;
   justify-content: space-between;

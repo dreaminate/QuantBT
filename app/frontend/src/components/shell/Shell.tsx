@@ -223,8 +223,7 @@ function areaOf(pathname: string): string {
     pathname.startsWith("/agent") ||
     pathname.startsWith("/factors") ||
     pathname.startsWith("/trading") ||
-    pathname.startsWith("/experiments") ||
-    pathname.startsWith("/workbench")
+    pathname.startsWith("/experiments")
   )
     return "workshop";
   return "research";
