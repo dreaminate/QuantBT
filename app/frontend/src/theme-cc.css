@@ -764,3 +764,207 @@
   white-space: pre-wrap;
   color: var(--cc-text);
 }
+
+/* ============================================================
+ * v0.9.9 · 移动端响应式 (PWA)
+ * 断点: 768px (平板/手机) · 480px (小屏手机)
+ * 设计原则:
+ *   - sidebar 折叠为汉堡抽屉
+ *   - cc-grid 单列
+ *   - 按钮触控目标 ≥ 44px
+ *   - statusbar 简化只留核心
+ * ============================================================ */
+
+/* 桌面默认显示 / 移动端默认隐藏的辅助类 */
+.cc-hide-mobile { display: inline; }
+.cc-show-mobile { display: none; }
+
+/* 汉堡按钮：桌面默认隐藏 */
+.cc-hamburger {
+  display: none;
+  background: transparent;
+  border: 1px solid var(--cc-border);
+  color: var(--cc-text);
+  width: 40px;
+  height: 40px;
+  border-radius: 6px;
+  font-size: 18px;
+  cursor: pointer;
+  align-items: center;
+  justify-content: center;
+}
+
+/* 移动抽屉 sidebar */
+.cc-sidebar-drawer {
+  display: none;
+}
+
+@media (max-width: 768px) {
+  .cc-hide-mobile { display: none !important; }
+  .cc-show-mobile { display: inline; }
+
+  /* topbar 收紧 */
+  .cc-topbar {
+    padding: 8px 12px;
+    gap: 8px;
+  }
+  .cc-topbar-nav {
+    display: none;  /* 移动端走汉堡菜单 */
+  }
+  .cc-topbar-logo .cc-logo-tag {
+    display: none;  /* 只留 'qb' 字标 */
+  }
+  .cc-hamburger {
+    display: inline-flex;
+  }
+
+  /* shell 主区 */
+  .cc-shell {
+    flex-direction: column;
+  }
+  .cc-sidebar {
+    display: none;  /* 桌面 sidebar 隐藏，靠 drawer */
+  }
+  .cc-main {
+    padding: 12px 8px;
+    width: 100%;
+  }
+
+  /* 抽屉 sidebar */
+  .cc-sidebar-drawer {
+    display: block;
+    position: fixed;
+    top: 0;
+    left: 0;
+    bottom: 0;
+    width: 80%;
+    max-width: 320px;
+    background: var(--cc-bg-elev, #1a1f2a);
+    z-index: 1000;
+    transform: translateX(-100%);
+    transition: transform 0.25s ease;
+    overflow-y: auto;
+    box-shadow: 4px 0 20px rgba(0, 0, 0, 0.5);
+    padding: 12px;
+  }
+  .cc-sidebar-drawer.open {
+    transform: translateX(0);
+  }
+  .cc-sidebar-drawer a {
+    display: flex;
+    align-items: center;
+    gap: 10px;
+    padding: 12px 14px;
+    border-radius: 6px;
+    color: var(--cc-dim);
+    text-decoration: none;
+    font-size: 14px;
+    min-height: 44px;  /* 触控目标 */
+  }
+  .cc-sidebar-drawer a.active {
+    background: var(--cc-bg-soft);
+    color: var(--cc-text);
+  }
+
+  /* 背景遮罩 */
+  .cc-drawer-backdrop {
+    position: fixed;
+    inset: 0;
+    background: rgba(0, 0, 0, 0.5);
+    z-index: 999;
+  }
+
+  /* 卡片网格强制单列 */
+  .cc-grid {
+    grid-template-columns: 1fr !important;
+  }
+  .cc-grid-lg {
+    grid-template-columns: 1fr !important;
+  }
+
+  /* 卡片 padding 收紧 */
+  .cc-card {
+    padding: 12px;
+  }
+
+  /* 按钮触控目标 */
+  .cc-btn {
+    min-height: 38px;
+    padding: 8px 14px;
+  }
+  .cc-btn--sm {
+    min-height: 32px;
+    padding: 6px 10px;
+  }
+
+  /* statusbar 只留 2 项核心 */
+  .cc-statusbar {
+    padding: 4px 8px;
+    font-size: 10px;
+    flex-wrap: wrap;
+    gap: 6px;
+  }
+  .cc-statusbar .cc-status-item:nth-child(n+4) {
+    display: none;  /* 隐藏 factors / secrets / version */
+  }
+
+  /* page header 移动端简化 */
+  .cc-page-header {
+    flex-direction: column;
+    align-items: flex-start;
+    gap: 8px;
+  }
+  .cc-page-title {
+    font-size: 18px;
+  }
+  .cc-page-actions {
+    width: 100%;
+    flex-wrap: wrap;
+  }
+
+  /* row 默认 wrap 防溢出 */
+  .cc-row {
+    flex-wrap: wrap;
+  }
+}
+
+@media (max-width: 480px) {
+  .cc-main {
+    padding: 8px 6px;
+  }
+  .cc-card {
+    padding: 10px;
+  }
+  .cc-page-title {
+    font-size: 16px;
+  }
+  /* 表格强制横向滚动避免布局崩 */
+  .cc-table-wrap, .table-wrap {
+    overflow-x: auto;
+    -webkit-overflow-scrolling: touch;
+  }
+}
+
+/* 横向屏幕（landscape phone）保留 sidebar */
+@media (max-width: 768px) and (orientation: landscape) and (min-height: 500px) {
+  /* 不强制单列，保持桌面 layout */
+  .cc-sidebar { display: flex; }
+  .cc-topbar-nav { display: flex; }
+}
+
+/* 移动端横屏 IDE / Compare 警告横幅（由组件自己渲染） */
+.cc-mobile-warning {
+  display: none;
+}
+@media (max-width: 768px) {
+  .cc-mobile-warning {
+    display: block;
+    margin: 8px 0;
+    padding: 10px 12px;
+    background: rgba(201, 138, 20, 0.1);
+    border-left: 3px solid #c98a14;
+    border-radius: 4px;
+    font-size: 12px;
+    color: var(--cc-text);
+  }
+}

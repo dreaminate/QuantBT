@@ -45,6 +45,7 @@ export function Shell({ children, wide = false }: { children: ReactNode; wide?: 
     const stored = typeof window !== "undefined" ? localStorage.getItem("cc-theme") : null;
     return (stored as Theme) || "dark";
   });
+  const [drawerOpen, setDrawerOpen] = useState(false);
   useEffect(() => {
     document.documentElement.setAttribute("data-theme", theme);
     try {
@@ -58,23 +59,74 @@ export function Shell({ children, wide = false }: { children: ReactNode; wide?: 
   const area = areaOf(location.pathname);
   const sidebar = SIDEBAR_BY_AREA[area];
 
+  // 路由切换自动关 drawer
+  useEffect(() => {
+    setDrawerOpen(false);
+  }, [location.pathname]);
+
   return (
     <div className="cc-app">
-      <TopNav theme={theme} onToggleTheme={() => setTheme(theme === "dark" ? "light" : "dark")} />
+      <TopNav
+        theme={theme}
+        onToggleTheme={() => setTheme(theme === "dark" ? "light" : "dark")}
+        onHamburger={() => setDrawerOpen((v) => !v)}
+      />
       <div className="cc-shell">
         {sidebar && <Sidebar items={sidebar} area={area} />}
         <main className={`cc-main${wide ? " cc-main--wide" : ""}`}>{children}</main>
       </div>
       <StatusBar />
+
+      {/* v0.9.9 移动端 drawer (仅 < 768px 显示) */}
+      {drawerOpen && <div className="cc-drawer-backdrop" onClick={() => setDrawerOpen(false)} />}
+      <MobileDrawer open={drawerOpen} onClose={() => setDrawerOpen(false)} currentArea={area} />
     </div>
   );
 }
 
-function TopNav({ theme, onToggleTheme }: { theme: Theme; onToggleTheme: () => void }) {
+function MobileDrawer({ open, onClose, currentArea }: { open: boolean; onClose: () => void; currentArea: string }) {
+  const allItems: { area: string; items: SidebarItem[] }[] = [
+    { area: "research", items: SIDEBAR_BY_AREA.research },
+    { area: "workshop", items: SIDEBAR_BY_AREA.workshop },
+    { area: "community", items: SIDEBAR_BY_AREA.community },
+  ];
+  return (
+    <aside className={`cc-sidebar-drawer${open ? " open" : ""}`} aria-hidden={!open}>
+      <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 16 }}>
+        <span style={{ fontWeight: 600, fontSize: 16 }}>qb · QuantBT</span>
+        <button type="button" onClick={onClose} className="cc-btn cc-btn--ghost cc-btn--sm" aria-label="关闭菜单">×</button>
+      </div>
+      {allItems.map((group) => (
+        <div key={group.area} style={{ marginBottom: 16 }}>
+          <div className="cc-sidebar-section" style={{ fontSize: 11, opacity: 0.6, marginBottom: 4 }}>
+            {group.area === "research" ? "回测研究" : group.area === "workshop" ? "工坊" : "社区"}
+          </div>
+          {group.items.map((item) => (
+            <NavLink
+              key={item.to}
+              to={item.to}
+              className={({ isActive }) => (isActive ? "active" : "")}
+              end
+            >
+              {item.icon && <span className="cc-sidebar-icon">{item.icon}</span>}
+              <span>{item.label}</span>
+            </NavLink>
+          ))}
+        </div>
+      ))}
+      <div style={{ marginTop: 24, paddingTop: 12, borderTop: "1px solid rgba(255,255,255,0.08)", opacity: 0.7, fontSize: 11 }}>
+        当前: {currentArea}
+      </div>
+    </aside>
+  );
+}
+
+function TopNav({ theme, onToggleTheme, onHamburger }: { theme: Theme; onToggleTheme: () => void; onHamburger: () => void }) {
   const location = useLocation();
   const area = areaOf(location.pathname);
   return (
     <header className="cc-topbar">
+      <button type="button" className="cc-hamburger" onClick={onHamburger} aria-label="菜单">≡</button>
       <NavLink to="/" className="cc-topbar-logo">
         <b>qb</b>
         <span className="cc-logo-tag">// QuantBT</span>
@@ -265,7 +317,7 @@ function StatusBar() {
         <span className="cc-status-dot" /> secrets: {info.loadedSecrets.length} loaded
       </span>
       <span className="cc-status-spacer" />
-      <span className="cc-status-item">v0.9.5</span>
+      <span className="cc-status-item">v0.9.9</span>
     </footer>
   );
 }
