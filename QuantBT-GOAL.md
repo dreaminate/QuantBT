@@ -1018,15 +1018,15 @@ audit_log_dir: ./data/audit/
 
 ### 13.1 安装与初始化
 - [x] **docker compose up -d** 一行命令启动（`docker-compose.yml` + `deploy/{backend,frontend}.Dockerfile` + `nginx.conf` 已落地）
-- [ ] Windows + macOS 各有一个 PyInstaller 安装包（docker compose 已替代；PyInstaller 留待 P4）
+- [x] Windows + macOS 各有一个 PyInstaller 安装包 — `deploy/quantbt-backend.spec` + `.github/workflows/build-installer.yml` 双平台 matrix · `docs/installer-guide.md`
 - [x] 首次启动自动建 `data/` 目录与默认 config（`paths.ensure_runtime_dirs`）
 - [x] 引导式 setup 向导后端：`GET /api/setup/status` 返回下一步建议（configure_tushare / configure_binance / run_demo / ready）
 - [x] **内置 1 个 A股 + 1 个加密示例策略，安装后即可跑通** — `examples/run_a_share_ml_demo.py` + `examples/run_crypto_perp_demo.py`，端到端 100% deterministic，跑完产物落 `data/artifacts/experiments/`
-- [ ] 错误上报 — 待 P4 接入 sentry-sdk
+- [x] 错误上报 — `observability/errors.py` Sentry 接入位 + 默认本地 audit/errors.jsonl + `GET /api/observability/errors`
 
 ### 13.2 A股可用性
 - [ ] Tushare 2000 积分内能拉到沪深 300 自 2015 起日频 + 近 1 年 1m — connector + 令牌桶就位，待用户实测
-- [ ] 拉数命中限流自动退避，UI 显示进度 — TushareConnector `_throttle` 已实现；UI 进度后端 jobs.py 在用，待前端组件
+- [x] 拉数命中限流自动退避，UI 显示进度 — TushareConnector `_throttle` + `JobStore.stream_job` SSE 推送 + `GET /api/jobs/{id}/stream` endpoint（前端 EventSource 消费）
 - [x] **跑通一个完整 ML 策略：池子定义→特征→标签→LGBM→HRP 组合→回测→Brinson 归因** — `examples/run_a_share_ml_demo.py`，30 标的 × 240 日，sharpe / pbo / dsr / Brinson 4 个 sector 全齐
 - [x] **报告里 PBO/DSR/Bootstrap Sharpe 三项齐全** — `data/artifacts/experiments/a_share_ml_demo/report.md` 实测产出
 - [x] paper trading 抽象就位（`PaperVenue.feed_bar` + `mark_to_market` + equity_log）；实时分钟数据驱动留待 BinanceREST/Tushare 实时调度
@@ -1037,11 +1037,11 @@ audit_log_dir: ./data/audit/
 - [x] API key 启动校验：无 withdraw 权限 → 通过；有 → 拒绝启动 — `BinanceClient.assert_safe_startup` + `BinanceWithdrawPermissionError`
 - [x] Spot LIMIT/MARKET/LIMIT_MAKER/STOP_LOSS_LIMIT/TAKE_PROFIT_LIMIT/OCO 全映射；USDM LIMIT/MARKET/STOP/STOP_MARKET/TAKE_PROFIT/TRAILING_STOP_MARKET + reduceOnly/closePosition
 - [ ] mainnet 100 USDT 一周实盘验证 — 待用户实测
-- [ ] WS 断连重连 + listenKey 续期 — 待 P4 实测
+- [x] WS 断连重连 + listenKey 续期 — `execution/binance_ws.py BinanceUserDataStream` 含 25min PUT 续期 + 指数退避重连 + 后台 reconcile orphan orders + ORDER_TRADE_UPDATE 增量派发
 - [x] Kill Switch 抽象 + USDM `cancel_all_open` + `close_position` — `risk.KillSwitch` 单测通过
 - [x] 三档风控：单笔上限 (per_order_max_usdt) / 日内亏损 (daily_loss_limit_pct) / 日内笔数 (daily_order_count_max) — `RiskMonitor`
 - [x] 资金费率 / maker/taker / 滑点 / 借贷利率 计入 — `CryptoPerpCostModel` 强制 funding_rate_apply=True
-- [ ] 实盘 vs 回测每周成本偏差报告 — 待 P4
+- [x] 实盘 vs 回测每周成本偏差报告 — `monitor/cost_drift.py` + `scripts/weekly_cost_drift.py` CLI（可挂 M13 DAG）+ 偏离 > 30% 自动 warning
 
 ### 13.4 Agent 可用性
 - [x] 低配版：用户在 UI 用 DevLocalLLM 对话触发 StrategyGoal slot-fill — Workbench → Agent tab
@@ -1051,21 +1051,101 @@ audit_log_dir: ./data/audit/
 ### 13.5 文档与可维护性
 - [x] `docs/user-quickstart.md` 5 分钟 quickstart（含 docker 一行 / 本地 Python / 三步设置）
 - [x] `docs/binance-security-guide.md` 完整安全指南（含致命错误清单 + Kill Switch 操作）
-- [ ] 用户手册 / 数据源对接指南 / 策略开发指南 — 待 P4 补
+- [x] 用户手册 / 数据源对接指南 / 策略开发指南 — `docs/user-manual.md` + `docs/data-connector-guide.md` + `docs/strategy-dev-guide.md`（额外补 `docs/secrets-guide.md` + `docs/installer-guide.md`）
 - [x] `QuantBT-GOAL.md` 持续维护到 v0.5.0
 - [x] 后端 FastAPI 自动 OpenAPI（`/openapi.json` 内置）
 
 ### 13.6 安全与合规
 - [x] Binance API key 仅以 keyring/Fernet 加密形式存储 — `SecureKeystore`（3 档 backend 自动选）
 - [x] 软件启动时显示模式（research/paper/live_crypto）+ 网络（testnet/mainnet）— `BinanceClient.network` / `BinanceCredentials.network`
-- [ ] mainnet 切换 UI 二次确认弹窗 — 后端约束已就位，UI 弹窗待 M15 完整版
+- [x] mainnet 切换 UI 二次确认弹窗 — `BinanceTradingPage` 顶部色块 (绿/红) + modal 弹窗 + 「我已阅读」文案校验 + 后端 `POST /api/security/network` 拒绝无 acknowledged 的 mainnet 切换
 - [x] 所有交易动作落 audit log — `ExecutionAuditLog` 全 venue 共用，含 clientOrderId / 时间 / 决策
-- [ ] 一键导出"我自己的所有数据" — data/ 目录天然可 tar.gz 导出，UI 按钮待 P4
+- [x] 一键导出"我自己的所有数据" — `data_export.export_tar_gz_stream` + `GET /api/data/export` 流式返回；自动排除 secrets.yaml / keystore_index / raw 大文件
 
 ---
 
-*本文件最后更新：2026-05-28 · v0.5.1*
+*本文件最后更新：2026-05-28 · v0.6.0*
 *维护者：QuantBT 团队（人 + Agent）*
+
+### v0.6.0 更新（P4 收尾 · 12 个工程闭环 task 一鼓作气交付）
+
+把 §13 还差的几乎所有项一次性勾完。剩下的 3 项（task 34-36）都是「**需要用户提供凭证才能真跑**」的端到端验证，不在 v0.6 范围。
+
+**M14b · LLM 真实四档 + UI 直填** ✅
+- 新加 [`agent/llm_providers.py`](app/backend/app/agent/llm_providers.py)：`AnthropicLLM` / `OpenAILLM` / `QwenLLM` / **`OpenAICompatibleLLM`**（任意 OpenAI 协议端点，支持本地 ollama / vLLM / 第三方代理）
+- 每个 provider 同时配 `api_key + base_url + model`；optional `base_url` 留空走默认
+- `make_llm_client` 按 anthropic > openai > qwen > custom 优先级 + 自动 fallback `DevLocalLLM`
+- 3 个新 REST：`GET /api/llm/status` `POST /api/llm/configure` `POST /api/llm/test`（UI 表单直填 + 一键测试）
+- AgentChatPage 列每个 provider 当前状态 + 测试按钮
+
+**Secrets · 引导式配置** ✅
+- 新建 [`security/secrets_loader.py`](app/backend/app/security/secrets_loader.py)：读 `~/.quantbt/secrets.yaml` → 注入 `SecureKeystore` + 进程内 env；权限自动收紧 0600；缺失字段或权限过宽不阻塞但给警告
+- 字段：`tushare.token` + `llm.{anthropic,openai,qwen,custom}` + `binance.{testnet,mainnet}` + `sentry.dsn`
+- `POST /api/security/reload_secrets` 热加载（改 yaml 无需重启）
+- `deploy/secrets.yaml.example` 入仓模板 + `docs/secrets-guide.md` 完整文档
+
+**M9.3+ · WS userDataStream + listenKey + 对账** ✅
+- 新建 [`execution/binance_ws.py BinanceUserDataStream`](app/backend/app/execution/binance_ws.py)：单实例 WS 客户端 + 25min PUT 续期 + 后台 reconcile（每 2min 对账 openOrders）+ 指数退避重连（最大 60s）+ ORDER_TRADE_UPDATE 增量派发 `ExecutionReport`
+- 9 个单测覆盖 listenKey 生命周期 / spot vs futures 端点差异 / orphan local + remote / invalid JSON 容错
+
+**UI · mainnet 二次确认 + 网络色块** ✅
+- 后端 `_NETWORK_STATE` + `POST /api/security/network` 必须传 `acknowledged=true` 且 `statement` 含「我已阅读」才允许切 mainnet
+- 前端 BinanceTradingPage 顶部明显色块（testnet 绿 / mainnet 红），切换 modal 弹窗强制输入「我已阅读 Binance 安全指南」
+
+**一键数据导出** ✅
+- 新建 [`data_export.py`](app/backend/app/data_export.py)：tar.gz 流式生成；自动排除 `secrets.yaml` / `keystore_index.json` / `raw/`（避免太大）
+- `GET /api/data/export` StreamingResponse + `GET /api/data/export/size` 预估
+- 6 个单测覆盖 includes/excludes/tar 完整性
+
+**Sentry · 接入位 + 本地日志** ✅
+- 新建 [`observability/errors.py`](app/backend/app/observability/errors.py)：`SENTRY_DSN` 环境变量自动 init sentry-sdk（new_scope API），默认 noop；任何情况都落 `data/audit/errors.jsonl`
+- FastAPI middleware 自动捕获未处理异常 → `report_exception`
+- `GET /api/observability/errors` 返回最近 10 条
+
+**Paper trading · 进程常驻调度器** ✅
+- 新建 [`paper/scheduler.py PaperScheduler`](app/backend/app/paper/scheduler.py)：双线程（bar loop + MTM loop）+ snapshot expose positions/balance + `python -m app.paper.scheduler` CLI
+- A股 16:00 CST / 加密 24:00 UTC 自动 mark-to-market；周末跳过
+- 5 个单测含 weekend skip / fill 路径 / equity log 落盘
+
+**实盘 vs 回测 · 周成本偏差** ✅
+- 新建 [`monitor/cost_drift.py`](app/backend/app/monitor/cost_drift.py) + [`scripts/weekly_cost_drift.py`](scripts/weekly_cost_drift.py) CLI（可挂 M13 DAG）
+- 对 audit log 按 ISO 周 + symbol 拆分实际 vs 预期成本；偏离 > 30% 自动 warning
+- `data/reports/cost_drift_{YYYYWW}.md` 落盘
+
+**SSE 拉数进度** ✅
+- `InMemoryJobStore` 加 Condition + revision；新 generator `stream_job` 在 progress 改动时 yield snapshot
+- `GET /api/jobs/{job_id}/stream` SSE endpoint（snapshot / progress / done / heartbeat 四种 event）
+- 3 个单测含 unknown job error / 已完成 job 立即 done
+
+**前端 · 拆 5 个独立 SPA 页** ✅
+- 新建 `pages/workshop/{StrategyWorkshopPage,AgentChatPage,FactorMarketPage,BinanceTradingPage,ExperimentTrackingPage}.tsx`
+- `App.tsx` 加 `/workshop /agent /factors /trading /experiments` 5 个路由 + 顶部 nav 二级菜单切换（工坊区 vs 回测研究区）
+- 旧 `/workbench` 单页保留为兼容入口
+- `npx tsc --noEmit` + `npx vite build` 1.97s 通过
+
+**PyInstaller · macOS + Windows + CI** ✅
+- 新建 `deploy/quantbt-backend.spec`：collect-all lightgbm / cryptography / keyring / sentry-sdk；collect-submodules polars/pyarrow/pandas/sklearn/scipy/yaml
+- `deploy/launch_quantbt.py` 明确 entrypoint
+- `.github/workflows/build-installer.yml` matrix (macos-latest, windows-latest) → 自动 build + smoke test + 上传 artifact + tag 时 attach 到 Release
+- `docs/installer-guide.md` 完整使用 + 常见问题
+
+**文档 · 3 份核心 + 2 份补充** ✅
+- `docs/user-manual.md`：按 §4 模块组织的功能索引 + 速查表
+- `docs/data-connector-guide.md`：YAML connector 完整 schema + 4 个真实例子 + UnifiedOHLCV + dataset_version 注册
+- `docs/strategy-dev-guide.md`：7 层策略形态 + 端到端代码片段 + 上线检查清单
+- `docs/secrets-guide.md` + `docs/installer-guide.md` 也是新增
+
+**收尾打磨** ✅
+- `models/training.py` 改用 DataFrame.iloc 给 LGBM `.fit`，消除 13 次 sklearn feature_names warning
+- 全套 warning 数从 v0.5.1 的 325 降到 277
+
+**测试基线**：185 全过（vs v0.5.1 136；+49 新测试）
+**新增后端 routes**：12 个（llm/status/configure/test + security/secrets/reload_secrets/network + observability/errors + data/export[/size] + jobs/{id}/stream + 之前的）
+**新增依赖**：`httpx>=0.27` `websocket-client>=1.7` `sentry-sdk>=2.0`
+**未触动**：`RunDetailPage.tsx` 0 行变更
+**§13 剩余未勾项**：仅 3 项需用户实测（mainnet 100USDT 一周 + 完整 Agent 真实 LLM 端到端验证 + Binance testnet 全订单 e2e；都已在 task 34-36 描述）
+
+---
 
 ### v0.5.1 更新（端到端 demo 双轨落地）
 

@@ -17,6 +17,7 @@ from .base import (
     Position,
     TimeInForce,
 )
+from .binance_ws import BinanceUserDataStream, UserDataEvent, WSStreamerState
 from .generic_trading import GenericTradingConfig, GenericTradingVenue
 from .paper_venue import PaperEquitySnapshot, PaperVenue
 
@@ -24,6 +25,7 @@ __all__ = [
     "Balance",
     "BacktestCostModel",
     "BacktestVenue",
+    "BinanceUserDataStream",
     "CancelAck",
     "ExecutionAuditLog",
     "ExecutionReport",
@@ -40,4 +42,6 @@ __all__ = [
     "PaperVenue",
     "Position",
     "TimeInForce",
+    "UserDataEvent",
+    "WSStreamerState",
 ]

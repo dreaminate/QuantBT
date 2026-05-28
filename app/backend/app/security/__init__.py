@@ -10,12 +10,16 @@ from .keystore import (
     SecureKeystore,
     derive_key_from_password,
 )
+from .secrets_loader import DEFAULT_SECRETS_PATH, SecretsLoadReport, load_secrets
 
 __all__ = [
+    "DEFAULT_SECRETS_PATH",
     "InMemoryKeystore",
     "KeystoreBackend",
     "KeystoreError",
     "KeystoreRecord",
+    "SecretsLoadReport",
     "SecureKeystore",
     "derive_key_from_password",
+    "load_secrets",
 ]

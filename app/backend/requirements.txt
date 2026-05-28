@@ -5,6 +5,9 @@ pyarrow==19.0.1
 pandas==2.3.2
 plotly==6.3.0
 requests==2.32.5
+httpx>=0.27
+websocket-client>=1.7
+sentry-sdk>=2.0
 tushare==1.4.24
 pydantic==2.11.7
 pyyaml==6.0.2

@@ -4,9 +4,17 @@ from typing import Any
 
 from fastapi import Body, FastAPI, HTTPException, Query
 from fastapi.middleware.cors import CORSMiddleware
-from fastapi.responses import FileResponse
+from fastapi.responses import FileResponse, StreamingResponse
 
-from .agent import AgentRuntime, CodeReplicator, DevLocalLLM, StrategyGoalSlotFiller, TOOL_SCHEMA
+from .agent import (
+    AgentRuntime,
+    CodeReplicator,
+    DevLocalLLM,
+    StrategyGoalSlotFiller,
+    TOOL_SCHEMA,
+    list_llm_status,
+    make_llm_client,
+)
 from .connectors import registry as connector_registry
 from .data_center_services import (
     get_data_files_response,
@@ -16,13 +24,15 @@ from .data_center_services import (
     get_data_preview_response,
     get_markets_response,
 )
+from .data_export import estimate_export_size, export_tar_gz_stream
 from .data_quality import DatasetRegistry, compute_freshness
 from .experiments import ExperimentStore, ModelRegistry, RunStore
 from .factor_factory import FactorRegistry, list_operators, register_alpha_lite
+from .observability import get_reporter, init_error_reporting
 from .jobs import InMemoryJobStore
 from .paths import DATA_ROOT, ensure_runtime_dirs
 from .risk import KillSwitch, RiskLimits, RiskMonitor
-from .security import InMemoryKeystore, KeystoreRecord, SecureKeystore
+from .security import InMemoryKeystore, KeystoreRecord, SecureKeystore, load_secrets
 from .run_detail_services import (
     artifact_download_path,
     compare_runs_response,
@@ -57,9 +67,12 @@ if not FACTOR_REGISTRY.list():
 EXPERIMENT_STORE = ExperimentStore(DATA_ROOT / "experiments")
 RUN_STORE = RunStore(DATA_ROOT / "experiments")
 MODEL_REGISTRY = ModelRegistry(DATA_ROOT / "experiments")
+ERROR_REPORTER = init_error_reporting(DATA_ROOT / "audit" / "errors.jsonl")
 
 # 安全：开发环境用内存 keystore；上线时切换到 keyring/fernet（由 settings 控制）
 KEYSTORE = SecureKeystore(InMemoryKeystore())
+# 启动时自动读 ~/.quantbt/secrets.yaml（如有），把字段注入 keystore + env
+_SECRETS_REPORT = load_secrets(KEYSTORE)
 RISK_LIMITS = RiskLimits()
 RISK_MONITOR = RiskMonitor(RISK_LIMITS)
 KILL_SWITCH = KillSwitch([])  # 实盘 venue 启用时由 settings 注入
@@ -207,6 +220,164 @@ def store_keystore_record(payload: dict = Body(...)) -> dict:
         )
     )
     return {"stored": payload["name"], "backend": KEYSTORE.backend_name}
+
+
+@app.get("/api/security/secrets")
+def secrets_status() -> dict[str, Any]:
+    """返回最近一次 secrets.yaml 加载状态（不回显 key）。"""
+    return _SECRETS_REPORT.to_dict()
+
+
+# ---- mainnet/testnet 网络切换 + 二次确认 ----
+
+_NETWORK_STATE: dict[str, str] = {"binance_network": "testnet", "confirmed_at_utc": ""}
+
+
+@app.get("/api/security/network")
+def get_network() -> dict[str, Any]:
+    return {**_NETWORK_STATE, "mode": "live_crypto" if _NETWORK_STATE["binance_network"] == "mainnet" else "paper"}
+
+
+@app.post("/api/security/network")
+def set_network(payload: dict = Body(...)) -> dict[str, Any]:
+    """切换 binance_network。mainnet 必须传 acknowledged=true（二次确认）。"""
+    import datetime as _dt
+
+    network = payload.get("binance_network", "testnet")
+    if network not in {"testnet", "mainnet"}:
+        raise HTTPException(400, "binance_network 必须是 testnet 或 mainnet")
+    if network == "mainnet" and not payload.get("acknowledged"):
+        raise HTTPException(
+            400,
+            "切到 mainnet 必须传 acknowledged=true 且文案需含 '我已阅读 Binance 安全指南'",
+        )
+    if network == "mainnet":
+        statement = (payload.get("statement") or "").strip()
+        if "我已阅读" not in statement and "I have read" not in statement:
+            raise HTTPException(400, "statement 必须包含「我已阅读」字样")
+    _NETWORK_STATE["binance_network"] = network
+    _NETWORK_STATE["confirmed_at_utc"] = _dt.datetime.now(_dt.UTC).isoformat()
+    ERROR_REPORTER.report(  # 用 error reporter 顺道写 audit
+        Exception(f"network_switch:{network}"),
+        {"network": network, "confirmed_at_utc": _NETWORK_STATE["confirmed_at_utc"]},
+    ) if False else None  # 不发 sentry；仅留位
+    return _NETWORK_STATE
+
+
+@app.post("/api/security/reload_secrets")
+def reload_secrets() -> dict[str, Any]:
+    """热加载 ~/.quantbt/secrets.yaml。"""
+    global _SECRETS_REPORT
+    _SECRETS_REPORT = load_secrets(KEYSTORE)
+    return _SECRETS_REPORT.to_dict()
+
+
+# -------- LLM 配置（UI 直填用） --------
+
+@app.get("/api/llm/status")
+def llm_status() -> list[dict]:
+    """列出每个 provider 的配置状态（不回显 api_key）。"""
+    return list_llm_status(KEYSTORE)
+
+
+@app.post("/api/llm/configure")
+def llm_configure(payload: dict = Body(...)) -> dict[str, Any]:
+    """从前端表单接收：provider + api_key + base_url + model，写入 keystore。
+
+    payload 形如：
+        {"provider": "anthropic", "api_key": "sk-ant-...", "base_url": "", "model": ""}
+    或：
+        {"provider": "custom", "api_key": "ollama", "base_url": "http://localhost:11434/v1", "model": "qwen2.5:32b"}
+    """
+    import json as _json
+
+    provider = payload.get("provider")
+    if provider not in {"anthropic", "openai", "qwen", "custom"}:
+        raise HTTPException(400, f"unknown provider: {provider}")
+    api_key = (payload.get("api_key") or "").strip()
+    base_url = (payload.get("base_url") or "").strip()
+    model = (payload.get("model") or "").strip()
+    if provider == "custom" and not (base_url and model):
+        raise HTTPException(400, "custom 必须同时填 base_url 和 model")
+    if not api_key and provider != "custom":
+        raise HTTPException(400, f"{provider} 必须填 api_key")
+    KEYSTORE.store(
+        KeystoreRecord(
+            name=f"llm_{provider}",
+            api_key=api_key or "no-key",
+            api_secret=api_key or "no-key",
+            note=_json.dumps({"base_url": base_url, "model": model}, ensure_ascii=False),
+        )
+    )
+    return {"configured": provider, "base_url": base_url, "model": model}
+
+
+@app.get("/api/observability/errors")
+def observability_errors() -> dict:
+    return ERROR_REPORTER.info_snapshot()
+
+
+@app.get("/api/jobs/{job_id}/stream")
+def stream_job_events(job_id: str):
+    """SSE：连上后立即收到 snapshot，每次 progress 改动 push 一条事件，终态自动关闭。"""
+
+    def _sse():
+        import json as _json
+        for evt in JOB_STORE.stream_job(job_id):
+            line = (
+                f"event: {evt['event']}\n"
+                f"data: {_json.dumps(evt['data'], ensure_ascii=False, default=str)}\n\n"
+            )
+            yield line.encode("utf-8")
+            if evt["event"] in {"done", "error"}:
+                return
+
+    return StreamingResponse(_sse(), media_type="text/event-stream")
+
+
+@app.get("/api/data/export/size")
+def data_export_size() -> dict:
+    return estimate_export_size(DATA_ROOT)
+
+
+@app.get("/api/data/export")
+def data_export():
+    fname = f"quantbt-export-{__import__('datetime').datetime.now().strftime('%Y%m%d-%H%M%S')}.tar.gz"
+    return StreamingResponse(
+        export_tar_gz_stream(DATA_ROOT),
+        media_type="application/gzip",
+        headers={"Content-Disposition": f'attachment; filename="{fname}"'},
+    )
+
+
+@app.middleware("http")
+async def _report_unhandled_exceptions(request, call_next):
+    try:
+        return await call_next(request)
+    except Exception as exc:  # noqa: BLE001
+        ERROR_REPORTER.report(exc, {"path": str(request.url.path), "method": request.method})
+        raise
+
+
+@app.post("/api/llm/test")
+def llm_test(payload: dict = Body(default_factory=dict)) -> dict[str, Any]:
+    """让前端"测试连接"按钮一键 ping LLM provider。"""
+    provider = payload.get("provider")
+    try:
+        client = make_llm_client(provider=provider, keystore=KEYSTORE)
+        from .agent import LLMMessage
+        resp = client.chat(
+            [LLMMessage(role="user", content=payload.get("ping", "回我一句 ok"))],
+            tools=None,
+            temperature=0.0,
+        )
+        return {
+            "provider": client.provider,
+            "ok": True,
+            "reply_preview": (resp.content or "")[:200],
+        }
+    except Exception as exc:  # noqa: BLE001
+        return {"provider": provider, "ok": False, "error": f"{type(exc).__name__}: {exc}"}
 
 
 @app.get("/api/risk/alerts")

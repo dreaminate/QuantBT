@@ -14,6 +14,15 @@ from __future__ import annotations
 from .agent_runtime import AgentRuntime, AgentStep, AgentTurn
 from .code_replicator import CodeReplicator, ReplicationReport
 from .llm_client import DevLocalLLM, LLMClient, LLMMessage, LLMResponse, NoLLMConfigured
+from .llm_providers import (
+    AnthropicLLM,
+    OpenAICompatibleLLM,
+    OpenAILLM,
+    ProviderName,
+    QwenLLM,
+    list_llm_status,
+    make_llm_client,
+)
 from .slot_filling import StrategyGoalSlotFiller
 from .tool_schema import TOOL_SCHEMA, tool_openapi_skeleton
 
@@ -21,14 +30,21 @@ __all__ = [
     "AgentRuntime",
     "AgentStep",
     "AgentTurn",
+    "AnthropicLLM",
     "CodeReplicator",
     "DevLocalLLM",
     "LLMClient",
     "LLMMessage",
     "LLMResponse",
     "NoLLMConfigured",
+    "OpenAICompatibleLLM",
+    "OpenAILLM",
+    "ProviderName",
+    "QwenLLM",
     "ReplicationReport",
     "StrategyGoalSlotFiller",
     "TOOL_SCHEMA",
+    "list_llm_status",
+    "make_llm_client",
     "tool_openapi_skeleton",
 ]

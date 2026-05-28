@@ -135,7 +135,8 @@ def train_model(
         raise ValueError("ModelSpec.feature_cols 不能为空")
     df = panel.copy()
     df = df.sort_values("ts").reset_index(drop=True)
-    X = df[spec.feature_cols].values
+    # 用 DataFrame 而非 .values 传给 LGBM，消除 "X does not have valid feature names" warning
+    X = df[spec.feature_cols]
     y = df[spec.label_col].values
     times = df["ts"]
     splitter = list(_split_iter(spec, n_samples=len(df), times=times))
@@ -153,16 +154,18 @@ def train_model(
         if spec.task == "lambdarank" and spec.group_col and spec.group_col in df.columns:
             group_train = df.iloc[split.train_idx].groupby(spec.group_col).size().tolist()
             fit_kwargs["group"] = group_train
-        model.fit(X[split.train_idx], y[split.train_idx], **fit_kwargs)
+        X_train = X.iloc[split.train_idx]
+        X_test = X.iloc[split.test_idx]
+        model.fit(X_train, y[split.train_idx], **fit_kwargs)
         if spec.task == "classification":
-            y_pred = model.predict(X[split.test_idx])
+            y_pred = model.predict(X_test)
             y_proba = (
-                model.predict_proba(X[split.test_idx])[:, 1]
+                model.predict_proba(X_test)[:, 1]
                 if hasattr(model, "predict_proba")
                 else None
             )
         else:
-            y_pred = model.predict(X[split.test_idx])
+            y_pred = model.predict(X_test)
             y_proba = None
         metrics = _evaluate_split(spec, y[split.test_idx], y_pred, y_proba)
         folds.append(FoldMetrics(split.fold_index, len(split.train_idx), len(split.test_idx), metrics))

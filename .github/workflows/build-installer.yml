@@ -1,0 +1,48 @@
+name: build-installer
+
+# 触发：tag push（vX.Y.Z）+ 手动；分别在 macOS / Windows runner 上跑 PyInstaller
+# 产物上传 GitHub Release（如有 tag）+ artifact（永远）。
+
+on:
+  push:
+    tags:
+      - "v*.*.*"
+  workflow_dispatch:
+
+jobs:
+  build:
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [macos-latest, windows-latest]
+    runs-on: ${{ matrix.os }}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.13"
+      - name: Install backend deps
+        working-directory: app/backend
+        run: |
+          python -m pip install --upgrade pip
+          pip install -r requirements.txt
+          pip install pyinstaller
+      - name: PyInstaller build (macOS / Windows)
+        run: |
+          pyinstaller --clean --noconfirm deploy/quantbt-backend.spec
+      - name: Smoke test (start backend & curl health)
+        if: matrix.os == 'macos-latest'
+        run: |
+          ./dist/quantbt-backend/quantbt-backend &
+          sleep 8
+          curl -fsS http://127.0.0.1:8000/api/health
+      - uses: actions/upload-artifact@v4
+        with:
+          name: quantbt-backend-${{ matrix.os }}
+          path: dist/quantbt-backend
+          retention-days: 30
+      - name: Attach to GitHub Release (only on tag)
+        if: startsWith(github.ref, 'refs/tags/v')
+        uses: softprops/action-gh-release@v2
+        with:
+          files: dist/quantbt-backend/**

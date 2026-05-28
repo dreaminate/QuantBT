@@ -17,6 +17,61 @@ class InMemoryJobStore:
     def __init__(self) -> None:
         self._lock = threading.Lock()
         self._jobs: dict[str, JobRecord] = {}
+        self._cond = threading.Condition(self._lock)
+        # 每个 job 的 progress 版本号，watcher 用来判定"有没有新事件"
+        self._revisions: dict[str, int] = {}
+
+    def _bump(self, job_id: str) -> None:
+        """在持有 self._lock 的前提下调用：进度/状态变更通知所有 watcher。"""
+        self._revisions[job_id] = self._revisions.get(job_id, 0) + 1
+        self._cond.notify_all()
+
+    def stream_job(self, job_id: str, *, last_revision: int = 0, timeout_s: float = 60.0):
+        """generator：每次 progress/状态变更 yield 一份 job snapshot dict；适合 SSE。
+
+        终态 (succeeded / failed / interrupted) 会 yield 一次后退出。
+        若 `timeout_s` 内无任何变化则 yield 一次 heartbeat。
+        """
+
+        import time as _time
+
+        # 先吐一份当前快照
+        with self._cond:
+            if job_id not in self._jobs:
+                yield {"event": "error", "data": {"detail": f"job {job_id} not found"}}
+                return
+            current_rev = self._revisions.get(job_id, 0)
+            snapshot = self._jobs[job_id].to_dict()
+            yield {"event": "snapshot", "data": snapshot, "revision": current_rev}
+            done = snapshot["status"] in {"succeeded", "failed", "interrupted"}
+        if done:
+            yield {"event": "done", "data": {"final_status": snapshot["status"]}}
+            return
+
+        deadline_total = _time.time() + 3600  # 单连接最多 1 小时
+        while _time.time() < deadline_total:
+            with self._cond:
+                # 等到 revision 改变或超时
+                end = _time.time() + timeout_s
+                while self._revisions.get(job_id, 0) <= last_revision:
+                    remaining = end - _time.time()
+                    if remaining <= 0:
+                        break
+                    self._cond.wait(timeout=remaining)
+                if job_id not in self._jobs:
+                    yield {"event": "error", "data": {"detail": "job removed"}}
+                    return
+                new_rev = self._revisions.get(job_id, 0)
+                snapshot = self._jobs[job_id].to_dict()
+            if new_rev > last_revision:
+                last_revision = new_rev
+                yield {"event": "progress", "data": snapshot, "revision": new_rev}
+                if snapshot["status"] in {"succeeded", "failed", "interrupted"}:
+                    yield {"event": "done", "data": {"final_status": snapshot["status"]}}
+                    return
+            else:
+                # 心跳，给前端知道连接还活着
+                yield {"event": "heartbeat", "data": {"status": snapshot["status"]}}
 
     def _get(self, job_id: str) -> JobRecord:
         job = self._jobs.get(job_id)
@@ -99,6 +154,7 @@ class InMemoryJobStore:
             job = self._get(job_id)
             for key, value in changes.items():
                 setattr(job, key, value)
+            self._bump(job_id)
             return job
 
     def _progress_callback(self, job_id: str):
@@ -112,6 +168,7 @@ class InMemoryJobStore:
                 progress.message = message
                 progress.stats = stats or {}
                 job.progress = progress
+                self._bump(job_id)
         return callback
 
     def _is_cancelled(self, job_id: str):
@@ -138,6 +195,7 @@ class InMemoryJobStore:
                     job.progress.stage = "complete"
                     job.progress.stage_label = "完成"
                     job.progress.message = "任务完成"
+                self._bump(job_id)
         except Exception as exc:  # noqa: BLE001
             finished = utc_now()
             duration = _duration_seconds(started, finished)
@@ -158,6 +216,7 @@ class InMemoryJobStore:
                         job.progress.stage = "error"
                         job.progress.stage_label = "失败"
                         job.progress.message = str(exc)
+                self._bump(job_id)
 
     def _run_binance_full_pull_job(self, job_id: str, request: BinanceFullPullRequest) -> None:
         started = utc_now()
@@ -201,6 +260,7 @@ class InMemoryJobStore:
                         job.progress.stage = "error"
                         job.progress.stage_label = "失败"
                         job.progress.message = str(exc)
+                self._bump(job_id)
 
 
 def _duration_seconds(started_at: str, finished_at: str) -> float:
