@@ -1,11 +1,21 @@
-import { Link } from "react-router-dom";
+import { useNavigate } from "react-router-dom";
+import { useEffect, useState } from "react";
+import { authFetch, getStoredUser } from "../lib/auth";
 
 /**
  * v0.9.0 · /pricing 三档订阅 (patch2 §A.c 价格锚定)
+ * v1.0.5 · 接入 /api/billing/me + /upgrade_request (Stripe scaffold)
  *
  * Community ¥0 / Learn ¥49 / Live Pro ¥149。
- * 按"信任阶梯 L0-L7"映射。不收费时点暂用 waitlist 形式（v0.9.x 后真上 stripe）。
  */
+
+interface MySubscription {
+  user_id: string;
+  plan: string;
+  billing_cycle: string;
+  status: string;
+  current_period_end_utc: string | null;
+}
 
 interface Tier {
   id: string;
@@ -86,6 +96,58 @@ const TIERS: Tier[] = [
 ];
 
 export function PricingPage() {
+  const navigate = useNavigate();
+  const user = getStoredUser();
+  const [sub, setSub] = useState<MySubscription | null>(null);
+  const [annual, setAnnual] = useState(false);
+  const [requesting, setRequesting] = useState<string | null>(null);
+
+  useEffect(() => {
+    if (!user) return;
+    authFetch("/api/billing/me")
+      .then((r) => (r.ok ? r.json() : null))
+      .then((j) => j && setSub(j))
+      .catch(() => {});
+  }, [user?.user_id]);
+
+  async function handleUpgrade(planId: string) {
+    if (!user) {
+      navigate(`/login?next=/pricing`);
+      return;
+    }
+    setRequesting(planId);
+    try {
+      const r = await authFetch("/api/billing/upgrade_request", {
+        method: "POST",
+        body: JSON.stringify({
+          plan: planId,
+          billing_cycle: annual ? "annual" : "monthly",
+        }),
+      });
+      const j = await r.json();
+      if (!r.ok) {
+        alert(`升级失败: ${j.detail || r.status}`);
+        return;
+      }
+      if (j.status === "downgraded") {
+        alert("已切回 Community 免费档");
+        setSub({ ...(sub || ({} as MySubscription)), plan: "community", status: "active" } as MySubscription);
+        return;
+      }
+      if (j.checkout_url) {
+        // scaffold: 真 Stripe 时此处 window.location = j.checkout_url
+        const proceed = confirm(
+          `进入 Stripe 结账? (scaffold 阶段不会真扣款)\n\nplan=${j.plan}\ncycle=${j.billing_cycle}\ncheckout_url=${j.checkout_url}`,
+        );
+        if (proceed) {
+          window.location.href = j.checkout_url;
+        }
+      }
+    } finally {
+      setRequesting(null);
+    }
+  }
+
   return (
     <>
       <div className="cc-page-header">
@@ -94,6 +156,23 @@ export function PricingPage() {
           <div className="cc-soft">
             QuantBT 不是收益机器。三档订阅，每档对应一段"信任阶梯"。先跑通流程，再看你能不能证明策略有效。
           </div>
+          {sub && (
+            <div style={{ marginTop: 8, fontSize: 13 }}>
+              当前订阅: <b>{sub.plan}</b>{" "}
+              <span className="cc-chip cc-chip--ok" style={{ marginLeft: 4 }}>
+                {sub.status}
+              </span>
+              {sub.current_period_end_utc && (
+                <span className="cc-soft" style={{ marginLeft: 8 }}>
+                  下次续费 {sub.current_period_end_utc.slice(0, 10)}
+                </span>
+              )}
+            </div>
+          )}
+          <label className="cc-row" style={{ gap: 6, marginTop: 8, fontSize: 13 }}>
+            <input type="checkbox" checked={annual} onChange={(e) => setAnnual(e.target.checked)} />
+            <span>按年付费 (省 15%)</span>
+          </label>
         </div>
       </div>
 
@@ -151,9 +230,26 @@ export function PricingPage() {
             <div style={{ marginTop: 16 }}>
               <div className="cc-dim" style={{ fontSize: 11, marginBottom: 4 }}>价格锚点</div>
               <div className="cc-soft" style={{ fontSize: 11, marginBottom: 12 }}>{t.anchor}</div>
-              <Link to={t.cta_href} className="cc-btn cc-btn--accent" style={{ display: "block", textAlign: "center" }}>
-                {t.cta_label}
-              </Link>
+              {sub?.plan === t.id ? (
+                <button
+                  type="button"
+                  className="cc-btn cc-btn--ghost"
+                  disabled
+                  style={{ display: "block", width: "100%", textAlign: "center" }}
+                >
+                  ✓ 当前订阅
+                </button>
+              ) : (
+                <button
+                  type="button"
+                  className="cc-btn cc-btn--accent"
+                  disabled={requesting === t.id}
+                  onClick={() => handleUpgrade(t.id)}
+                  style={{ display: "block", width: "100%", textAlign: "center" }}
+                >
+                  {requesting === t.id ? "处理中..." : t.id === "community" ? "切回免费档" : t.cta_label}
+                </button>
+              )}
               <div className="cc-dim" style={{ fontSize: 10, marginTop: 6, textAlign: "center" }}>
                 信任阶梯 {t.level}
               </div>
