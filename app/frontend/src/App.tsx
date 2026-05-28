@@ -8,6 +8,7 @@ import { AgentChatPage } from "./pages/workshop/AgentChatPage";
 import { FactorMarketPage } from "./pages/workshop/FactorMarketPage";
 import { BinanceTradingPage } from "./pages/workshop/BinanceTradingPage";
 import { ExperimentTrackingPage } from "./pages/workshop/ExperimentTrackingPage";
+import { IDEPage } from "./pages/workshop/IDEPage";
 import { HomePage } from "./pages/HomePage";
 import { StrategyIndexPage } from "./pages/StrategyIndexPage";
 import { LoginPage } from "./pages/community/LoginPage";
@@ -55,6 +56,7 @@ export default function App() {
         <Route path="/factors" element={<FactorMarketPage />} />
         <Route path="/trading" element={<BinanceTradingPage />} />
         <Route path="/experiments" element={<ExperimentTrackingPage />} />
+        <Route path="/ide" element={<IDEPage />} />
         {/* 社区 + 私域带单 */}
         <Route path="/login" element={<LoginPage mode="login" />} />
         <Route path="/register" element={<LoginPage mode="register" />} />

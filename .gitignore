@@ -29,6 +29,11 @@ data/community.db
 data/community.db-journal
 data/community.db-wal
 data/community.db-shm
+data/ide_strategies.db
+data/ide_strategies.db-journal
+data/ide_strategies.db-wal
+data/ide_strategies.db-shm
+data/ide_runs/
 # 临时跑 e2e 测试产出的 run 目录（pytest 用 _test 后缀）
 data/artifacts/experiments/*_test/
 *.zip

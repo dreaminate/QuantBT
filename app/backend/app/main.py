@@ -20,6 +20,8 @@ from .auth.service import set_service as set_auth_service
 from .community import CommunityService
 from .connectors import registry as connector_registry
 from .copy_trade import CopyTradeError, CopyTradeService, SignalRelayer
+from .ide import IDEError, IDEService
+from .ide.service import run_to_dict, strategy_to_dict
 from .sharing import SharingService
 from .data_center_services import (
     get_data_files_response,
@@ -81,6 +83,7 @@ set_auth_service(AUTH_SERVICE)
 COMMUNITY_SERVICE = CommunityService(_COMMUNITY_DB)
 SHARING_SERVICE = SharingService(_COMMUNITY_DB, DATA_ROOT / "artifacts" / "experiments")
 COPY_TRADE_SERVICE = CopyTradeService(_COMMUNITY_DB)
+IDE_SERVICE = IDEService(DATA_ROOT / "ide_strategies.db", run_root=DATA_ROOT / "ide_runs")
 
 
 def _binance_venue_for_follower(follower, keystore):
@@ -1194,3 +1197,129 @@ def export_run(run_id: str, export_type: str):
     if not path.exists():
         raise HTTPException(status_code=404, detail=f"文件不存在: {path.name}")
     return FileResponse(path, filename=f"{run_id}_{path.name}")
+
+
+# ============================================================
+# v0.8.2 · 聚宽风 IDE：策略 CRUD + 沙箱运行 + AI 辅助
+# ============================================================
+
+
+@app.get("/api/ide/strategies")
+def ide_list_strategies(user=Depends(require_user_dependency)) -> list[dict[str, Any]]:
+    return [strategy_to_dict(s) for s in IDE_SERVICE.list_strategies(user.username)]
+
+
+@app.get("/api/ide/strategies/{name}")
+def ide_get_strategy(name: str, user=Depends(require_user_dependency)) -> dict[str, Any]:
+    try:
+        return strategy_to_dict(IDE_SERVICE.get_strategy(user.username, name))
+    except IDEError as exc:
+        raise HTTPException(status_code=404, detail=str(exc)) from exc
+
+
+@app.post("/api/ide/strategies")
+def ide_save_strategy(payload: dict = Body(...), user=Depends(require_user_dependency)) -> dict[str, Any]:
+    try:
+        s = IDE_SERVICE.save_strategy(
+            user.username,
+            payload.get("name", ""),
+            payload.get("code", ""),
+            asset_class=payload.get("asset_class", "crypto_perp"),
+            description=payload.get("description", ""),
+        )
+    except IDEError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+    return strategy_to_dict(s)
+
+
+@app.delete("/api/ide/strategies/{name}")
+def ide_delete_strategy(name: str, user=Depends(require_user_dependency)) -> dict[str, bool]:
+    try:
+        IDE_SERVICE.delete_strategy(user.username, name)
+    except IDEError as exc:
+        raise HTTPException(status_code=404, detail=str(exc)) from exc
+    return {"ok": True}
+
+
+@app.post("/api/ide/strategies/{name}/run")
+def ide_run_strategy(name: str, user=Depends(require_user_dependency)) -> dict[str, Any]:
+    try:
+        run = IDE_SERVICE.run_strategy(user.username, name)
+    except IDEError as exc:
+        raise HTTPException(status_code=404, detail=str(exc)) from exc
+    return run_to_dict(run)
+
+
+@app.get("/api/ide/runs")
+def ide_list_runs(limit: int = Query(50, ge=1, le=200), user=Depends(require_user_dependency)) -> list[dict[str, Any]]:
+    return [run_to_dict(r) for r in IDE_SERVICE.list_runs(user.username, limit=limit)]
+
+
+@app.get("/api/ide/runs/{run_id}")
+def ide_get_run(run_id: str, user=Depends(require_user_dependency)) -> dict[str, Any]:
+    try:
+        run = IDE_SERVICE.get_run(run_id)
+    except IDEError as exc:
+        raise HTTPException(status_code=404, detail=str(exc)) from exc
+    if run.owner_username != user.username:
+        raise HTTPException(status_code=403, detail="无权访问该 run")
+    return run_to_dict(run)
+
+
+@app.get("/api/ide/runs/{run_id}/{kind}")
+def ide_get_run_artifact(run_id: str, kind: str, user=Depends(require_user_dependency)) -> dict[str, Any]:
+    try:
+        run = IDE_SERVICE.get_run(run_id)
+    except IDEError as exc:
+        raise HTTPException(status_code=404, detail=str(exc)) from exc
+    if run.owner_username != user.username:
+        raise HTTPException(status_code=403, detail="无权访问该 run")
+    try:
+        return IDE_SERVICE.get_run_artifact(run_id, kind)
+    except IDEError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+
+
+@app.post("/api/ide/ai_complete")
+def ide_ai_complete(payload: dict = Body(...), user=Depends(require_user_dependency)) -> dict[str, Any]:
+    """BigQuant 风 AI 辅助：让 LLM 帮写 / 解释 / 修复 策略代码。
+
+    payload: {prompt: str, context_code?: str, mode?: 'write'|'explain'|'fix'}
+    """
+    prompt = (payload.get("prompt") or "").strip()
+    if not prompt:
+        raise HTTPException(status_code=400, detail="prompt 必填")
+    mode = payload.get("mode", "write")
+    context_code = (payload.get("context_code") or "")[:8000]
+    system_prompts = {
+        "write": (
+            "你是 QuantBT 的策略代码助手。用户在浏览器 IDE 里写 Python 策略。"
+            "约束：(1) 输出必须是纯 Python 代码片段，不要 markdown 围栏；"
+            "(2) 用 `quantbt.emit_result({...})` 在结尾发出回测结果；"
+            "(3) 禁止 socket/subprocess/os.system；"
+            "(4) 可用 numpy/pandas/polars/math。"
+            "保持简短可读。"
+        ),
+        "explain": (
+            "你是 QuantBT 的策略代码助手。逐段解释下面这段策略代码的意图、"
+            "因子逻辑、潜在风险（过拟合 / 前视偏差 / 流动性假设）。"
+            "用中文，分条列出，不要返回代码。"
+        ),
+        "fix": (
+            "你是 QuantBT 的策略代码助手。下面的代码运行报错。"
+            "请定位 bug 并给出修复后的完整 Python 代码片段（不要 markdown）。"
+        ),
+    }
+    sys_prompt = system_prompts.get(mode, system_prompts["write"])
+    user_text = f"{prompt}\n\n# 当前编辑器内容（context）:\n{context_code}" if context_code else prompt
+    from .agent.llm_client import LLMMessage
+    try:
+        client = _current_agent_llm()
+        reply = client.chat([
+            LLMMessage(role="system", content=sys_prompt),
+            LLMMessage(role="user", content=user_text),
+        ])
+        text = reply.content or ""
+    except Exception as exc:  # noqa: BLE001
+        raise HTTPException(status_code=502, detail=f"LLM 调用失败: {exc}") from exc
+    return {"mode": mode, "code": text.strip(), "provider": getattr(client, "provider", "unknown")}
