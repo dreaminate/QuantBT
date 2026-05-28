@@ -9,6 +9,7 @@
  */
 
 import { useEffect, useRef, useState } from "react";
+import { trackEvent } from "./trackEvent";
 import type { RiskSummary } from "../../types";
 
 interface Props {
@@ -34,6 +35,16 @@ export function RiskSummaryChip({ riskSummary }: Props) {
     document.addEventListener("mousedown", onClick);
     return () => document.removeEventListener("mousedown", onClick);
   }, [open]);
+
+  // mount 时触发一次"看见可信度卡片"
+  useEffect(() => {
+    if (riskSummary) {
+      trackEvent("risk_summary_shown", {
+        trust_level: riskSummary.trust_level,
+        flag_count: riskSummary.flags.length,
+      });
+    }
+  }, [riskSummary?.trust_level, riskSummary?.flags.length]);
 
   if (!riskSummary) return null;
 

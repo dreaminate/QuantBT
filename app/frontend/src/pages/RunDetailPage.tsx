@@ -28,6 +28,7 @@ import { buildJqSummaryRows } from "../jqOverviewSummary";
 import { getGlossarySlugForMetric } from "../features/glossary/metricGlossaryMap";
 import { GlossaryInfoButton } from "../features/glossary/GlossaryInfoButton";
 import { RiskSummaryChip } from "../features/glossary/RiskSummaryChip";
+import { trackEvent } from "../features/glossary/trackEvent";
 import { formatFileSize, formatNumber, formatPct } from "../utils";
 
 type DetailContentTab =
@@ -1289,6 +1290,11 @@ export function RunDetailPage() {
   const runId = routeRunId;
   const [detailContentTab, setDetailContentTab] = useState<DetailContentTab>("overview");
   const [logTab, setLogTab] = useState<"logs" | "errors">("logs");
+
+  // v0.8.4 · 进页埋点 (fire-and-forget)
+  useEffect(() => {
+    if (runId) trackEvent("run_detail_viewed", { run_id: runId, from_page: "direct" });
+  }, [runId]);
 
   const runQuery = useQuery({
     queryKey: ["run-detail", runId],

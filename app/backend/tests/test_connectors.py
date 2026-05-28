@@ -158,7 +158,9 @@ def test_user_upload_connector_csv_roundtrip(tmp_path: Path) -> None:
     assert result.frame["close"].to_list() == [1.5, 2.0]
 
 
-def test_tushare_connector_health_without_token() -> None:
+def test_tushare_connector_health_without_token(monkeypatch) -> None:
+    # 隔离 env：其他测试加载 secrets.yaml 可能注入 TUSHARE_TOKEN
+    monkeypatch.delenv("TUSHARE_TOKEN", raising=False)
     conn = TushareConnector(token="")
     hc = conn.health_check()
     assert hc.ok is False

@@ -12,6 +12,7 @@
  */
 
 import { useEffect, useRef, useState } from "react";
+import { trackEvent } from "./trackEvent";
 import { useGlossaryTerm } from "./useGlossaryTerm";
 
 interface Props {
@@ -50,7 +51,11 @@ export function GlossaryInfoButton({ slug, ariaLabel }: Props) {
         onClick={(e) => {
           e.preventDefault();
           e.stopPropagation();
-          setOpen((v) => !v);
+          setOpen((v) => {
+            const next = !v;
+            if (next && slug) trackEvent("glossary_term_viewed", { slug, depth: "l2", opened_from: "rundetail_card" });
+            return next;
+          });
           if (open) setShowDeep(false);
         }}
         style={{
@@ -136,7 +141,10 @@ export function GlossaryInfoButton({ slug, ariaLabel }: Props) {
               {!showDeep && (data.l3 || data.l4) && (
                 <button
                   type="button"
-                  onClick={() => setShowDeep(true)}
+                  onClick={() => {
+                    setShowDeep(true);
+                    if (slug) trackEvent("risk_metric_expanded", { slug, depth: "l3l4", opened_from: "glossary_popover" });
+                  }}
                   style={{
                     background: "transparent",
                     border: "1px solid var(--cc-border, rgba(255,255,255,0.2))",

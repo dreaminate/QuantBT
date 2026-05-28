@@ -24,6 +24,7 @@ from .connectors import registry as connector_registry
 from .copy_trade import CopyTradeError, CopyTradeService, SignalRelayer
 from .ide import IDEError, IDEService, PromoteError, build_ai_context, promote_ide_run
 from .ide.service import run_to_dict, strategy_to_dict
+from .events import EventService, EventTrackError
 from .glossary import GlossaryError, GlossaryRegistry, load_glossary_dir
 from .sharing import SharingService
 from .data_center_services import (
@@ -87,6 +88,7 @@ COMMUNITY_SERVICE = CommunityService(_COMMUNITY_DB)
 SHARING_SERVICE = SharingService(_COMMUNITY_DB, DATA_ROOT / "artifacts" / "experiments")
 COPY_TRADE_SERVICE = CopyTradeService(_COMMUNITY_DB)
 IDE_SERVICE = IDEService(DATA_ROOT / "ide_strategies.db", run_root=DATA_ROOT / "ide_runs")
+EVENT_SERVICE = EventService(_COMMUNITY_DB)  # 复用 community.db，单文件好查
 
 _main_logger = logging.getLogger(__name__)
 
@@ -1470,6 +1472,32 @@ def glossary_get(
             detail={"error": "term_not_found", "term": term, "suggestions": suggestions},
         )
     return t.to_dict(level=level)
+
+
+@app.post("/api/events/track")
+def events_track(payload: dict = Body(...), current=Depends(current_user_dependency)) -> dict[str, Any]:
+    """前端埋点入口。fire-and-forget，不阻塞 UI。"""
+
+    try:
+        rec = EVENT_SERVICE.track(
+            event_name=payload.get("event_name", ""),
+            user_id=current.user_id if current else None,
+            anonymous_id=payload.get("anonymous_id"),
+            session_id=payload.get("session_id"),
+            app_version=payload.get("app_version"),
+            market_mode=payload.get("market_mode"),
+            properties=payload.get("properties") or {},
+        )
+    except EventTrackError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+    return {"event_id": rec.event_id, "ok": True}
+
+
+@app.get("/api/events/recent")
+def events_recent(limit: int = Query(50, ge=1, le=500)) -> list[dict[str, Any]]:
+    """调试 / 监控用：拉最近事件。"""
+
+    return EVENT_SERVICE.recent(limit=limit)
 
 
 @app.get("/api/glossary_meta")
