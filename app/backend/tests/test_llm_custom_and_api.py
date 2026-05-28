@@ -89,7 +89,11 @@ def client(monkeypatch):
 def test_get_llm_status(client) -> None:
     r = client.get("/api/llm/status")
     assert r.status_code == 200
-    providers = {s["provider"] for s in r.json()}
+    body = r.json()
+    # v0.9.5 schema: {providers: [...], active_provider: "auto"|...}
+    assert "providers" in body
+    assert "active_provider" in body
+    providers = {s["provider"] for s in body["providers"]}
     assert providers == {"anthropic", "openai", "qwen", "custom"}
 
 
@@ -107,11 +111,37 @@ def test_post_llm_configure_custom(client) -> None:
     body = r.json()
     assert body["configured"] == "custom"
     assert body["base_url"] == "http://localhost:11434/v1"
-    # status 应该反映 configured=True
-    status = client.get("/api/llm/status").json()
-    by_p = {s["provider"]: s for s in status}
+    # status 应该反映 configured=True (v0.9.5 schema)
+    status_body = client.get("/api/llm/status").json()
+    by_p = {s["provider"]: s for s in status_body["providers"]}
     assert by_p["custom"]["configured"] is True
     assert by_p["custom"]["model"] == "qwen2.5:32b"
+
+
+def test_post_llm_active_switch(client) -> None:
+    """v0.9.5 · 切换 active provider。"""
+    # 先配 custom
+    client.post("/api/llm/configure", json={
+        "provider": "custom", "api_key": "x",
+        "base_url": "http://localhost:11434/v1", "model": "qwen2.5:32b",
+    })
+    r = client.post("/api/llm/active", json={"provider": "custom"})
+    assert r.status_code == 200
+    assert r.json()["active_provider"] == "custom"
+    # 切回 auto
+    r2 = client.post("/api/llm/active", json={"provider": "auto"})
+    assert r2.json()["active_provider"] == "auto"
+
+
+def test_post_llm_active_rejects_unconfigured(client) -> None:
+    r = client.post("/api/llm/active", json={"provider": "qwen"})
+    assert r.status_code == 400
+    assert "未配置" in r.json()["detail"] or "configured" in r.json()["detail"].lower()
+
+
+def test_post_llm_active_rejects_unknown_provider(client) -> None:
+    r = client.post("/api/llm/active", json={"provider": "evil_provider"})
+    assert r.status_code == 400
 
 
 def test_post_llm_configure_rejects_incomplete_custom(client) -> None:

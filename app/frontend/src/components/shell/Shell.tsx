@@ -145,18 +145,27 @@ function Sidebar({ items, area }: { items: SidebarItem[]; area: string }) {
   );
 }
 
+interface ProviderStatus {
+  provider: string;
+  configured: boolean;
+  base_url?: string;
+  model?: string;
+}
+
 interface StatusInfo {
   network: string;
   mode: string;
   factorsCount: number;
-  llmProvider: string | null;
+  providers: ProviderStatus[];
+  activeProvider: string;       // "auto" | provider name
   loadedSecrets: string[];
 }
 
 function StatusBar() {
   const [info, setInfo] = useState<StatusInfo | null>(null);
-  useEffect(() => {
-    let cancelled = false;
+  const [switching, setSwitching] = useState(false);
+
+  const reload = () => {
     Promise.all([
       fetch("/api/security/network").then((r) => r.json()),
       fetch("/api/factors").then((r) => r.json()),
@@ -164,23 +173,38 @@ function StatusBar() {
       fetch("/api/security/secrets").then((r) => r.json()),
     ])
       .then(([net, factors, llm, secrets]) => {
-        if (cancelled) return;
-        const active = llm.find((p: { configured: boolean; provider: string }) => p.configured);
+        // 兼容旧 schema (list) 和新 schema ({providers, active_provider})
+        const providers: ProviderStatus[] = Array.isArray(llm)
+          ? llm
+          : (llm.providers || []);
+        const activeProvider: string = (!Array.isArray(llm) && llm.active_provider) || "auto";
         setInfo({
           network: net.binance_network,
           mode: net.mode,
           factorsCount: Array.isArray(factors) ? factors.length : 0,
-          llmProvider: active?.provider ?? null,
+          providers,
+          activeProvider,
           loadedSecrets: secrets.loaded || [],
         });
       })
-      .catch(() => {
-        /* status bar best-effort */
+      .catch(() => { /* best-effort */ });
+  };
+
+  useEffect(() => { reload(); }, []);
+
+  const setActive = async (provider: string) => {
+    setSwitching(true);
+    try {
+      await fetch("/api/llm/active", {
+        method: "POST",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify({ provider }),
       });
-    return () => {
-      cancelled = true;
-    };
-  }, []);
+      reload();
+    } finally {
+      setSwitching(false);
+    }
+  };
 
   if (!info) {
     return (
@@ -191,6 +215,11 @@ function StatusBar() {
       </footer>
     );
   }
+
+  const configuredProviders = info.providers.filter((p) => p.configured);
+  const effectiveLabel = info.activeProvider === "auto"
+    ? (configuredProviders[0]?.provider ?? "dev_local")
+    : info.activeProvider;
 
   return (
     <footer className="cc-statusbar">
@@ -203,10 +232,31 @@ function StatusBar() {
         net: {info.network} · mode: {info.mode}
       </span>
       <span className="cc-status-item">
-        <span
-          className={`cc-status-dot ${info.llmProvider ? "cc-status-dot--orange" : ""}`}
-        />
-        LLM: {info.llmProvider || "dev_local (fallback)"}
+        <span className={`cc-status-dot ${effectiveLabel !== "dev_local" ? "cc-status-dot--orange" : ""}`} />
+        LLM:&nbsp;
+        <select
+          value={info.activeProvider}
+          onChange={(e) => setActive(e.target.value)}
+          disabled={switching}
+          title="切换当前 active LLM provider（不持久化，重启回 auto）"
+          style={{
+            background: "transparent",
+            color: "inherit",
+            border: "1px solid var(--cc-border, rgba(255,255,255,0.2))",
+            borderRadius: 3,
+            padding: "0 4px",
+            fontFamily: "inherit",
+            fontSize: 11,
+            cursor: "pointer",
+          }}
+        >
+          <option value="auto">auto ({configuredProviders[0]?.provider ?? "dev_local"})</option>
+          {info.providers.map((p) => (
+            <option key={p.provider} value={p.provider} disabled={!p.configured}>
+              {p.provider}{p.configured ? "" : " (未配置)"}
+            </option>
+          ))}
+        </select>
       </span>
       <span className="cc-status-item">
         <span className="cc-status-dot cc-status-dot--blue" /> factors: {info.factorsCount}
@@ -215,7 +265,7 @@ function StatusBar() {
         <span className="cc-status-dot" /> secrets: {info.loadedSecrets.length} loaded
       </span>
       <span className="cc-status-spacer" />
-      <span className="cc-status-item">v0.9.4</span>
+      <span className="cc-status-item">v0.9.5</span>
     </footer>
   );
 }

@@ -1,6 +1,7 @@
 ﻿from __future__ import annotations
 
 import logging
+import os
 from pathlib import Path
 from typing import Any
 
@@ -363,9 +364,37 @@ def reload_secrets() -> dict[str, Any]:
 # -------- LLM 配置（UI 直填用） --------
 
 @app.get("/api/llm/status")
-def llm_status() -> list[dict]:
-    """列出每个 provider 的配置状态（不回显 api_key）。"""
-    return list_llm_status(KEYSTORE)
+def llm_status() -> dict:
+    """列出每个 provider 配置状态 + 当前 active provider。"""
+    return {
+        "providers": list_llm_status(KEYSTORE),
+        "active_provider": os.environ.get("LLM_PROVIDER", "auto"),
+    }
+
+
+@app.post("/api/llm/active")
+def llm_set_active(payload: dict = Body(...)) -> dict[str, Any]:
+    """v0.9.5 · 进程内切 active LLM provider。不持久化到 secrets.yaml；重启回 auto。
+
+    安全考虑：
+    - 仅允许切到 already-configured 的 provider（防 enum injection）
+    - 不接受 base_url/api_key 修改（那是 /api/llm/configure 的事）
+    """
+
+    provider = (payload.get("provider") or "").strip().lower()
+    if provider not in ("auto", "anthropic", "openai", "qwen", "custom"):
+        raise HTTPException(400, "provider must be auto/anthropic/openai/qwen/custom")
+    if provider != "auto":
+        # 校验该 provider 真已配置
+        statuses = list_llm_status(KEYSTORE)
+        match = next((s for s in statuses if s["provider"] == provider), None)
+        if not match or not match.get("configured"):
+            raise HTTPException(400, f"provider {provider} 未配置 (configured=False)，请先去 /api/llm/configure")
+    if provider == "auto":
+        os.environ.pop("LLM_PROVIDER", None)
+    else:
+        os.environ["LLM_PROVIDER"] = provider
+    return {"active_provider": os.environ.get("LLM_PROVIDER", "auto")}
 
 
 @app.post("/api/llm/configure")
