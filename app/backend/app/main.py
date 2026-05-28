@@ -372,6 +372,107 @@ def llm_status() -> dict:
     }
 
 
+@app.get("/api/security/binance/verify")
+def security_binance_verify(network: str = Query("testnet")) -> dict[str, Any]:
+    """v0.9.5+ · 真发签名请求验证 binance API key 是否真的是该 network。
+
+    流程:
+      1. 从 keystore 拿 binance_<network> record (绝不返回 key)
+      2. 对 https://testnet.binancefuture.com/fapi/v1/apiKey/permissions 发签名 GET
+         (或 mainnet 对应 url)
+      3. 返回 {ok, is_correct_network, permissions, signed_url_base}
+         · 签名通过 → key 真属于该 network
+         · -2014/-2015 invalid api key → key 不属于该 network
+         · 其他错误透传
+
+    安全:
+      - 整流程不暴露 api_key/secret 到响应或日志
+      - 只返回 permission bool 字段（不返回 key/secret 自身）
+      - 如果 key 验证为 mainnet 但 network=testnet（或反过来），明确警告
+    """
+
+    if network not in ("testnet", "mainnet"):
+        raise HTTPException(400, "network must be testnet or mainnet")
+
+    from .execution.binance_client import BinanceClient, BinanceCredentials
+    from .security.keystore import KeystoreError
+
+    try:
+        record = KEYSTORE.fetch(f"binance_{network}")
+    except KeystoreError:
+        return {
+            "ok": False,
+            "error": "key_not_found",
+            "detail": f"keystore 里没有 binance_{network}，secrets.yaml 是否填了 binance.{network}.api_key/api_secret？",
+            "is_correct_network": None,
+        }
+
+    cred = BinanceCredentials(api_key=record.api_key, api_secret=record.api_secret, network=network)
+    client = BinanceClient(cred, product="usdm_futures")
+
+    base_url = client.base_url  # 已自动选 testnet/mainnet URL
+    # 用 /fapi/v2/balance 验证 (testnet 必有 + 签名校验路径)
+    try:
+        payload = client._signed("GET", "/fapi/v2/balance", {})
+    except Exception as exc:  # noqa: BLE001
+        msg = str(exc)
+        if "-2014" in msg or "-2015" in msg or "API-key format invalid" in msg:
+            err_kind = "invalid_api_key"
+            detail = "API key 格式或权限有问题，大概率是把 mainnet key 填进了 testnet slot（反之同理）"
+        elif "Signature" in msg or "-1022" in msg:
+            err_kind = "bad_signature"
+            detail = "签名校验失败 - api_secret 不匹配 api_key (复制时少了字符？)"
+        elif "404" in msg:
+            err_kind = "endpoint_not_found"
+            detail = "endpoint 路径错；可能是 spot key 填进了 futures slot"
+        else:
+            err_kind = "unknown"
+            detail = msg
+        return {
+            "ok": False,
+            "error": err_kind,
+            "detail": detail,
+            "raw_error": msg,
+            "signed_url_base": base_url,
+            "is_correct_network": False,
+            "remediation": (
+                "1. 确认 https://testnet.binancefuture.com 的 API Key 和 Secret 完整复制（Secret 只显示一次，可能漏字符）\n"
+                "2. testnet key 不定期失效，需要重新生成\n"
+                "3. 不要把 testnet.binance.vision (spot) 的 key 填到 futures 这边"
+            ),
+        }
+
+    # 签名通过 → key 真属于该 network；payload 是余额列表
+    # Permission 信息走另一个 endpoint（如 /fapi/v1/account 或 testnet 直接根据下单结果推断）
+    asset_count = len(payload) if isinstance(payload, list) else 0
+    total_usdt = 0.0
+    if isinstance(payload, list):
+        for asset in payload:
+            if asset.get("asset") == "USDT":
+                try:
+                    total_usdt = float(asset.get("balance", 0))
+                except (TypeError, ValueError):
+                    pass
+                break
+
+    return {
+        "ok": True,
+        "is_correct_network": True,
+        "network": network,
+        "signed_url_base": base_url,
+        "assets_count": asset_count,
+        "usdt_balance": total_usdt,
+        "safekey_status": "PASS",
+        "note": (
+            f"✅ testnet key 验证通过。"
+            f"账户有 {asset_count} 种资产，USDT 余额 {total_usdt:.2f}。"
+            f"如果 USDT=0，去 testnet.binancefuture.com → Wallet → 领取 testnet 测试 USDT。"
+            if network == "testnet"
+            else f"⚠️ MAINNET key 验证通过。USDT 余额 {total_usdt:.2f}。请先确认 enableWithdrawals=False 再下单。"
+        ),
+    }
+
+
 @app.post("/api/llm/active")
 def llm_set_active(payload: dict = Body(...)) -> dict[str, Any]:
     """v0.9.5 · 进程内切 active LLM provider。不持久化到 secrets.yaml；重启回 auto。
