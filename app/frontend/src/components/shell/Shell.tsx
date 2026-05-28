@@ -343,6 +343,9 @@ function UserMenu() {
       <NavLink to={`/u/${user.username}`} className="cc-btn cc-btn--ghost cc-btn--sm" title="profile">
         @{user.username}
       </NavLink>
+      <NavLink to="/settings/security" className="cc-btn cc-btn--ghost cc-btn--sm" title="安全设置 (mainnet 7 项防御)">
+        ⚙
+      </NavLink>
       <button
         type="button"
         className="cc-btn cc-btn--ghost cc-btn--sm"
