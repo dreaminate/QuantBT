@@ -364,9 +364,18 @@ def _render_report(metrics: dict[str, Any]) -> str:
 
 # ----- 入口 -----
 
-def run(run_id: str = "a_share_ml_demo", days: int = 240, top_n: int = 5) -> dict[str, Any]:
-    symbols, sectors = _symbol_universe(30)
-    panel = synthetic_panel(symbols=symbols, sectors=sectors, days=days, seed=7)
+def run(
+    run_id: str = "a_share_ml_demo",
+    days: int = 240,
+    top_n: int = 5,
+    panel: "pl.DataFrame | None" = None,
+    *,
+    strategy_name: str | None = None,
+) -> dict[str, Any]:
+    """合成 panel by default；如 panel 入参非空则用之（task 34 真数据走这条）。"""
+    if panel is None:
+        symbols, sectors = _symbol_universe(30)
+        panel = synthetic_panel(symbols=symbols, sectors=sectors, days=days, seed=7)
     factor_ids = [
         "alpha_mom_5d",
         "alpha_mom_20d",
@@ -384,8 +393,8 @@ def run(run_id: str = "a_share_ml_demo", days: int = 240, top_n: int = 5) -> dic
     )
     run_meta = {
         "started_at_utc": datetime.now(UTC).isoformat(),
-        "strategy_id": "a_share_ml_demo",
-        "strategy_name": "A股 ML demo (alpha_lite × LGBM × HRP × Brinson)",
+        "strategy_id": run_id,
+        "strategy_name": strategy_name or "A股 ML demo (alpha_lite × LGBM × HRP × Brinson)",
         "market": "stocks_cn",
         "frequency": "1d",
         "benchmark": "synthetic_equal_weight",

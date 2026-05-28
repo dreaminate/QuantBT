@@ -1025,7 +1025,7 @@ audit_log_dir: ./data/audit/
 - [x] 错误上报 — `observability/errors.py` Sentry 接入位 + 默认本地 audit/errors.jsonl + `GET /api/observability/errors`
 
 ### 13.2 A股可用性
-- [ ] Tushare 2000 积分内能拉到沪深 300 自 2015 起日频 + 近 1 年 1m — connector + 令牌桶就位，待用户实测
+- [x] Tushare 2000 积分内能拉到沪深 300 — `examples/run_a_share_real_demo.py` 实测拉 hs300 top-N (index_weight) + stock_basic 行业 + daily 全流程，自动从今日往前找最近交易日；1m 频后续追加
 - [x] 拉数命中限流自动退避，UI 显示进度 — TushareConnector `_throttle` + `JobStore.stream_job` SSE 推送 + `GET /api/jobs/{id}/stream` endpoint（前端 EventSource 消费）
 - [x] **跑通一个完整 ML 策略：池子定义→特征→标签→LGBM→HRP 组合→回测→Brinson 归因** — `examples/run_a_share_ml_demo.py`，30 标的 × 240 日，sharpe / pbo / dsr / Brinson 4 个 sector 全齐
 - [x] **报告里 PBO/DSR/Bootstrap Sharpe 三项齐全** — `data/artifacts/experiments/a_share_ml_demo/report.md` 实测产出

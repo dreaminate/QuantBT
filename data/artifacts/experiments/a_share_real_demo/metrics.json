@@ -1,0 +1,34 @@
+{
+  "total_return": 3.407691211382577,
+  "annualized_return": 6.71099554289706,
+  "sharpe": 5.835133580357045,
+  "max_drawdown": -0.10625930468906296,
+  "pbo": {
+    "pbo": 0.0,
+    "n_strategies": 5,
+    "n_combinations": 6,
+    "s_blocks": 4
+  },
+  "deflated_sharpe": 0.9994208473132327,
+  "bootstrap_sharpe_ci": {
+    "estimate": 5.835133580357045,
+    "lower": 3.6819110447072356,
+    "upper": 7.821578571767274,
+    "n_boot": 200
+  },
+  "brinson_total": {
+    "allocation": 0.4087459888417431,
+    "selection": -0.1923775800648422,
+    "interaction": 0.21231251114736824,
+    "active_return": 0.42868091992426915
+  },
+  "train_oos": {
+    "mse": 0.10263178574451674,
+    "r2": -0.15257895750972006,
+    "sharpe_proxy": 0.005696069196643052
+  },
+  "n_factors": 5,
+  "n_symbols": 30,
+  "n_days": 159,
+  "trade_count": 811
+}
