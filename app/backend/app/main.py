@@ -110,6 +110,9 @@ from .copy_trade.beta import CopyTradeBetaService  # noqa: E402
 CT_BETA_SERVICE = CopyTradeBetaService(_COMMUNITY_DB)  # v0.8.9 · 跟单灰度
 from .security.mainnet_guards import MainnetGuardError, MainnetGuardsService  # noqa: E402
 MAINNET_GUARDS = MainnetGuardsService(_COMMUNITY_DB)  # v1.0 · mainnet 7 项防御
+from .billing import BillingService, PLAN_IDS  # noqa: E402
+from .billing.stripe_service import PLAN_INFO  # noqa: E402
+BILLING_SERVICE = BillingService(_COMMUNITY_DB)  # v1.0.3 · Stripe scaffold
 
 _main_logger = logging.getLogger(__name__)
 
@@ -372,6 +375,62 @@ def llm_status() -> dict:
         "providers": list_llm_status(KEYSTORE),
         "active_provider": os.environ.get("LLM_PROVIDER", "auto"),
     }
+
+
+# ============================================================
+# v1.0.3 · Stripe 订阅 endpoint (scaffold)
+# ============================================================
+
+
+@app.get("/api/billing/plans")
+def billing_list_plans() -> list[dict[str, Any]]:
+    return [
+        {"id": p, **{k: v for k, v in PLAN_INFO[p].items() if not k.startswith("stripe_")}}
+        for p in PLAN_IDS
+    ]
+
+
+@app.get("/api/billing/me")
+def billing_me(user=Depends(require_user_dependency)) -> dict[str, Any]:
+    return BILLING_SERVICE.get_subscription(user.user_id).to_dict()
+
+
+@app.post("/api/billing/upgrade_request")
+def billing_upgrade_request(payload: dict = Body(...), user=Depends(require_user_dependency)) -> dict[str, Any]:
+    plan = payload.get("plan", "")
+    cycle = payload.get("billing_cycle", "monthly")
+    if plan not in PLAN_IDS:
+        raise HTTPException(400, f"plan must be one of {PLAN_IDS}")
+    if plan == "community":
+        from .billing.stripe_service import SubscriptionRecord as _SR
+        import time as _t
+        sub = BILLING_SERVICE.get_subscription(user.user_id)
+        sub.plan = "community"
+        sub.status = "active"
+        BILLING_SERVICE.upsert_subscription(sub)
+        return {"status": "downgraded", "plan": "community"}
+    return {
+        "status": "pending_payment",
+        "plan": plan,
+        "billing_cycle": cycle,
+        "checkout_url": f"/stripe_checkout_stub?plan={plan}&cycle={cycle}&user_id={user.user_id}",
+        "note": "scaffold - 接真 Stripe SDK 后此 URL 是 stripe.com/c/pay/cs_xxx",
+    }
+
+
+@app.post("/api/billing/webhook")
+def billing_webhook(payload: dict = Body(...)) -> dict[str, Any]:
+    try:
+        result = BILLING_SERVICE.process_stripe_event(payload)
+        return {"received": True, "result": result}
+    except Exception as exc:  # noqa: BLE001
+        raise HTTPException(400, f"webhook 处理失败: {exc}") from exc
+
+
+@app.get("/api/billing/check_feature")
+def billing_check_feature(feature: str = Query(...), user=Depends(require_user_dependency)) -> dict[str, Any]:
+    ok = BILLING_SERVICE.user_can_access_feature(user.user_id, feature)
+    return {"feature": feature, "allowed": ok}
 
 
 # ============================================================
