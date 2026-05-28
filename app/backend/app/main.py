@@ -1,5 +1,7 @@
 ﻿from __future__ import annotations
 
+import logging
+from pathlib import Path
 from typing import Any
 
 from fastapi import Body, Depends, FastAPI, HTTPException, Query
@@ -22,6 +24,7 @@ from .connectors import registry as connector_registry
 from .copy_trade import CopyTradeError, CopyTradeService, SignalRelayer
 from .ide import IDEError, IDEService, PromoteError, build_ai_context, promote_ide_run
 from .ide.service import run_to_dict, strategy_to_dict
+from .glossary import GlossaryError, GlossaryRegistry, load_glossary_dir
 from .sharing import SharingService
 from .data_center_services import (
     get_data_files_response,
@@ -84,6 +87,17 @@ COMMUNITY_SERVICE = CommunityService(_COMMUNITY_DB)
 SHARING_SERVICE = SharingService(_COMMUNITY_DB, DATA_ROOT / "artifacts" / "experiments")
 COPY_TRADE_SERVICE = CopyTradeService(_COMMUNITY_DB)
 IDE_SERVICE = IDEService(DATA_ROOT / "ide_strategies.db", run_root=DATA_ROOT / "ide_runs")
+
+_main_logger = logging.getLogger(__name__)
+
+# v0.8.4 · Glossary 词条仓库（启动时从 docs/glossary/ 加载，加载失败不阻断启动）
+# main.py 在 app/backend/app/main.py → 仓库根是 parents[3]
+_GLOSSARY_DIR = Path(__file__).resolve().parents[3] / "docs" / "glossary"
+try:
+    GLOSSARY = load_glossary_dir(_GLOSSARY_DIR) if _GLOSSARY_DIR.exists() else GlossaryRegistry()
+except GlossaryError as exc:
+    _main_logger.warning("Glossary 加载失败: %s（启动继续，词条 endpoint 返空）", exc)
+    GLOSSARY = GlossaryRegistry()
 
 
 def _binance_venue_for_follower(follower, keystore):
@@ -1391,4 +1405,81 @@ def ide_promote_run(run_id: str, payload: dict = Body(default_factory=dict), use
         "run_id": promoted.run_id,
         "run_url": f"/runs/{promoted.run_id}",
         "metrics": promoted.metrics,
+    }
+
+
+# ============================================================
+# v0.8.4 Day 2 · Glossary endpoints
+# ============================================================
+
+
+@app.get("/api/glossary")
+def glossary_list(
+    category: str | None = Query(None, description="按 category 过滤"),
+    level: str | None = Query(None, description="按 level 过滤"),
+) -> list[dict[str, Any]]:
+    """列出全部词条 summary（用于 RunDetail ⓘ mapping 选词 + 词典页）。"""
+
+    items = GLOSSARY.list_summary()
+    if category:
+        items = [x for x in items if x["category"] == category]
+    if level:
+        items = [x for x in items if x["level"] == level]
+    return items
+
+
+@app.get("/api/glossary/{term}")
+def glossary_get(
+    term: str,
+    level: str | None = Query(None, description="渐进披露：'l1'/'l2'/'l3'/'l4'；省略=全部"),
+) -> dict[str, Any]:
+    """通过 slug 或 alias 拿单个词条。404 返 {error, term, suggestions}。"""
+
+    t = GLOSSARY.lookup(term)
+    if t is None:
+        # 拼写相近建议：difflib 模糊匹配 slug + aliases
+        import difflib
+        q = term.strip().lower()
+        candidates: list[tuple[str, str]] = []  # (key, slug)
+        for x in GLOSSARY.list_summary():
+            candidates.append((x["slug"].lower(), x["slug"]))
+            for a in x["aliases"]:
+                candidates.append((a.lower(), x["slug"]))
+        keys = [k for k, _ in candidates]
+        close = difflib.get_close_matches(q, keys, n=8, cutoff=0.4)
+        # 去重 slug 保序
+        seen: set[str] = set()
+        suggestions: list[str] = []
+        for k in close:
+            for kk, slug in candidates:
+                if kk == k and slug not in seen:
+                    seen.add(slug)
+                    suggestions.append(slug)
+                    break
+            if len(suggestions) >= 5:
+                break
+        raise HTTPException(
+            status_code=404,
+            detail={"error": "term_not_found", "term": term, "suggestions": suggestions},
+        )
+    return t.to_dict(level=level)
+
+
+@app.get("/api/glossary_meta")
+def glossary_meta() -> dict[str, Any]:
+    """词典统计：用于 RunDetail 风险卡片判断 'glossary 是否就绪'。"""
+
+    summary = GLOSSARY.list_summary()
+    by_category: dict[str, int] = {}
+    by_level: dict[str, int] = {}
+    for x in summary:
+        by_category[x["category"]] = by_category.get(x["category"], 0) + 1
+        by_level[x["level"]] = by_level.get(x["level"], 0) + 1
+    related_violations = GLOSSARY.validate_related_closure()
+    return {
+        "count": len(summary),
+        "by_category": by_category,
+        "by_level": by_level,
+        "related_closure_ok": not related_violations,
+        "related_violations": related_violations[:10],  # 前 10 条便于调试
     }
