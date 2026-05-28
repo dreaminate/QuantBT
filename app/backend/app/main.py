@@ -1474,6 +1474,54 @@ def glossary_get(
     return t.to_dict(level=level)
 
 
+@app.get("/api/glossary/{term}/usage_in_runs")
+def glossary_usage_in_runs(term: str, user_id: str | None = Query(None)) -> dict[str, Any]:
+    """v0.8.5 · 该 metric 在用户历史 runs 的分布 (bucket histogram)。
+
+    GlossaryDetailPage 侧栏用，让用户看到"我的 SR 落在第 X 分位"。
+    """
+
+    t = GLOSSARY.lookup(term)
+    if t is None:
+        return {"count": 0, "buckets": []}
+    # 简化实现：扫 runs/<run_id>/run.json，找 metrics 中该 metric_name 值
+    metric_name = t.slug
+    # 别名映射
+    alias_for_metric = {"sharpe_ratio": ["sharpe", "sharpe_ratio"], "max_drawdown": ["max_drawdown", "drawdown"]}
+    candidates = alias_for_metric.get(metric_name, [metric_name])
+    runs_root = DATA_ROOT / "artifacts" / "experiments"
+    values: list[float] = []
+    if runs_root.exists():
+        for run_dir in runs_root.iterdir():
+            manifest = run_dir / "run.json"
+            if not manifest.exists():
+                continue
+            try:
+                import json
+                m = json.loads(manifest.read_text(encoding="utf-8-sig"))
+                metrics = m.get("metrics") or {}
+                for c in candidates:
+                    if c in metrics and isinstance(metrics[c], (int, float)):
+                        values.append(float(metrics[c]))
+                        break
+            except Exception:  # noqa: BLE001
+                continue
+    if not values:
+        return {"count": 0, "buckets": []}
+    # 5-bucket histogram
+    lo, hi = min(values), max(values)
+    if lo == hi:
+        return {"count": len(values), "buckets": [{"range": f"{lo:.2f}", "users": len(values)}]}
+    width = (hi - lo) / 5
+    buckets = []
+    for i in range(5):
+        b_lo = lo + i * width
+        b_hi = lo + (i + 1) * width
+        cnt = sum(1 for v in values if b_lo <= v < (b_hi if i < 4 else b_hi + 1e-9))
+        buckets.append({"range": f"{b_lo:.2f}~{b_hi:.2f}", "users": cnt})
+    return {"count": len(values), "buckets": buckets}
+
+
 @app.post("/api/events/track")
 def events_track(payload: dict = Body(...), current=Depends(current_user_dependency)) -> dict[str, Any]:
     """前端埋点入口。fire-and-forget，不阻塞 UI。"""

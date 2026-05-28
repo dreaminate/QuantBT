@@ -16,6 +16,8 @@ import { CommunityFeedPage } from "./pages/community/CommunityFeedPage";
 import { SharedStrategiesPage } from "./pages/community/SharedStrategiesPage";
 import { UserProfilePage } from "./pages/community/UserProfilePage";
 import { CopyTradePage } from "./pages/community/CopyTradePage";
+import { GlossaryIndexPage } from "./pages/community/GlossaryIndexPage";
+import { GlossaryDetailPage } from "./pages/community/GlossaryDetailPage";
 import { Shell } from "./components/shell/Shell";
 
 /**
@@ -63,6 +65,8 @@ export default function App() {
         <Route path="/community" element={<CommunityFeedPage />} />
         <Route path="/square" element={<SharedStrategiesPage />} />
         <Route path="/copy-trade" element={<CopyTradePage />} />
+        <Route path="/glossary" element={<GlossaryIndexPage />} />
+        <Route path="/glossary/:slug" element={<GlossaryDetailPage />} />
         <Route path="/u/:username" element={<UserProfilePage />} />
       </Routes>
     </Shell>

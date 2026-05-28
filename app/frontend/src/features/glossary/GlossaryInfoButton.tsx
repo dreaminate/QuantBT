@@ -205,6 +205,19 @@ export function GlossaryInfoButton({ slug, ariaLabel }: Props) {
                   来源: {data.frontmatter.sources.slice(0, 2).join(" · ")}
                 </div>
               )}
+              <div style={{ marginTop: 8, textAlign: "right" }}>
+                <a
+                  href={`/glossary/${slug}`}
+                  style={{
+                    fontSize: 11,
+                    color: "var(--cc-accent, #4a9eff)",
+                    textDecoration: "none",
+                  }}
+                  onClick={(e) => e.stopPropagation()}
+                >
+                  📖 打开专页 →
+                </a>
+              </div>
             </>
           )}
         </div>
