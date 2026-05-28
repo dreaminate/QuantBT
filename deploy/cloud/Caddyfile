@@ -1,0 +1,68 @@
+# Caddy 配置 - 自动 HTTPS (Let's Encrypt) + reverse proxy
+# 编辑后 docker compose restart caddy 即可
+
+{
+    # 全局选项
+    email {$CADDY_EMAIL}
+    # storage 持久化在 caddy-data volume，证书自动续期
+}
+
+# 主域名 (从 env 读)
+{$QUANTBT_DOMAIN} {
+    # 静态前端 (vite build dist)
+    root * /srv/quantbt-frontend
+    encode gzip zstd
+
+    # SPA fallback - 所有非 /api 路径都 fallback 到 index.html
+    @notapi {
+        not path /api/*
+        not path /assets/*
+        not path /icon.svg
+        not path /manifest.webmanifest
+        not path /sw.js
+        not file
+    }
+    rewrite @notapi /index.html
+
+    # API 反代到 backend
+    handle /api/* {
+        reverse_proxy backend:8000 {
+            header_up X-Real-IP {remote_host}
+            header_up X-Forwarded-For {remote_host}
+            header_up X-Forwarded-Proto {scheme}
+            # mainnet 操作必须看到真实用户 IP (IP 白名单校验用)
+        }
+    }
+
+    # 静态文件
+    handle {
+        try_files {path} /index.html
+        file_server
+    }
+
+    # 强制 HTTPS
+    @http {
+        protocol http
+    }
+    redir @http https://{host}{uri} permanent
+
+    # 安全头
+    header {
+        Strict-Transport-Security "max-age=31536000; includeSubDomains; preload"
+        X-Content-Type-Options "nosniff"
+        X-Frame-Options "DENY"
+        Referrer-Policy "strict-origin-when-cross-origin"
+        Permissions-Policy "geolocation=(), microphone=(), camera=()"
+        # 移除默认 server 头
+        -Server
+    }
+
+    # 日志（持久化到 caddy-data）
+    log {
+        output file /data/access.log {
+            roll_size 100MB
+            roll_keep 10
+        }
+        format json
+    }
+}

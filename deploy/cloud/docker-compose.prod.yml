@@ -1,0 +1,114 @@
+# QuantBT 生产环境 docker-compose (阿里云轻量香港 / Hetzner / Lightsail)
+#
+# 用法 (首次部署):
+#   1. SSH 到 VPS, cd /opt/quantbt
+#   2. cp deploy/cloud/.env.template .env  → 填上 真实 secrets
+#   3. 把 secrets.yaml 放 ./data/secrets/ (chmod 600)
+#   4. docker compose -f deploy/cloud/docker-compose.prod.yml up -d
+#   5. docker compose logs -f caddy  → 看 HTTPS 自动签发
+#
+# 含:
+#   - caddy: HTTPS 自动 cert + reverse proxy → backend
+#   - backend: FastAPI uvicorn (3 worker)
+#   - postgres: 用户/run/event 数据 (替代 sqlite 单文件)
+#   - watchtower: 自动 pull 镜像 + restart
+#
+# 数据持久化:
+#   - ./data: 用户 artifacts/runs/keystore (host bind, 便于备份)
+#   - postgres-data: db volume
+#
+# 端口:
+#   - 80, 443 (caddy 对外)
+#   - 8000 (backend, 仅 caddy 访问，不对外)
+#   - 5432 (postgres, 仅 backend 访问，不对外)
+
+version: "3.9"
+
+services:
+  caddy:
+    image: caddy:2.7-alpine
+    restart: always
+    ports:
+      - "80:80"
+      - "443:443"
+      - "443:443/udp"  # HTTP/3
+    volumes:
+      - ./deploy/cloud/Caddyfile:/etc/caddy/Caddyfile:ro
+      - caddy-data:/data
+      - caddy-config:/config
+      - ./app/frontend/dist:/srv/quantbt-frontend:ro  # 直接 serve 静态
+    depends_on:
+      - backend
+    environment:
+      - QUANTBT_DOMAIN=${QUANTBT_DOMAIN:-localhost}
+      - CADDY_EMAIL=${CADDY_EMAIL:-admin@example.com}
+
+  backend:
+    build:
+      context: ../..
+      dockerfile: deploy/backend.Dockerfile
+    image: quantbt/backend:prod
+    restart: always
+    environment:
+      # 主密钥 (mainnet keystore 加密派生)
+      - QUANTBT_MASTER_KEY=${QUANTBT_MASTER_KEY}
+      - BACKTEST_DATA_ROOT=/data
+      - QUANTBT_KEYSTORE_INDEX=/data/keystore_index.json
+      # Postgres (生产 db)
+      - DATABASE_URL=postgresql://quantbt:${POSTGRES_PASSWORD}@postgres:5432/quantbt
+      # LLM (走自己代理)
+      - LLM_PROVIDER=custom
+      - LLM_CUSTOM_BASE_URL=${LLM_CUSTOM_BASE_URL:-}
+      - LLM_CUSTOM_API_KEY=${LLM_CUSTOM_API_KEY:-}
+      - LLM_CUSTOM_MODEL=${LLM_CUSTOM_MODEL:-}
+      # Sentry (可选)
+      - SENTRY_DSN=${SENTRY_DSN:-}
+      # CORS
+      - CORS_ALLOWED_ORIGINS=https://${QUANTBT_DOMAIN}
+    volumes:
+      - ./data:/data
+      - ./data/secrets:/root/.quantbt:ro  # secrets.yaml 只读挂
+    depends_on:
+      - postgres
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:8000/api/health"]
+      interval: 30s
+      timeout: 5s
+      retries: 3
+      start_period: 30s
+    # 不对外暴露端口；只让 caddy 访问
+    expose:
+      - "8000"
+
+  postgres:
+    image: postgres:16-alpine
+    restart: always
+    environment:
+      - POSTGRES_USER=quantbt
+      - POSTGRES_PASSWORD=${POSTGRES_PASSWORD}
+      - POSTGRES_DB=quantbt
+    volumes:
+      - postgres-data:/var/lib/postgresql/data
+    expose:
+      - "5432"
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U quantbt"]
+      interval: 30s
+      timeout: 5s
+      retries: 5
+
+  # 自动 pull 新镜像后无停机重启
+  watchtower:
+    image: containrrr/watchtower
+    restart: always
+    volumes:
+      - /var/run/docker.sock:/var/run/docker.sock
+    environment:
+      - WATCHTOWER_POLL_INTERVAL=86400  # 24h
+      - WATCHTOWER_CLEANUP=true
+      - WATCHTOWER_INCLUDE_RESTARTING=true
+
+volumes:
+  caddy-data:
+  caddy-config:
+  postgres-data:
