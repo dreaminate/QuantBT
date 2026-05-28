@@ -47,6 +47,7 @@ from .data_center_services import (
 )
 from .data_export import estimate_export_size, export_tar_gz_stream
 from .data_quality import DatasetRegistry, compute_freshness
+from .datasets import get_template as get_strategy_template, list_samples, list_templates as list_strategy_templates, load_sample
 from .experiments import ExperimentStore, ModelRegistry, RunStore
 from .factor_factory import FactorRegistry, list_operators, register_alpha_lite
 from .observability import get_reporter, init_error_reporting
@@ -1550,6 +1551,47 @@ def events_track(payload: dict = Body(...), current=Depends(current_user_depende
     except EventTrackError as exc:
         raise HTTPException(status_code=400, detail=str(exc)) from exc
     return {"event_id": rec.event_id, "ok": True}
+
+
+@app.get("/api/datasets/samples")
+def datasets_samples() -> list[dict[str, Any]]:
+    """v0.8.7 · 列出全部内置 sample。"""
+    return list_samples()
+
+
+@app.get("/api/datasets/samples/{sample_id}/preview")
+def datasets_sample_preview(sample_id: str, rows: int = Query(20, ge=1, le=200)) -> dict[str, Any]:
+    """sample 前 N 行预览 (前端表格用)。"""
+    df = load_sample(sample_id)
+    if df is None:
+        raise HTTPException(status_code=404, detail=f"sample 不存在: {sample_id}")
+    preview = df.head(rows)
+    return {
+        "sample_id": sample_id,
+        "total_rows": df.height,
+        "columns": preview.columns,
+        "rows": preview.to_dicts(),
+    }
+
+
+@app.get("/api/strategies/templates")
+def strategies_templates() -> list[dict[str, Any]]:
+    """v0.8.7 · 列出 3 个策略模板 (BTC momentum / ETH funding / A股 ETF rotation)。"""
+    items = list_strategy_templates()
+    # 不返回完整 code，只返回 metadata + code 长度（前端按需 fetch detail）
+    return [
+        {**{k: v for k, v in t.items() if k != "code"}, "code_length": len(t["code"])}
+        for t in items
+    ]
+
+
+@app.get("/api/strategies/templates/{template_id}")
+def strategies_template_detail(template_id: str) -> dict[str, Any]:
+    """单个模板完整代码 + metadata。"""
+    t = get_strategy_template(template_id)
+    if t is None:
+        raise HTTPException(status_code=404, detail=f"template 不存在: {template_id}")
+    return t.to_dict()
 
 
 @app.get("/api/runs/{run_id}/coach_suggestion")
