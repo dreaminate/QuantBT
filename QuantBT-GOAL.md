@@ -166,6 +166,35 @@ flowchart TB
       U7[监控告警]
     end
     UI -. REST .-> AGENT
+
+    subgraph EDU[教学层 v0.8.4+]
+      G1[Glossary 30 条 L1-L4]
+      G2[Mode 2 教练 / SSE + RAG]
+      G3[RunDetail 风险卡 + ⓘ]
+      G4[Coach 主动建议 + Socratic]
+      EVAL --> G3
+      G1 --> G2
+      G3 --> G4 --> G2
+    end
+
+    subgraph SOCIAL[社区/带单 v0.8.0+]
+      C1[Auth / Posts / Follow]
+      C2[Sharing / Fork / 复现]
+      C3[Compliance · 收益承诺禁词]
+      C4[CopyTrade Beta · 5master/50follower]
+      C5[Dispatch idempotency + leverage cap]
+      EVAL --> C2
+      C1 --> C2 --> C3
+      EXEC --> C4 --> C5
+    end
+
+    subgraph LIVE_SAFETY[实盘安全阶梯 v0.8.8]
+      LS1[SafeKey wizard · no-withdraw 强校验]
+      LS2[Testnet matrix 12 cell]
+      LS3[Live ladder 5 级]
+      LS4[Kill switch · 降级阻断 24h]
+      EXEC --> LS1 --> LS2 --> LS3 --> LS4
+    end
 ```
 
 ---
@@ -785,6 +814,85 @@ Agent: [tool: model.train ...]
 
 ---
 
+### M16 · 社区 + 策略分享（v0.8.0 落地）
+
+- **目标**：让用户从"自己跑回测"演化到"看别人怎么跑、Fork、对比、复现"
+- **输入**：用户 auth (sqlite users 表) + run.json metrics snapshot
+- **输出**：Square 风 feed + 策略广场 leaderboard + 用户主页 + 关注关系图
+- **关键库**：自写 sqlite + PBKDF2-HMAC-SHA256 (无 bcrypt 依赖) + bearer token sessions
+- **MVP 验收**：注册 → 发帖（含 #tag + attached_run_id）→ 收到关注 → 复制别人的 run 跑出同样结果
+- **可选扩展**：Markdown 评论嵌套、@mention 通知、weekly recap
+
+### M17 · 私域带单 CopyTrade（v0.8.1 + v0.8.9 落地）
+
+- **目标**：master 发 signal → 给 active follower 真下 Binance 单，但 master 永远拿不到 follower 凭证
+- **输入**：master 风控参数 + follower 自填 keystore_name + per_order_max_usdt + daily_loss_pct + max_leverage
+- **输出**：5 表 (ct_masters / ct_followers / ct_signals / ct_executions / ct_dispatches) + invite_code 旋转
+- **关键库**：复用 M9 SignalRelayer + RiskMonitor + SecureKeystore（每个 follower 走自己 key）
+- **MVP 验收**：
+  - master 发 STOP_MARKET → 3 个 follower 各自跑自己 RiskMonitor → 各自下到自己 Binance venue
+  - 私域 invite_only → 用户必须先 redeem invite_code 才能订阅
+  - **v0.8.9**：dispatch idempotency (signal_id+follower_id UNIQUE) + leverage hard cap (master 10x → follower cap 2x)
+- **生产边界**：5 master / 50 follower beta 上限（patch2 §A.f 法律风险考虑）
+
+### M18 · 聚宽风 IDE + BigQuant 风 AI 辅助 + 沙箱（v0.8.2-v0.8.3 落地）
+
+- **目标**：浏览器内用户自己写 Python 策略 → 子进程沙箱跑 → emit_result 落到正式 Run pipeline
+- **输入**：用户在 IDE 写的 Python 代码（含 `quantbt.emit_result({equity_curve: [...]})` 协议）
+- **输出**：runs/<id>/{portfolio.csv, run.json, strategy.py, stdout.log, stderr.log}
+- **关键库**：subprocess + resource.setrlimit + isolated python (-I) + socket/subprocess/os.system/chdir monkey-patch
+- **MVP 验收**：
+  - 用户提交访问 socket 的代码 → sandbox 抛 PermissionError
+  - 提交 emit_result 含 equity_curve → promote 后 RunDetail 三联图能渲染
+  - AI write/explain/fix 三模式 + 注入 ai_context (connector/factor/operator/沙箱规则)
+- **已知限制**：sandbox 非 hardened（patch1 §G.b 8 个攻击向量待 v0.9.x 容器化）
+
+### M19 · Glossary + Mode 2 教学 Agent（v0.8.4-v0.8.6.1 落地）
+
+- **目标**：让用户**理解**策略结果可信度（PBO/DSR/MaxDD/IC-IR），而不是只盯收益曲线
+- **输入**：30 条 markdown 词条 (frontmatter + L1-L4 渐进披露) + active_run metrics + conversation history
+- **输出**：
+  - `/api/glossary/{term}?level=l1|l2|l3|l4` 渐进披露
+  - `/chat` 多轮 SSE + RAG (BM25 + 关键词 + recency) + 5 步状态机
+  - RunDetail 风险卡 (4 档 trust_level) + 7 条触发规则
+  - Coach 主动建议 (按 risk_summary flag 浮出"我帮你诊断 →")
+- **关键模块**：
+  - `glossary/loader.py` Pydantic schema + parser + registry
+  - `agent/conversations.py` ChatService (sqlite chat_conversations + chat_messages)
+  - `agent/rag.py` 混合 retrieval
+  - `agent/coach.py` SOCRATIC_DECISION + suggest_from_risk_summary
+  - `agent/prompts/mode2_teaching.py` 完整 system prompt + 11 条 contract test
+  - `eval/risk_summary.py` 7 条规则 (PBO>0.6 / DSR<0.2 / MaxDD>25% / Sharpe<1 / IC-IR<0.3 / Turnover>3 / Conc>0.25)
+- **MVP 验收**：注册 → 跑 run → 看 risk chip → 点 ⓘ 弹 L1/L2 → "查看 L3/L4" → 点 "Mode 2 教练" → 多轮对话 + RAG 命中 → 改一个变量 rerun
+
+### M20 · Live Safety 安全阶梯（v0.8.8 落地）
+
+- **目标**：用户从 paper → testnet → mainnet 必须**逐级晋级**，没过安全闸门不给 mainnet
+- **输入**：API key 权限位 (enableWithdrawals 等 6 个) + testnet 下单结果 (12 cell matrix)
+- **输出**：
+  - SafeKey checklist (3 fail / 3 warn 规则)
+  - Testnet matrix 12 cell (6 order_type × 2 side, 各自 place/query/cancel/reconcile)
+  - Live ladder 5 级 (level_0 paper → level_1 testnet → level_2 $50 mainnet → level_3 $200 → level_4 $1000 → level_5 自定义)
+  - Demote 后阻断 24h 才能再晋级
+- **关键模块**：`trading/safety.py` SafetyService (sqlite 3 表)
+- **MVP 验收**：
+  - 用户 key 含 enableWithdrawals=True → SafeKey 阻断
+  - testnet matrix 完成率 < 100% → 不能升 level_2
+  - kill switch 触发 → demote + block 24h
+
+### M21 · Sample Data + Strategy Templates（v0.8.7 落地）
+
+- **目标**：用户**零数据**也能立刻跑 demo，看到完整 RunDetail
+- **输入**：内置 seed 生成（不依赖外部 connector）
+- **输出**：
+  - BTC-USDT 永续 365 日 (GBM + 偶发 jump + funding_rate)
+  - ETH-USDT 永续 365 日
+  - A股 ETF 4 个 (510300/510500/510050/510880) 252 日
+  - 3 个策略模板 (BTC momentum / ETH funding arb / A股 ETF rotation) 含 expected_metrics
+- **关键特性**：deterministic (固定 seed → 复现性) + 不需要外部 API key
+
+---
+
 ## 5. 数据源详单与限流策略
 
 ### 5.1 Binance Vision
@@ -894,8 +1002,15 @@ schema_target: ohlcv  # 必须能映射到统一 schema
 | **P4 · 实验 & 调度 & 监控 (1 月)** | M10 + M12 + M13 | MLflow-lite 嵌入 + DAG + freshness/漂移/熔断告警 + 增量更新 | 策略上线后能看到日级监控；模型衰减能自动报警 |
 | **P5 · Agent 工作台 (2-3 月)** | M14 落地 | LLM client 抽象 + tool schema + slot filling + 代码复刻（AST 改写） | 用户能用对话生成新策略；能粘贴 vnpy/pandas 代码自动复刻 |
 | **P6 · 多策略组合管理 (1-2 月)** | 多个上线策略并行 | 策略隔离 + 资金分配 + 跨策略相关性约束 + 组合归因 | 同时跑 3-5 个策略，按风险预算自动分配资金 |
+| **P7 · 社区 + 复现 + 私域带单 (✅ v0.8.0-v0.8.9 落地)** | M16+M17 | Auth + Posts + Sharing + Fork + CopyTrade beta 5/50 + 收益承诺禁词 + idempotency + leverage hard cap | 用户能发帖分享 run / Fork 别人的策略 / 申请 master 或 follower beta |
+| **P8 · 聚宽 IDE + AI 辅助 (✅ v0.8.2-v0.8.3 落地)** | M18 | 浏览器写策略 + 子进程沙箱 + emit_result 协议 + AI write/explain/fix 三模式 + promote 进正式 RunDetail | 用户能在浏览器 IDE 跑自己写的 Python 策略，安全沙箱 |
+| **P9 · Mode 2 教学 Agent (✅ v0.8.4-v0.8.6.1 落地)** | M19 | Glossary 30 条 L1-L4 + RunDetail 风险卡 + ⓘ popover + 多轮 Socratic chat + RAG + Coach 主动建议 | 用户从"跑出收益曲线"升级到"理解策略可信度，被引导改一个变量" |
+| **P10 · 实盘安全阶梯 + sample (✅ v0.8.7-v0.8.8 落地)** | M20+M21 | SafeKey wizard + testnet matrix + live ladder 5 级 + 3 个 deterministic sample + 3 个策略模板 | mainnet 入口从"权限"变成"晋级"；零外部数据也能跑 demo |
+| **P11 · 上线收口 (✅ v0.9.0 落地)** | release readiness | release_check.py + /pricing 三档 (Community/Learn/Live Pro) + 完整 release notes + 路由总览 | "可上线" 北极星打勾 — 单测 498 / patch1 §G.a 9 条核心技术债已偿还 |
+| **P12 · 实盘 e2e + 第一批用户 (待)** | task 36 + 内测 | Binance testnet 全订单类型 e2e (待 user 提供 testnet key 实测) + mainnet 100USDT 一周 (user 自决) + 招 5 个种子用户跑 funnel | mainnet 上线第一周不踩任何已知技术债的雷 |
 
 > P1→P3.5 是"产品上线的关键路径"，必须连续不能跳。P4 起是产品打磨与扩展。
+> P7-P11 是 v0.8.x / v0.9.0 阶段（已全部完成），P12 是用户内测。
 
 ---
 
@@ -921,8 +1036,11 @@ schema_target: ohlcv  # 必须能映射到统一 schema
 | M14 Agent | 🟢 v0.6/v0.6.2 完成：**LLMClient 抽象** + **4 档真实 client (Anthropic/OpenAI/Qwen + OpenAICompatibleLLM 任意 base_url 含本地 ollama/第三方代理)** + **make_llm_client 自动 fallback DevLocalLLM** + **5xx/timeout 3 次指数退避自愈** + tool_schema (13 个 OpenAPI 工具) + StrategyGoalSlotFiller + CodeReplicator (vnpy/backtrader/pandas/qlib → QuantBT 模板) + AgentRuntime reAct loop + **真 LLM 多轮 tool 串联实测通过** + UI `/api/llm/configure` 表单一键填 base_url+key+model | 更多 provider 留扩展 (Gemini / Ollama 原生协议) | `agent/` |
 | M15 前端 | 🟢 v0.7 完成：**Claude Code 风深色 shell** (`theme-cc.css` 766 行 + Shell.tsx 顶 nav/sidebar/status bar + dark/light 主题 toggle) + **quantpedia 风首页 + 策略索引** (HomePage / StrategyIndexPage 卡片网格按 asset_class 分组) + **5 个独立 SPA 页** (StrategyWorkshop / AgentChat 含 LLM provider 测试 / FactorMarket 按 lifecycle 分组 / BinanceTrading 含 testnet/mainnet 色块 + 二次确认 modal / ExperimentTracking) + 数据中心 / 回测列表 / 对比 (jq-* 保留) · **RunDetailPage.tsx 0 行变更** · 三联图 dataZoom minValueSpan 防压扁 + v0.8 新增 6 个社区/IDE 页 (Login / CommunityFeed / SharedStrategies / UserProfile / CopyTrade / IDE) | DataPage retheme / RunDetail 接入新 metrics 字段 (M10) | `app/frontend/src/`, `theme-cc.css`, `components/shell/` |
 | M16 社区 & 策略分享 | 🟢 v0.8.0 完成：**Auth 本地 sqlite** (PBKDF2-HMAC-SHA256 200k iter + bearer token sessions, 无 bcrypt/jwt 依赖) + **Community** (post/comment/like/follow + Square 风 feed recent/hot/following/by_author + #tag 自动提取) + **Sharing** (publish_strategy / fork / leaderboard, snapshot run.metrics 字段 sharpe/total_return/max_dd/pbo/dsr 避免每次重读 run.json) · 共享一个 sqlite `data/community.db` (c_*/s_* 前缀) · 17 个 REST endpoint + 19 测试 | 评论嵌套层级 / @mention 通知 / 关注 timeline 推送 | `auth/`, `community/`, `sharing/` |
-| M17 私域带单 | 🟢 v0.8.1 完成：**CopyTradeService** (5 表 ct_* prefix) + **invite_only 私域门 + invite_code 旋转 + redeemed 记录** + **SignalRelayer** (master 发单 → 给每个 active follower 跑自己的 RiskMonitor + 走自己的 BinanceVenue → master 永远拿不到 follower key) + master 风控参数 + follower 个人风控 (per_order_max / daily_loss_pct) · 14 个 REST endpoint + 21 测试 (含 mock venue dispatch + risk reject + venue exception 全覆盖) | 跟单分润结算 / master 排行实盘 metrics 自动算 / WS push 跟单实时通知 | `copy_trade/` |
-| M18 聚宽风 IDE & BigQuant 风 AI | 🟢 v0.8.3 完成：**IDESandbox** (subprocess + resource.setrlimit CPU/RSS/FSIZE/NOFILE + socket monkey-patch + os.system/subprocess/chdir/fork 全 raise PermissionError + isolated python -I + chdir tempdir + wallclock 30s timeout + stdout 截断 1MB) + **emit_result JSON 协议** (用户代码末尾 quantbt.emit_result({...}) → 主进程解析 stdout) + **IDEService** (i_strategies / i_runs sqlite + 串行 lock 防 fork bomb) + **AI 辅助** (write/explain/fix 三模式调 LLM 写代码) + **promote_ide_run** (沙箱 result.json → runs/<id>/portfolio.csv + run.json + strategy.py，复用现有 RunDetail pipeline，自动算 sharpe/sortino/alpha/beta/IR/vol/max_dd) + **build_ai_context** (LLM system prompt 注入 connector/factor/operator/沙箱规则/emit_result schema) + 前端 IDEPage (策略文件树 + textarea + 行号槽 + 右侧 AI panel + 沙箱 banner + ⤴ 提升为正式 Run + AI 上下文 drawer) · 11 个 REST endpoint + 32 测试 | hardened sandbox (Linux namespace) / Monaco editor 升级 / trades.csv schema 标准化 | `ide/` |
+| M17 私域带单 | 🟢 v0.8.1 + v0.8.9 完成：**CopyTradeService** (5 表 ct_* prefix) + **invite_only 私域门 + invite_code 旋转** + **SignalRelayer** (master 发单 → 给每个 active follower 跑自己的 RiskMonitor + 走自己的 BinanceVenue → master 永远拿不到 follower key) + **dispatch idempotency** (signal_id+follower_id UNIQUE) + **follower leverage hard cap** (master 10x → follower cap 2x 强制截断) + **beta gate 5 master/50 follower** waitlist · 18 个 REST endpoint + 40 测试 | 跟单分润结算 (推迟到合规边界确认后) / master 实盘 metrics 自动算 / WS push 实时通知 | `copy_trade/` |
+| M18 聚宽风 IDE & BigQuant 风 AI | 🟢 v0.8.3 完成：**IDESandbox** (subprocess + resource.setrlimit CPU/RSS/FSIZE/NOFILE + socket monkey-patch + os.system/subprocess/chdir/fork 全 raise PermissionError + isolated python -I + chdir tempdir + wallclock 30s timeout + stdout 截断 1MB) + **emit_result JSON 协议** + **IDEService** (i_strategies / i_runs sqlite + 串行 lock 防 fork bomb) + **AI 辅助** (write/explain/fix 三模式) + **promote_ide_run** (沙箱 result.json → runs/<id>/portfolio.csv + run.json + strategy.py，复用现有 RunDetail pipeline，自动算 sharpe/sortino/alpha/beta/IR/vol/max_dd) + **build_ai_context** (LLM system prompt 注入 connector/factor/operator/沙箱规则/emit_result schema) + 前端 IDEPage · 11 个 REST endpoint + 32 测试 | hardened sandbox (Linux namespace / 容器化) / Monaco editor 升级 / trades.csv schema 标准化 | `ide/` |
+| M19 Glossary + Mode 2 教学 Agent | 🟢 v0.8.4-v0.8.6.1 完成：**Glossary 30 条 baseline** (Pydantic schema + L1/L2/L3/L4 渐进披露 markdown + alias 索引 + related 闭环检查) + **/api/glossary 含 ?level= filter + 404 difflib 拼写建议** + **RunDetail metric ⓘ button + popover** (含 "查看 L3/L4 ↓" + "打开专页" 跳 /glossary/:slug) + **RunDetail risk_summary chip** (可信/存疑/高风险/信息不足 4 档) + **7 条风险规则** (PBO>0.6 / DSR<0.2 / MaxDD>25% / Sharpe<1 / IC-IR<0.3 / Turnover>3 / Conc>0.25) + **CoachSuggestionBanner** 主动建议浮卡 + **/chat Mode 2 多轮 SSE** + **RAG hybrid** (BM25 + 关键词重合 + recency, top_k=4) + **5 步 SOCRATIC_DECISION 状态机** (refuse/ask/explain/recommend_experiment) + MODE2_SYSTEM_PROMPT_ZH 完整落库 + 11 条 contract test · 90 测试 (Glossary 27 / API 16 / risk 23 / chat 22 / coach 18) · 待 GPT Pro 补完 27 个 baseline 词条 | 真 streaming token-by-token / vector embedding RAG / "我的指标分布" 个性化 | `glossary/`, `agent/conversations.py`, `agent/rag.py`, `agent/coach.py`, `agent/prompts/`, `eval/risk_summary.py`, `features/glossary/*` |
+| M20 Live Safety 安全阶梯 | 🟢 v0.8.8 完成：**SafeKey wizard** (enableWithdrawals / internalTransfer / universalTransfer 必拦 + margin/ipRestrict warn) + **Testnet Order Matrix** 12 cell (6 order_type × 2 side, 各自 place/query/cancel/reconcile 4 指标) + **Live Ladder 5 级** (level_0 paper → level_5 自定义, PROMOTION_REQ_ORDERS 单调递增) + **降级阻断 24h** (kill_switch 触发后 promotion_blocked_until_utc) · 7 endpoint + 19 测试 · 复用 v0.8.3.1 hotfix 的 Binance Algo Order + 扩 SafeKey | mainnet 100USDT 一周实测 (task 36 user 自决) / kill switch UI 浮卡 / live ladder 自动晋级 hook | `trading/safety.py` |
+| M21 Sample Data + Strategy Templates | 🟢 v0.8.7 完成：3 个 deterministic seed sample (BTC 永续 365d / ETH 永续 365d / A股 ETF 4 个 252d) + 3 个策略模板 (btc_momentum_v1 / eth_funding_arb_v1 / ashare_etf_rotation_v1) 含 expected_metrics 防过拟合 + /api/datasets/samples + /api/strategies/templates · 19 测试 | 更多模板 (HRP / risk parity / mean reversion) / 真 Binance Vision 接 sample | `datasets/samples.py`, `datasets/templates.py` |
 
 ---
 
@@ -1065,9 +1183,49 @@ audit_log_dir: ./data/audit/
 - [x] 所有交易动作落 audit log — `ExecutionAuditLog` 全 venue 共用，含 clientOrderId / 时间 / 决策
 - [x] 一键导出"我自己的所有数据" — `data_export.export_tar_gz_stream` + `GET /api/data/export` 流式返回；自动排除 secrets.yaml / keystore_index / raw 大文件
 
+### 13.7 教学层 (v0.8.4+ 新增)
+- [x] Glossary 词条 schema 落地（30 baseline slug 已索引，3 完整样例 sharpe_ratio/pbo/deflated_sharpe）— `docs/glossary/_index.yaml` + `_SCHEMA.md` + Pydantic loader
+- [x] `/api/glossary` `/api/glossary/{term}?level=` `/api/glossary_meta` 三 endpoint — list summary + 渐进披露 + 404 difflib 拼写建议
+- [x] RunDetail metric ⓘ button + popover (L1/L2 默认 + 查看 L3/L4 ↓) — 冻结页加字段
+- [x] RunDetail 风险卡片 chip 4 档 (可信/存疑/高风险/信息不足) + 7 条触发规则 (PBO/DSR/MaxDD/Sharpe/IC-IR/Turnover/Conc)
+- [x] CoachSuggestionBanner 主动建议浮卡 + one_variable_hint + 跳 /chat 入口
+- [x] /chat Mode 2 多轮 SSE + RAG hybrid (BM25 + 关键词 + recency, top_k=4) + conversations sqlite 持久化
+- [x] 5 步 SOCRATIC_DECISION 状态机 (refuse/ask/explain/recommend_experiment) + Binance live 严格 refuse
+- [x] MODE2_SYSTEM_PROMPT_ZH 完整落库 (产品边界 / 6 类拒答 / 8 句 Socratic / 三段 slot) + 11 条 contract test
+- [ ] 27 条剩余 glossary 词条 .md 内容补完 — 待 user 用 GPT Pro 按 `docs/glossary/_PROMPT_FOR_GPT_PRO.md` 6 批次生成
+
+### 13.8 实盘安全阶梯 (v0.8.8 新增)
+- [x] SafeKey wizard 5 步检查（enableWithdrawals / internalTransfer / universalTransfer 必拦 + margin/ipRestrict warn）
+- [x] Testnet Order Matrix 12 cell (6 order_type × 2 side, 各 place/query/cancel/reconcile)
+- [x] Live Ladder 5 级（level_0 paper → level_5 自定义）+ 降级阻断 24h
+- [x] Binance algoOrder migration (2025-12-09) 已修 hotfix v0.8.3.1
+- [ ] mainnet 100 USDT 一周实盘验证 — 待 user 实测
+- [ ] testnet 全 12 cell 真实下单 e2e — 待 user 提供 testnet key (明天)
+
+### 13.9 跟单合规 (v0.8.9 新增)
+- [x] CopyTrade beta gate 5 master / 50 follower waitlist (patch2 §A.f 法律风险考虑)
+- [x] dispatch idempotency (signal_id+follower_id UNIQUE) - 防 master 信号重发导致重复下单
+- [x] follower leverage hard cap - master 10x signal 在 follower max_lev=2x 时强制截断
+- [x] master signal audit log + clamped flag 持久化
+- [x] follower 自 keystore + override - master 永远拿不到 follower 凭证（v0.8.1）
+- [ ] 跟单分润结算（推迟到法律边界确认后；patch2 §A.f 推荐 v1.0 前不做 GMV 抽佣）
+
+### 13.10 复现社区 (v0.8.8.1 新增)
+- [x] 帖子 attached_run_id 自动 risk_summary snapshot
+- [x] 6 种收益承诺禁词正则 (保证收益 / 稳赚 / 必赚 / 包年 X% / 100% 盈利 / 无风险回报) 拦截
+- [x] /api/community/check_text 发帖前预检 + /api/community/posts/{id}/check_compliance 持久化
+- [ ] 复现排行榜 + Fork lineage UI（v0.9.x 路线）
+
+### 13.11 商业化基建 (v0.9.0 新增)
+- [x] `/pricing` 三档订阅页 (Community ¥0 / Learn ¥49 月 ¥499 年 / Live Pro ¥149 月 ¥1499 年) + 价格锚点说明
+- [x] 信任阶梯 L0-L7 与三档订阅映射明确
+- [x] `scripts/release_check.py` 7 项自动校验 (pytest/glossary/tsc/vite/notes/GOAL/git clean)
+- [ ] 真支付集成 (stripe / 微信 / 支付宝) — v1.0 前不做
+- [ ] 用户 funnel 真实数据 (需要先有 ≥50 种子用户)
+
 ---
 
-*本文件最后更新：2026-05-29 · v0.9.0*
+*本文件最后更新：2026-05-29 · v0.9.0 (24h sprint 11 tag 全过)*
 *维护者：QuantBT 团队（人 + Agent）*
 
 ### v0.9.0 更新（24h sprint · patch2 §C 12 周路线一次性交付）
