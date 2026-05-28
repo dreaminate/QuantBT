@@ -922,7 +922,7 @@ schema_target: ohlcv  # 必须能映射到统一 schema
 | M15 前端 | 🟢 v0.7 完成：**Claude Code 风深色 shell** (`theme-cc.css` 766 行 + Shell.tsx 顶 nav/sidebar/status bar + dark/light 主题 toggle) + **quantpedia 风首页 + 策略索引** (HomePage / StrategyIndexPage 卡片网格按 asset_class 分组) + **5 个独立 SPA 页** (StrategyWorkshop / AgentChat 含 LLM provider 测试 / FactorMarket 按 lifecycle 分组 / BinanceTrading 含 testnet/mainnet 色块 + 二次确认 modal / ExperimentTracking) + 数据中心 / 回测列表 / 对比 (jq-* 保留) · **RunDetailPage.tsx 0 行变更** · 三联图 dataZoom minValueSpan 防压扁 + v0.8 新增 6 个社区/IDE 页 (Login / CommunityFeed / SharedStrategies / UserProfile / CopyTrade / IDE) | DataPage retheme / RunDetail 接入新 metrics 字段 (M10) | `app/frontend/src/`, `theme-cc.css`, `components/shell/` |
 | M16 社区 & 策略分享 | 🟢 v0.8.0 完成：**Auth 本地 sqlite** (PBKDF2-HMAC-SHA256 200k iter + bearer token sessions, 无 bcrypt/jwt 依赖) + **Community** (post/comment/like/follow + Square 风 feed recent/hot/following/by_author + #tag 自动提取) + **Sharing** (publish_strategy / fork / leaderboard, snapshot run.metrics 字段 sharpe/total_return/max_dd/pbo/dsr 避免每次重读 run.json) · 共享一个 sqlite `data/community.db` (c_*/s_* 前缀) · 17 个 REST endpoint + 19 测试 | 评论嵌套层级 / @mention 通知 / 关注 timeline 推送 | `auth/`, `community/`, `sharing/` |
 | M17 私域带单 | 🟢 v0.8.1 完成：**CopyTradeService** (5 表 ct_* prefix) + **invite_only 私域门 + invite_code 旋转 + redeemed 记录** + **SignalRelayer** (master 发单 → 给每个 active follower 跑自己的 RiskMonitor + 走自己的 BinanceVenue → master 永远拿不到 follower key) + master 风控参数 + follower 个人风控 (per_order_max / daily_loss_pct) · 14 个 REST endpoint + 21 测试 (含 mock venue dispatch + risk reject + venue exception 全覆盖) | 跟单分润结算 / master 排行实盘 metrics 自动算 / WS push 跟单实时通知 | `copy_trade/` |
-| M18 聚宽风 IDE & BigQuant 风 AI | 🟢 v0.8.2 完成：**IDESandbox** (subprocess + resource.setrlimit CPU/RSS/FSIZE/NOFILE + socket monkey-patch + os.system/subprocess/chdir/fork 全 raise PermissionError + isolated python -I + chdir tempdir + wallclock 30s timeout + stdout 截断 1MB) + **emit_result JSON 协议** (用户代码末尾 quantbt.emit_result({...}) → 主进程解析 stdout) + **IDEService** (i_strategies / i_runs sqlite + 串行 lock 防 fork bomb) + **AI 辅助** (write/explain/fix 三模式调 LLM 写代码) + 前端 IDEPage (策略文件树 + textarea + 行号槽 + 右侧 AI panel + 沙箱 banner) · 9 个 REST endpoint + 22 测试 | hardened sandbox (Linux namespace) / 真回测 pipeline 接入 (用户 emit_result 落 run.json) / Monaco editor 升级 | `ide/` |
+| M18 聚宽风 IDE & BigQuant 风 AI | 🟢 v0.8.3 完成：**IDESandbox** (subprocess + resource.setrlimit CPU/RSS/FSIZE/NOFILE + socket monkey-patch + os.system/subprocess/chdir/fork 全 raise PermissionError + isolated python -I + chdir tempdir + wallclock 30s timeout + stdout 截断 1MB) + **emit_result JSON 协议** (用户代码末尾 quantbt.emit_result({...}) → 主进程解析 stdout) + **IDEService** (i_strategies / i_runs sqlite + 串行 lock 防 fork bomb) + **AI 辅助** (write/explain/fix 三模式调 LLM 写代码) + **promote_ide_run** (沙箱 result.json → runs/<id>/portfolio.csv + run.json + strategy.py，复用现有 RunDetail pipeline，自动算 sharpe/sortino/alpha/beta/IR/vol/max_dd) + **build_ai_context** (LLM system prompt 注入 connector/factor/operator/沙箱规则/emit_result schema) + 前端 IDEPage (策略文件树 + textarea + 行号槽 + 右侧 AI panel + 沙箱 banner + ⤴ 提升为正式 Run + AI 上下文 drawer) · 11 个 REST endpoint + 32 测试 | hardened sandbox (Linux namespace) / Monaco editor 升级 / trades.csv schema 标准化 | `ide/` |
 
 ---
 
@@ -1067,8 +1067,29 @@ audit_log_dir: ./data/audit/
 
 ---
 
-*本文件最后更新：2026-05-28 · v0.8.2*
+*本文件最后更新：2026-05-28 · v0.8.3*
 *维护者：QuantBT 团队（人 + Agent）*
+
+### v0.8.3 更新（IDE 沙箱 → 正式 Run + AI 喂饱上下文）
+
+**M18b · promote + ai_context** ✅
+- `ide/promote.py` — 沙箱 result.json → runs/<id>/ (portfolio.csv + run.json + strategy.py)
+  - emit_result.equity_curve 解析（支持 t/timestamp/date + equity/value 别名）
+  - 自动算 metrics: total_return / annualized / sharpe / sortino / alpha / beta / IR / vol / max_dd
+  - 复用现有 RunDetail pipeline 渲染三联图（series equity / drawdown / net_return / benchmark_return 全可用）
+- `ide/ai_context.py` — 给 LLM 喂的策略写作上下文
+  - 5 个 connector / 30 个 factor (过滤 RETIRED) / 44 个白名单 operator
+  - 沙箱黑名单规则 + emit_result schema + 代码骨架
+  - `/api/ide/ai_complete` 自动 inject context block 到 system prompt
+- 新 endpoint：GET /api/ide/ai_context + POST /api/ide/runs/{run_id}/promote
+- 前端 IDEPage：成功 run 后显示 "⤴ 提升为正式 Run" 按钮 → 跳 /runs/<id> 三联图
+  + AI 面板加 "ⓘ 上下文" drawer 透明展示 LLM 拿到的 connector/factor/operator/规则
+- **10 新测试全过**（promote 6 + ai_context 4：包含 alpha/beta 回归校验 + 最大回撤负值 + 别名兼容）
+- E2E 真后端 smoke 验证：register → save → run → promote → /api/runs/<id> 三联图
+
+测试基线 **251 → 261** / tsc 0 / vite build pass
+
+§8 差距表 M18 行升级到 v0.8.3，新增 promote_ide_run + build_ai_context 两个能力
 
 ### v0.8.2 更新（聚宽风 IDE + BigQuant 风 AI 辅助）
 

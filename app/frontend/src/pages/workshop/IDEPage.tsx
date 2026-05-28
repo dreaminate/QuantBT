@@ -1,4 +1,5 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
+import { useNavigate } from "react-router-dom";
 import { authFetch, getStoredUser } from "../../lib/auth";
 
 /**
@@ -77,8 +78,18 @@ quantbt.emit_result({
 })
 `;
 
+interface AIContext {
+  connectors: { name: string; asset_class?: string; kind?: string }[];
+  factors: { factor_id: string; lifecycle_state?: string; description?: string }[];
+  operators: { name?: string }[];
+  rules: string[];
+  code_skeleton: string;
+  emit_result_schema: Record<string, unknown>;
+}
+
 export function IDEPage() {
   const me = getStoredUser();
+  const navigate = useNavigate();
   const [strategies, setStrategies] = useState<StrategyFile[]>([]);
   const [currentName, setCurrentName] = useState<string | null>(null);
   const [code, setCode] = useState(DEFAULT_TEMPLATE);
@@ -93,6 +104,9 @@ export function IDEPage() {
   const [aiMode, setAIMode] = useState<"write" | "explain" | "fix">("write");
   const [aiBusy, setAIBusy] = useState(false);
   const [aiReply, setAIReply] = useState("");
+  const [aiContext, setAIContext] = useState<AIContext | null>(null);
+  const [showContext, setShowContext] = useState(false);
+  const [promoting, setPromoting] = useState(false);
 
   const reload = useCallback(async () => {
     try {
@@ -111,6 +125,14 @@ export function IDEPage() {
   useEffect(() => {
     if (me) reload();
   }, [me, reload]);
+
+  useEffect(() => {
+    if (!me) return;
+    authFetch("/api/ide/ai_context")
+      .then((r) => (r.ok ? r.json() : null))
+      .then((c) => c && setAIContext(c))
+      .catch(() => {/* noop */});
+  }, [me]);
 
   const openStrategy = (s: StrategyFile) => {
     setCurrentName(s.name);
@@ -211,6 +233,31 @@ export function IDEPage() {
       setAIReply(`[ERROR] ${String(err)}`);
     } finally {
       setAIBusy(false);
+    }
+  };
+
+  const promoteRun = async () => {
+    if (!activeRun) return;
+    if (!activeRun.result_keys.includes("equity_curve")) {
+      alert("emit_result 必须包含 equity_curve 才能提升为正式 Run");
+      return;
+    }
+    setPromoting(true);
+    try {
+      const res = await authFetch(`/api/ide/runs/${activeRun.run_id}/promote`, {
+        method: "POST",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify({}),
+      });
+      if (!res.ok) {
+        const err = await res.json().catch(() => ({ detail: "promote 失败" }));
+        alert(err.detail || "promote 失败");
+        return;
+      }
+      const data: { run_id: string; run_url: string } = await res.json();
+      navigate(data.run_url);
+    } finally {
+      setPromoting(false);
     }
   };
 
@@ -360,7 +407,14 @@ export function IDEPage() {
             </a>
           </div>
           <div style={{ padding: 12, maxHeight: "70vh", overflow: "auto" }}>
-            {rightTab === "output" ? <RunOutput run={activeRun} running={running} /> : (
+            {rightTab === "output" ? (
+              <RunOutput
+                run={activeRun}
+                running={running}
+                onPromote={promoteRun}
+                promoting={promoting}
+              />
+            ) : (
               <AIPanel
                 prompt={aiPrompt}
                 setPrompt={setAIPrompt}
@@ -370,6 +424,9 @@ export function IDEPage() {
                 reply={aiReply}
                 onAsk={askAI}
                 onInsert={insertAIReply}
+                context={aiContext}
+                showContext={showContext}
+                onToggleContext={() => setShowContext(!showContext)}
               />
             )}
           </div>
@@ -446,16 +503,29 @@ function CodeEditor({ code, onChange }: { code: string; onChange: (v: string) =>
   );
 }
 
-function RunOutput({ run, running }: { run: IDERun | null; running: boolean }) {
+function RunOutput({ run, running, onPromote, promoting }: { run: IDERun | null; running: boolean; onPromote: () => void; promoting: boolean }) {
   if (running) return <div className="cc-dim">⏳ 沙箱运行中... (wallclock ≤ 30s)</div>;
   if (!run) return <div className="cc-dim">未运行。保存代码 → ▶ 运行</div>;
   const chipClass = run.status === "ok" ? "cc-chip--green" : run.status === "timeout" ? "cc-chip--yellow" : "cc-chip--red";
+  const canPromote = run.status === "ok" && run.result_keys.includes("equity_curve");
   return (
     <div>
       <div className="cc-row" style={{ justifyContent: "space-between", marginBottom: 8 }}>
         <span className={`cc-chip ${chipClass}`}>{run.status.toUpperCase()}</span>
         <span className="cc-mono cc-dim" style={{ fontSize: 11 }}>{run.duration_s.toFixed(2)}s · exit={run.exit_code}</span>
       </div>
+      {canPromote && (
+        <button
+          type="button"
+          className="cc-btn cc-btn--accent"
+          onClick={onPromote}
+          disabled={promoting}
+          style={{ width: "100%", marginBottom: 8 }}
+          title="把沙箱结果落到 runs/<id> 跑 metrics，进 RunDetail 三联图"
+        >
+          {promoting ? "promoting..." : "⤴ 提升为正式 Run · 进 /runs/<id>"}
+        </button>
+      )}
       {run.error && (
         <div className="cc-card" style={{ padding: 8, marginBottom: 8, fontSize: 12, color: "var(--cc-red, #f55)" }}>
           {run.error}
@@ -494,11 +564,54 @@ function AIPanel(props: {
   reply: string;
   onAsk: () => void;
   onInsert: () => void;
+  context: AIContext | null;
+  showContext: boolean;
+  onToggleContext: () => void;
 }) {
-  const { prompt, setPrompt, mode, setMode, busy, reply, onAsk, onInsert } = props;
+  const { prompt, setPrompt, mode, setMode, busy, reply, onAsk, onInsert, context, showContext, onToggleContext } = props;
   return (
     <div>
-      <div className="cc-section-title" style={{ marginTop: 0 }}>AI 辅助 (BigQuant 风)</div>
+      <div className="cc-row" style={{ justifyContent: "space-between", marginTop: 0 }}>
+        <div className="cc-section-title" style={{ margin: 0 }}>AI 辅助 (BigQuant 风)</div>
+        {context && (
+          <button
+            type="button"
+            className="cc-btn cc-btn--ghost cc-btn--sm"
+            onClick={onToggleContext}
+            title="查看 LLM 拿到的上下文"
+            style={{ fontSize: 10 }}
+          >
+            ⓘ 上下文 {context.connectors.length}·{context.factors.length}·{context.operators.length}
+          </button>
+        )}
+      </div>
+      {showContext && context && (
+        <div className="cc-card" style={{ padding: 8, marginTop: 6, marginBottom: 8, fontSize: 11, maxHeight: 180, overflow: "auto" }}>
+          <div className="cc-mono cc-dim">connector · {context.connectors.length}</div>
+          <div style={{ marginBottom: 4 }}>
+            {context.connectors.slice(0, 6).map((c) => (
+              <span key={c.name} className="cc-chip" style={{ marginRight: 4, fontSize: 10 }}>{c.name}</span>
+            ))}
+          </div>
+          <div className="cc-mono cc-dim">factor · {context.factors.length}（已过滤 RETIRED）</div>
+          <div style={{ marginBottom: 4 }}>
+            {context.factors.slice(0, 6).map((f) => (
+              <span key={f.factor_id} className="cc-chip" style={{ marginRight: 4, fontSize: 10 }}>{f.factor_id}</span>
+            ))}
+            {context.factors.length > 6 && <span className="cc-dim" style={{ fontSize: 10 }}>+{context.factors.length - 6}</span>}
+          </div>
+          <div className="cc-mono cc-dim">operator · {context.operators.length}</div>
+          <div className="cc-dim" style={{ fontSize: 10 }}>
+            {context.operators.slice(0, 8).map((o) => o.name).join(", ")}{context.operators.length > 8 ? "..." : ""}
+          </div>
+          <div className="cc-mono cc-dim" style={{ marginTop: 6 }}>沙箱规则</div>
+          <ul style={{ paddingLeft: 16, margin: "2px 0 0 0", fontSize: 10 }}>
+            {context.rules.map((r, i) => (
+              <li key={i}>{r}</li>
+            ))}
+          </ul>
+        </div>
+      )}
       <div className="cc-row" style={{ gap: 4, marginBottom: 8 }}>
         {(["write", "explain", "fix"] as const).map((m) => (
           <button

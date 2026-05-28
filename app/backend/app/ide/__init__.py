@@ -11,13 +11,20 @@
 
 from __future__ import annotations
 
+from .ai_context import AIContext, build_ai_context
+from .promote import PromoteError, PromotedRun, promote_ide_run
 from .sandbox import SandboxResult, run_user_strategy
 from .service import IDEError, IDEService, StrategyFile
 
 __all__ = [
+    "AIContext",
     "IDEError",
     "IDEService",
+    "PromoteError",
+    "PromotedRun",
     "SandboxResult",
     "StrategyFile",
+    "build_ai_context",
+    "promote_ide_run",
     "run_user_strategy",
 ]

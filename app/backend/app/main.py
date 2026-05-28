@@ -20,7 +20,7 @@ from .auth.service import set_service as set_auth_service
 from .community import CommunityService
 from .connectors import registry as connector_registry
 from .copy_trade import CopyTradeError, CopyTradeService, SignalRelayer
-from .ide import IDEError, IDEService
+from .ide import IDEError, IDEService, PromoteError, build_ai_context, promote_ide_run
 from .ide.service import run_to_dict, strategy_to_dict
 from .sharing import SharingService
 from .data_center_services import (
@@ -1310,7 +1310,14 @@ def ide_ai_complete(payload: dict = Body(...), user=Depends(require_user_depende
             "请定位 bug 并给出修复后的完整 Python 代码片段（不要 markdown）。"
         ),
     }
-    sys_prompt = system_prompts.get(mode, system_prompts["write"])
+    base_prompt = system_prompts.get(mode, system_prompts["write"])
+    # 喂给 LLM 完整的写策略上下文（connector / factor / operator / 沙箱规则 / emit_result schema）
+    ctx = build_ai_context(
+        connectors=connector_registry.describe_all(),
+        factors=[f.to_dict() for f in FACTOR_REGISTRY.list()],
+        operators=list_operators(),
+    )
+    sys_prompt = base_prompt + "\n\n" + ctx.to_system_prompt_block()
     user_text = f"{prompt}\n\n# 当前编辑器内容（context）:\n{context_code}" if context_code else prompt
     from .agent.llm_client import LLMMessage
     try:
@@ -1323,3 +1330,65 @@ def ide_ai_complete(payload: dict = Body(...), user=Depends(require_user_depende
     except Exception as exc:  # noqa: BLE001
         raise HTTPException(status_code=502, detail=f"LLM 调用失败: {exc}") from exc
     return {"mode": mode, "code": text.strip(), "provider": getattr(client, "provider", "unknown")}
+
+
+@app.get("/api/ide/ai_context")
+def ide_ai_context(user=Depends(require_user_dependency)) -> dict[str, Any]:
+    """UI 透明展示 LLM 拿到的上下文（connector / factor / operator / 沙箱规则）。"""
+
+    _ = user
+    ctx = build_ai_context(
+        connectors=connector_registry.describe_all(),
+        factors=[f.to_dict() for f in FACTOR_REGISTRY.list()],
+        operators=list_operators(),
+    )
+    return ctx.to_dict()
+
+
+@app.post("/api/ide/runs/{run_id}/promote")
+def ide_promote_run(run_id: str, payload: dict = Body(default_factory=dict), user=Depends(require_user_dependency)) -> dict[str, Any]:
+    """把 IDE 沙箱 run 提升为正式 Run（落 runs/<new_id>/ 进 RunDetail pipeline）。"""
+
+    try:
+        ide_run = IDE_SERVICE.get_run(run_id)
+    except IDEError as exc:
+        raise HTTPException(status_code=404, detail=str(exc)) from exc
+    if ide_run.owner_username != user.username:
+        raise HTTPException(status_code=403, detail="无权操作该 run")
+    if ide_run.status != "ok":
+        raise HTTPException(status_code=400, detail=f"only ok run can promote, got status={ide_run.status}")
+
+    try:
+        result = IDE_SERVICE.get_run_artifact(run_id, "result")["body"]
+    except IDEError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+
+    # 拿对应 strategy 的源码（如果还在）
+    strategy_code = ""
+    strategy_name = "ide_strategy"
+    try:
+        strategies = IDE_SERVICE.list_strategies(user.username)
+        match = next((s for s in strategies if s.strategy_id == ide_run.strategy_id), None)
+        if match is not None:
+            strategy_code = match.code
+            strategy_name = match.name
+    except IDEError:
+        pass
+
+    try:
+        promoted = promote_ide_run(
+            ide_run_id=ide_run.run_id,
+            owner_username=user.username,
+            strategy_name=strategy_name,
+            strategy_code=strategy_code,
+            result=result,
+            record_name=payload.get("record_name"),
+        )
+    except PromoteError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+
+    return {
+        "run_id": promoted.run_id,
+        "run_url": f"/runs/{promoted.run_id}",
+        "metrics": promoted.metrics,
+    }
