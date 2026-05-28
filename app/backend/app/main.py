@@ -1400,6 +1400,40 @@ def ide_ai_context(user=Depends(require_user_dependency)) -> dict[str, Any]:
     return ctx.to_dict()
 
 
+@app.get("/api/ide/runs/{run_id}/risk_preview")
+def ide_run_risk_preview(run_id: str, user=Depends(require_user_dependency)) -> dict[str, Any]:
+    """v0.9.2 · promote 前预算 risk_summary，让 IDE 前端实时展示可信度。"""
+    try:
+        ide_run = IDE_SERVICE.get_run(run_id)
+    except IDEError as exc:
+        raise HTTPException(status_code=404, detail=str(exc)) from exc
+    if ide_run.owner_username != user.username:
+        raise HTTPException(status_code=403, detail="无权访问该 run")
+    if ide_run.status != "ok":
+        return {"risk_summary": None, "reason": f"run status={ide_run.status}"}
+
+    try:
+        result = IDE_SERVICE.get_run_artifact(run_id, "result")["body"]
+    except IDEError:
+        return {"risk_summary": None, "reason": "no emit_result"}
+
+    # 从 result.json 抽 metrics (兼容 emit_result 顶层直接给 metrics dict 或挂 metrics 字段)
+    metrics_combined: dict[str, Any] = {}
+    if isinstance(result, dict):
+        if isinstance(result.get("metrics"), dict):
+            metrics_combined.update(result["metrics"])
+        # 平铺字段（用户也可能直接顶层放 sharpe）
+        for k in ("sharpe", "sharpe_ratio", "pbo", "dsr", "deflated_sharpe",
+                   "max_drawdown", "drawdown", "alpha", "beta", "ic_ir",
+                   "turnover", "max_position_weight", "information_ratio"):
+            if k in result and not isinstance(result[k], dict):
+                metrics_combined.setdefault(k, result[k])
+
+    from .eval.risk_summary import compute_risk_summary
+    rs = compute_risk_summary(metrics_combined).to_dict()
+    return {"risk_summary": rs, "metrics_used": metrics_combined}
+
+
 @app.post("/api/ide/runs/{run_id}/promote")
 def ide_promote_run(run_id: str, payload: dict = Body(default_factory=dict), user=Depends(require_user_dependency)) -> dict[str, Any]:
     """把 IDE 沙箱 run 提升为正式 Run（落 runs/<new_id>/ 进 RunDetail pipeline）。"""

@@ -504,16 +504,63 @@ function CodeEditor({ code, onChange }: { code: string; onChange: (v: string) =>
 }
 
 function RunOutput({ run, running, onPromote, promoting }: { run: IDERun | null; running: boolean; onPromote: () => void; promoting: boolean }) {
+  const [riskPreview, setRiskPreview] = useState<{ trust_level?: string; summary?: string; flags?: any[] } | null>(null);
+
+  useEffect(() => {
+    if (!run || run.status !== "ok" || !run.result_keys.includes("equity_curve")) {
+      setRiskPreview(null);
+      return;
+    }
+    fetch(`/api/ide/runs/${run.run_id}/risk_preview`, {
+      headers: localStorage.getItem("qb-token") ? { authorization: `Bearer ${localStorage.getItem("qb-token")}` } : undefined,
+    })
+      .then((r) => r.json())
+      .then((d) => setRiskPreview(d?.risk_summary || null))
+      .catch(() => setRiskPreview(null));
+  }, [run?.run_id, run?.status, run?.result_keys?.join(",")]);
+
   if (running) return <div className="cc-dim">⏳ 沙箱运行中... (wallclock ≤ 30s)</div>;
   if (!run) return <div className="cc-dim">未运行。保存代码 → ▶ 运行</div>;
   const chipClass = run.status === "ok" ? "cc-chip--green" : run.status === "timeout" ? "cc-chip--yellow" : "cc-chip--red";
   const canPromote = run.status === "ok" && run.result_keys.includes("equity_curve");
+  const trustColor = riskPreview?.trust_level === "ok" ? "#1f9a52"
+    : riskPreview?.trust_level === "caution" ? "#c98a14"
+    : riskPreview?.trust_level === "high_risk" ? "#cc3344"
+    : "#888";
+  const trustLabel = riskPreview?.trust_level === "ok" ? "可信"
+    : riskPreview?.trust_level === "caution" ? "存疑"
+    : riskPreview?.trust_level === "high_risk" ? "高风险"
+    : riskPreview?.trust_level === "insufficient_data" ? "信息不足"
+    : null;
+
   return (
     <div>
       <div className="cc-row" style={{ justifyContent: "space-between", marginBottom: 8 }}>
         <span className={`cc-chip ${chipClass}`}>{run.status.toUpperCase()}</span>
         <span className="cc-mono cc-dim" style={{ fontSize: 11 }}>{run.duration_s.toFixed(2)}s · exit={run.exit_code}</span>
       </div>
+      {canPromote && trustLabel && (
+        <div
+          style={{
+            marginBottom: 8,
+            padding: 8,
+            background: `${trustColor}1a`,
+            borderLeft: `3px solid ${trustColor}`,
+            borderRadius: 4,
+            fontSize: 12,
+          }}
+        >
+          <div style={{ fontWeight: 600, color: trustColor }}>● {trustLabel}（提升前预览）</div>
+          {riskPreview?.summary && <div className="cc-soft" style={{ marginTop: 4 }}>{riskPreview.summary}</div>}
+          {riskPreview?.flags && riskPreview.flags.length > 0 && (
+            <ul style={{ paddingLeft: 16, margin: "4px 0 0 0", fontSize: 11 }}>
+              {riskPreview.flags.slice(0, 3).map((f: any) => (
+                <li key={f.name}>{f.message}</li>
+              ))}
+            </ul>
+          )}
+        </div>
+      )}
       {canPromote && (
         <button
           type="button"
