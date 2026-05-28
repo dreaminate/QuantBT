@@ -25,6 +25,10 @@ data/experiments/
 data/audit/
 data/raw/
 data/keystore_index.json
+data/community.db
+data/community.db-journal
+data/community.db-wal
+data/community.db-shm
 # 临时跑 e2e 测试产出的 run 目录（pytest 用 _test 后缀）
 data/artifacts/experiments/*_test/
 *.zip

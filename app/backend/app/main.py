@@ -2,7 +2,7 @@
 
 from typing import Any
 
-from fastapi import Body, FastAPI, HTTPException, Query
+from fastapi import Body, Depends, FastAPI, HTTPException, Query
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import FileResponse, StreamingResponse
 
@@ -15,7 +15,11 @@ from .agent import (
     list_llm_status,
     make_llm_client,
 )
+from .auth import AuthError, AuthService, current_user_dependency, require_user_dependency
+from .auth.service import set_service as set_auth_service
+from .community import CommunityService
 from .connectors import registry as connector_registry
+from .sharing import SharingService
 from .data_center_services import (
     get_data_files_response,
     get_data_kinds_response,
@@ -68,6 +72,13 @@ EXPERIMENT_STORE = ExperimentStore(DATA_ROOT / "experiments")
 RUN_STORE = RunStore(DATA_ROOT / "experiments")
 MODEL_REGISTRY = ModelRegistry(DATA_ROOT / "experiments")
 ERROR_REPORTER = init_error_reporting(DATA_ROOT / "audit" / "errors.jsonl")
+
+# 社区 / Auth / Sharing 共享同一 sqlite
+_COMMUNITY_DB = DATA_ROOT / "community.db"
+AUTH_SERVICE = AuthService(_COMMUNITY_DB)
+set_auth_service(AUTH_SERVICE)
+COMMUNITY_SERVICE = CommunityService(_COMMUNITY_DB)
+SHARING_SERVICE = SharingService(_COMMUNITY_DB, DATA_ROOT / "artifacts" / "experiments")
 
 # 安全：开发环境用内存 keystore；上线时切换到 keyring/fernet（由 settings 控制）
 KEYSTORE = SecureKeystore(InMemoryKeystore())
@@ -443,6 +454,245 @@ def agent_replicate(payload: dict = Body(...)) -> dict[str, Any]:
     code = payload.get("code", "")
     report = CODE_REPLICATOR.replicate(code, dialect=dialect)
     return {"dialect": report.dialect, "target_code": report.target_code, "notes": report.notes}
+
+
+# =============== AUTH ===============
+
+@app.post("/api/auth/register")
+def auth_register(payload: dict = Body(...)) -> dict[str, Any]:
+    try:
+        user = AUTH_SERVICE.register(
+            username=payload["username"],
+            password=payload["password"],
+            display_name=payload.get("display_name", ""),
+        )
+        _u, token = AUTH_SERVICE.login(payload["username"], payload["password"])
+        return {"user": user.to_dict(), "token": token}
+    except AuthError as exc:
+        raise HTTPException(400, str(exc))
+    except KeyError as exc:
+        raise HTTPException(400, f"缺少字段: {exc}")
+
+
+@app.post("/api/auth/login")
+def auth_login(payload: dict = Body(...)) -> dict[str, Any]:
+    try:
+        user, token = AUTH_SERVICE.login(payload.get("username", ""), payload.get("password", ""))
+        return {"user": user.to_dict(), "token": token}
+    except AuthError as exc:
+        raise HTTPException(401, str(exc))
+
+
+@app.post("/api/auth/logout")
+def auth_logout(authorization: str | None = None) -> dict[str, str]:
+    if authorization and authorization.lower().startswith("bearer "):
+        AUTH_SERVICE.logout(authorization[7:].strip())
+    return {"status": "ok"}
+
+
+@app.get("/api/auth/me")
+def auth_me(user=Depends(current_user_dependency)) -> dict[str, Any]:
+    if user is None:
+        return {"user": None, "anonymous": True}
+    return {"user": user.to_dict(), "anonymous": False}
+
+
+@app.get("/api/auth/users/{username}")
+def auth_user_profile(username: str, current=Depends(current_user_dependency)) -> dict[str, Any]:
+    u = AUTH_SERVICE.get_user_by_username(username)
+    if u is None:
+        raise HTTPException(404, "用户不存在")
+    stats = COMMUNITY_SERVICE.follow_stats(u.user_id, current.user_id if current else None)
+    return {"user": u.to_dict(), **stats}
+
+
+# =============== COMMUNITY ===============
+
+@app.get("/api/community/feed")
+def community_feed(
+    feed_type: str = "recent",
+    author: str | None = None,
+    limit: int = 50,
+    offset: int = 0,
+    current=Depends(current_user_dependency),
+) -> list[dict[str, Any]]:
+    author_id = None
+    if author:
+        u = AUTH_SERVICE.get_user_by_username(author)
+        if u:
+            author_id = u.user_id
+    items = COMMUNITY_SERVICE.feed(
+        feed_type=feed_type,
+        current_user_id=current.user_id if current else None,
+        author_id=author_id,
+        limit=limit,
+        offset=offset,
+    )
+    return [it.to_dict() for it in items]
+
+
+@app.post("/api/community/posts")
+def community_create_post(payload: dict = Body(...), user=Depends(require_user_dependency)) -> dict[str, Any]:
+    try:
+        post = COMMUNITY_SERVICE.create_post(
+            author_id=user.user_id,
+            content=payload.get("content", ""),
+            tags=payload.get("tags") or [],
+            attached_run_id=payload.get("attached_run_id"),
+            attached_factor_id=payload.get("attached_factor_id"),
+            repost_of=payload.get("repost_of"),
+        )
+        return post.to_dict()
+    except ValueError as exc:
+        raise HTTPException(400, str(exc))
+
+
+@app.get("/api/community/posts/{post_id}")
+def community_get_post(post_id: str, current=Depends(current_user_dependency)) -> dict[str, Any]:
+    item = COMMUNITY_SERVICE.get_post(post_id, current.user_id if current else None)
+    if item is None:
+        raise HTTPException(404, "帖子不存在")
+    return item.to_dict()
+
+
+@app.delete("/api/community/posts/{post_id}")
+def community_delete_post(post_id: str, user=Depends(require_user_dependency)) -> dict[str, bool]:
+    try:
+        return {"deleted": COMMUNITY_SERVICE.delete_post(post_id, user.user_id)}
+    except PermissionError as exc:
+        raise HTTPException(403, str(exc))
+
+
+@app.post("/api/community/posts/{post_id}/like")
+def community_like(post_id: str, user=Depends(require_user_dependency)) -> dict[str, bool]:
+    return {"liked": COMMUNITY_SERVICE.like(user.user_id, post_id)}
+
+
+@app.delete("/api/community/posts/{post_id}/like")
+def community_unlike(post_id: str, user=Depends(require_user_dependency)) -> dict[str, bool]:
+    return {"unliked": COMMUNITY_SERVICE.unlike(user.user_id, post_id)}
+
+
+@app.get("/api/community/posts/{post_id}/comments")
+def community_comments(post_id: str) -> list[dict[str, Any]]:
+    return COMMUNITY_SERVICE.list_comments(post_id)
+
+
+@app.post("/api/community/posts/{post_id}/comments")
+def community_add_comment(post_id: str, payload: dict = Body(...), user=Depends(require_user_dependency)) -> dict[str, Any]:
+    try:
+        c = COMMUNITY_SERVICE.add_comment(post_id, user.user_id, payload.get("content", ""), payload.get("reply_to"))
+        return c.to_dict()
+    except ValueError as exc:
+        raise HTTPException(400, str(exc))
+
+
+@app.post("/api/community/users/{target_username}/follow")
+def community_follow(target_username: str, user=Depends(require_user_dependency)) -> dict[str, bool]:
+    target = AUTH_SERVICE.get_user_by_username(target_username)
+    if target is None:
+        raise HTTPException(404, "目标用户不存在")
+    try:
+        return {"followed": COMMUNITY_SERVICE.follow(user.user_id, target.user_id)}
+    except ValueError as exc:
+        raise HTTPException(400, str(exc))
+
+
+@app.delete("/api/community/users/{target_username}/follow")
+def community_unfollow(target_username: str, user=Depends(require_user_dependency)) -> dict[str, bool]:
+    target = AUTH_SERVICE.get_user_by_username(target_username)
+    if target is None:
+        raise HTTPException(404, "目标用户不存在")
+    return {"unfollowed": COMMUNITY_SERVICE.unfollow(user.user_id, target.user_id)}
+
+
+# =============== STRATEGY SHARING ===============
+
+@app.post("/api/sharing/publish")
+def sharing_publish(payload: dict = Body(...), user=Depends(require_user_dependency)) -> dict[str, Any]:
+    try:
+        s = SHARING_SERVICE.publish_strategy(
+            run_id=payload["run_id"],
+            author_id=user.user_id,
+            title=payload.get("title") or payload["run_id"],
+            description=payload.get("description", ""),
+            tags=payload.get("tags") or [],
+            asset_class=payload.get("asset_class", ""),
+            public=bool(payload.get("public", True)),
+        )
+        return s.to_dict()
+    except (ValueError, KeyError) as exc:
+        raise HTTPException(400, str(exc))
+
+
+@app.get("/api/sharing/feed")
+def sharing_feed(
+    asset_class: str | None = None,
+    author: str | None = None,
+    sort_by: str = "recent",
+    limit: int = 50,
+    offset: int = 0,
+) -> list[dict[str, Any]]:
+    author_id = None
+    if author:
+        u = AUTH_SERVICE.get_user_by_username(author)
+        if u:
+            author_id = u.user_id
+    items = SHARING_SERVICE.list_strategies(
+        asset_class=asset_class,
+        author_id=author_id,
+        sort_by=sort_by,
+        limit=limit,
+        offset=offset,
+    )
+    cache: dict[str, dict[str, str]] = {}
+    out: list[dict[str, Any]] = []
+    for s in items:
+        if s.author_id not in cache:
+            u = AUTH_SERVICE.get_user_by_id(s.author_id)
+            cache[s.author_id] = (
+                {"author_username": u.username, "author_display_name": u.display_name}
+                if u else {"author_username": "unknown", "author_display_name": "unknown"}
+            )
+        d = s.to_dict()
+        d.update(cache[s.author_id])
+        out.append(d)
+    return out
+
+
+@app.get("/api/sharing/{share_id}")
+def sharing_get(share_id: str) -> dict[str, Any]:
+    s = SHARING_SERVICE.get_strategy(share_id)
+    if s is None:
+        raise HTTPException(404, "share 不存在")
+    return s.to_dict()
+
+
+@app.post("/api/sharing/{share_id}/fork")
+def sharing_fork(share_id: str, payload: dict = Body(default_factory=dict), user=Depends(require_user_dependency)) -> dict[str, Any]:
+    try:
+        s = SHARING_SERVICE.fork_strategy(share_id, user.user_id, title=payload.get("title"))
+        return s.to_dict()
+    except ValueError as exc:
+        raise HTTPException(404, str(exc))
+
+
+@app.post("/api/sharing/{share_id}/like")
+def sharing_like(share_id: str, user=Depends(require_user_dependency)) -> dict[str, bool]:
+    return {"liked": SHARING_SERVICE.like(user.user_id, share_id)}
+
+
+@app.delete("/api/sharing/{share_id}/like")
+def sharing_unlike(share_id: str, user=Depends(require_user_dependency)) -> dict[str, bool]:
+    return {"unliked": SHARING_SERVICE.unlike(user.user_id, share_id)}
+
+
+@app.delete("/api/sharing/{share_id}")
+def sharing_delete(share_id: str, user=Depends(require_user_dependency)) -> dict[str, bool]:
+    try:
+        return {"deleted": SHARING_SERVICE.delete_strategy(share_id, user.user_id)}
+    except PermissionError as exc:
+        raise HTTPException(403, str(exc))
 
 
 # -------- P3.5 setup 向导状态 --------

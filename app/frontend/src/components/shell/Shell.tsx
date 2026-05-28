@@ -1,5 +1,6 @@
 import { ReactNode, useEffect, useState } from "react";
 import { NavLink, useLocation } from "react-router-dom";
+import { clearSession, getStoredUser, logout, type AuthUser } from "../../lib/auth";
 
 /**
  * Claude Code 风 shell：顶部 nav + 左侧 sidebar + 底部 status bar
@@ -27,6 +28,10 @@ const SIDEBAR_BY_AREA: Record<string, SidebarItem[]> = {
     { to: "/factors", label: "因子市场", icon: "∑" },
     { to: "/trading", label: "Binance 交易台", icon: "$" },
     { to: "/experiments", label: "实验追踪", icon: "⌥" },
+  ],
+  community: [
+    { to: "/community", label: "社区广场", icon: "#" },
+    { to: "/square", label: "策略广场", icon: "★" },
   ],
 };
 
@@ -86,13 +91,14 @@ function TopNav({ theme, onToggleTheme }: { theme: Theme; onToggleTheme: () => v
           Workshop
         </NavLink>
         <NavLink
-          to="/strategies"
-          className={location.pathname.startsWith("/strategies") ? "cc-nav-item active" : "cc-nav-item"}
+          to="/community"
+          className={area === "community" ? "cc-nav-item active" : "cc-nav-item"}
         >
-          Strategies
+          Community
         </NavLink>
       </nav>
       <div className="cc-topbar-right">
+        <UserMenu />
         <button
           type="button"
           className="cc-btn cc-btn--ghost cc-btn--sm"
@@ -209,6 +215,41 @@ function StatusBar() {
   );
 }
 
+function UserMenu() {
+  const [user, setUser] = useState<AuthUser | null>(() => getStoredUser());
+  useEffect(() => {
+    const h = () => setUser(getStoredUser());
+    window.addEventListener("qb-auth-change", h);
+    window.addEventListener("storage", h);
+    return () => {
+      window.removeEventListener("qb-auth-change", h);
+      window.removeEventListener("storage", h);
+    };
+  }, []);
+  if (!user) {
+    return (
+      <NavLink to="/login" className="cc-btn cc-btn--ghost cc-btn--sm">登录</NavLink>
+    );
+  }
+  return (
+    <div className="cc-row" style={{ gap: 4 }}>
+      <NavLink to={`/u/${user.username}`} className="cc-btn cc-btn--ghost cc-btn--sm" title="profile">
+        @{user.username}
+      </NavLink>
+      <button
+        type="button"
+        className="cc-btn cc-btn--ghost cc-btn--sm"
+        title="退出登录"
+        onClick={() => {
+          logout().catch(() => clearSession());
+        }}
+      >
+        ↪
+      </button>
+    </div>
+  );
+}
+
 function areaOf(pathname: string): string {
   if (pathname === "/" || pathname.startsWith("/home")) return "home";
   if (
@@ -226,6 +267,14 @@ function areaOf(pathname: string): string {
     pathname.startsWith("/experiments")
   )
     return "workshop";
+  if (
+    pathname.startsWith("/community") ||
+    pathname.startsWith("/square") ||
+    pathname.startsWith("/u/") ||
+    pathname === "/login" ||
+    pathname === "/register"
+  )
+    return "community";
   return "research";
 }
 
