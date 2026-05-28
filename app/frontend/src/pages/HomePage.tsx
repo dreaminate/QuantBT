@@ -1,5 +1,6 @@
 import { useEffect, useState } from "react";
 import { Link } from "react-router-dom";
+import { OnboardingBanner } from "../features/onboarding/OnboardingBanner";
 
 /**
  * 首页：quantpedia 风 hero + 三大类策略卡片 + 最近 runs + 终端感命令提示
@@ -56,8 +57,9 @@ export function HomePage() {
 
   return (
     <>
+      <OnboardingBanner />
       <section className="cc-hero">
-        <div className="cc-hero-eyebrow">v0.6.2 · 上线前最后版本</div>
+        <div className="cc-hero-eyebrow">v0.8.5.1 · 教学型 agent 冲刺</div>
         <h1 className="cc-hero-title">QuantBT · A股 + 加密的全栈量化软件</h1>
         <p className="cc-hero-subtitle">
           因子工厂 · ML 模型 · Purged k-fold · HRP 组合 · BacktestVenue · Binance 实盘 · Agent

@@ -18,6 +18,7 @@ import { UserProfilePage } from "./pages/community/UserProfilePage";
 import { CopyTradePage } from "./pages/community/CopyTradePage";
 import { GlossaryIndexPage } from "./pages/community/GlossaryIndexPage";
 import { GlossaryDetailPage } from "./pages/community/GlossaryDetailPage";
+import { FunnelDashboardPage } from "./pages/FunnelDashboardPage";
 import { Shell } from "./components/shell/Shell";
 
 /**
@@ -67,6 +68,7 @@ export default function App() {
         <Route path="/copy-trade" element={<CopyTradePage />} />
         <Route path="/glossary" element={<GlossaryIndexPage />} />
         <Route path="/glossary/:slug" element={<GlossaryDetailPage />} />
+        <Route path="/metrics/funnel" element={<FunnelDashboardPage />} />
         <Route path="/u/:username" element={<UserProfilePage />} />
       </Routes>
     </Shell>

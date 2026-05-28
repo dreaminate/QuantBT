@@ -1541,6 +1541,71 @@ def events_track(payload: dict = Body(...), current=Depends(current_user_depende
     return {"event_id": rec.event_id, "ok": True}
 
 
+@app.get("/api/metrics/funnel")
+def metrics_funnel() -> dict[str, Any]:
+    """v0.8.5.1 · 漏斗 dashboard 用：事件总计 + 首次 run 耗时 bucket。"""
+
+    import sqlite3
+    db_path = _COMMUNITY_DB
+    by_event: list[dict[str, Any]] = []
+    first_run_buckets: list[dict[str, Any]] = []
+    total = 0
+
+    if db_path.exists():
+        with sqlite3.connect(db_path) as c:
+            c.row_factory = sqlite3.Row
+            try:
+                rows = c.execute(
+                    "SELECT event_name, COUNT(*) as cnt FROM events GROUP BY event_name ORDER BY cnt DESC"
+                ).fetchall()
+                by_event = [{"event_name": r["event_name"], "count": r["cnt"]} for r in rows]
+                total = sum(x["count"] for x in by_event)
+            except sqlite3.OperationalError:
+                pass
+            # 首次 run 耗时 bucket
+            try:
+                sql = """
+                WITH registered AS (
+                  SELECT user_id, MIN(datetime(occurred_at)) AS registered_at
+                  FROM events WHERE event_name='user_registered' AND user_id IS NOT NULL GROUP BY user_id
+                ),
+                first_success_run AS (
+                  SELECT user_id, MIN(datetime(occurred_at)) AS first_run_at
+                  FROM events WHERE event_name='run_completed'
+                  AND json_extract(properties,'$.status')='success'
+                  AND user_id IS NOT NULL GROUP BY user_id
+                ),
+                delta AS (
+                  SELECT r.user_id,
+                         CAST((julianday(f.first_run_at)-julianday(r.registered_at))*24*60 AS INTEGER) AS minutes
+                  FROM registered r JOIN first_success_run f ON r.user_id=f.user_id
+                  WHERE f.first_run_at >= r.registered_at
+                ),
+                bucketed AS (
+                  SELECT CASE
+                    WHEN minutes < 5 THEN '00_<5min'
+                    WHEN minutes < 15 THEN '01_5-15min'
+                    WHEN minutes < 30 THEN '02_15-30min'
+                    WHEN minutes < 60 THEN '03_30-60min'
+                    WHEN minutes < 180 THEN '04_1-3h'
+                    WHEN minutes < 1440 THEN '05_3-24h'
+                    ELSE '06_>24h'
+                  END AS bucket, COUNT(*) AS users FROM delta GROUP BY 1
+                )
+                SELECT bucket, users, ROUND(users*100.0/SUM(users) OVER (), 2) AS pct
+                FROM bucketed ORDER BY bucket;
+                """
+                rows = c.execute(sql).fetchall()
+                first_run_buckets = [
+                    {"bucket": r["bucket"], "users": r["users"], "pct": r["pct"] or 0.0}
+                    for r in rows
+                ]
+            except sqlite3.OperationalError:
+                pass
+
+    return {"total_events": total, "by_event": by_event, "first_run_buckets": first_run_buckets}
+
+
 @app.get("/api/events/recent")
 def events_recent(limit: int = Query(50, ge=1, le=500)) -> list[dict[str, Any]]:
     """调试 / 监控用：拉最近事件。"""
