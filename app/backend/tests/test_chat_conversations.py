@@ -1,0 +1,208 @@
+"""v0.8.6 · Mode 2 多轮对话 + RAG 测试。"""
+
+from __future__ import annotations
+
+from pathlib import Path
+
+import pytest
+from fastapi.testclient import TestClient
+
+from app.agent.conversations import ChatError, ChatService, VALID_MARKET_MODES
+from app.agent.rag import format_rag_context, format_run_context, retrieve
+from app.glossary import GlossaryRegistry, load_glossary_dir
+from app.main import app
+
+
+@pytest.fixture
+def svc(tmp_path: Path) -> ChatService:
+    return ChatService(tmp_path / "chat.db")
+
+
+# ============================================================
+# ChatService CRUD
+# ============================================================
+
+
+def test_start_thread_basic(svc: ChatService):
+    t = svc.start_thread(user_id="u1", market_mode="ashare_research")
+    assert t.thread_id.startswith("thr_")
+    assert t.user_id == "u1"
+    assert t.market_mode == "ashare_research"
+    assert t.state == "ENTER_THREAD"
+
+
+def test_start_thread_rejects_invalid_market_mode(svc: ChatService):
+    with pytest.raises(ChatError):
+        svc.start_thread(user_id="u1", market_mode="random_mode")
+
+
+def test_list_threads_filters_by_user(svc: ChatService):
+    svc.start_thread(user_id="a")
+    svc.start_thread(user_id="a")
+    svc.start_thread(user_id="b")
+    assert len(svc.list_threads("a")) == 2
+    assert len(svc.list_threads("b")) == 1
+
+
+def test_update_state_validation(svc: ChatService):
+    t = svc.start_thread(user_id="u1")
+    svc.update_state(t.thread_id, "RETRIEVE_CONTEXT")
+    assert svc.get_thread(t.thread_id).state == "RETRIEVE_CONTEXT"
+    with pytest.raises(ChatError):
+        svc.update_state(t.thread_id, "BOGUS_STATE")
+
+
+def test_add_message_basic(svc: ChatService):
+    t = svc.start_thread(user_id="u1")
+    m = svc.add_message(t.thread_id, "user", "hi")
+    assert m.role == "user"
+    assert m.content == "hi"
+    msgs = svc.list_messages(t.thread_id)
+    assert len(msgs) == 1
+
+
+def test_add_message_rejects_invalid_role(svc: ChatService):
+    t = svc.start_thread(user_id="u1")
+    with pytest.raises(ChatError):
+        svc.add_message(t.thread_id, "evil_role", "x")
+
+
+def test_add_message_updates_thread_timestamp(svc: ChatService):
+    t = svc.start_thread(user_id="u1")
+    orig = t.updated_at_utc
+    import time as _t
+    _t.sleep(1.01)
+    svc.add_message(t.thread_id, "user", "hi")
+    t2 = svc.get_thread(t.thread_id)
+    assert t2.updated_at_utc >= orig
+
+
+def test_compress_history(svc: ChatService):
+    t = svc.start_thread(user_id="u1")
+    for i in range(10):
+        svc.add_message(t.thread_id, "user", f"msg {i}")
+        svc.add_message(t.thread_id, "assistant", f"reply {i}")
+    h = svc.compress_history(t.thread_id, max_messages=4, max_chars=400)
+    # 4 条且 ≤400 字
+    assert len(h) <= 400
+    # newest 几条应该在里面
+    assert "msg 9" in h or "reply 9" in h
+
+
+def test_update_active_context(svc: ChatService):
+    t = svc.start_thread(user_id="u1")
+    svc.update_active_context(t.thread_id, active_run_id="r1", active_strategy_id="s1")
+    t2 = svc.get_thread(t.thread_id)
+    assert t2.active_run_id == "r1"
+    assert t2.active_strategy_id == "s1"
+
+
+# ============================================================
+# RAG retrieval
+# ============================================================
+
+
+def test_retrieve_glossary_hit():
+    glossary = load_glossary_dir(Path(__file__).resolve().parents[3] / "docs" / "glossary")
+    hits = retrieve("夏普 是什么", glossary=glossary)
+    assert len(hits) >= 1
+    assert any(h.slug == "sharpe_ratio" for h in hits)
+
+
+def test_retrieve_pbo_hit():
+    glossary = load_glossary_dir(Path(__file__).resolve().parents[3] / "docs" / "glossary")
+    hits = retrieve("PBO 0.7 这个策略可信吗", glossary=glossary)
+    assert any(h.slug == "pbo" for h in hits)
+
+
+def test_retrieve_empty_query_returns_empty():
+    glossary = load_glossary_dir(Path(__file__).resolve().parents[3] / "docs" / "glossary")
+    assert retrieve("", glossary=glossary) == []
+
+
+def test_format_run_context_extracts_key_fields():
+    run = {"run_id": "r1", "sharpe": 1.5, "pbo": 0.7, "unknown_field": 42}
+    s = format_run_context(run)
+    assert "run_id" in s
+    assert "sharpe" in s
+    assert "pbo" in s
+    assert "unknown_field" not in s  # 只挑白名单字段
+
+
+def test_format_run_context_empty():
+    assert "无 active run" in format_run_context(None)
+
+
+def test_format_rag_context_no_hits():
+    assert "无 RAG 命中" in format_rag_context([])
+
+
+def test_format_rag_context_with_hits():
+    from app.agent.rag import RagHit
+    hits = [RagHit(kind="glossary", slug="sharpe_ratio", title="Sharpe", snippet="一句话", score=0.8)]
+    s = format_rag_context(hits)
+    assert "sharpe_ratio" in s
+    assert "一句话" in s
+
+
+# ============================================================
+# API endpoints
+# ============================================================
+
+
+@pytest.fixture
+def client() -> TestClient:
+    return TestClient(app)
+
+
+def test_api_chat_start(client: TestClient):
+    r = client.post("/api/agent/chat/start", json={"market_mode": "ashare_research"})
+    assert r.status_code == 200
+    data = r.json()
+    assert data["thread_id"].startswith("thr_")
+    assert data["state"] == "ENTER_THREAD"
+
+
+def test_api_chat_start_rejects_bad_market_mode(client: TestClient):
+    r = client.post("/api/agent/chat/start", json={"market_mode": "evil"})
+    assert r.status_code == 400
+
+
+def test_api_chat_get_thread_404(client: TestClient):
+    r = client.get("/api/agent/chat/thr_nonexistent")
+    assert r.status_code == 404
+
+
+def test_api_send_message_devLocal_round_trip(client: TestClient):
+    """完整 round-trip: start → send message → 拿到 assistant 回复（DevLocal LLM fallback）。"""
+    r1 = client.post("/api/agent/chat/start", json={"market_mode": "ashare_research"})
+    tid = r1.json()["thread_id"]
+    r2 = client.post(f"/api/agent/chat/{tid}/message", json={"content": "夏普比率是什么"})
+    assert r2.status_code == 200
+    assistant = r2.json()
+    assert assistant["role"] == "assistant"
+    assert len(assistant["content"]) > 0
+    # 应该 RAG 命中 sharpe_ratio
+    assert any(h["slug"] == "sharpe_ratio" for h in (assistant["metadata"].get("rag_hits") or []))
+
+
+def test_api_send_message_empty_content_400(client: TestClient):
+    r1 = client.post("/api/agent/chat/start", json={})
+    tid = r1.json()["thread_id"]
+    r2 = client.post(f"/api/agent/chat/{tid}/message", json={"content": ""})
+    assert r2.status_code == 400
+
+
+def test_api_thread_history_persists(client: TestClient):
+    r1 = client.post("/api/agent/chat/start", json={})
+    tid = r1.json()["thread_id"]
+    client.post(f"/api/agent/chat/{tid}/message", json={"content": "你好"})
+    client.post(f"/api/agent/chat/{tid}/message", json={"content": "夏普比率是什么"})
+    r = client.get(f"/api/agent/chat/{tid}")
+    assert r.status_code == 200
+    messages = r.json()["messages"]
+    # 应该有 2 个 user + 2 个 assistant
+    user_msgs = [m for m in messages if m["role"] == "user"]
+    assistant_msgs = [m for m in messages if m["role"] == "assistant"]
+    assert len(user_msgs) == 2
+    assert len(assistant_msgs) == 2

@@ -24,6 +24,15 @@ from .connectors import registry as connector_registry
 from .copy_trade import CopyTradeError, CopyTradeService, SignalRelayer
 from .ide import IDEError, IDEService, PromoteError, build_ai_context, promote_ide_run
 from .ide.service import run_to_dict, strategy_to_dict
+from .agent.conversations import (
+    ChatError,
+    ChatService,
+    VALID_MARKET_MODES,
+    message_to_dict,
+    thread_to_dict,
+)
+from .agent.prompts import build_mode2_prompt
+from .agent.rag import format_rag_context, format_run_context, retrieve
 from .events import EventService, EventTrackError
 from .glossary import GlossaryError, GlossaryRegistry, load_glossary_dir
 from .sharing import SharingService
@@ -89,6 +98,7 @@ SHARING_SERVICE = SharingService(_COMMUNITY_DB, DATA_ROOT / "artifacts" / "exper
 COPY_TRADE_SERVICE = CopyTradeService(_COMMUNITY_DB)
 IDE_SERVICE = IDEService(DATA_ROOT / "ide_strategies.db", run_root=DATA_ROOT / "ide_runs")
 EVENT_SERVICE = EventService(_COMMUNITY_DB)  # 复用 community.db，单文件好查
+CHAT_SERVICE = ChatService(_COMMUNITY_DB)  # v0.8.6 · Mode 2 多轮对话
 
 _main_logger = logging.getLogger(__name__)
 
@@ -1539,6 +1549,180 @@ def events_track(payload: dict = Body(...), current=Depends(current_user_depende
     except EventTrackError as exc:
         raise HTTPException(status_code=400, detail=str(exc)) from exc
     return {"event_id": rec.event_id, "ok": True}
+
+
+# ============================================================
+# v0.8.6 · Mode 2 多轮对话 + SSE chat + RAG
+# ============================================================
+
+
+@app.post("/api/agent/chat/start")
+def chat_start(payload: dict = Body(...), current=Depends(current_user_dependency)) -> dict[str, Any]:
+    """创建 thread。market_mode / active_run_id / active_strategy_id 可选。"""
+    try:
+        t = CHAT_SERVICE.start_thread(
+            user_id=current.user_id if current else None,
+            market_mode=payload.get("market_mode", "ashare_research"),
+            active_run_id=payload.get("active_run_id"),
+            active_strategy_id=payload.get("active_strategy_id"),
+            title=payload.get("title", ""),
+        )
+    except ChatError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+    return thread_to_dict(t)
+
+
+@app.get("/api/agent/chat/threads")
+def chat_list_threads(user=Depends(require_user_dependency)) -> list[dict[str, Any]]:
+    return [thread_to_dict(t) for t in CHAT_SERVICE.list_threads(user.user_id)]
+
+
+@app.get("/api/agent/chat/{thread_id}")
+def chat_get_thread(thread_id: str, current=Depends(current_user_dependency)) -> dict[str, Any]:
+    try:
+        t = CHAT_SERVICE.get_thread(thread_id)
+    except ChatError as exc:
+        raise HTTPException(status_code=404, detail=str(exc)) from exc
+    _ = current  # 简化访问控制：所有 thread 自己 user 可见，留 v0.8.6.1 加 ACL
+    msgs = CHAT_SERVICE.list_messages(thread_id)
+    return {"thread": thread_to_dict(t), "messages": [message_to_dict(m) for m in msgs]}
+
+
+@app.post("/api/agent/chat/{thread_id}/message")
+def chat_send_message(
+    thread_id: str,
+    payload: dict = Body(...),
+    current=Depends(current_user_dependency),
+) -> dict[str, Any]:
+    """非流式：发用户消息 → 触发 RAG + LLM → 返回 assistant 完整回复。
+
+    流式版在 /api/agent/chat/{thread_id}/stream（SSE）。
+    """
+    try:
+        thread = CHAT_SERVICE.get_thread(thread_id)
+    except ChatError as exc:
+        raise HTTPException(status_code=404, detail=str(exc)) from exc
+    user_text = (payload.get("content") or "").strip()
+    if not user_text:
+        raise HTTPException(status_code=400, detail="content 必填")
+
+    CHAT_SERVICE.add_message(thread_id, "user", user_text)
+
+    # 1. RAG
+    run_data: dict[str, Any] | None = None
+    if thread.active_run_id:
+        try:
+            run_resp = get_run_response(thread.active_run_id)
+            run_data = {
+                "run_id": thread.active_run_id,
+                **(run_resp.get("metrics") or {}),
+                **(run_resp.get("jq_overview_metrics") or {}),
+                "trust_level": (run_resp.get("risk_summary") or {}).get("trust_level"),
+            }
+        except FileNotFoundError:
+            pass
+    hits = retrieve(user_text, glossary=GLOSSARY, run_context=run_data)
+    rag_text = format_rag_context(hits)
+    run_text = format_run_context(run_data)
+    history_text = CHAT_SERVICE.compress_history(thread_id)
+    sys_prompt = build_mode2_prompt(
+        rag_context=rag_text,
+        run_context=run_text,
+        conversation_history=history_text,
+    )
+
+    # 2. LLM
+    from .agent.llm_client import LLMMessage
+    try:
+        client = _current_agent_llm()
+        reply = client.chat([
+            LLMMessage(role="system", content=sys_prompt),
+            LLMMessage(role="user", content=user_text),
+        ])
+        reply_text = reply.content or "(LLM 无内容)"
+    except Exception as exc:  # noqa: BLE001
+        reply_text = f"[LLM 错误] {exc}"
+
+    # 3. 持久化 assistant 消息（含 RAG metadata 便于审计）
+    msg = CHAT_SERVICE.add_message(
+        thread_id,
+        "assistant",
+        reply_text,
+        metadata={
+            "rag_hits": [{"kind": h.kind, "slug": h.slug, "title": h.title, "score": h.score} for h in hits],
+            "had_run_context": run_data is not None,
+        },
+    )
+    CHAT_SERVICE.update_state(thread_id, "FOLLOW_UP_UPDATE")
+    return message_to_dict(msg)
+
+
+@app.get("/api/agent/chat/{thread_id}/stream")
+def chat_stream(thread_id: str, q: str = Query(..., description="user message"), current=Depends(current_user_dependency)):
+    """SSE：用户消息 → 流式输出 assistant tokens。
+
+    简化版：LLM client 当前是同步整段返回，所以这里把整段分块输出模拟流式。
+    v0.8.7 LLM client 升级支持真 streaming 后改成 token-by-token。
+    """
+    _ = current
+    try:
+        thread = CHAT_SERVICE.get_thread(thread_id)
+    except ChatError as exc:
+        raise HTTPException(status_code=404, detail=str(exc)) from exc
+
+    def event_stream():
+        import json as _json
+        user_text = q.strip()
+        if not user_text:
+            yield f"data: {_json.dumps({'error': 'empty content'})}\n\n"
+            return
+        CHAT_SERVICE.add_message(thread_id, "user", user_text)
+        # RAG + LLM
+        run_data = None
+        if thread.active_run_id:
+            try:
+                run_resp = get_run_response(thread.active_run_id)
+                run_data = {
+                    "run_id": thread.active_run_id,
+                    **(run_resp.get("metrics") or {}),
+                    **(run_resp.get("jq_overview_metrics") or {}),
+                    "trust_level": (run_resp.get("risk_summary") or {}).get("trust_level"),
+                }
+            except FileNotFoundError:
+                pass
+        hits = retrieve(user_text, glossary=GLOSSARY, run_context=run_data)
+        rag_text = format_rag_context(hits)
+        run_text = format_run_context(run_data)
+        history_text = CHAT_SERVICE.compress_history(thread_id)
+        sys_prompt = build_mode2_prompt(rag_context=rag_text, run_context=run_text, conversation_history=history_text)
+        # 给前端 RAG 命中预告
+        yield f"event: rag\ndata: {_json.dumps({'hits': [{'kind': h.kind, 'slug': h.slug, 'title': h.title} for h in hits]})}\n\n"
+
+        from .agent.llm_client import LLMMessage
+        try:
+            client = _current_agent_llm()
+            reply = client.chat([
+                LLMMessage(role="system", content=sys_prompt),
+                LLMMessage(role="user", content=user_text),
+            ])
+            reply_text = reply.content or "(LLM 无内容)"
+        except Exception as exc:  # noqa: BLE001
+            reply_text = f"[LLM 错误] {exc}"
+
+        # 分块输出模拟 streaming（每 30 字符）
+        for i in range(0, len(reply_text), 30):
+            chunk = reply_text[i:i + 30]
+            yield f"data: {_json.dumps({'chunk': chunk})}\n\n"
+
+        # 持久化 + done
+        msg = CHAT_SERVICE.add_message(
+            thread_id, "assistant", reply_text,
+            metadata={"rag_hits": [{"kind": h.kind, "slug": h.slug} for h in hits], "streamed": True},
+        )
+        CHAT_SERVICE.update_state(thread_id, "FOLLOW_UP_UPDATE")
+        yield f"event: done\ndata: {_json.dumps({'message_id': msg.message_id})}\n\n"
+
+    return StreamingResponse(event_stream(), media_type="text/event-stream")
 
 
 @app.get("/api/metrics/funnel")
