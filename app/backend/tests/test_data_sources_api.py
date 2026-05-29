@@ -16,6 +16,14 @@ def test_fields_endpoint_structure() -> None:
     assert set(body.keys()) == {"canonical", "freeform"}
 
 
+def test_data_package_manifest_endpoint() -> None:
+    r = client.get("/api/data-packages/manifest")
+    assert r.status_code == 200
+    body = r.json()
+    assert body["channel"] == "official-data"
+    assert "data_version" in body and "files" in body
+
+
 def test_infer_and_apply_mapping_endpoints() -> None:
     r = client.post("/api/fields/infer-mapping", json={"columns": ["close", "px_unknown"], "market": "stocks_cn"})
     assert r.status_code == 200

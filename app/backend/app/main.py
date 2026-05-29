@@ -813,6 +813,46 @@ def data_export():
     )
 
 
+# --- 官方数据更新通道（与软件更新分两条线；客户端 Win/Mac 据此下载官方数据库更新）-----------
+
+def _official_catalog_files() -> list[dict]:
+    from .tushare_quant1.data_catalog import load_data_catalog
+
+    return load_data_catalog(_QB_PATHS, rebuild_if_missing=True).get("files") or []
+
+
+@app.get("/api/data-packages/manifest")
+def data_package_manifest() -> dict:
+    """官方数据清单 + 数据版本号 + 每文件指纹。客户端比对本地指纹算增量；与软件更新是独立通道。"""
+    from .data_packages import official_manifest
+
+    return official_manifest(_official_catalog_files(), _QB_PATHS.root)
+
+
+@app.get("/api/data-packages/download")
+def data_package_download(paths: str | None = Query(None)):
+    """下载官方数据 zip（内含 manifest.json）。paths=逗号分隔相对路径→增量；省略→全量官方数据。"""
+    import tempfile
+
+    from fastapi.responses import FileResponse
+    from starlette.background import BackgroundTask
+
+    from .data_packages import build_package_zip, official_manifest
+
+    files = _official_catalog_files()
+    version = official_manifest(files, _QB_PATHS.root)["data_version"]
+    rel = [p for p in paths.split(",") if p.strip()] if paths else None
+    tmp = tempfile.NamedTemporaryFile(prefix="qbt-data-", suffix=".zip", delete=False)
+    tmp.close()
+    build_package_zip(files, _QB_PATHS.root, tmp.name, rel_paths=rel)
+    return FileResponse(
+        tmp.name,
+        media_type="application/zip",
+        filename=f"quantbt-official-data-{version}.zip",
+        background=BackgroundTask(lambda: os.path.exists(tmp.name) and os.unlink(tmp.name)),
+    )
+
+
 @app.middleware("http")
 async def _report_unhandled_exceptions(request, call_next):
     try:
