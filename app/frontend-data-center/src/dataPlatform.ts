@@ -21,21 +21,6 @@ async function fetchJson<T>(path: string, init?: RequestInit): Promise<T> {
   return (await res.json()) as T;
 }
 
-export type SourceNode = {
-  name: string;
-  market: string;
-  kind: string; // "official" | "user"
-  enabled: boolean;
-  priority: number;
-  label: string;
-};
-
-export type MarketSourcesNode = {
-  market: string;
-  enabled_any: boolean;
-  sources: SourceNode[];
-};
-
 export type FieldEntry = {
   field_id: string;
   source: string;
@@ -60,21 +45,6 @@ export type InferReport = {
   suggestions: InferSuggestion[];
   canonical_options: string[];
 };
-
-export function listSources(): Promise<MarketSourcesNode[]> {
-  return fetchJson<MarketSourcesNode[]>("/api/sources");
-}
-
-export function setSourceEnabled(name: string, market: string, enabled: boolean): Promise<unknown> {
-  const q = new URLSearchParams({ market, enabled: String(enabled) });
-  return fetchJson<unknown>(`/api/sources/${encodeURIComponent(name)}/enabled?${q.toString()}`, { method: "PUT" });
-}
-
-export function setMarketSourcesEnabled(market: string, enabled: boolean, kind?: string): Promise<unknown> {
-  const q = new URLSearchParams({ enabled: String(enabled) });
-  if (kind) q.set("kind", kind);
-  return fetchJson<unknown>(`/api/sources/market/${encodeURIComponent(market)}/enabled?${q.toString()}`, { method: "PUT" });
-}
 
 export function listFields(market: string, interval?: string, enabledOnly = true): Promise<FieldUniverse> {
   const q = new URLSearchParams({ market, enabled_only: String(enabledOnly) });

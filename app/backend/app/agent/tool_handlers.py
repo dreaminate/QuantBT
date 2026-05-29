@@ -3,8 +3,7 @@
 在两个接缝辅助：① 入库时把用户源陌生列对齐到 canonical（infer→apply）；
 ② 消费时校验因子表达式引用的列是否在当前可用字段宇宙内（validate_columns）。
 
-handler 都是轻 wrapper，接现有单例（FieldCatalog / SourceConfigService / FieldMappingStore），
-由 main.py 的 _agent_runtime 注册。
+handler 都是轻 wrapper，接现有单例（FieldCatalog / FieldMappingStore），由 main.py 的 _agent_runtime 注册。
 """
 
 from __future__ import annotations
@@ -29,13 +28,30 @@ def referenced_columns(formula: str) -> set[str]:
     return names - set(OPERATOR_REGISTRY.keys())
 
 
-def register_field_tools(runtime, *, field_catalog, source_config, mapping_store) -> None:
+def register_field_tools(runtime, *, field_catalog, mapping_store) -> None:
     def _list_sources(_n: str, _args: dict) -> dict[str, Any]:
-        try:
-            source_config.sync_from_catalog(field_catalog)
-        except Exception:  # noqa: BLE001
-            pass
-        return {"sources": source_config.tree()}
+        # 从字段目录枚举当前数据源（官方/用户）；无开关、不隔离，仅告知 Agent 有哪些源
+        seen: dict[str, dict] = {}
+        for ds in field_catalog.list_datasets():
+            entry = seen.setdefault(
+                ds.source_name,
+                {
+                    "source": ds.source_name,
+                    "kind": "user" if str(ds.source_name).startswith("user_") else "official",
+                    "markets": set(),
+                    "data_kinds": set(),
+                },
+            )
+            if ds.market:
+                entry["markets"].add(ds.market)
+            if ds.data_kind:
+                entry["data_kinds"].add(ds.data_kind)
+        return {
+            "sources": [
+                {"source": v["source"], "kind": v["kind"], "markets": sorted(v["markets"]), "data_kinds": sorted(v["data_kinds"])}
+                for v in seen.values()
+            ]
+        }
 
     def _describe_fields(_n: str, args: dict) -> dict[str, Any]:
         market = args.get("market")

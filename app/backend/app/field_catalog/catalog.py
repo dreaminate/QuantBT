@@ -143,15 +143,24 @@ class FieldCatalog:
 
     def _classify(self, ds: DatasetInfo, raw_column: str) -> FieldEntry:
         data_kind = ds.data_kind or "ohlcv"
+        # 官方源 = 非用户源（tushare / binance / crawler_* 都算官方；user_* 才是用户自带源）
+        official = not str(ds.source_name).startswith("user_")
+        # 1) 显式映射覆盖优先（用户/Agent 指定的 id 原样用）
         if self._mapping is not None:
             override = self._mapping.get(ds.source_name, data_kind).get(raw_column)
             if override is not None:
                 fid, is_free = override
                 return FieldEntry(fid, is_free, ds.source_name, ds.dataset_id, raw_column)
+        # 2) canonical 词典解析；官方提供的字段一律加 official_ 前缀，与用户同名字段区分、绝不撞名
         canon = self._canonical.resolve(raw_column, ds.market)
         if canon is not None:
-            return FieldEntry(canon, False, ds.source_name, ds.dataset_id, raw_column)
-        fid = f"{_ident(ds.source_name)}__{_ident(raw_column)}"
+            fid = f"official_{canon}" if official else canon
+            return FieldEntry(fid, False, ds.source_name, ds.dataset_id, raw_column)
+        # 3) freeform：官方 → official_<col>；用户 → <source>__<col>
+        if official:
+            fid = f"official_{_ident(raw_column)}"
+        else:
+            fid = f"{_ident(ds.source_name)}__{_ident(raw_column)}"
         return FieldEntry(fid, True, ds.source_name, ds.dataset_id, raw_column)
 
     def _universe_from_datasets(self, datasets: list[DatasetInfo], market: str) -> FieldUniverse:

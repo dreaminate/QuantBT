@@ -16,23 +16,6 @@ def test_fields_endpoint_structure() -> None:
     assert set(body.keys()) == {"canonical", "freeform"}
 
 
-def test_sources_endpoint_returns_tree() -> None:
-    r = client.get("/api/sources")
-    assert r.status_code == 200
-    assert isinstance(r.json(), list)
-
-
-def test_source_toggle_endpoints() -> None:
-    r = client.put("/api/sources/market/stocks_cn/enabled", params={"enabled": False, "kind": "official"})
-    assert r.status_code == 200
-    assert r.json()["market"] == "stocks_cn"
-    assert r.json()["enabled"] is False
-
-    r2 = client.put("/api/sources/tushare/enabled", params={"market": "stocks_cn", "enabled": True})
-    assert r2.status_code == 200
-    assert r2.json()["enabled"] is True
-
-
 def test_infer_and_apply_mapping_endpoints() -> None:
     r = client.post("/api/fields/infer-mapping", json={"columns": ["close", "px_unknown"], "market": "stocks_cn"})
     assert r.status_code == 200

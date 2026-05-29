@@ -37,9 +37,9 @@ def test_canonical_freeform_and_structural(tmp_path: Path) -> None:
     _register(reg, tmp_path, dataset_id="d1", source="tushare", market="stocks_cn",
               interval="1d", data_kind="daily", frame=frame)
     uni = FieldCatalog(reg).available_fields("stocks_cn", interval="1d")
-    assert "close" in uni.canonical
-    assert "pe_ttm" in uni.canonical
-    assert "tushare__alpha_news" in uni.freeform
+    assert "official_close" in uni.canonical
+    assert "official_pe_ttm" in uni.canonical
+    assert "official_alpha_news" in uni.freeform
     # 结构键不进字段宇宙
     for key in ("ts", "symbol", "market", "interval"):
         assert key not in uni.canonical and key not in uni.freeform
@@ -55,8 +55,8 @@ def test_alias_vol_to_volume_and_crypto_fields(tmp_path: Path) -> None:
     _register(reg, tmp_path, dataset_id="btc", source="binance_vision", market="binanceusdm",
               interval="1h", data_kind="ohlcv", frame=frame)
     uni = FieldCatalog(reg).available_fields("binanceusdm")
-    assert "volume" in uni.canonical          # vol → volume 别名解析
-    assert "funding_rate" in uni.canonical
+    assert "official_volume" in uni.canonical   # vol → volume 别名解析, 官方源加 official_
+    assert "official_funding_rate" in uni.canonical
 
 
 def test_multi_dataset_union(tmp_path: Path) -> None:
@@ -71,7 +71,7 @@ def test_multi_dataset_union(tmp_path: Path) -> None:
     _register(reg, tmp_path, dataset_id="basic", source="tushare", market="stocks_cn",
               interval="1d", data_kind="daily_basic", frame=basic)
     uni = FieldCatalog(reg).available_fields("stocks_cn", interval="1d")
-    assert {"close", "volume", "pe_ttm", "total_mv"}.issubset(set(uni.canonical))
+    assert {"official_close", "official_volume", "official_pe_ttm", "official_total_mv"}.issubset(set(uni.canonical))
 
 
 def test_source_filter_gates_fields(tmp_path: Path) -> None:

@@ -48,11 +48,11 @@ def test_inventory_source_binance_klines_timestamp_col(tmp_path: Path) -> None:
     )
     cat = FieldCatalog(sources=[InventoryDatasetSource(inv)])
     uni = cat.available_fields("binanceusdm", interval="1d")
-    assert "close" in uni.canonical and "funding_rate" in uni.canonical
-    res = cat.load_panel(FieldRequirement(canonical_ids=["close", "funding_rate"], market="binanceusdm", interval="1d"))
+    assert "official_close" in uni.canonical and "official_funding_rate" in uni.canonical
+    res = cat.load_panel(FieldRequirement(canonical_ids=["official_close", "official_funding_rate"], market="binanceusdm", interval="1d"))
     assert res.ok and res.row_count == 2
     # source 按 market 约定归到 binance（官方加密源）
-    assert res.manifest["close"] == "binance"
+    assert res.manifest["official_close"] == "binance"
 
 
 def test_inventory_source_injects_symbol_from_filename(tmp_path: Path) -> None:
@@ -69,10 +69,10 @@ def test_inventory_source_injects_symbol_from_filename(tmp_path: Path) -> None:
           "columns": ["trade_date", "open", "high", "low", "close", "volume"]}],
     )
     cat = FieldCatalog(sources=[InventoryDatasetSource(inv)])
-    res = cat.load_panel(FieldRequirement(canonical_ids=["close"], market="stocks_cn", interval="1d"))
+    res = cat.load_panel(FieldRequirement(canonical_ids=["official_close"], market="stocks_cn", interval="1d"))
     assert res.ok and res.row_count == 2
     assert set(res.panel.get_column("symbol").unique().to_list()) == {"000001.SZ"}
-    assert res.manifest["close"] == "tushare"
+    assert res.manifest["official_close"] == "tushare"
 
 
 def test_inventory_aggregates_multi_symbol_files(tmp_path: Path) -> None:
@@ -92,10 +92,10 @@ def test_inventory_aggregates_multi_symbol_files(tmp_path: Path) -> None:
     )
     cat = FieldCatalog(sources=[InventoryDatasetSource(inv)])
     assert len(cat.list_datasets(market="stocks_cn")) == 1  # 聚成一个
-    res = cat.load_panel(FieldRequirement(canonical_ids=["close"], market="stocks_cn", interval="1d"))
+    res = cat.load_panel(FieldRequirement(canonical_ids=["official_close"], market="stocks_cn", interval="1d"))
     assert set(res.panel.get_column("symbol").unique().to_list()) == {"AAA", "BBB"}
     # 按 symbol 过滤
-    res2 = cat.load_panel(FieldRequirement(canonical_ids=["close"], market="stocks_cn", interval="1d", symbols=["AAA"]))
+    res2 = cat.load_panel(FieldRequirement(canonical_ids=["official_close"], market="stocks_cn", interval="1d", symbols=["AAA"]))
     assert set(res2.panel.get_column("symbol").unique().to_list()) == {"AAA"}
 
 
@@ -116,5 +116,5 @@ def test_registry_and_inventory_merge(tmp_path: Path) -> None:
     )
     cat = FieldCatalog(sources=[InventoryDatasetSource(inv), RegistryDatasetSource(reg)])
     uni = cat.available_fields("binanceusdm", interval="1d")
-    assert "close" in uni.canonical                       # 来自 inventory(官方)
-    assert "crawler_onchain__mvrv" in uni.freeform        # 来自 registry(爬虫)
+    assert "official_close" in uni.canonical              # 来自 inventory(官方)
+    assert "official_mvrv" in uni.freeform                # 来自 registry(爬虫, 也是官方源 → official_)

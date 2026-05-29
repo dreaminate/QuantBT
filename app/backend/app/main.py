@@ -114,9 +114,8 @@ from .billing import BillingService, PLAN_IDS  # noqa: E402
 from .billing.stripe_service import PLAN_INFO  # noqa: E402
 BILLING_SERVICE = BillingService(_COMMUNITY_DB)  # v1.0.3 · Stripe scaffold
 
-# v2 数据平台 · 字段目录（inventory 为主 + registry 为辅）+ 源开关（市场级+源级）+ 字段映射
+# v2 数据平台 · 字段目录（inventory 为主 + registry 为辅）+ 字段映射；官方字段带 official_ 前缀，无源开关/隔离
 from .field_catalog import FieldCatalog, FieldMappingStore, InventoryDatasetSource  # noqa: E402
-from .source_config import SourceConfigService  # noqa: E402
 
 
 from .tushare_quant1 import qb_project_paths as _qb_project_paths  # noqa: E402
@@ -131,13 +130,11 @@ def _rebuild_inventory() -> None:
     rebuild_data_catalog(_QB_PATHS)
 
 
-SOURCE_CONFIG = SourceConfigService(_COMMUNITY_DB)
 FIELD_MAPPING_STORE = FieldMappingStore(str(_COMMUNITY_DB))
 FIELD_CATALOG = FieldCatalog(
     DATASET_REGISTRY,
     sources=[InventoryDatasetSource(_QB_PATHS.data_catalog_inventory_file, rebuild=_rebuild_inventory)],
     mapping=FIELD_MAPPING_STORE,
-    source_filter=SOURCE_CONFIG.source_filter(),
 )
 
 
@@ -226,7 +223,6 @@ def _agent_runtime() -> AgentRuntime:
     register_field_tools(
         runtime,
         field_catalog=FIELD_CATALOG,
-        source_config=SOURCE_CONFIG,
         mapping_store=FIELD_MAPPING_STORE,
     )
     return runtime
@@ -274,32 +270,6 @@ def data_freshness(dataset_id: str | None = Query(None), market_kind: str = Quer
     """对单个 dataset_id 或所有 dataset 给出 green/yellow/red 报告。"""
     ids = [dataset_id] if dataset_id else DATASET_REGISTRY.list_dataset_ids()
     return [compute_freshness(did, market_kind, DATASET_REGISTRY).to_dict() for did in ids]
-
-
-@app.get("/api/sources")
-def list_data_sources() -> list[dict]:
-    """数据源开关树（市场 → 源；官方/用户）。刷新前同步 catalog 当前所见的源。"""
-    try:
-        SOURCE_CONFIG.sync_from_catalog(FIELD_CATALOG)
-    except Exception:  # noqa: BLE001
-        pass
-    return SOURCE_CONFIG.tree()
-
-
-@app.put("/api/sources/{name}/enabled")
-def set_data_source_enabled(name: str, market: str = Query(...), enabled: bool = Query(...)) -> dict:
-    """源级开关：开/关某 (源, 市场) 单元。"""
-    SOURCE_CONFIG.set_source_enabled(name, market, enabled)
-    return {"name": name, "market": market, "enabled": enabled}
-
-
-@app.put("/api/sources/market/{market}/enabled")
-def set_market_sources_enabled(
-    market: str, enabled: bool = Query(...), kind: str | None = Query(None)
-) -> dict:
-    """市场级开关：批量开/关该市场下所有源（kind 可选 official/user，用于"只屏蔽官方数据"）。"""
-    affected = SOURCE_CONFIG.set_market_enabled(market, enabled, kind=kind)
-    return {"market": market, "enabled": enabled, "kind": kind, "affected": affected}
 
 
 @app.get("/api/fields")

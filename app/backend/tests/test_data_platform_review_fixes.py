@@ -52,7 +52,7 @@ def test_load_panel_survives_compact_date_csv(tmp_path: Path) -> None:
     inv = _inv(tmp_path, [{"market": "stocks_cn", "interval": "1d", "data_kind": "ohlcv", "symbol_key": "000001.SZ",
                            "file_path": str(csv), "columns": ["trade_date", "close", "volume"]}])
     cat = FieldCatalog(sources=[InventoryDatasetSource(inv)])
-    res = cat.load_panel(FieldRequirement(canonical_ids=["close"], market="stocks_cn", interval="1d"))
+    res = cat.load_panel(FieldRequirement(canonical_ids=["official_close"], market="stocks_cn", interval="1d"))
     assert res.ok and res.row_count == 2
     assert res.panel.schema["ts"] == pl.Datetime("us", "UTC")
 
@@ -99,6 +99,6 @@ def test_inventory_crypto_market_normalized_to_binanceusdm(tmp_path: Path) -> No
     cat = FieldCatalog(sources=[InventoryDatasetSource(inv)])
     # 落盘 market="crypto" 被归一为 "binanceusdm"，按 binanceusdm 可查到
     uni = cat.available_fields("binanceusdm")
-    assert "close" in uni.canonical and "funding_rate" in uni.canonical
+    assert "official_close" in uni.canonical and "official_funding_rate" in uni.canonical
     # 不再散落在 "crypto" 这个孤儿市场键下
     assert not cat.available_fields("crypto").canonical

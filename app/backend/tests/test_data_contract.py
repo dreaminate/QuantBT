@@ -47,7 +47,7 @@ def _catalog(tmp_path: Path) -> FieldCatalog:
     path = tmp_path / "daily.parquet"
     frame.write_parquet(path)
     reg = DatasetRegistry(tmp_path / "registry.jsonl")
-    fr = make_wide_fetch_result(frame, source_name="tushare")
+    fr = make_wide_fetch_result(frame, source_name="user_x")  # 用户源 → canonical 保持自然名(close/pe_ttm)
     reg.register(
         "cn_000001_daily",
         fr,
@@ -83,8 +83,8 @@ def test_load_panel_resolves_and_derives_amount(tmp_path: Path) -> None:
     res = cat.load_panel(req)
     assert res.ok and not res.missing
     assert {"ts", "symbol", "close", "volume", "pe_ttm", "amount"}.issubset(set(res.panel.columns))
-    assert res.manifest["close"] == "tushare"
-    assert res.manifest["pe_ttm"] == "tushare"
+    assert res.manifest["close"] == "user_x"
+    assert res.manifest["pe_ttm"] == "user_x"
     assert res.manifest["amount"] == "derived"
     row0 = res.panel.sort("ts").row(0, named=True)
     assert abs(row0["amount"] - row0["close"] * row0["volume"]) < 1e-6
@@ -116,7 +116,7 @@ def test_load_panel_cross_dtype_join_parquet_and_csv(tmp_path: Path) -> None:
     )
     pa = tmp_path / "a.parquet"
     fa.write_parquet(pa)
-    reg.register("a", make_wide_fetch_result(fa, "tushare"), file_paths=[str(pa)],
+    reg.register("a", make_wide_fetch_result(fa, "user_a"), file_paths=[str(pa)],
                  metadata={"market": "stocks_cn", "interval": "1d", "data_kind": "daily"})
 
     pb = tmp_path / "b.csv"
@@ -125,7 +125,7 @@ def test_load_panel_cross_dtype_join_parquet_and_csv(tmp_path: Path) -> None:
         encoding="utf-8",
     )
     fb = pl.read_csv(pb, try_parse_dates=True)  # ts 推断为 Date
-    reg.register("b", make_wide_fetch_result(fb, "tushare_basic"), file_paths=[str(pb)],
+    reg.register("b", make_wide_fetch_result(fb, "user_b"), file_paths=[str(pb)],
                  metadata={"market": "stocks_cn", "interval": "1d", "data_kind": "daily_basic"})
 
     res = FieldCatalog(reg).load_panel(
@@ -147,7 +147,7 @@ def test_load_panel_dedups_financial_restatement(tmp_path: Path) -> None:
     )
     p = tmp_path / "fina.parquet"
     f.write_parquet(p)
-    reg.register("fina", make_wide_fetch_result(f, "tushare"), file_paths=[str(p)],
+    reg.register("fina", make_wide_fetch_result(f, "user_x"), file_paths=[str(p)],
                  metadata={"market": "stocks_cn", "interval": "1q", "data_kind": "fina_indicator"})
     res = FieldCatalog(reg).load_panel(FieldRequirement(canonical_ids=["roe"], market="stocks_cn", interval="1q"))
     assert res.row_count == 1
@@ -165,7 +165,7 @@ def test_amount_partial_coalesce(tmp_path: Path) -> None:
     )
     p = tmp_path / "d.parquet"
     f.write_parquet(p)
-    reg.register("d", make_wide_fetch_result(f, "tushare"), file_paths=[str(p)],
+    reg.register("d", make_wide_fetch_result(f, "user_x"), file_paths=[str(p)],
                  metadata={"market": "stocks_cn", "interval": "1d", "data_kind": "daily"})
     res = FieldCatalog(reg).load_panel(
         FieldRequirement(canonical_ids=["close", "volume"], optional_ids=["amount"], market="stocks_cn", interval="1d")

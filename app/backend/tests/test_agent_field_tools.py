@@ -11,7 +11,6 @@ from app.agent.tool_handlers import referenced_columns, register_field_tools
 from app.connectors.base import make_wide_fetch_result
 from app.data_quality import DatasetRegistry
 from app.field_catalog import FieldCatalog, FieldMappingStore
-from app.source_config import SourceConfigService
 
 
 class _Runtime:
@@ -30,13 +29,12 @@ def _setup(tmp_path: Path):
     )
     p = tmp_path / "d.parquet"
     f.write_parquet(p)
-    reg.register("d", make_wide_fetch_result(f, "tushare"), file_paths=[str(p)],
+    reg.register("d", make_wide_fetch_result(f, "user_x"), file_paths=[str(p)],
                  metadata={"market": "stocks_cn", "interval": "1d", "data_kind": "daily"})
     store = FieldMappingStore(":memory:")
     cat = FieldCatalog(reg, mapping=store)
-    svc = SourceConfigService(":memory:")
     rt = _Runtime()
-    register_field_tools(rt, field_catalog=cat, source_config=svc, mapping_store=store)
+    register_field_tools(rt, field_catalog=cat, mapping_store=store)
     return rt, cat, store
 
 
@@ -51,8 +49,8 @@ def test_describe_fields_tool(tmp_path: Path) -> None:
     canon = {e["field_id"] for e in out["canonical"]}
     free = {e["field_id"] for e in out["freeform"]}
     assert {"close", "volume", "pe_ttm"}.issubset(canon)
-    assert "tushare__alpha_x" in free
-    assert out["datasets"] and out["datasets"][0]["source"] == "tushare"
+    assert "user_x__alpha_x" in free
+    assert out["datasets"] and out["datasets"][0]["source"] == "user_x"
 
 
 def test_infer_mapping_tool(tmp_path: Path) -> None:
