@@ -1022,7 +1022,7 @@ schema_target: ohlcv  # 必须能映射到统一 schema
 |---|---|---|---|
 | M1 StrategyGoal | ✅ v0.3 已建 Pydantic schema + 两套预设 + YAML round-trip + 8 单测 | （后续）UI 表单 + Agent slot-filling 走同一份 schema | `app/backend/app/strategy_goal.py` |
 | M2 Universe + Regime | ❌ 仅 `symbol_pools.py` 静态池 | 加动态池 + HMM/ADX regime | `app/backend/app/universe/`, `regime/` |
-| M3 数据接入 | 🟢 v0.3 完成：DataConnector 抽象 + Tushare/BinanceVision/BinanceREST/GenericREST(YAML DIY)/UserUpload 共 5 类内置 + dataset_version 不可变 + freshness green/yellow/red + GE-lite 5 类规则 + REST 暴露 | 还差 WS userDataStream（在 M9.3）+ CoinGecko/Glassnode 外部概率源 | `connectors/`, `data_quality.py` |
+| M3 数据接入 | 🟢 v0.3 完成：DataConnector 抽象 + 5 类内置 connector + dataset_version 不可变 + freshness + GE-lite + REST。**v2(分支 feat/data-platform-v2) 扩展**：宽字段保留(make_wide_fetch_result)、字段目录 FieldCatalog、官方/用户字段 official_ 标识、字段宇宙表 field_catalog、官方数据更新通道 /api/data-packages/*(打包/manifest/增量/客户端 apply)、Tushare 全接口+Binance 全类型 | 还差 CoinGecko/Glassnode 外部概率源；v2 分支待合并 | `connectors/`, `data_quality.py`, `field_catalog/`, `data_packages.py` |
 | M4 特征 | 🟢 v0.4 完成：44 个白箱算子（ts_/cs_/一元/二元）+ AST 表达式引擎（双阶段 eval 绕开 polars over chain）+ alpha_lite 30 个内置因子 + IC/Rank-IC/IC-IR/IC 衰减计算 + FactorRegistry 版本化 | 还差 外部概率特征（链上 / 宏观 / 期权 IV）；表达式编辑器前端页 | `app/backend/app/factor_factory/` |
 | M5 标签 | 🟢 v0.5 完成：raw_return / excess_return / xs_rank / **triple_barrier (自写 100 行内)** / meta_label / vol_adjusted | 动态 barrier（基于实时波动率） | `labels/` |
 | M6 模型 | 🟢 v0.5 完成：LGBM clf/reg/lambdarank + sklearn baseline + **Purged k-fold + Embargo** + Walk-forward + 模型 artifact pickle + feature importance | Optuna 自动 HP search / Combinatorial Purged CV / arch GARCH | `models/` |
@@ -1246,6 +1246,17 @@ audit_log_dir: ./data/audit/
 
 *本文件最后更新：2026-05-29 · v1.0.0-rc1 (24h sprint v0.9.6 → v1.0.5 推到"只剩用户信息"状态)*
 *维护者：QuantBT 团队（人 + Agent）*
+
+### 数据平台 v2 更新（多源可插拔 + 宽字段 + 字段目录 + official_ 标识 + 数据更新通道 · 分支 feat/data-platform-v2）
+
+> 详见 `docs/plans/v2-data-platform.md`。把数据层从"单一官方源 + 固定 10 列 OHLCV 窄漏斗"升级为多源宽字段 + 字段目录驱动。三轮多 agent 对抗式复核闭环；后端 631 测试绿、前端 tsc/vite 通过。
+
+- **宽字段落盘**：`make_wide_fetch_result` 保留接口全部原生列；`enforce_unified_schema` 降级为 OHLCV 兼容视图(`to_ohlcv_view`，冻结页/旧 run 不受影响)；`DatasetRegistry` 落 `metadata["columns"]`。Tushare 全 2000 档接口、Binance klines 12 列 + 资金费率/持仓量各自独立成表。
+- **字段目录** `app/backend/app/field_catalog/`：`FieldRequirement`/`load_panel`/`WidePanel` 契约（量化模块声明字段需求、不写死列名/数据源）+ canonical 受控词典 + `FieldCatalog`(DatasetSource: inventory 主 + registry 辅, 磁盘 key/dtype 规范化) + **字段宇宙持久化表 `field_catalog`(store.py)**(Agent 拉取辅助/写策略 + 官方字段合并目标)。
+- **官方/用户区分（不隔离/无开关）**：官方源(白名单 tushare/binance/crawler_)字段加 `official_` 前缀，用户源自然名，防撞名；运行时读全部数据，动态字段宇宙只用于告知 Agent(`build_ai_context` 注入)。
+- **数据更新通道（与软件更新分两条线）**：`/api/data-packages/manifest`(清单+data_version+每文件指纹+official_fields) + `download`(全量/按文件增量 zip, 按 version 缓存) + `pull`(客户端从上游拉取→zip-slip 防护解压进本地数据湖→重建 inventory→合并官方字段)。
+- **Agent 字段对齐工具**：`data.list_sources/describe_fields/infer_mapping/apply_mapping/factor.validate_columns`。
+- commits：9c86f7a/3d8e21a/8c55d94/eca8e61/10e9c61/9862ced/b2fbb45。**待办**：M2(动态池+regime, §8 唯一 ❌)进行中。
 
 ### v1.0.0-rc1 更新（24h sprint · v0.9.6-v1.0.5 全栈推进）
 
