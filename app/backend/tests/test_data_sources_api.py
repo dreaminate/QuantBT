@@ -16,12 +16,19 @@ def test_fields_endpoint_structure() -> None:
     assert set(body.keys()) == {"canonical", "freeform"}
 
 
+def test_fields_catalog_endpoint() -> None:
+    r = client.get("/api/fields/catalog")
+    assert r.status_code == 200
+    assert isinstance(r.json(), list)
+
+
 def test_data_package_manifest_endpoint() -> None:
     r = client.get("/api/data-packages/manifest")
     assert r.status_code == 200
     body = r.json()
     assert body["channel"] == "official-data"
     assert "data_version" in body and "files" in body
+    assert "official_fields" in body  # 供客户端合并的官方字段定义
 
 
 def test_infer_and_apply_mapping_endpoints() -> None:

@@ -16,6 +16,7 @@ from .contract import DatasetInfo, FieldRequirement, FileRef, PanelResult, WideP
 from .intake import register_official_dataset
 from .mapping import FieldMapping, FieldMappingStore
 from .sources import DatasetSource, InventoryDatasetSource, RegistryDatasetSource
+from .store import FieldCatalogStore
 
 __all__ = [
     "CANONICAL",
@@ -24,6 +25,7 @@ __all__ = [
     "DatasetInfo",
     "DatasetSource",
     "FieldCatalog",
+    "FieldCatalogStore",
     "FieldEntry",
     "FieldMapping",
     "FieldMappingStore",

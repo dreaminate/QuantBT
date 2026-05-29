@@ -114,8 +114,8 @@ from .billing import BillingService, PLAN_IDS  # noqa: E402
 from .billing.stripe_service import PLAN_INFO  # noqa: E402
 BILLING_SERVICE = BillingService(_COMMUNITY_DB)  # v1.0.3 · Stripe scaffold
 
-# v2 数据平台 · 字段目录（inventory 为主 + registry 为辅）+ 字段映射；官方字段带 official_ 前缀，无源开关/隔离
-from .field_catalog import FieldCatalog, FieldMappingStore, InventoryDatasetSource  # noqa: E402
+# v2 数据平台 · 字段目录（inventory 为主 + registry 为辅）+ 字段映射 + 字段宇宙持久化表；官方字段带 official_ 前缀，无源开关/隔离
+from .field_catalog import FieldCatalog, FieldCatalogStore, FieldMappingStore, InventoryDatasetSource  # noqa: E402
 
 
 from .tushare_quant1 import qb_project_paths as _qb_project_paths  # noqa: E402
@@ -136,6 +136,8 @@ FIELD_CATALOG = FieldCatalog(
     sources=[InventoryDatasetSource(_QB_PATHS.data_catalog_inventory_file, rebuild=_rebuild_inventory)],
     mapping=FIELD_MAPPING_STORE,
 )
+# 字段宇宙持久化表：Agent 拉取辅助/写策略 + 官方数据更新的合并目标
+FIELD_CATALOG_STORE = FieldCatalogStore(str(_COMMUNITY_DB))
 
 
 def _field_universe_for_prompt(market: str | None = None) -> dict[str, dict]:
@@ -278,6 +280,16 @@ def list_available_fields(
 ) -> dict:
     """当前可用字段宇宙（canonical + freeform），按 enabled 源过滤——量化流程/Agent 的字段真相源。"""
     return FIELD_CATALOG.available_fields(market, interval=interval, enabled_only=enabled_only).to_dict()
+
+
+@app.get("/api/fields/catalog")
+def fields_catalog(market: str | None = Query(None), official: bool | None = Query(None)) -> list[dict]:
+    """字段宇宙持久化表（含 canonical_id/单位/含义/来源/数据种类）。Agent 拉取辅助 + 写策略用。"""
+    try:
+        FIELD_CATALOG_STORE.sync_from_catalog(FIELD_CATALOG)
+    except Exception:  # noqa: BLE001
+        pass
+    return FIELD_CATALOG_STORE.list(market=market, official=official)
 
 
 from pydantic import BaseModel as _BaseModel  # noqa: E402
@@ -823,10 +835,16 @@ def _official_catalog_files() -> list[dict]:
 
 @app.get("/api/data-packages/manifest")
 def data_package_manifest() -> dict:
-    """官方数据清单 + 数据版本号 + 每文件指纹。客户端比对本地指纹算增量；与软件更新是独立通道。"""
+    """官方数据清单 + 数据版本号 + 每文件指纹 + 官方字段定义。客户端据此算增量、并把 official_fields 合并进本地字段表。"""
     from .data_packages import official_manifest
 
-    return official_manifest(_official_catalog_files(), _QB_PATHS.root)
+    m = official_manifest(_official_catalog_files(), _QB_PATHS.root)
+    try:
+        FIELD_CATALOG_STORE.sync_from_catalog(FIELD_CATALOG)
+    except Exception:  # noqa: BLE001
+        pass
+    m["official_fields"] = FIELD_CATALOG_STORE.list(official=True)  # 供客户端 merge_official 合并
+    return m
 
 
 @app.get("/api/data-packages/download")
