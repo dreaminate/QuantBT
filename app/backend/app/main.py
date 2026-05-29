@@ -861,6 +861,11 @@ def data_package_download(paths: str | None = Query(None)):
 
     files = _official_catalog_files()
     manifest = official_manifest(files, _QB_PATHS.root)
+    try:
+        FIELD_CATALOG_STORE.sync_from_catalog(FIELD_CATALOG)
+        manifest["official_fields"] = FIELD_CATALOG_STORE.list(official=True)  # 让 zip 内 manifest 带官方字段定义供客户端合并
+    except Exception:  # noqa: BLE001
+        pass
     version = manifest["data_version"]
     rel = [p for p in paths.split(",") if p.strip()] if paths else None
     key = version if rel is None else f"{version}-{_hl.sha256(','.join(sorted(rel)).encode()).hexdigest()[:10]}"
@@ -870,6 +875,36 @@ def data_package_download(paths: str | None = Query(None)):
     if not out.exists():
         build_package_zip(files, _QB_PATHS.root, out, rel_paths=rel, manifest=manifest)
     return FileResponse(out, media_type="application/zip", filename=out.name)
+
+
+class _DataPullUpstreamRequest(_BaseModel):
+    upstream_url: str
+    paths: list[str] | None = None
+
+
+@app.post("/api/data-packages/pull")
+def data_package_pull(req: _DataPullUpstreamRequest) -> dict:
+    """客户端(Win/Mac 本地后端)从上游网站拉官方数据更新并应用：防 zip-slip 解压进本地数据湖 →
+    重建 inventory → 把 official_fields 合并进字段宇宙表。与软件更新是两条独立通道。"""
+    from .data_packages import pull_and_apply
+
+    report = pull_and_apply(req.upstream_url, DATA_ROOT, paths=req.paths)
+    try:
+        _rebuild_inventory()
+    except Exception:  # noqa: BLE001
+        pass
+    merged = 0
+    try:
+        merged = FIELD_CATALOG_STORE.merge_official(report.get("official_fields") or [])
+        FIELD_CATALOG_STORE.sync_from_catalog(FIELD_CATALOG)
+    except Exception:  # noqa: BLE001
+        pass
+    return {
+        "applied_files": len(report.get("applied_files") or []),
+        "skipped": len(report.get("skipped") or []),
+        "data_version": report.get("data_version"),
+        "merged_official_fields": merged,
+    }
 
 
 @app.middleware("http")

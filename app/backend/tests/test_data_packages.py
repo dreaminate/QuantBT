@@ -2,10 +2,11 @@
 
 from __future__ import annotations
 
+import json
 import zipfile
 from pathlib import Path
 
-from app.data_packages import build_package_zip, official_manifest
+from app.data_packages import apply_package, build_package_zip, official_manifest, plan_update, pull_and_apply
 
 
 def _make_files(root: Path) -> list[dict]:
@@ -53,3 +54,69 @@ def test_build_zip_full_and_incremental(tmp_path: Path) -> None:
     assert sub2["partial"] is True and len(sub2["files"]) == 1
     with zipfile.ZipFile(inc) as z:
         assert off_rel in z.namelist()
+
+
+def test_apply_package_extracts_official_and_merges_fields(tmp_path: Path) -> None:
+    src = tmp_path / "server"
+    files = _make_files(src)
+    manifest = official_manifest(files, src)
+    manifest["official_fields"] = [
+        {"field_id": "official_close", "market": "stocks_cn", "canonical_id": "close", "is_freeform": False,
+         "is_official": True, "source": "tushare", "data_kind": "ohlcv", "raw_column": "close", "unit": "", "description": "收盘价"}
+    ]
+    pkg = tmp_path / "pkg.zip"
+    build_package_zip(files, src, pkg, manifest=manifest)
+
+    dest = tmp_path / "client"
+    report = apply_package(pkg, dest)
+    assert any("stocks_cn/ohlcv/latest" in f for f in report["applied_files"])
+    assert (dest / report["applied_files"][0]).exists()           # 文件真解压进客户端数据湖
+    assert not any("user_myapi" in f for f in report["applied_files"])  # 用户源不在包里
+    assert report["official_fields"][0]["field_id"] == "official_close"  # 官方字段定义随包带来供合并
+
+
+def test_apply_package_blocks_zip_slip(tmp_path: Path) -> None:
+    mal = tmp_path / "mal.zip"
+    with zipfile.ZipFile(mal, "w") as z:
+        z.writestr("manifest.json", json.dumps({"data_version": "x"}))
+        z.writestr("../../evil.txt", "pwned")
+    dest = tmp_path / "client"
+    report = apply_package(mal, dest)
+    assert "../../evil.txt" in report["skipped"]
+    assert not (tmp_path / "evil.txt").exists()      # 没逃逸出 data_root
+    assert not (dest.parent / "evil.txt").exists()
+
+
+def test_plan_update_diff() -> None:
+    local = [{"path": "data/market/stocks_cn/ohlcv/latest/symbol=X/d.csv", "fingerprint": "2024-01-01T00:00:00Z|1"}]
+    upstream = {
+        "data_version": "v2",
+        "files": [
+            {"path": "data/market/stocks_cn/ohlcv/latest/symbol=X/d.csv", "fingerprint": "2024-01-02T00:00:00Z|2"},
+            {"path": "data/market/stocks_cn/ohlcv/latest/symbol=Y/d.csv", "fingerprint": "z|1"},
+        ],
+    }
+    plan = plan_update(local, upstream)
+    assert plan["needs_update"] and plan["changed_count"] == 2 and plan["upstream_version"] == "v2"
+
+
+def test_pull_and_apply_with_fake_http(tmp_path: Path) -> None:
+    src = tmp_path / "server"
+    files = _make_files(src)
+    pkg = tmp_path / "pkg.zip"
+    build_package_zip(files, src, pkg)
+
+    class _FakeResp:
+        content = pkg.read_bytes()
+
+        def raise_for_status(self) -> None:
+            pass
+
+    class _FakeHttp:
+        def get(self, url, params=None, timeout=None):  # noqa: ANN001
+            return _FakeResp()
+
+    dest = tmp_path / "client"
+    report = pull_and_apply("https://up.example", dest, http=_FakeHttp())
+    assert any("stocks_cn/ohlcv/latest" in f for f in report["applied_files"])
+    assert (dest / report["applied_files"][0]).exists()

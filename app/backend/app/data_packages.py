@@ -16,6 +16,9 @@ from __future__ import annotations
 
 import hashlib
 import json
+import os
+import shutil
+import tempfile
 import zipfile
 from datetime import UTC, datetime
 from pathlib import Path
@@ -104,4 +107,96 @@ def build_package_zip(
     return sub_manifest
 
 
-__all__ = ["official_manifest", "build_package_zip"]
+# ---- 客户端侧：拉取 + 应用官方数据更新 -------------------------------------
+
+
+def plan_update(local_files: list[dict], upstream_manifest: dict[str, Any]) -> dict[str, Any]:
+    """对比本地 inventory 与上游 manifest，算出需要下载的文件（指纹不同/新增）。"""
+    local_fp: dict[str, str] = {}
+    local_root = ""  # 仅用于本地 manifest 复用 official_manifest 时，这里直接收 file items
+    for it in local_files:
+        # local_files 是本地 official_manifest 的 files（已含 path/fingerprint）
+        local_fp[it.get("path", "")] = it.get("fingerprint", "")
+    changed = [
+        f["path"]
+        for f in upstream_manifest.get("files", [])
+        if local_fp.get(f["path"]) != f.get("fingerprint")
+    ]
+    return {
+        "needs_update": bool(changed),
+        "changed_paths": changed,
+        "upstream_version": upstream_manifest.get("data_version"),
+        "changed_count": len(changed),
+    }
+
+
+def _safe_dest(root: Path, name: str) -> Path | None:
+    """zip-slip 防护：解析后的目标必须落在 root 内，否则返回 None（跳过该条目）。"""
+    dest = (root / name).resolve()
+    root_r = root.resolve()
+    if dest == root_r or str(dest).startswith(str(root_r) + os.sep):
+        return dest
+    return None
+
+
+def apply_package(zip_path: Path | str, data_root: Path | str) -> dict[str, Any]:
+    """把官方数据 zip 解压进本地数据湖（防 zip-slip），读出内嵌 manifest（含 official_fields）。
+
+    返回 report：{applied_files, skipped, data_version, official_fields, manifest}。
+    调用方随后重建 inventory + 把 official_fields 合并进字段宇宙表。
+    """
+    root = Path(data_root)
+    root.mkdir(parents=True, exist_ok=True)
+    applied: list[str] = []
+    skipped: list[str] = []
+    manifest: dict[str, Any] = {}
+    with zipfile.ZipFile(zip_path) as z:
+        for name in z.namelist():
+            if name.endswith("/"):
+                continue
+            if name == "manifest.json":
+                try:
+                    manifest = json.loads(z.read(name))
+                except Exception:  # noqa: BLE001
+                    manifest = {}
+                continue
+            dest = _safe_dest(root, name)
+            if dest is None:
+                skipped.append(name)  # 越界条目（zip-slip 企图）一律跳过
+                continue
+            dest.parent.mkdir(parents=True, exist_ok=True)
+            with z.open(name) as src, open(dest, "wb") as out:
+                shutil.copyfileobj(src, out)
+            applied.append(name)
+    return {
+        "applied_files": applied,
+        "skipped": skipped,
+        "data_version": manifest.get("data_version"),
+        "official_fields": manifest.get("official_fields", []),
+        "manifest": manifest,
+    }
+
+
+def pull_and_apply(upstream_base: str, data_root: Path | str, *, http: Any = None, paths: list[str] | None = None) -> dict[str, Any]:
+    """从上游（网站后端）拉官方数据包并应用到本地数据湖。
+
+    upstream_base 例 "https://quantbt.example.com"。http 可注入（测试用 fake）；默认 requests。
+    paths=None → 全量；否则增量（客户端按 plan_update 算出的 changed_paths）。
+    """
+    if http is None:
+        import requests as http  # noqa: PLC0415
+    url = upstream_base.rstrip("/") + "/api/data-packages/download"
+    params = {"paths": ",".join(paths)} if paths else {}
+    resp = http.get(url, params=params, timeout=120)
+    resp.raise_for_status()
+    tmp = tempfile.NamedTemporaryFile(prefix="qbt-pull-", suffix=".zip", delete=False)
+    try:
+        tmp.write(resp.content)
+        tmp.close()
+        return apply_package(tmp.name, data_root)
+    finally:
+        if os.path.exists(tmp.name):
+            os.unlink(tmp.name)
+
+
+__all__ = ["official_manifest", "build_package_zip", "plan_update", "apply_package", "pull_and_apply"]
