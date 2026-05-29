@@ -13,7 +13,7 @@
 from __future__ import annotations
 
 import json
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from typing import Any
 
 
@@ -87,6 +87,9 @@ class AIContext:
     rules: list[str]
     code_skeleton: str
     emit_result_schema: dict[str, Any]
+    # 数据平台 v2：当前可用字段宇宙（按市场，随启用的数据源动态变化）—— 让代用户写策略的 Agent
+    # 知道"启用了哪些源 → 能用哪些 canonical/freeform 字段"，而不是只看静态 connector/factor 目录。
+    fields_by_market: dict[str, Any] = field(default_factory=dict)
 
     def to_dict(self) -> dict[str, Any]:
         return {
@@ -96,7 +99,29 @@ class AIContext:
             "rules": self.rules,
             "code_skeleton": self.code_skeleton,
             "emit_result_schema": self.emit_result_schema,
+            "fields_by_market": self.fields_by_market,
         }
+
+    def _fields_block(self) -> str:
+        if not self.fields_by_market:
+            return ""
+        lines = []
+        for mkt, uni in self.fields_by_market.items():
+            if not isinstance(uni, dict):
+                continue
+            canon = ", ".join((uni.get("canonical") or [])[:40])
+            free = ", ".join((uni.get("freeform") or [])[:20])
+            line = f"- {mkt} · canonical: {canon or '(无)'}"
+            if free:
+                line += f" · freeform: {free}"
+            lines.append(line)
+        if not lines:
+            return ""
+        return (
+            "## 当前可用字段宇宙（随启用的数据源动态变化；canonical 可跨源移植，freeform 带源命名空间）\n"
+            "## 写策略时只用下面这些字段名；屏蔽掉的官方源/未接入的字段不会出现在此\n"
+            + "\n".join(lines) + "\n\n"
+        )
 
     def to_system_prompt_block(self, *, max_factors: int = 20, max_operators: int = 30) -> str:
         """压缩到 LLM system prompt 块；避免超 token。"""
@@ -120,6 +145,7 @@ class AIContext:
             + "\n".join(factors_brief) + "\n\n"
             + f"## 白名单算子（共 {len(self.operators)}）\n"
             + ops_brief + "\n\n"
+            + self._fields_block()
             + "## 沙箱规则\n"
             + "\n".join(f"- {r}" for r in self.rules) + "\n\n"
             + "## emit_result schema（最末尾必须调）\n"
@@ -132,10 +158,12 @@ def build_ai_context(
     connectors: list[dict[str, Any]] | None = None,
     factors: list[dict[str, Any]] | None = None,
     operators: list[dict[str, Any]] | None = None,
+    fields_by_market: dict[str, Any] | None = None,
 ) -> AIContext:
     """调用方传入注册表快照（main.py 注入），返回 AIContext。
 
-    保持 pure-function，便于测试。
+    ``fields_by_market``：{market: {"canonical": [...], "freeform": [...]}}，当前可用字段宇宙
+    （由 FieldCatalog 按启用的源动态算出）。保持 pure-function，便于测试。
     """
 
     safe_connectors = [c for c in (connectors or []) if isinstance(c, dict)]
@@ -156,6 +184,7 @@ def build_ai_context(
         rules=SANDBOX_RULES,
         code_skeleton=CODE_SKELETON,
         emit_result_schema=EMIT_RESULT_SCHEMA,
+        fields_by_market=dict(fields_by_market or {}),
     )
 
 

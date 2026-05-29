@@ -140,6 +140,19 @@ FIELD_CATALOG = FieldCatalog(
     source_filter=SOURCE_CONFIG.source_filter(),
 )
 
+
+def _field_universe_for_prompt(market: str | None = None) -> dict[str, dict]:
+    """给 IDE/Agent system prompt 用的当前可用字段宇宙（按市场，随启用的源动态变化）。"""
+    markets = [market] if market else ["stocks_cn", "binanceusdm", "binance_spot"]
+    out: dict[str, dict] = {}
+    for mkt in markets:
+        try:
+            uni = FIELD_CATALOG.available_fields(mkt)
+        except Exception:  # noqa: BLE001
+            continue
+        out[mkt] = {"canonical": list(uni.canonical.keys()), "freeform": list(uni.freeform.keys())}
+    return out
+
 _main_logger = logging.getLogger(__name__)
 
 # v0.8.4 · Glossary 词条仓库（启动时从 docs/glossary/ 加载，加载失败不阻断启动）
@@ -1780,6 +1793,7 @@ def ide_ai_complete(payload: dict = Body(...), user=Depends(require_user_depende
         connectors=connector_registry.describe_all(),
         factors=[f.to_dict() for f in FACTOR_REGISTRY.list()],
         operators=list_operators(),
+        fields_by_market=_field_universe_for_prompt(payload.get("market")),
     )
     sys_prompt = base_prompt + "\n\n" + ctx.to_system_prompt_block()
     user_text = f"{prompt}\n\n# 当前编辑器内容（context）:\n{context_code}" if context_code else prompt
@@ -1805,6 +1819,7 @@ def ide_ai_context(user=Depends(require_user_dependency)) -> dict[str, Any]:
         connectors=connector_registry.describe_all(),
         factors=[f.to_dict() for f in FACTOR_REGISTRY.list()],
         operators=list_operators(),
+        fields_by_market=_field_universe_for_prompt(),
     )
     return ctx.to_dict()
 
