@@ -90,6 +90,24 @@ def test_missing_column_raises() -> None:
         detect_regime(df)
 
 
+def test_zero_price_no_nan_cascade() -> None:
+    # 复核 blocker：prev_close=0 曾 → ret=inf → vol=NaN → NaN>crisis_z 误判整段 crisis。
+    closes = [100.0 * (1.002**i) for i in range(130)]
+    closes[60] = 0.0  # 停牌/坏 tick/0 打印
+    res = detect_regime(_ohlc(closes))
+    assert not res["vol_z"].is_nan().any()        # 无 NaN 残留
+    assert not res["vol_z"].is_infinite().any()   # 无 inf 残留
+    assert "crisis" not in res.tail(20)["regime"].to_list()  # 远离 0 的尾段不再被错标 crisis
+
+
+def test_warmup_forces_range() -> None:
+    # 复核 high：从第 0 根就强趋势，前 2n-1=27 根必须全 range（Wilder 未收敛不臆造趋势）。
+    closes = [100.0 * (1.02**i) for i in range(40)]
+    res = detect_regime(_ohlc(closes))
+    assert set(res.head(27)["regime"].to_list()) == {"range"}  # warmup 区全 range
+    assert "bull" in res["regime"].to_list()                   # 收敛后仍能判 bull
+
+
 def test_feeds_regime_gating() -> None:
     # 输出可直接喂 M7：bull 区间内 short 信号被关成 flat。
     closes = [100.0 * (1.01**i) for i in range(80)]

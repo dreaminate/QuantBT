@@ -7,14 +7,22 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
-from datetime import date, datetime
+from datetime import date, datetime, time
 from typing import Any
 
 import polars as pl
 
 from .definition import UniverseRules
 
-AsOf = date | datetime | str | int
+# as_of 支持 date / datetime / ISO 字符串；int 不支持（epoch 含义不明确，见 _as_of_bound）。
+AsOf = date | datetime | str
+
+_NUMERIC_DTYPES = (
+    pl.Int8, pl.Int16, pl.Int32, pl.Int64,
+    pl.UInt8, pl.UInt16, pl.UInt32, pl.UInt64,
+    pl.Float32, pl.Float64,
+)
+_TRUTHY_STR = ("y", "yes", "true", "t", "1", "st", "*st")
 
 
 @dataclass(frozen=True)
@@ -32,6 +40,60 @@ def _require(panel: pl.DataFrame, columns: list[str]) -> None:
     missing = [c for c in columns if c not in panel.columns]
     if missing:
         raise ValueError(f"panel 缺少列 {missing}")
+
+
+def _as_of_bound(as_of: AsOf, ts_dtype: pl.DataType) -> pl.Expr:
+    """把 as_of 规整成与 ts 列 dtype 对齐、对当日含尾的上界表达式。
+
+    - str → ISO 解析（date 或 datetime）；int/bool → 拒绝（epoch 含义不明确）。
+    - Datetime 列 + 纯 date as_of → 抬到当日 23:59:59.999999，使 `<=` 含当日全部 bar
+      （否则 date 被 polars 强转零点会丢掉 09:30/15:00 等当日 bar，破坏 point-in-time）。
+    - tz-aware 列 → 给裸时刻附上同一时区。
+    """
+
+    val: Any = as_of
+    if isinstance(val, bool):
+        raise ValueError("as_of 不支持 bool 类型")
+    if isinstance(val, str):
+        s = val.strip()
+        val = datetime.fromisoformat(s) if ("T" in s or " " in s) else date.fromisoformat(s)
+    elif isinstance(val, int):
+        raise ValueError("as_of 不支持 int（epoch 含义不明确）；请用 date/datetime 或 ISO 字符串")
+
+    if isinstance(ts_dtype, pl.Datetime):
+        bound = val if isinstance(val, datetime) else datetime.combine(val, time(23, 59, 59, 999999))
+        expr = pl.lit(bound)
+        if ts_dtype.time_zone is not None and bound.tzinfo is None:
+            expr = expr.dt.replace_time_zone(ts_dtype.time_zone)
+        return expr.cast(ts_dtype)
+
+    # Date（或其它非 Datetime 时间列）：按 date 比较。
+    if isinstance(val, datetime):
+        val = val.date()
+    return pl.lit(val)
+
+
+def _st_is_flagged(col_name: str, dtype: pl.DataType | None) -> pl.Expr:
+    """ST/风险警示真值判定，兼容 bool / 数值(≠0) / 字符串('Y'/'1'/'ST…'/'*ST…')。"""
+
+    col = pl.col(col_name)
+    if dtype == pl.Boolean:
+        return col.fill_null(False)
+    if dtype is not None and dtype in _NUMERIC_DTYPES:
+        return col.cast(pl.Float64).fill_nan(0.0).fill_null(0.0) != 0.0
+    s = col.cast(pl.Utf8).fill_null("").str.to_lowercase().str.strip_chars()
+    return s.is_in(_TRUTHY_STR) | s.str.contains(r"^\*?st")
+
+
+def _nan_to_null(stats: pl.DataFrame, columns: list[str]) -> pl.DataFrame:
+    """把浮点列里的 NaN 归一成 null（polars 里 NaN≠null，只判 null 的缺值防御会漏 NaN）。"""
+
+    exprs = [
+        pl.col(c).fill_nan(None).alias(c)
+        for c in columns
+        if c in stats.columns and stats.schema[c] in (pl.Float32, pl.Float64)
+    ]
+    return stats.with_columns(exprs) if exprs else stats
 
 
 def resolve_universe(
@@ -64,7 +126,7 @@ def resolve_universe(
         )
 
     _require(panel, [ts_col, symbol_col])
-    df = panel.filter(pl.col(ts_col) <= as_of)
+    df = panel.filter(pl.col(ts_col) <= _as_of_bound(as_of, panel.schema[ts_col]))
     n_candidates = df.select(pl.col(symbol_col).n_unique()).item() if df.height else 0
     if n_candidates == 0:
         return UniverseResult(as_of=as_of, symbols=[], n_candidates=0, n_selected=0, dropped={})
@@ -95,6 +157,8 @@ def resolve_universe(
         )
         win = tail.group_by(symbol_col, maintain_order=True).agg(window_exprs)
         stats = stats.join(win, on=symbol_col, how="left")
+        # NaN→null：让下面的缺值防御（fill_null(-inf) 比较、nulls_last、rank 剔除）对 NaN 同样生效。
+        stats = _nan_to_null(stats, ["rank_value", "avg_amount", "last_price"])
 
     dropped: dict[str, int] = {}
 
@@ -111,15 +175,20 @@ def resolve_universe(
     if rules.min_history_days > 0:
         stats = _drop(pl.col("n_obs") >= rules.min_history_days, "history", stats)
     if rules.st_col is not None:
-        # st_flag 为真 → 剔除；空值视为非 ST 保留。
-        stats = _drop(~(pl.col("st_flag").fill_null(False).cast(pl.Boolean)), "st", stats)
+        # st_flag 为真 → 剔除；空值视为非 ST 保留。兼容 bool/数值/字符串编码。
+        stats = _drop(~_st_is_flagged("st_flag", stats.schema.get("st_flag")), "st", stats)
     if rules.min_price is not None:
         stats = _drop(pl.col("last_price").fill_null(float("-inf")) >= rules.min_price, "price", stats)
     if rules.min_avg_amount is not None:
         stats = _drop(pl.col("avg_amount").fill_null(float("-inf")) >= rules.min_avg_amount, "amount", stats)
 
-    # 排序取前 top_n。
+    # 排序取前 top_n。排序值缺失(null/NaN)的标的视为不可排序，剔除并计入 dropped['rank']，
+    # 与价格/流动性的缺值剔除保持一致，避免脏数据标的靠 nulls_last 悄悄沉底进池。
     if rules.rank_by is not None:
+        n_bad = stats.filter(pl.col("rank_value").is_null()).height
+        if n_bad:
+            dropped["rank"] = dropped.get("rank", 0) + n_bad
+            stats = stats.filter(pl.col("rank_value").is_not_null())
         stats = stats.sort("rank_value", descending=True, nulls_last=True)
         if rules.top_n is not None and stats.height > rules.top_n:
             dropped["rank"] = dropped.get("rank", 0) + (stats.height - rules.top_n)

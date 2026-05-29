@@ -11,7 +11,8 @@
 设计取舍：
 - 规则法（非 HMM/GARCH）→ 确定性、可测、零额外依赖；HMM/GARCH 留作后续可插后端。
 - crisis 优先级最高（波动聚集压过趋势判定），符合「危机即高波动」的常识。
-- 早期窗口未填满时一律 range（安全默认），不臆造状态。
+- 前 2n-1 根（Wilder ADX 收敛前）强制 range（安全默认），不臆造状态。
+- 数值健壮：停牌/坏 tick 导致的 0/负价不会顺着 inf/NaN 误判成 crisis。
 """
 
 from __future__ import annotations
@@ -102,7 +103,7 @@ def detect_regime(
         .otherwise(0.0),
     )
 
-    # Wilder 平滑 ≡ EWM(alpha=1/n, adjust=False)。
+    # Wilder 平滑用 EWM(alpha=1/n, adjust=False) 近似（首值 seeding，前 2n-1 根未收敛 → 下方 warmup 段强制 range）。
     df = df.with_columns(
         atr=pl.col("tr").ewm_mean(alpha=alpha, adjust=False),
         plus_dm_s=pl.col("plus_dm").ewm_mean(alpha=alpha, adjust=False),
@@ -122,25 +123,42 @@ def detect_regime(
     df = df.with_columns(adx=pl.col("dx").ewm_mean(alpha=alpha, adjust=False))
 
     # 波动率：收益率滚动标准差，再相对长基线做 z 标准化。
-    df = df.with_columns(ret=pl.col(close_col) / pl.col("prev_close") - 1.0)
+    # prev_close<=0（停牌/坏 tick/0 打印）置 null，避免 ±inf 顺着 rolling 传成 NaN 误判 crisis。
+    df = df.with_columns(
+        ret=pl.when(pl.col("prev_close") > 0)
+        .then(pl.col(close_col) / pl.col("prev_close") - 1.0)
+        .otherwise(None)
+    )
     df = df.with_columns(
         vol=pl.col("ret").rolling_std(window_size=config.vol_window, min_samples=vol_min)
     )
+    # 基线只用历史（shift 掉当前点），避免当前波动稀释自身 z 值、削弱 crisis 灵敏度。
+    df = df.with_columns(vol_prev=pl.col("vol").shift(1))
     df = df.with_columns(
-        vol_mean=pl.col("vol").rolling_mean(window_size=config.vol_baseline_window, min_samples=config.vol_window),
-        vol_std=pl.col("vol").rolling_std(window_size=config.vol_baseline_window, min_samples=config.vol_window),
+        vol_mean=pl.col("vol_prev").rolling_mean(window_size=config.vol_baseline_window, min_samples=config.vol_window),
+        vol_std=pl.col("vol_prev").rolling_std(window_size=config.vol_baseline_window, min_samples=config.vol_window),
     )
+    # 守卫连 NaN 一起判（polars 里 NaN≠null 且 NaN>x 为真），最后 fill_nan+fill_null 双兜底。
     df = df.with_columns(
-        vol_z=pl.when(pl.col("vol_std").is_not_null() & (pl.col("vol_std") > 0))
+        vol_z=pl.when(
+            pl.col("vol_std").is_not_null()
+            & pl.col("vol_std").is_finite()
+            & (pl.col("vol_std") > 0)
+            & pl.col("vol").is_finite()
+        )
         .then((pl.col("vol") - pl.col("vol_mean")) / pl.col("vol_std"))
         .otherwise(0.0)
+        .fill_nan(0.0)
         .fill_null(0.0)
     )
 
+    # warmup：Wilder ADX 在前 2n-1 根尚未收敛，EWM 首值 seeding 会人为抬高 → 强制 range。
+    warmup = 2 * config.adx_window - 1
+    crisis_hit = pl.col("vol_z").is_finite() & (pl.col("vol_z") > config.crisis_z)
     regime = (
-        pl.when(pl.col("adx").is_null())
+        pl.when(pl.int_range(pl.len()) < warmup)
         .then(pl.lit("range"))
-        .when(pl.col("vol_z") > config.crisis_z)
+        .when(crisis_hit)
         .then(pl.lit("crisis"))
         .when(pl.col("adx") >= config.adx_trend)
         .then(

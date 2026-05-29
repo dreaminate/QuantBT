@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from datetime import date, timedelta
+from datetime import UTC, date, datetime, timedelta
 
 import polars as pl
 import pytest
@@ -109,6 +109,87 @@ def test_missing_rank_column_raises() -> None:
     rules = UniverseRules(market="x", rank_by="nope")
     with pytest.raises(ValueError, match="nope"):
         resolve_universe(rules, _panel(), _last())
+
+
+def test_datetime_panel_date_asof_includes_full_day() -> None:
+    # 复核 high：Datetime(tz-aware) 面板 + 纯 date as_of，当日 15:00 bar 不能被丢。
+    panel = pl.DataFrame(
+        {
+            "ts": [
+                datetime(2024, 1, 1, 15, 0, tzinfo=UTC),
+                datetime(2024, 1, 2, 15, 0, tzinfo=UTC),  # A 第二日
+                datetime(2024, 1, 2, 15, 0, tzinfo=UTC),  # B 当日才上市
+            ],
+            "symbol": ["A", "A", "B"],
+            "close": [10.0, 11.0, 20.0],
+            "amount": [1000.0, 1100.0, 500.0],
+        }
+    )
+    rules = UniverseRules(market="x", rank_by="amount", min_history_days=1)
+    res = resolve_universe(rules, panel, date(2024, 1, 2))
+    assert "B" in res.symbols  # 当日 15:00 上市的 B 必须可见（修复前会被强转零点丢掉）
+    assert set(res.symbols) == {"A", "B"}
+
+
+def test_str_asof_parsed() -> None:
+    rules = UniverseRules(market="x", min_history_days=1)
+    via_str = resolve_universe(rules, _panel(), "2024-01-09").symbols
+    via_date = resolve_universe(rules, _panel(), date(2024, 1, 9)).symbols
+    assert via_str == via_date == ["A", "B", "C"]  # D 第 26 天才上市
+
+
+def test_int_asof_rejected() -> None:
+    rules = UniverseRules(market="x", min_history_days=1)
+    with pytest.raises(ValueError, match="int"):
+        resolve_universe(rules, _panel(), 20240102)  # type: ignore[arg-type]
+
+
+def test_string_st_column_no_crash() -> None:
+    # 复核 high：字符串 ST 列曾因 cast(Boolean) 崩溃。
+    panel = pl.DataFrame(
+        {
+            "ts": [date(2024, 1, 1)] * 4,
+            "symbol": ["A", "B", "C", "D"],
+            "close": [10.0, 10.0, 10.0, 10.0],
+            "name": ["平安银行", "*ST海航", "ST康得", "宁德时代"],
+        }
+    )
+    rules = UniverseRules(market="x", st_col="name")
+    res = resolve_universe(rules, panel, date(2024, 1, 1))
+    assert res.symbols == ["A", "D"]  # B(*ST)/C(ST) 被剔
+    assert res.dropped.get("st") == 2
+
+
+def test_nan_rank_value_dropped_not_top() -> None:
+    # 复核 high：rank_value=NaN 曾被 nulls_last 漏过、排到最前挤掉合法标的。
+    panel = pl.DataFrame(
+        {
+            "ts": [date(2024, 1, 1)] * 3,
+            "symbol": ["A", "B", "C"],
+            "mv": [float("nan"), 50.0, 100.0],
+        }
+    )
+    rules = UniverseRules(market="x", rank_by="mv", top_n=2)
+    res = resolve_universe(rules, panel, date(2024, 1, 1))
+    assert res.symbols == ["C", "B"]   # NaN 的 A 不得入选
+    assert "A" not in res.symbols
+    assert res.dropped.get("rank") == 1
+
+
+def test_nan_amount_filtered_out() -> None:
+    # 复核 high：fill_null(-inf) 拦不住 NaN（NaN>=thr 为真），缺值标的曾被错误保留。
+    panel = pl.DataFrame(
+        {
+            "ts": [date(2024, 1, 1), date(2024, 1, 2)] * 2,
+            "symbol": ["A", "A", "B", "B"],
+            "close": [10.0, 10.0, 10.0, 10.0],
+            "amount": [1000.0, 1000.0, 10.0, float("nan")],
+        }
+    )
+    rules = UniverseRules(market="x", min_avg_amount=300.0, min_history_days=1)
+    res = resolve_universe(rules, panel, date(2024, 1, 2))
+    assert res.symbols == ["A"]            # B 含 NaN amount 应被剔
+    assert res.dropped.get("amount") == 1
 
 
 def test_presets_valid() -> None:
