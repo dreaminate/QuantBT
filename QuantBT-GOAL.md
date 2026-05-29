@@ -1265,7 +1265,8 @@ audit_log_dir: ./data/audit/
 - **官方/用户区分（不隔离/无开关）**：官方源(白名单 tushare/binance/crawler_)字段加 `official_` 前缀，用户源自然名，防撞名；运行时读全部数据，动态字段宇宙只用于告知 Agent(`build_ai_context` 注入)。
 - **数据更新通道（与软件更新分两条线）**：`/api/data-packages/manifest`(清单+data_version+每文件指纹+official_fields) + `download`(全量/按文件增量 zip, 按 version 缓存) + `pull`(客户端从上游拉取→zip-slip 防护解压进本地数据湖→重建 inventory→合并官方字段)。
 - **Agent 字段对齐工具**：`data.list_sources/describe_fields/infer_mapping/apply_mapping/factor.validate_columns`。
-- commits：9c86f7a/3d8e21a/8c55d94/eca8e61/10e9c61/9862ced/b2fbb45。**待办**：M2(动态池+regime, §8 唯一 ❌)进行中。
+- commits：9c86f7a/3d8e21a/8c55d94/eca8e61/10e9c61/9862ced/b2fbb45；已快进合并入 **fullstack**。
+- **M2 已补完**（284a738 + c2bba2a，经第 4 轮对抗式复核修 12 项）：§8 模块表 M1-M21 全 🟢/✅，差距表内再无 ❌（仅剩 §「明确不做」的有意不交付清单）。
 
 ### v1.0.0-rc1 更新（24h sprint · v0.9.6-v1.0.5 全栈推进）
 
