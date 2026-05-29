@@ -248,7 +248,15 @@ flowchart TB
 **MVP 验收**：能输出"自 2018-01 至今，沪深 300 成分股动态池 + 4 类市场状态序列"。
 **扩展**：跨资产联动状态（美元指数 + A股 + 加密同步状态）。
 
-落地位置：`app/backend/app/universe/`、`app/backend/app/regime/`（待建）
+落地位置：`app/backend/app/universe/`、`app/backend/app/regime/`（✅ v1.0 已建）
+
+**已交付**：
+- `universe/`：`UniverseRules`/`UniverseDefinition`（Pydantic）+ `resolve_universe`（按 as-of 解析，截至当日数据 → point-in-time，喂入保留退市历史的面板即幸存者偏差安全）+ `resolve_universe_series`（逐再平衡日成分）+ 排序取 top_n + 上市天数/最低成交额/最低价/ST/排除过滤 + 3 个数据驱动预设（全市场 / 流动性 Top300 / 加密 Top30）。规则字段名对齐 canonical（amount/close），跨 A 股与加密通用。
+- `regime/`：`detect_regime`（Wilder ADX 平滑判趋势强度 + +DI/-DI 判方向 + 收益率波动率 z-score 判 crisis）→ `(ts, regime, adx, plus_di, minus_di, vol_z)`，`regime ∈ {bull,bear,range,crisis}`，`select(["ts","regime"])` 直喂 M7 `apply_regime_gating`（已有集成测试）。`RegimeConfig` 阈值可调。
+- 依赖轻量：仅 numpy/polars，**未引** hmmlearn/arch/ruptures（环境未装）。HMM/GARCH/变点检测留作可插后端。
+- 18 个单测（regime 8 + universe 10），含幸存者偏差、阈值生效、空输入、缺列报错、喂 M7 gating。
+
+**未做（按需扩展）**：HMM/GARCH 状态后端（需装 hmmlearn/arch）；沪深300/中证500 等指数成分通过 Tushare `index_weight` 注入 `static_symbols`；宏观因子（PMI/CPI/利率）regime。
 
 ---
 
@@ -1021,7 +1029,7 @@ schema_target: ohlcv  # 必须能映射到统一 schema
 | 模块 | 现状 | 目标差距 | 文件位置 |
 |---|---|---|---|
 | M1 StrategyGoal | ✅ v0.3 已建 Pydantic schema + 两套预设 + YAML round-trip + 8 单测 | （后续）UI 表单 + Agent slot-filling 走同一份 schema | `app/backend/app/strategy_goal.py` |
-| M2 Universe + Regime | ❌ 仅 `symbol_pools.py` 静态池 | 加动态池 + HMM/ADX regime | `app/backend/app/universe/`, `regime/` |
+| M2 Universe + Regime | 🟢 v1.0 完成：**动态资产池** (UniverseRules/Definition + `resolve_universe` point-in-time 幸存者偏差安全 + `resolve_universe_series` 逐再平衡日成分 + 市值/成交额 top_n + 上市天数/最低成交额/最低价/ST/排除过滤 + 3 预设) + **Regime 检测器** (Wilder ADX 判趋势方向 + 波动率 z 判 crisis → bull/bear/range/crisis，输出直喂 M7 `apply_regime_gating`) · 依赖轻量(numpy/polars，零 hmmlearn/arch) · 18 测试 | HMM/GARCH 状态后端(待装 hmmlearn/arch) / 指数成分(index_weight)注入 static_symbols / 宏观因子 regime | `app/backend/app/universe/`, `regime/` |
 | M3 数据接入 | 🟢 v0.3 完成：DataConnector 抽象 + 5 类内置 connector + dataset_version 不可变 + freshness + GE-lite + REST。**v2(分支 feat/data-platform-v2) 扩展**：宽字段保留(make_wide_fetch_result)、字段目录 FieldCatalog、官方/用户字段 official_ 标识、字段宇宙表 field_catalog、官方数据更新通道 /api/data-packages/*(打包/manifest/增量/客户端 apply)、Tushare 全接口+Binance 全类型 | 还差 CoinGecko/Glassnode 外部概率源；v2 分支待合并 | `connectors/`, `data_quality.py`, `field_catalog/`, `data_packages.py` |
 | M4 特征 | 🟢 v0.4 完成：44 个白箱算子（ts_/cs_/一元/二元）+ AST 表达式引擎（双阶段 eval 绕开 polars over chain）+ alpha_lite 30 个内置因子 + IC/Rank-IC/IC-IR/IC 衰减计算 + FactorRegistry 版本化 | 还差 外部概率特征（链上 / 宏观 / 期权 IV）；表达式编辑器前端页 | `app/backend/app/factor_factory/` |
 | M5 标签 | 🟢 v0.5 完成：raw_return / excess_return / xs_rank / **triple_barrier (自写 100 行内)** / meta_label / vol_adjusted | 动态 barrier（基于实时波动率） | `labels/` |
