@@ -12,8 +12,67 @@ from typing import Any
 TOOL_SCHEMA: list[dict[str, Any]] = [
     {
         "name": "data.list_sources",
-        "description": "列出全部数据 connector 及其 freshness 状态",
+        "description": "列出数据源开关树（市场→源；官方/用户，含 enabled 状态）",
         "parameters": {"type": "object", "properties": {}},
+    },
+    {
+        "name": "data.describe_fields",
+        "description": "某市场当前可用的字段宇宙（canonical + freeform）及各数据集真实列；随启用的源动态变化",
+        "parameters": {
+            "type": "object",
+            "properties": {"market": {"type": "string"}, "interval": {"type": "string"}},
+            "required": ["market"],
+        },
+    },
+    {
+        "name": "data.infer_mapping",
+        "description": "对用户源的陌生列名推断到 canonical 字段的映射建议（精确/近似/freeform），供人工确认",
+        "parameters": {
+            "type": "object",
+            "properties": {
+                "columns": {"type": "array", "items": {"type": "string"}},
+                "market": {"type": "string"},
+                "sample": {"type": "object"},
+            },
+            "required": ["columns"],
+        },
+    },
+    {
+        "name": "data.apply_mapping",
+        "description": "把确认后的「原始列→canonical/freeform 字段」映射写入某 (源, data_kind)",
+        "parameters": {
+            "type": "object",
+            "properties": {
+                "source": {"type": "string"},
+                "data_kind": {"type": "string"},
+                "mappings": {
+                    "type": "array",
+                    "items": {
+                        "type": "object",
+                        "properties": {
+                            "raw_column": {"type": "string"},
+                            "field_id": {"type": "string"},
+                            "is_freeform": {"type": "boolean"},
+                        },
+                        "required": ["raw_column", "field_id"],
+                    },
+                },
+            },
+            "required": ["source", "mappings"],
+        },
+    },
+    {
+        "name": "factor.validate_columns",
+        "description": "校验因子表达式引用的列是否都在当前市场的可用字段宇宙内；缺失则给映射建议",
+        "parameters": {
+            "type": "object",
+            "properties": {
+                "formula": {"type": "string"},
+                "market": {"type": "string"},
+                "interval": {"type": "string"},
+            },
+            "required": ["formula", "market"],
+        },
     },
     {
         "name": "data.pull",

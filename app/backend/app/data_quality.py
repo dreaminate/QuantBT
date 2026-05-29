@@ -189,6 +189,14 @@ class DatasetRegistry:
         ge_results = []
         if rules:
             ge_results = [r.to_dict() for r in run_ge_checks(fetch_result.frame, rules, foreign_provider)]
+        # 数据平台 v2：把数据集真实列清单落进 metadata["columns"]（FieldCatalog 的真相源之一）。
+        # 用 metadata 既有扩展点，不改 DatasetVersion 字段，旧 jsonl 行不受影响。
+        meta = dict(metadata or {})
+        if "columns" not in meta:
+            try:
+                meta["columns"] = list(fetch_result.frame.columns)
+            except Exception:  # noqa: BLE001
+                pass
         version = DatasetVersion(
             dataset_id=dataset_id,
             version_id=make_version_id(fetch_result.fetched_at_utc, fetch_result.sha256),
@@ -200,7 +208,7 @@ class DatasetRegistry:
             sha256=fetch_result.sha256,
             file_paths=list(file_paths or []),
             ge_results=ge_results,
-            metadata=dict(metadata or {}),
+            metadata=meta,
         )
         self._append(version)
         return version

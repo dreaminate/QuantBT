@@ -22,8 +22,7 @@ from .base import (
     DataConnector,
     FetchRequest,
     FetchResult,
-    enforce_unified_schema,
-    make_fetch_result,
+    make_wide_fetch_result,
 )
 
 
@@ -49,7 +48,7 @@ class BinanceRESTConnector(DataConnector):
             asset_class="crypto_perp" if self._market == "binanceusdm" else "crypto_spot",
             supported_markets=(self._market,),
             supported_intervals=_INTERVALS,
-            supported_data_kinds=("ohlcv", "funding_rate", "premium_index"),
+            supported_data_kinds=("ohlcv", "funding_rate"),
             auth_mode="none",
             rate_limit_per_minute=1200,
             realtime=True,
@@ -86,7 +85,8 @@ class BinanceRESTConnector(DataConnector):
             df = self._fetch_funding(request)
         else:
             raise NotImplementedError(f"binance_rest connector 暂不支持 {request.data_kind}")
-        return make_fetch_result(df, source_name=f"binance_rest::{self._market}")
+        # 数据平台 v2：保留宽字段落盘；OHLCV 兼容视图在消费侧用 to_ohlcv_view 投影。
+        return make_wide_fetch_result(df, source_name=f"binance_rest::{self._market}")
 
     def _base(self) -> str:
         return _USDM_BASE if self._market == "binanceusdm" else _SPOT_BASE
@@ -129,6 +129,9 @@ class BinanceRESTConnector(DataConnector):
                         "close": float(k[4]),
                         "volume": float(k[5]),
                         "amount": float(k[7]) if len(k) > 7 else 0.0,
+                        "trade_count": int(k[8]) if len(k) > 8 else 0,
+                        "taker_buy_volume": float(k[9]) if len(k) > 9 else 0.0,
+                        "taker_buy_quote_volume": float(k[10]) if len(k) > 10 else 0.0,
                     }
                 )
             if len(chunk) < _MAX_LIMIT:
@@ -136,7 +139,7 @@ class BinanceRESTConnector(DataConnector):
             cursor = int(chunk[-1][0]) + 1
             if request.end and cursor >= int(request.end.replace(tzinfo=UTC).timestamp() * 1000):
                 break
-        return enforce_unified_schema(pl.DataFrame(rows)) if rows else enforce_unified_schema(pl.DataFrame())
+        return pl.DataFrame(rows) if rows else pl.DataFrame()
 
     def _fetch_funding(self, request: FetchRequest) -> pl.DataFrame:
         if self._market != "binanceusdm":
@@ -151,23 +154,20 @@ class BinanceRESTConnector(DataConnector):
         r.raise_for_status()
         payload = r.json()
         if not payload:
-            return enforce_unified_schema(pl.DataFrame())
+            return pl.DataFrame()
+        # 数据平台 v2：资金费率独立成表，保留原生列 funding_rate / mark_price，不再伪造成 OHLC。
         rows = [
             {
                 "ts": datetime.fromtimestamp(item["fundingTime"] / 1000, tz=UTC),
                 "symbol": item["symbol"],
                 "market": self._market,
                 "interval": "8h",
-                "open": float(item.get("fundingRate", 0)),
-                "high": float(item.get("fundingRate", 0)),
-                "low": float(item.get("fundingRate", 0)),
-                "close": float(item.get("fundingRate", 0)),
-                "volume": 0.0,
-                "amount": 0.0,
+                "funding_rate": float(item.get("fundingRate", 0)),
+                "mark_price": float(item.get("markPrice", 0)),
             }
             for item in payload
         ]
-        return enforce_unified_schema(pl.DataFrame(rows))
+        return pl.DataFrame(rows)
 
 
 __all__ = ["BinanceRESTConnector"]

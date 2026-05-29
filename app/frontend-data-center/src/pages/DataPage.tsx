@@ -3,15 +3,17 @@ import { useMutation, useQuery } from "@tanstack/react-query";
 
 import { cancelJob, getDataPreview, listDataFiles, listDataOverview, listJobs, retryJob } from "../api";
 import { DataPullPanel } from "../components/DataPullPanel";
+import { FieldsPanel } from "../components/FieldsPanel";
+import { SourcesPanel } from "../components/SourcesPanel";
 import { StatusPill } from "../components/StatusPill";
 import type { JobResponse } from "../types";
 
 
-type DomainTab = "cn_stock" | "hk_stock" | "us_stock" | "crypto" | "browser" | "jobs";
+type DomainTab = "cn_stock" | "hk_stock" | "us_stock" | "crypto" | "browser" | "jobs" | "sources" | "fields";
 type DataBrowserBucketId = "cn" | "hk" | "us" | "crypto";
 
 type DomainConfig = {
-  key: Exclude<DomainTab, "browser" | "jobs">;
+  key: Exclude<DomainTab, "browser" | "jobs" | "sources" | "fields">;
   label: string;
   pullMarkets: string[];
 };
@@ -24,12 +26,14 @@ const DOMAIN_CONFIGS: DomainConfig[] = [
   { key: "crypto", label: "加密", pullMarkets: ["binanceusdm"] },
 ];
 
-const DOMAIN_TAB_ORDER: DomainTab[] = ["cn_stock", "hk_stock", "us_stock", "crypto", "browser", "jobs"];
+const DOMAIN_TAB_ORDER: DomainTab[] = ["cn_stock", "hk_stock", "us_stock", "crypto", "sources", "fields", "browser", "jobs"];
 const DOMAIN_LABELS: Record<DomainTab, string> = {
   cn_stock: "A股",
   hk_stock: "港股",
   us_stock: "美股",
   crypto: "加密",
+  sources: "数据源",
+  fields: "字段",
   browser: "数据浏览",
   jobs: "任务中心",
 };
@@ -123,6 +127,8 @@ export function DataPage() {
             onGoToTaskCenter={() => setActiveTab("jobs")}
           />
         ) : null}
+        {activeTab === "sources" ? <SourcesPanel /> : null}
+        {activeTab === "fields" ? <FieldsPanel /> : null}
         {activeTab === "browser" ? <DataBrowserView bucketId={browserBucketId} onBucketChange={setBrowserBucketId} /> : null}
         {activeTab === "jobs" ? <JobsCenterView /> : null}
       </div>

@@ -14,7 +14,7 @@ from .market_data import MARKET_ALIASES, SUPPORTED_INTERVALS, normalize_symbol_k
 from .project_paths import ProjectPaths
 
 
-CATALOG_VERSION = 2
+CATALOG_VERSION = 3
 IGNORED_FILE_STEMS = {"fetch_failures"}
 TIMESTAMP_COLUMN_CANDIDATES = (
     "date",
@@ -185,6 +185,7 @@ def _build_legacy_file_item(
         "row_count": stats["row_count"],
         "start": stats["start"],
         "end": stats["end"],
+        "columns": stats.get("columns") or [],
         "updated_at": max(_mtime_iso(path) for path in format_paths.values()),
     }
 
@@ -239,6 +240,7 @@ def _scan_dataset_market(paths: ProjectPaths, market: str, data_kind: str) -> li
                 "row_count": stats["row_count"],
                 "start": stats["start"],
                 "end": stats["end"],
+                "columns": stats.get("columns") or [],
                 "updated_at": _mtime_iso(path),
             }
         )

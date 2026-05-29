@@ -183,6 +183,36 @@ def make_fetch_result(frame: pl.DataFrame, source_name: str) -> FetchResult:
     )
 
 
+def make_wide_fetch_result(frame: pl.DataFrame, source_name: str) -> FetchResult:
+    """`make_fetch_result` 的对偶：**保留全部原生列（宽字段）**，不做 OHLCV 投影。
+
+    用于数据平台 v2 的"拉全字段"落盘（Tushare 基本面/财务/资金流、Binance 资金费率/持仓量等）。
+    消费侧需要固定 10 列时再调 `to_ohlcv_view()`。
+    """
+
+    df = frame if frame is not None else pl.DataFrame()
+    rows = df.height
+    coverage_start = coverage_end = None
+    if rows and "ts" in df.columns:
+        ts_col = df.get_column("ts")
+        cmin, cmax = ts_col.min(), ts_col.max()
+        try:
+            coverage_start = cmin.isoformat() if cmin is not None else None
+            coverage_end = cmax.isoformat() if cmax is not None else None
+        except AttributeError:
+            coverage_start = str(cmin) if cmin is not None else None
+            coverage_end = str(cmax) if cmax is not None else None
+    return FetchResult(
+        frame=df,
+        source_name=source_name,
+        fetched_at_utc=datetime.now(UTC).isoformat(),
+        row_count=rows,
+        coverage_start_utc=coverage_start,
+        coverage_end_utc=coverage_end,
+        sha256=_sha256_of_frame(df),
+    )
+
+
 def enforce_unified_schema(frame: pl.DataFrame) -> pl.DataFrame:
     """把任意 DataFrame 强制对齐到统一 OHLCV schema，缺失列填空。"""
 
@@ -206,6 +236,11 @@ def enforce_unified_schema(frame: pl.DataFrame) -> pl.DataFrame:
     if df.height:
         df = df.sort(["symbol", "ts"])
     return df
+
+
+# 语义别名：消费侧"把宽表投影成固定 10 列 OHLCV 视图"，与落盘侧的"强制门"用途区分开。
+# 数据平台 v2 起，落盘走 make_wide_fetch_result 保留宽字段，只有兼容路径调 to_ohlcv_view。
+to_ohlcv_view = enforce_unified_schema
 
 
 def _sha256_of_frame(df: pl.DataFrame) -> str:
@@ -328,5 +363,7 @@ __all__ = [
     "UNIFIED_OHLCV_SCHEMA",
     "enforce_unified_schema",
     "make_fetch_result",
+    "make_wide_fetch_result",
     "registry",
+    "to_ohlcv_view",
 ]

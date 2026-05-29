@@ -64,9 +64,14 @@ class BacktestVenue(ExecutionVenue):
         matching: MatchingMode = "next_bar_open",
         cash: float = 1_000_000.0,
         audit: ExecutionAuditLog | None = None,
+        required_fields: set[str] | None = None,
     ) -> None:
-        if not {"ts", "symbol", "open", "high", "low", "close"}.issubset(prices.columns):
-            raise ValueError("prices 必须含 ts/symbol/open/high/low/close")
+        # 数据平台 v2：默认仍要 OHLCV（向后兼容），但可由调用方按 FieldRequirement 配置所需字段。
+        # 不在 venue 内反向依赖 FieldCatalog —— prices 由上游(load_panel 等)组装好后传入。
+        needed = required_fields or {"ts", "symbol", "open", "high", "low", "close"}
+        missing = sorted(needed - set(prices.columns))
+        if missing:
+            raise ValueError(f"prices 缺少必需字段: {missing}（需 {sorted(needed)}）")
         self._prices = prices.sort(["ts", "symbol"])
         self._cost = cost_model or BacktestCostModel()
         self._mode: MatchingMode = matching

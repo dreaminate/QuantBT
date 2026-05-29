@@ -114,6 +114,32 @@ from .billing import BillingService, PLAN_IDS  # noqa: E402
 from .billing.stripe_service import PLAN_INFO  # noqa: E402
 BILLING_SERVICE = BillingService(_COMMUNITY_DB)  # v1.0.3 · Stripe scaffold
 
+# v2 数据平台 · 字段目录（inventory 为主 + registry 为辅）+ 源开关（市场级+源级）+ 字段映射
+from .field_catalog import FieldCatalog, FieldMappingStore, InventoryDatasetSource  # noqa: E402
+from .source_config import SourceConfigService  # noqa: E402
+
+
+from .tushare_quant1 import qb_project_paths as _qb_project_paths  # noqa: E402
+
+# B5: inventory 读路径 = rebuild 写路径（都取自 qb_project_paths），避免 BACKTEST_DATA_ROOT 非默认时读写分叉、字段宇宙恒空。
+_QB_PATHS = _qb_project_paths()
+
+
+def _rebuild_inventory() -> None:
+    from .tushare_quant1.data_catalog import rebuild_data_catalog
+
+    rebuild_data_catalog(_QB_PATHS)
+
+
+SOURCE_CONFIG = SourceConfigService(_COMMUNITY_DB)
+FIELD_MAPPING_STORE = FieldMappingStore(str(_COMMUNITY_DB))
+FIELD_CATALOG = FieldCatalog(
+    DATASET_REGISTRY,
+    sources=[InventoryDatasetSource(_QB_PATHS.data_catalog_inventory_file, rebuild=_rebuild_inventory)],
+    mapping=FIELD_MAPPING_STORE,
+    source_filter=SOURCE_CONFIG.source_filter(),
+)
+
 _main_logger = logging.getLogger(__name__)
 
 # v0.8.4 · Glossary 词条仓库（启动时从 docs/glossary/ 加载，加载失败不阻断启动）
@@ -182,6 +208,14 @@ def _agent_runtime() -> AgentRuntime:
     runtime.register_tool("strategy_goal.create", lambda _n, args: {"strategy_goal": args})
     runtime.register_tool("factor.run_ic", lambda _n, args: {"queued": True, "args": args})
     runtime.register_tool("code.replicate", lambda _n, args: CODE_REPLICATOR.replicate(args.get("code", ""), args.get("source_dialect", "pandas")).__dict__)
+    # v2 数据平台 · 字段对齐工具（list_sources / describe_fields / infer_mapping / apply_mapping / validate_columns）
+    from .agent.tool_handlers import register_field_tools
+    register_field_tools(
+        runtime,
+        field_catalog=FIELD_CATALOG,
+        source_config=SOURCE_CONFIG,
+        mapping_store=FIELD_MAPPING_STORE,
+    )
     return runtime
 
 
@@ -227,6 +261,91 @@ def data_freshness(dataset_id: str | None = Query(None), market_kind: str = Quer
     """对单个 dataset_id 或所有 dataset 给出 green/yellow/red 报告。"""
     ids = [dataset_id] if dataset_id else DATASET_REGISTRY.list_dataset_ids()
     return [compute_freshness(did, market_kind, DATASET_REGISTRY).to_dict() for did in ids]
+
+
+@app.get("/api/sources")
+def list_data_sources() -> list[dict]:
+    """数据源开关树（市场 → 源；官方/用户）。刷新前同步 catalog 当前所见的源。"""
+    try:
+        SOURCE_CONFIG.sync_from_catalog(FIELD_CATALOG)
+    except Exception:  # noqa: BLE001
+        pass
+    return SOURCE_CONFIG.tree()
+
+
+@app.put("/api/sources/{name}/enabled")
+def set_data_source_enabled(name: str, market: str = Query(...), enabled: bool = Query(...)) -> dict:
+    """源级开关：开/关某 (源, 市场) 单元。"""
+    SOURCE_CONFIG.set_source_enabled(name, market, enabled)
+    return {"name": name, "market": market, "enabled": enabled}
+
+
+@app.put("/api/sources/market/{market}/enabled")
+def set_market_sources_enabled(
+    market: str, enabled: bool = Query(...), kind: str | None = Query(None)
+) -> dict:
+    """市场级开关：批量开/关该市场下所有源（kind 可选 official/user，用于"只屏蔽官方数据"）。"""
+    affected = SOURCE_CONFIG.set_market_enabled(market, enabled, kind=kind)
+    return {"market": market, "enabled": enabled, "kind": kind, "affected": affected}
+
+
+@app.get("/api/fields")
+def list_available_fields(
+    market: str = Query(...), interval: str | None = Query(None), enabled_only: bool = Query(True)
+) -> dict:
+    """当前可用字段宇宙（canonical + freeform），按 enabled 源过滤——量化流程/Agent 的字段真相源。"""
+    return FIELD_CATALOG.available_fields(market, interval=interval, enabled_only=enabled_only).to_dict()
+
+
+from pydantic import BaseModel as _BaseModel  # noqa: E402
+
+
+class _FieldInferRequest(_BaseModel):
+    columns: list[str]
+    market: str | None = None
+    data_kind: str = "ohlcv"
+    sample: dict | None = None
+
+
+class _FieldMappingItem(_BaseModel):
+    raw_column: str
+    field_id: str
+    is_freeform: bool = False
+
+
+class _FieldMappingApplyRequest(_BaseModel):
+    source: str
+    data_kind: str = "ohlcv"
+    mappings: list[_FieldMappingItem]
+
+
+@app.post("/api/fields/infer-mapping")
+def infer_field_mapping(req: _FieldInferRequest) -> dict:
+    """字段映射向导：对一批原始列名给出对齐到 canonical 的建议（供前端/用户确认）。"""
+    from .field_catalog.infer import infer_mapping_report
+
+    return infer_mapping_report(req.columns, market=req.market, data_kind=req.data_kind, sample=req.sample)
+
+
+@app.post("/api/fields/mapping")
+def apply_field_mapping(req: _FieldMappingApplyRequest) -> dict:
+    """把确认后的映射写入 (源, data_kind)。非法 field_id 返回 422。"""
+    from .field_catalog import FieldMapping
+
+    for m in req.mappings:
+        try:
+            FIELD_MAPPING_STORE.set(
+                FieldMapping(
+                    source=req.source,
+                    data_kind=req.data_kind,
+                    raw_column=m.raw_column,
+                    field_id=m.field_id,
+                    is_freeform=m.is_freeform,
+                )
+            )
+        except ValueError as exc:
+            raise HTTPException(status_code=422, detail=f"{m.raw_column}: {exc}") from exc
+    return {"applied": len(req.mappings)}
 
 
 @app.get("/api/factors/operators")

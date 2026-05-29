@@ -476,7 +476,8 @@ def _merge_binance_dedupe(data_kind: str, old: pl.DataFrame | None, new: pl.Data
         return new
     if new.height == 0:
         return old
-    merged = pl.concat([old, new], how="vertical")
+    # diagonal_relaxed：容忍新旧文件列集/列类型演进（如 klines 从 8 列升到 12 列），按并集对齐、缺列填 null。
+    merged = pl.concat([old, new], how="diagonal_relaxed")
     if data_kind == "agg_trades":
         return merged.unique(subset=["aggregate_trade_id"], keep="last").sort("timestamp")
     if data_kind in ("klines", "funding_rate", "open_interest_hist", "taker_buy_sell_volume"):
@@ -777,6 +778,11 @@ def _normalize_binance_rows(data_kind: str, rows: Any, symbol: str | None = None
                     "close": float(item[4]),
                     "volume": float(item[5]),
                     "close_time": datetime.fromtimestamp(item[6] / 1000, tz=UTC).isoformat().replace("+00:00", "Z"),
+                    # 数据平台 v2：保留 12 列 kline 的全部字段（成交额/笔数/主动买入量额）
+                    "quote_volume": float(item[7]) if len(item) > 7 else 0.0,
+                    "trade_count": int(item[8]) if len(item) > 8 else 0,
+                    "taker_buy_volume": float(item[9]) if len(item) > 9 else 0.0,
+                    "taker_buy_quote_volume": float(item[10]) if len(item) > 10 else 0.0,
                     "symbol": symbol,
                 }
                 for item in rows
