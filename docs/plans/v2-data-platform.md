@@ -240,7 +240,7 @@
 
 **目标**：用户能在 UI 开关源、看字段、走映射向导。
 
-**改动**：[frontend-data-center](app/frontend-data-center)（[DataPage.tsx](app/frontend-data-center/src/pages/DataPage.tsx) 加 tab）
+**改动**：~~frontend-data-center~~ → **已并入主应用** `app/frontend`（`src/pages/DataPage.tsx` 加「字段」tab + `components/FieldsPanel.tsx` + `dataPlatform.ts`；独立 data-center SPA 已退役）。注：去开关方案落地后只保留「字段查看器 + 映射向导」，源开关树作废。
 - **源开关树**：market→sources，市场级总开关 + 源级开关；官方/用户分组；调 `/api/sources`。
 - **字段查看器**：选中源/dataset 看真实列 + canonical 映射 + 样本；调 `/api/fields`、`/api/data/preview`。
 - **字段映射向导**：用户上传/自定义 API 后，调 `data.infer_mapping` 拿 Agent 建议 → 拖拽确认 → `apply_mapping`。

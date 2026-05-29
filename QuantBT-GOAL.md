@@ -804,7 +804,7 @@ Agent: [tool: model.train ...]
 
 | 页面 | 位置 | 状态 |
 |---|---|---|
-| 数据中心（来源 / 标的池 / 上传 / freshness） | `frontend-data-center` | 已有骨架，待扩展 freshness 与上传向导 |
+| 数据中心（A股/港股/美股/加密拉取 · 字段宇宙 · 数据浏览 · 任务中心） | `frontend` 的 `/data`（DataPage，在主应用 Shell 内） | 已并入主应用，含 v2「字段」tab（字段宇宙+映射向导）；独立 `frontend-data-center` SPA 已退役（git 可恢复） |
 | 策略工坊（StrategyGoal 表单 + 因子表达式编辑器） | 新建 | 待建 |
 | Agent 工作台（对话 + 工具调用可视化） | 新建 | 待建 |
 | Run 详情（收益概述三联图） | `frontend-run-detail` | **冻结**（仅允许排版/显示逻辑优化/加字段） |
