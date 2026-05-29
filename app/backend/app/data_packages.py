@@ -21,7 +21,7 @@ from datetime import UTC, datetime
 from pathlib import Path
 from typing import Any
 
-from .field_catalog.sources import _infer_source
+from .field_catalog.sources import _infer_source, is_official_source
 
 
 def _rel(file_path: str, root: Path) -> str | None:
@@ -32,7 +32,8 @@ def _rel(file_path: str, root: Path) -> str | None:
 
 
 def _is_official(market: str | None, file_path: str) -> bool:
-    return not _infer_source(market, file_path).startswith("user_")
+    # 白名单：只有归到官方源(tushare/binance/crawler_*)才下发；custom/unknown/用户源一律不打包
+    return is_official_source(_infer_source(market, file_path))
 
 
 def official_manifest(catalog_files: list[dict], root: Path | str) -> dict[str, Any]:
@@ -74,15 +75,20 @@ def official_manifest(catalog_files: list[dict], root: Path | str) -> dict[str, 
 
 
 def build_package_zip(
-    catalog_files: list[dict], root: Path | str, out_zip: Path | str, *, rel_paths: list[str] | None = None
+    catalog_files: list[dict],
+    root: Path | str,
+    out_zip: Path | str,
+    *,
+    rel_paths: list[str] | None = None,
+    manifest: dict[str, Any] | None = None,
 ) -> dict[str, Any]:
     """把官方数据打成 zip（含 manifest.json）。
 
     rel_paths=None → 全量；否则只打这些相对路径（客户端按 manifest 算出的增量清单）。
-    返回打进去的 manifest 子集。
+    manifest 可传入预构造的（避免重复排序/哈希）。返回打进去的 manifest 子集。
     """
     root = Path(root)
-    manifest = official_manifest(catalog_files, root)
+    manifest = manifest or official_manifest(catalog_files, root)
     if rel_paths is not None:
         want = set(rel_paths)
         selected = [f for f in manifest["files"] if f["path"] in want]

@@ -1,4 +1,4 @@
-// 数据平台 v2 · 数据源开关 + 字段目录 + 字段映射向导 的类型与 API client。
+// 数据平台 v2 · 字段目录 + 字段映射向导 的类型与 API client。（源开关已废弃：单库 + official_ 前缀，不隔离）
 
 async function fetchJson<T>(path: string, init?: RequestInit): Promise<T> {
   const res = await fetch(path, {

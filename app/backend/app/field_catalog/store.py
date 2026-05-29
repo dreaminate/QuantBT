@@ -18,6 +18,7 @@ from datetime import UTC, datetime
 from typing import Any
 
 from .canonical import CANONICAL
+from .sources import is_official_source
 
 
 class FieldCatalogStore:
@@ -115,7 +116,7 @@ class FieldCatalogStore:
                         market=market,
                         canonical_id=canonical_id,
                         is_freeform=is_free,
-                        is_official=not str(e.source_name).startswith("user_"),
+                        is_official=is_official_source(e.source_name),
                         source=e.source_name,
                         data_kind=dk_by_ds.get(e.dataset_id),
                         raw_column=e.raw_column,

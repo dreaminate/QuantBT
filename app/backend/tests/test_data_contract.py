@@ -191,3 +191,26 @@ def test_freeform_ids_are_valid_python_identifiers(tmp_path: Path) -> None:
     assert uni.freeform
     for fid in uni.freeform:
         assert fid.isidentifier(), fid
+
+
+def test_load_panel_derives_official_amount(tmp_path: Path) -> None:
+    """官方源(official_close/official_volume) → 派生 official_amount（复核 finding：派生须 official-aware）。"""
+    reg = DatasetRegistry(tmp_path / "r.jsonl")
+    f = pl.DataFrame(
+        [
+            {"ts": datetime(2024, 1, 1, tzinfo=UTC), "symbol": "BTCUSDT", "market": "binanceusdm", "interval": "1d", "close": 10.0, "volume": 100.0},
+            {"ts": datetime(2024, 1, 2, tzinfo=UTC), "symbol": "BTCUSDT", "market": "binanceusdm", "interval": "1d", "close": 11.0, "volume": 110.0},
+        ]
+    )
+    p = tmp_path / "k.parquet"
+    f.write_parquet(p)
+    reg.register("k", make_wide_fetch_result(f, "binance"), file_paths=[str(p)],
+                 metadata={"market": "binanceusdm", "interval": "1d", "data_kind": "klines"})
+    res = FieldCatalog(reg).load_panel(
+        FieldRequirement(canonical_ids=["official_close", "official_volume"], optional_ids=["official_amount"],
+                         market="binanceusdm", interval="1d")
+    )
+    assert res.ok and not res.missing
+    assert "official_amount" in res.panel.columns
+    row0 = res.panel.sort("ts").row(0, named=True)
+    assert abs(row0["official_amount"] - row0["official_close"] * row0["official_volume"]) < 1e-6

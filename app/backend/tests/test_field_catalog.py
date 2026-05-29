@@ -39,7 +39,7 @@ def test_canonical_freeform_and_structural(tmp_path: Path) -> None:
     uni = FieldCatalog(reg).available_fields("stocks_cn", interval="1d")
     assert "official_close" in uni.canonical
     assert "official_pe_ttm" in uni.canonical
-    assert "official_alpha_news" in uni.freeform
+    assert "official_tushare__alpha_news" in uni.freeform   # 官方 freeform 带源命名空间
     # 结构键不进字段宇宙
     for key in ("ts", "symbol", "market", "interval"):
         assert key not in uni.canonical and key not in uni.freeform

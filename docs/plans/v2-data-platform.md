@@ -3,6 +3,8 @@
 > 状态：草案 v1，待用户 review 后开工。
 > 目标对应 GOAL 的 M3（数据接入）、M4（特征）、M14（Agent），并新增"源开关 / 字段目录"两块当前 GOAL 未覆盖的能力。
 > 维护原则同 GOAL：只增不删，决策变了在原段下追加。
+>
+> **⚠️ 状态更新（2026-05-29，已实现并提交于分支 `feat/data-platform-v2`）**：**源开关/隔离方案已废弃**——下文 §2.5/§3 P3 里的 `SourceConfigService` / `/api/sources` / 源开关树等**已删除**。最终采用：**单库 + 官方字段加 `official_` 前缀**（不隔离、不屏蔽；运行时读全部数据；动态字段宇宙只用于告知 Agent）。另新增：字段宇宙持久化表 `field_catalog`（`field_catalog/store.py`）、官方数据更新通道 `/api/data-packages/*`（与软件更新分线）。下文"源开关"段落仅作历史轨迹，**勿据此找已删的 SourceConfigService 等服务**。
 
 ---
 

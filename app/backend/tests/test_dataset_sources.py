@@ -116,5 +116,5 @@ def test_registry_and_inventory_merge(tmp_path: Path) -> None:
     )
     cat = FieldCatalog(sources=[InventoryDatasetSource(inv), RegistryDatasetSource(reg)])
     uni = cat.available_fields("binanceusdm", interval="1d")
-    assert "official_close" in uni.canonical              # 来自 inventory(官方)
-    assert "official_mvrv" in uni.freeform                # 来自 registry(爬虫, 也是官方源 → official_)
+    assert "official_close" in uni.canonical                          # 来自 inventory(官方)
+    assert "official_crawler_onchain__mvrv" in uni.freeform           # 来自 registry(爬虫=官方源, 带源命名空间)

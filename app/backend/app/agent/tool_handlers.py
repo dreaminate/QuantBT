@@ -14,6 +14,7 @@ from typing import Any
 from ..factor_factory.operators import OPERATOR_REGISTRY
 from ..field_catalog import FieldMapping
 from ..field_catalog.infer import infer_mapping, infer_mapping_report
+from ..field_catalog.sources import is_official_source
 
 _STRUCTURAL = {"ts", "symbol", "market", "interval"}
 
@@ -37,7 +38,7 @@ def register_field_tools(runtime, *, field_catalog, mapping_store) -> None:
                 ds.source_name,
                 {
                     "source": ds.source_name,
-                    "kind": "user" if str(ds.source_name).startswith("user_") else "official",
+                    "kind": "official" if is_official_source(ds.source_name) else "user",
                     "markets": set(),
                     "data_kinds": set(),
                 },

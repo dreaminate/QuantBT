@@ -849,26 +849,27 @@ def data_package_manifest() -> dict:
 
 @app.get("/api/data-packages/download")
 def data_package_download(paths: str | None = Query(None)):
-    """下载官方数据 zip（内含 manifest.json）。paths=逗号分隔相对路径→增量；省略→全量官方数据。"""
-    import tempfile
+    """下载官方数据 zip（内含 manifest.json）。paths=逗号分隔相对路径→增量；省略→全量。
+
+    按 data_version 缓存复用（避免每次重压 + 客户端断连导致临时文件泄漏）。
+    """
+    import hashlib as _hl
 
     from fastapi.responses import FileResponse
-    from starlette.background import BackgroundTask
 
     from .data_packages import build_package_zip, official_manifest
 
     files = _official_catalog_files()
-    version = official_manifest(files, _QB_PATHS.root)["data_version"]
+    manifest = official_manifest(files, _QB_PATHS.root)
+    version = manifest["data_version"]
     rel = [p for p in paths.split(",") if p.strip()] if paths else None
-    tmp = tempfile.NamedTemporaryFile(prefix="qbt-data-", suffix=".zip", delete=False)
-    tmp.close()
-    build_package_zip(files, _QB_PATHS.root, tmp.name, rel_paths=rel)
-    return FileResponse(
-        tmp.name,
-        media_type="application/zip",
-        filename=f"quantbt-official-data-{version}.zip",
-        background=BackgroundTask(lambda: os.path.exists(tmp.name) and os.unlink(tmp.name)),
-    )
+    key = version if rel is None else f"{version}-{_hl.sha256(','.join(sorted(rel)).encode()).hexdigest()[:10]}"
+    cache_dir = DATA_ROOT / "_cache" / "data-packages"
+    cache_dir.mkdir(parents=True, exist_ok=True)
+    out = cache_dir / f"quantbt-official-data-{key}.zip"
+    if not out.exists():
+        build_package_zip(files, _QB_PATHS.root, out, rel_paths=rel, manifest=manifest)
+    return FileResponse(out, media_type="application/zip", filename=out.name)
 
 
 @app.middleware("http")

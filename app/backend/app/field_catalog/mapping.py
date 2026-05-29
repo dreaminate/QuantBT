@@ -40,8 +40,11 @@ def validate_field_id(field_id: str, is_freeform: bool) -> None:
         raise ValueError(f"field_id 必须是合法标识符（不能含点号/空格/中文等）: {field_id!r}")
     if fid in _STRUCTURAL:
         raise ValueError(f"field_id 不能是结构键 {sorted(_STRUCTURAL)}: {fid}")
-    if not is_freeform and fid not in set(CANONICAL.ids()):
-        raise ValueError(f"非 freeform 的 field_id 必须在 canonical 词典内: {fid}")
+    if not is_freeform:
+        # 接受裸 canonical(用户源) 与 official_<canonical>(官方源)；与 catalog 的 official_ 命名空间一致
+        base = fid[len("official_"):] if fid.startswith("official_") else fid
+        if base not in set(CANONICAL.ids()):
+            raise ValueError(f"非 freeform 的 field_id 必须是 canonical 或 official_<canonical>: {fid}")
 
 
 class FieldMappingStore:

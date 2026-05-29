@@ -38,8 +38,8 @@ def test_official_crawler_dataset_visible_and_gated(tmp_path: Path) -> None:
     # 官方爬虫源的字段进入"官方加密"可用宇宙（mvrv/sopr 不在词典 → freeform）
     cat = FieldCatalog(reg)
     uni = cat.available_fields("binanceusdm", interval="1d")
-    assert "official_mvrv" in uni.freeform   # 爬虫源也是官方源 → official_ 前缀
-    assert "official_sopr" in uni.freeform
+    assert "official_crawler_onchain__mvrv" in uni.freeform   # 爬虫=官方源 → official_<source>__<col>
+    assert "official_crawler_onchain__sopr" in uni.freeform
 
     # 源开关可屏蔽这个官方爬虫源（P3 接口）
     gated = FieldCatalog(reg, source_filter=lambda s, _m: s != "crawler_onchain")

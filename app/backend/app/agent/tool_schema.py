@@ -12,12 +12,12 @@ from typing import Any
 TOOL_SCHEMA: list[dict[str, Any]] = [
     {
         "name": "data.list_sources",
-        "description": "列出数据源开关树（市场→源；官方/用户，含 enabled 状态）",
+        "description": "列出当前所有数据源（官方 official / 用户 user）及各源覆盖的 markets 与 data_kinds；无开关、不隔离",
         "parameters": {"type": "object", "properties": {}},
     },
     {
         "name": "data.describe_fields",
-        "description": "某市场当前可用的字段宇宙（canonical + freeform）及各数据集真实列；随启用的源动态变化",
+        "description": "某市场当前全部源的字段宇宙（canonical + freeform；官方字段带 official_ 前缀）及各数据集真实列",
         "parameters": {
             "type": "object",
             "properties": {"market": {"type": "string"}, "interval": {"type": "string"}},

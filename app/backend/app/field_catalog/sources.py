@@ -30,6 +30,16 @@ _EXPECTED_CATALOG_VERSION = 3
 # market 命名归一：现代 Binance 落盘目录段是字面量 "crypto"，但源开关/字段宇宙/前端按 "binanceusdm" 查询。
 _MARKET_ALIASES = {"crypto": "binanceusdm"}
 
+# 官方源白名单前缀：只有这些才算"官方"（团队拉取/爬取）；其余(user_/upload/generic DIY/custom/unknown)一律按用户处理。
+# 白名单而非黑名单：避免 upload::xxx / 自定义 connector 名 / market='custom' 被误判成官方而打 official_ 前缀或被下发。
+_OFFICIAL_PREFIXES = ("tushare", "binance", "crawler_")
+
+
+def is_official_source(source_name: str | None) -> bool:
+    s = str(source_name or "")
+    return any(s.startswith(p) for p in _OFFICIAL_PREFIXES)
+
+
 # market → 官方源名 约定（位置感知未命中用户/爬虫段时的兜底归属）
 _OFFICIAL_BY_MARKET = {
     "stocks_cn": "tushare",
@@ -158,4 +168,4 @@ def _infer_source(market: str | None, file_path: str) -> str:
     return _OFFICIAL_BY_MARKET.get(str(market), str(market) if market else "unknown")
 
 
-__all__ = ["DatasetSource", "RegistryDatasetSource", "InventoryDatasetSource"]
+__all__ = ["DatasetSource", "RegistryDatasetSource", "InventoryDatasetSource", "is_official_source"]

@@ -61,6 +61,7 @@ def test_load_panel_survives_compact_date_csv(tmp_path: Path) -> None:
 
 def test_validate_field_id_rules() -> None:
     validate_field_id("close", False)            # canonical, ok
+    validate_field_id("official_close", False)    # 官方 canonical, ok（与 catalog 的 official_ 命名空间一致）
     validate_field_id("user_x__c1", True)         # freeform 合法标识符, ok
     with pytest.raises(ValueError):
         validate_field_id("ts", True)             # 结构键

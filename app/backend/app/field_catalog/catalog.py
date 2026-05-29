@@ -30,7 +30,7 @@ from ..data_quality import DatasetRegistry
 from .canonical import CANONICAL, CanonicalRegistry
 from .contract import DatasetInfo, FieldRequirement, PanelResult, WidePanel
 from .mapping import FieldMappingStore
-from .sources import DatasetSource, RegistryDatasetSource
+from .sources import DatasetSource, RegistryDatasetSource, is_official_source
 
 # ts/symbol 是 join 键，market/interval 是元数据 —— 不计入"字段宇宙"。
 _STRUCTURAL = {"ts", "symbol", "market", "interval"}
@@ -143,8 +143,8 @@ class FieldCatalog:
 
     def _classify(self, ds: DatasetInfo, raw_column: str) -> FieldEntry:
         data_kind = ds.data_kind or "ohlcv"
-        # 官方源 = 非用户源（tushare / binance / crawler_* 都算官方；user_* 才是用户自带源）
-        official = not str(ds.source_name).startswith("user_")
+        # 官方源 = 白名单(tushare/binance/crawler_*)；user_/upload/自定义 DIY/custom 等一律按用户
+        official = is_official_source(ds.source_name)
         # 1) 显式映射覆盖优先（用户/Agent 指定的 id 原样用）
         if self._mapping is not None:
             override = self._mapping.get(ds.source_name, data_kind).get(raw_column)
@@ -156,9 +156,9 @@ class FieldCatalog:
         if canon is not None:
             fid = f"official_{canon}" if official else canon
             return FieldEntry(fid, False, ds.source_name, ds.dataset_id, raw_column)
-        # 3) freeform：官方 → official_<col>；用户 → <source>__<col>
+        # 3) freeform：官方 → official_<source>__<col>；用户 → <source>__<col>（均带源命名空间，防同名列撞名）
         if official:
-            fid = f"official_{_ident(raw_column)}"
+            fid = f"official_{_ident(ds.source_name)}__{_ident(raw_column)}"
         else:
             fid = f"{_ident(ds.source_name)}__{_ident(raw_column)}"
         return FieldEntry(fid, True, ds.source_name, ds.dataset_id, raw_column)
@@ -235,14 +235,17 @@ class FieldCatalog:
 
         panel = _join_on_keys(subs)
 
-        if req.derive and {"close", "volume"}.issubset(panel.columns):
-            if "amount" not in panel.columns:
-                panel = panel.with_columns((pl.col("close") * pl.col("volume")).alias("amount"))
-                manifest.setdefault("amount", "derived")
-            else:
-                panel = panel.with_columns(
-                    pl.coalesce([pl.col("amount"), pl.col("close") * pl.col("volume")]).alias("amount")
-                )
+        # amount 派生：兼容裸名(用户源 close/volume)与官方前缀(official_close/official_volume)
+        if req.derive:
+            for _pfx in ("", "official_"):
+                c, v, a = f"{_pfx}close", f"{_pfx}volume", f"{_pfx}amount"
+                if not {c, v}.issubset(panel.columns):
+                    continue
+                if a not in panel.columns:
+                    panel = panel.with_columns((pl.col(c) * pl.col(v)).alias(a))
+                    manifest.setdefault(a, "derived")
+                else:
+                    panel = panel.with_columns(pl.coalesce([pl.col(a), pl.col(c) * pl.col(v)]).alias(a))
 
         present = {
             c for c in panel.columns if panel.height > 0 and panel.get_column(c).null_count() < panel.height
