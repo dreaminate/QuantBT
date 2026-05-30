@@ -91,7 +91,16 @@ class _JsonlStore:
 
     def read_all(self) -> list[dict[str, Any]]:
         with self._lock:
-            return [json.loads(line) for line in self._path.read_text(encoding="utf-8").splitlines() if line.strip()]
+            out: list[dict[str, Any]] = []
+            for line in self._path.read_text(encoding="utf-8").splitlines():
+                if not line.strip():
+                    continue
+                try:
+                    out.append(json.loads(line))
+                except json.JSONDecodeError:
+                    # 容忍崩溃中途写坏的（通常是末尾）行，避免整个 store 永久不可读
+                    continue
+            return out
 
 
 class ExperimentStore:

@@ -30,7 +30,17 @@ from .purged_cv import FoldSplit, purged_kfold, walk_forward
 
 TaskType = Literal["classification", "regression", "lambdarank"]
 CVScheme = Literal["purged_kfold", "walk_forward"]
-ModelKind = Literal["lgbm", "sklearn_logreg", "sklearn_rf"]
+ModelKind = Literal[
+    "lgbm",
+    "xgboost",
+    "catboost",
+    "sklearn_logreg",
+    "sklearn_rf",
+    "extra_trees",
+    "ridge",
+    "lasso",
+    "elastic_net",
+]
 
 
 @dataclass
@@ -65,6 +75,11 @@ class TrainResult:
     feature_importance: dict[str, float] | None
     artifact_path: str | None
     elapsed_seconds: float
+    # OOS 拼接预测，供训练台评价图（ROC/PR/预测-实际散点/残差）。
+    # {"y_true":[...], "y_pred":[...], "y_proba":[...]?}
+    oos_predictions: dict[str, Any] | None = None
+    # 学习曲线（DL 路径填 train/val loss；树模型一般为空）。
+    curves: dict[str, list[float]] = field(default_factory=dict)
 
     def to_dict(self) -> dict[str, Any]:
         return asdict(self)
@@ -77,8 +92,13 @@ class TrainResult:
 
 def _make_model(spec: ModelSpec, n_train: int) -> Any:
     import lightgbm as lgb
-    from sklearn.ensemble import RandomForestClassifier, RandomForestRegressor
-    from sklearn.linear_model import LogisticRegression
+    from sklearn.ensemble import (
+        ExtraTreesClassifier,
+        ExtraTreesRegressor,
+        RandomForestClassifier,
+        RandomForestRegressor,
+    )
+    from sklearn.linear_model import ElasticNet, Lasso, LogisticRegression, Ridge
 
     params = dict(spec.hyperparams)
     if spec.model == "lgbm":
@@ -88,12 +108,39 @@ def _make_model(spec: ModelSpec, n_train: int) -> Any:
             return lgb.LGBMRegressor(**{"verbose": -1, "n_estimators": 100, **params})
         if spec.task == "lambdarank":
             return lgb.LGBMRanker(**{"verbose": -1, "n_estimators": 100, **params})
+    if spec.model == "xgboost":
+        import xgboost as xgb
+
+        # 固定 random_state + 单线程默认，保证 demo/CI 可复现
+        base = {"n_estimators": 200, "random_state": 42, "n_jobs": 0, **params}
+        if spec.task == "classification":
+            return xgb.XGBClassifier(**base)
+        if spec.task == "regression":
+            return xgb.XGBRegressor(**base)
+        # 排序任务暂不走 xgboost（group/qid 接口差异），由 lgbm 承担
+        raise ValueError("xgboost 暂不支持 lambdarank，请用 model='lgbm'")
     if spec.model == "sklearn_logreg":
         return LogisticRegression(max_iter=300, **params)
     if spec.model == "sklearn_rf":
         if spec.task == "classification":
-            return RandomForestClassifier(n_estimators=100, **params)
-        return RandomForestRegressor(n_estimators=100, **params)
+            return RandomForestClassifier(n_estimators=100, random_state=42, **params)
+        return RandomForestRegressor(n_estimators=100, random_state=42, **params)
+    if spec.model == "extra_trees":
+        if spec.task == "classification":
+            return ExtraTreesClassifier(n_estimators=200, random_state=42, **params)
+        return ExtraTreesRegressor(n_estimators=200, random_state=42, **params)
+    if spec.model == "catboost":
+        from catboost import CatBoostClassifier, CatBoostRegressor
+
+        base = {"iterations": 300, "random_seed": 42, "verbose": False, "allow_writing_files": False, **params}
+        return (CatBoostClassifier if spec.task == "classification" else CatBoostRegressor)(**base)
+    # 线性族（回归）：catalog 把它们的 tasks 限定为 regression
+    if spec.model == "ridge":
+        return Ridge(random_state=42, **params)
+    if spec.model == "lasso":
+        return Lasso(random_state=42, **params)
+    if spec.model == "elastic_net":
+        return ElasticNet(random_state=42, **params)
     raise ValueError(f"未知模型/任务组合: {spec.model}/{spec.task}")
 
 
@@ -146,6 +193,7 @@ def train_model(
     folds: list[FoldMetrics] = []
     accumulated_pred: list[np.ndarray] = []
     accumulated_true: list[np.ndarray] = []
+    accumulated_proba: list[np.ndarray | None] = []
     feature_imp_sum: np.ndarray | None = None
     last_model: Any = None
     for split in splitter:
@@ -171,6 +219,7 @@ def train_model(
         folds.append(FoldMetrics(split.fold_index, len(split.train_idx), len(split.test_idx), metrics))
         accumulated_pred.append(y_pred)
         accumulated_true.append(y[split.test_idx])
+        accumulated_proba.append(y_proba)
         if hasattr(model, "feature_importances_"):
             imps = np.asarray(model.feature_importances_, dtype=float)
             feature_imp_sum = imps if feature_imp_sum is None else feature_imp_sum + imps
@@ -178,6 +227,12 @@ def train_model(
     oos_pred = np.concatenate(accumulated_pred)
     oos_true = np.concatenate(accumulated_true)
     oos_metrics = _evaluate_split(spec, oos_true, oos_pred, None)
+    oos_predictions: dict[str, Any] = {
+        "y_true": oos_true.tolist(),
+        "y_pred": oos_pred.tolist(),
+    }
+    if accumulated_proba and all(p is not None for p in accumulated_proba):
+        oos_predictions["y_proba"] = np.concatenate(accumulated_proba).tolist()  # type: ignore[arg-type]
     feature_importance = None
     if feature_imp_sum is not None:
         averaged = feature_imp_sum / max(len(folds), 1)
@@ -196,6 +251,7 @@ def train_model(
         feature_importance=feature_importance,
         artifact_path=artifact_path,
         elapsed_seconds=time.perf_counter() - t0,
+        oos_predictions=oos_predictions,
     )
 
 

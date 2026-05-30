@@ -34,9 +34,23 @@ data/ide_strategies.db-journal
 data/ide_strategies.db-wal
 data/ide_strategies.db-shm
 data/ide_runs/
+data/catalog/
+data/training_runs/
+data/model_artifacts/
 # 临时跑 e2e 测试产出的 run 目录（pytest 用 _test 后缀）
 data/artifacts/experiments/*_test/
 *.zip
+*.parquet
+
+# 训练台/DL 模型产物
+*.pt
+*.pkl
+
+# 用户私有工作区（不入功能提交）
+workspace/
+
+# 本地 Claude 调度/会话状态
+.claude/
 
 # Local editor state
 .vscode/

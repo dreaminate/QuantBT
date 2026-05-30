@@ -32,12 +32,23 @@ const SIDEBAR_BY_AREA: Record<string, SidebarItem[]> = {
     { to: "/trading", label: "Binance 交易台", icon: "$" },
     { to: "/experiments", label: "实验追踪", icon: "⌥" },
   ],
+  models: [
+    { to: "/training", label: "训练台", icon: "⚙" },
+    { to: "/models", label: "模型库", icon: "⊟" },
+  ],
   community: [
     { to: "/community", label: "社区广场", icon: "#" },
     { to: "/square", label: "策略广场", icon: "★" },
     { to: "/copy-trade", label: "带单大厅", icon: "⇆" },
     { to: "/glossary", label: "量化词典", icon: "📖" },
   ],
+};
+
+const AREA_LABEL: Record<string, string> = {
+  research: "回测研究",
+  workshop: "工坊",
+  models: "模型中心",
+  community: "社区",
 };
 
 export function Shell({ children, wide = false }: { children: ReactNode; wide?: boolean }) {
@@ -88,6 +99,7 @@ function MobileDrawer({ open, onClose, currentArea }: { open: boolean; onClose: 
   const allItems: { area: string; items: SidebarItem[] }[] = [
     { area: "research", items: SIDEBAR_BY_AREA.research },
     { area: "workshop", items: SIDEBAR_BY_AREA.workshop },
+    { area: "models", items: SIDEBAR_BY_AREA.models },
     { area: "community", items: SIDEBAR_BY_AREA.community },
   ];
   return (
@@ -99,7 +111,7 @@ function MobileDrawer({ open, onClose, currentArea }: { open: boolean; onClose: 
       {allItems.map((group) => (
         <div key={group.area} style={{ marginBottom: 16 }}>
           <div className="cc-sidebar-section" style={{ fontSize: 11, opacity: 0.6, marginBottom: 4 }}>
-            {group.area === "research" ? "回测研究" : group.area === "workshop" ? "工坊" : "社区"}
+            {AREA_LABEL[group.area] ?? group.area}
           </div>
           {group.items.map((item) => (
             <NavLink
@@ -148,6 +160,12 @@ function TopNav({ theme, onToggleTheme, onHamburger }: { theme: Theme; onToggleT
           Workshop
         </NavLink>
         <NavLink
+          to="/training"
+          className={area === "models" ? "cc-nav-item active" : "cc-nav-item"}
+        >
+          Models
+        </NavLink>
+        <NavLink
           to="/community"
           className={area === "community" ? "cc-nav-item active" : "cc-nav-item"}
         >
@@ -181,7 +199,7 @@ function TopNav({ theme, onToggleTheme, onHamburger }: { theme: Theme; onToggleT
 function Sidebar({ items, area }: { items: SidebarItem[]; area: string }) {
   return (
     <aside className="cc-sidebar">
-      <div className="cc-sidebar-section">{area === "research" ? "回测研究" : "工坊"}</div>
+      <div className="cc-sidebar-section">{AREA_LABEL[area] ?? area}</div>
       {items.map((item) => (
         <NavLink
           key={item.to}
@@ -380,6 +398,12 @@ function areaOf(pathname: string): string {
     pathname.startsWith("/chat")
   )
     return "workshop";
+  if (
+    pathname.startsWith("/training") ||
+    pathname.startsWith("/models") ||
+    pathname.startsWith("/model-cards")
+  )
+    return "models";
   if (
     pathname.startsWith("/community") ||
     pathname.startsWith("/square") ||

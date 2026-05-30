@@ -410,6 +410,240 @@ def promote_model(model_id: str, payload: dict = Body(...)) -> dict:
         raise HTTPException(404, str(exc)) from exc
 
 
+# -------- 模型中心 · 训练台 (v3) --------
+# 训练台"本质是跑代码"：ML 进程内、DL/代码走全功率子进程。主进程不 import torch。
+from .models.catalog import (  # noqa: E402
+    add_model_card,
+    get_model_card,
+    model_catalog_summary,
+)
+from .models.card_loader import ModelCardError  # noqa: E402
+from .training import TrainingRequest, TrainingService, spec_to_code  # noqa: E402
+from .training.agent_context import training_system_prompt  # noqa: E402
+from .training.datasets import list_training_datasets, load_training_panel  # noqa: E402
+
+TRAINING_SERVICE = TrainingService(
+    DATA_ROOT / "training_runs",
+    experiment_store=EXPERIMENT_STORE,
+    run_store=RUN_STORE,
+    model_registry=MODEL_REGISTRY,
+    timeout=1800,
+)
+
+from .training.tensorboard import TensorBoardManager  # noqa: E402
+
+TENSORBOARD_MANAGER = TensorBoardManager()
+
+
+@app.get("/api/training/models")
+def training_models() -> list[dict]:
+    """模型目录（类型卡：优缺点/调参 schema/算力/可用性）。"""
+    return model_catalog_summary()
+
+
+@app.get("/api/training/models/{key}")
+def training_model_detail(key: str) -> dict:
+    """单张模型卡详情（含 L1-L4 正文）。"""
+    try:
+        return get_model_card(key).to_detail()
+    except KeyError as exc:
+        raise HTTPException(404, str(exc)) from exc
+
+
+@app.post("/api/training/models")
+def training_add_model(payload: dict = Body(...)) -> dict:
+    """Agent/用户搜到新模型 → 补全信息加入模型卡（默认仅收录，runnable=False）。
+
+    这是『agent 只能在卡内做，除非用户让它搜新模型加卡』的落点。
+    """
+    try:
+        return add_model_card(payload).to_dict()
+    except ModelCardError as exc:
+        raise HTTPException(400, str(exc)) from exc
+
+
+@app.get("/api/training/agent_context")
+def training_agent_context() -> dict:
+    """训练台对话 agent 的 system prompt（约束 agent 只能在模型卡内选）。"""
+    return {"system_prompt": training_system_prompt()}
+
+
+@app.get("/api/training/datasets")
+def training_datasets() -> list[dict]:
+    return list_training_datasets()
+
+
+@app.post("/api/training/codegen")
+def training_codegen(payload: dict = Body(...)) -> dict:
+    """预览：把结构化 spec 渲染成将要跑的训练代码（让用户看到'本质是跑代码'）。"""
+    try:
+        return {"code": spec_to_code(payload)}
+    except (KeyError, NotImplementedError, ValueError) as exc:
+        raise HTTPException(400, str(exc)) from exc
+
+
+@app.get("/api/training/jobs")
+def training_jobs() -> list[dict]:
+    return [j.to_dict() for j in TRAINING_SERVICE.list_jobs()]
+
+
+@app.get("/api/training/jobs/{job_id}")
+def training_job(job_id: str) -> dict:
+    try:
+        return TRAINING_SERVICE.get_job(job_id).to_dict()
+    except KeyError as exc:
+        raise HTTPException(404, str(exc)) from exc
+
+
+@app.get("/api/training/jobs/{job_id}/eval")
+def training_job_eval(job_id: str) -> dict:
+    """训练结束的评价图（特征重要度/学习曲线/预测-实际/残差/ROC/分fold）。"""
+    import json  # main.py 无模块级 json，函数内 import（与本文件其它端点一致）
+
+    from .eval.model_eval import build_eval_charts, summarize_metrics
+
+    try:
+        job = TRAINING_SERVICE.get_job(job_id)
+    except KeyError as exc:
+        raise HTTPException(404, str(exc)) from exc
+    if not job.artifact_dir:
+        return {"status": job.status, "charts": [], "metrics": {}}
+    result_path = Path(job.artifact_dir) / "result.json"
+    if not result_path.exists():
+        return {"status": job.status, "charts": [], "metrics": job.metrics}
+    result = json.loads(result_path.read_text(encoding="utf-8"))
+    return {
+        "status": job.status,
+        "model": job.model,
+        "family": job.family,
+        "charts": build_eval_charts(result),
+        "metrics": summarize_metrics(result),
+    }
+
+
+@app.post("/api/training/jobs/{job_id}/backtest")
+def training_job_backtest(job_id: str, payload: dict = Body(default={})) -> dict:
+    """用训练好的模型回测。支持样本外(OOS)：
+
+    - `dataset_id`：在**另一个**数据集上回测（模型没训过的数据 → 真·样本外）。默认=训练数据集。
+    - `oos_fraction`：只回测末尾这一比例的交易日（如 0.3 = 后 30%）。默认 None=全段。
+    predict_with → 每日 top-N 权重(shift1 防前视) → 组合收益 → 指标 + 净值曲线。
+    """
+    from .training.backtest_bridge import backtest_job
+    from .training.datasets import FEATURES
+
+    try:
+        job = TRAINING_SERVICE.get_job(job_id)
+    except KeyError as exc:
+        raise HTTPException(404, str(exc)) from exc
+    if job.status != "succeeded" or not job.artifact_dir:
+        raise HTTPException(400, f"任务未成功完成，无法回测（status={job.status}）")
+
+    req = job.request or {}
+    train_dataset = req.get("dataset_id") or "demo_ashare_xsec"
+    # payload.dataset_id 优先（用户选的 OOS 数据集）；否则回训练集
+    dataset_id = payload.get("dataset_id") or train_dataset
+    feature_cols = req.get("feature_cols") or FEATURES
+    oos_fraction = payload.get("oos_fraction")
+    is_cross_dataset = dataset_id != train_dataset
+    train_fraction = req.get("train_fraction")
+    # 严格无泄露 walk-forward：若模型只用前 train_fraction 训练，且回测同一数据集、用户没显式指定
+    # oos_fraction → 自动取互补的后段 (1 - train_fraction)，使回测窗口正好是训练未见过的那段。
+    strict_oos = False
+    if oos_fraction is None and train_fraction is not None and not is_cross_dataset:
+        oos_fraction = 1.0 - float(train_fraction)
+        strict_oos = True
+    try:
+        panel = load_training_panel(dataset_id)
+    except KeyError as exc:
+        raise HTTPException(400, f"未知数据集: {dataset_id}") from exc
+    try:
+        bt = backtest_job(
+            job.artifact_dir,
+            panel,
+            feature_cols=feature_cols,
+            symbol_col=req.get("symbol_col", "symbol"),
+            top_n=int(payload.get("top_n", 5)),
+            long_short=bool(payload.get("long_short", False)),
+            oos_fraction=float(oos_fraction) if oos_fraction is not None else None,
+        )
+    except (ValueError, FileNotFoundError) as exc:
+        raise HTTPException(400, str(exc)) from exc
+    eq = bt["equity_curve"]
+    return {
+        "job_id": job_id,
+        "model": job.model,
+        "dataset_id": dataset_id,
+        "train_dataset": train_dataset,
+        "train_fraction": train_fraction,
+        "is_oos": bool(is_cross_dataset or oos_fraction),
+        "is_cross_dataset": is_cross_dataset,
+        "strict_oos": strict_oos,  # True = 训练前段/回测后段严格互补、零泄露
+        "oos_cutoff": bt.get("oos_cutoff"),
+        "metrics": bt["metrics"],
+        "equity_curve": [float(x) for x in eq.to_numpy()],
+        "n_days": bt["n_days"],
+        "n_symbols": bt["n_symbols"],
+    }
+
+
+@app.post("/api/training/jobs/{job_id}/tensorboard")
+def training_tensorboard_start(job_id: str) -> dict:
+    """为 DL 训练 job 启动 TensorBoard（独立端口），返回可直接打开的本机 URL。"""
+    if not TENSORBOARD_MANAGER.is_available():
+        raise HTTPException(400, "未安装 tensorboard")
+    try:
+        job = TRAINING_SERVICE.get_job(job_id)
+    except KeyError as exc:
+        raise HTTPException(404, str(exc)) from exc
+    logdir = Path(job.artifact_dir) / "tb" if job.artifact_dir else None
+    if not logdir or not logdir.exists():
+        raise HTTPException(404, "该任务没有 TensorBoard 日志（仅 DL 训练产出）")
+    try:
+        inst = TENSORBOARD_MANAGER.start(job_id, logdir)
+    except FileNotFoundError as exc:
+        raise HTTPException(404, str(exc)) from exc
+    return {"url": inst.url, "port": inst.port, "job_id": job_id}
+
+
+@app.get("/api/training/jobs/{job_id}/tensorboard")
+def training_tensorboard_status(job_id: str) -> dict:
+    inst = TENSORBOARD_MANAGER.get(job_id)
+    if inst is None:
+        return {"running": False, "available": TENSORBOARD_MANAGER.is_available()}
+    return {"running": True, "url": inst.url, "port": inst.port}
+
+
+@app.post("/api/training/jobs")
+def training_submit(payload: dict = Body(...)) -> dict:
+    """提交训练（异步，前端轮询 jobs/{id}）。dataset_id 选内置训练集。"""
+    try:
+        panel = load_training_panel(payload.get("dataset_id", ""))
+    except KeyError as exc:
+        raise HTTPException(400, f"未知数据集: {payload.get('dataset_id')}") from exc
+    try:
+        req = TrainingRequest(
+            name=payload.get("name") or "训练任务",
+            model=payload["model"],
+            task=payload["task"],
+            feature_cols=payload.get("feature_cols") or [],
+            label_col=payload.get("label_col", "label"),
+            asset_class=payload.get("asset_class", "a_share"),
+            cv_scheme=payload.get("cv_scheme", "purged_kfold"),
+            n_splits=int(payload.get("n_splits", 5)),
+            group_col=payload.get("group_col"),
+            symbol_col=payload.get("symbol_col", "symbol"),
+            ts_col=payload.get("ts_col", "ts"),
+            train_fraction=payload.get("train_fraction"),
+            hyperparams=payload.get("hyperparams") or {},
+            input_models=payload.get("input_models") or [],
+        )
+        job = TRAINING_SERVICE.submit(req, panel)
+    except (KeyError, ValueError) as exc:
+        raise HTTPException(400, str(exc)) from exc
+    return job.to_dict()
+
+
 # -------- M9.3 安全 / 风控 --------
 
 @app.get("/api/security/keystore")
