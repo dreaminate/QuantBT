@@ -8,6 +8,16 @@
 
 ---
 
+## 架构总览
+
+从数据接入到执行的七段流水线 —— Agent 与前端用**同一套 REST + tool API** 驱动；回测阶段强制做 **PBO / DSR / Bootstrap** 过拟合体检（信任门）；**A股**最多到 Paper（不接券商），**加密**走到 Binance 实盘。
+
+<p align="center">
+  <img src="docs/images/architecture.svg" alt="QuantBT 全流程架构：数据接入 → 特征/因子 → 模型训练 → 信号融合 → 组合优化 → 回测+过拟合体检 → 执行；A股到 Paper、加密到 Binance 实盘" width="760">
+</p>
+
+---
+
 ## 5 分钟 quickstart（macOS / Linux）
 
 ```bash
