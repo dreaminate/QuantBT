@@ -4,9 +4,9 @@
 > 上次刷新：2026-06-18（T-022 INV-3 lease-唯一-key 通道闭合：LeasedBinanceVenue 构造不持 key、真 key 只在门放行后 S4 物化、has_key 不 fetch；既有 venue 零改动 additive；10 对抗测试 + 4 变异全杀 + 5-lens 复核 15→1[LOW]修；全量 1000 测试绿。**安全门生产接线全链闭合，BOARD 无 todo**。上上次：T-021 安全门生产接线：relay 必经 deny-by-default 策略门（INV-2/M17 生产强制）+ 默认门模板 + 防重放 + 真钱 fail-closed；16 对抗测试 + 8 变异全杀 + 5-lens 复核 4 真发现全修（现货/市价全拒）；全量 990 测试绿。🟡 INV-3 lease-唯一-key 通道→T-022。上上次：T-020 验证官=脊柱最后一块：异模型一致性，产 content-addressed verdict_id，喂 T-017/T-019；异模型不一致即 BLOCK(不取均值)/独立性度量非假定/concern≠pass/措辞禁组织独立；含生产接线 + verdict↔工件绑定 + 防篡改读路径；31 对抗测试 + 10 变异全杀 + 5-lens 复核 18→5 真发现全修；全量 974 测试绿。**脊柱 8 块全建并验证**，T-018 生产接线→T-021）
 > **harness 自检**：`python dev/scripts/validate_dev.py` → PASS（对抗验证过：藏掉 done 记录即 FAIL）。
 
-<!-- 格式·防跑偏 | 结构型（每 loop 整篇重生,不是追加）：固定两块——
-① 子系统现状表(列：子系统 | 状态 ⬜未建/🟡部分未验证/✅已建并验证 | 证据 | gap) ② 头号 gap 编号列表。
-铁律：🟡 绝不写成 ✅（不假绿灯）。 -->
+<!-- 格式·防跑偏 | 结构型（每 loop 整篇重生,不是追加）：固定三块——
+① 子系统现状表(列：子系统 | 状态 ⬜未建/🟡部分未验证/✅已建并验证 | 证据 | gap) ② 头号 gap 编号列表 ③ 待决策岔路(点名,别让人翻卡)。
+铁律：🟡 绝不写成 ✅（不假绿灯）；测试数等易变值别写死,以实跑为准。 -->
 > 审计修复：v2/v3 项目设计文档归位 `docs/plans/`（曾误卷进 dev archive）· 旧 codex 任务残留归 `tasks/_archive/` · 补 `done/T-012/` 落档 · 建 `exec/LOG.md` + `scripts/validate_dev.py`。
 
 ## 终态结构（GOAL §1 两层相乘）
@@ -70,5 +70,10 @@
 3. **M12 promote 是 3 行裸 flip**（无 approver≠creator）——层1 已建件待层2 改造（T-019）。
 4. **内核 deferred**：`jobs.py` SSE（halted/checkpoint）+ `agent_runtime.py` 节点化（与 T-016 重叠）择期接——诚实标 🟡 未做。
 5. **gate 后续增强**（已记录，非阻断）：gate_verdict.color→risk_summary trust_level 映射；IDE config 粒度（params 入 metadata 才进 config_hash）。
-6. **安全门生产接线全链闭合**：T-021 relay 必经 deny-by-default 策略门（INV-2/M17/INV-4）+ T-022 INV-3（LeasedBinanceVenue 构造不持 key、真 key 只在门放行后 S4 物化、has_key 不 fetch、既有 venue 零改动 additive）。诚实残余：TCB 天花板（本地门=防篡改证据非防篡改，唯一硬墙在交易所侧）；非 relay live 路径未逐一接线（复核未确认真实漏洞）。
-7. 现有 **1000 测试**基线绿（含 T-022 新增 10 对抗测试）；新增代码须不破坏它 + 自带对抗测试（种已知 bug 门必抓）。
+6. **安全门生产接线全链闭合**：T-021 relay 必经 deny-by-default 策略门（INV-2/M17/INV-4）+ T-022 INV-3（LeasedBinanceVenue 构造不持 key、真 key 只在门放行后 S4 物化、has_key 不 fetch、既有 venue 零改动 additive）。**诚实限界**：TCB 天花板（本地门=防篡改证据非防篡改，唯一硬墙在交易所侧——工程设计极限,不会再改）。**诚实残余**：非 relay live 路径未逐一接线（→ 收口 T-025）。
+7. 现有**测试基线绿**（数目以实跑 `pytest` 为准,别据此判断）；新增代码须不破坏它 + 自带对抗测试（种已知 bug 门必抓）。
+
+## 待决策岔路（等用户拍板）
+> 卡在用户经济/产品判断上的开口——**点名**,别让人去翻任务卡 Open Questions。
+- **T-024 · exploratory↔confirmatory 判定信号从哪来**（谁判一个 run 是探索还是可下注确认）。建议:用户在 `StrategyGoal` 显式声明/晋级。
+- **T-025 · 急停 kill/emergency 的 fail 模式**（平仓本体 fail-open 不被门挡 vs 全过门）。建议:平仓 fail-open + 端点加鉴权。
