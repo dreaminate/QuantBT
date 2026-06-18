@@ -29,6 +29,13 @@ class LLMResponse:
     content: str
     tool_calls: list[dict[str, Any]] = field(default_factory=list)
     raw: dict[str, Any] = field(default_factory=dict)
+    # T-016 可复现元数据（全带默认值，向后兼容）：record/replay 回填。
+    model_id: str | None = None              # 不可变版本 id（供应商回传）
+    system_fingerprint: str | None = None    # None = 供应商未提供（诚实标注）
+    seed: int | None = None
+    fixture_key: str | None = None           # = 本 LLM 节点 node_id（llmfx- 前缀）
+    repro_level: str = "decision"
+    translation_status: str = "ok"           # ok | schema_invalid | human_confirm_required
 
 
 class NoLLMConfigured(RuntimeError):

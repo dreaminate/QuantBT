@@ -63,6 +63,7 @@ class Follower:
     per_order_max_usdt: float = 100.0
     daily_loss_limit_pct: float = 0.05
     max_positions: int = 5
+    max_leverage: float | None = None  # v0.8.9 · follower 自己的杠杆硬上限；relay 时硬截断 master 信号杠杆
     binance_keystore_name: str = ""
     binance_network: str = "testnet"
     status: FollowerStatus = "active"
@@ -84,6 +85,7 @@ class Signal:
     order_type: Literal["market", "limit"] = "market"
     stop_loss: float | None = None
     take_profit: float | None = None
+    leverage: float | None = None  # v0.8.9 · master 信号上的杠杆（perp/USDM）；relay 时被 follower cap 截断
     note: str = ""
     status: SignalStatus = "live"
     published_at_utc: str = ""
@@ -149,6 +151,7 @@ def init_copy_trade_db(db_path: Path) -> None:
                 per_order_max_usdt REAL DEFAULT 100,
                 daily_loss_limit_pct REAL DEFAULT 0.05,
                 max_positions INTEGER DEFAULT 5,
+                max_leverage REAL,
                 binance_keystore_name TEXT DEFAULT '',
                 binance_network TEXT DEFAULT 'testnet',
                 status TEXT DEFAULT 'active',
@@ -169,6 +172,7 @@ def init_copy_trade_db(db_path: Path) -> None:
                 order_type TEXT DEFAULT 'market',
                 stop_loss REAL,
                 take_profit REAL,
+                leverage REAL,
                 note TEXT DEFAULT '',
                 status TEXT DEFAULT 'live',
                 published_at_utc TEXT NOT NULL
@@ -199,6 +203,16 @@ def init_copy_trade_db(db_path: Path) -> None:
             );
             """
         )
+        # v0.8.9 · 已有库的轻量列迁移（杠杆截断需要 signal.leverage / follower.max_leverage）
+        for table, col, decl in (
+            ("ct_signals", "leverage", "REAL"),
+            ("ct_followers", "max_leverage", "REAL"),
+        ):
+            try:
+                conn.execute(f"ALTER TABLE {table} ADD COLUMN {col} {decl}")
+            except sqlite3.OperationalError:
+                pass  # 列已存在
+        conn.commit()
         conn.close()
         _INITIALIZED.add(key)
 
@@ -436,9 +450,12 @@ class CopyTradeService:
         per_order_max_usdt: float = 100.0,
         daily_loss_limit_pct: float = 0.05,
         max_positions: int = 5,
+        max_leverage: float | None = None,
     ) -> Follower:
         if invest_amount <= 0:
             raise CopyTradeError("invest_amount 必须 > 0")
+        if max_leverage is not None and max_leverage <= 0:
+            raise CopyTradeError("max_leverage 必须 > 0")
         if not binance_keystore_name:
             raise CopyTradeError("必须填 binance_keystore_name (follower 自己的 keystore 引用)")
         master = self.get_master(master_id)
@@ -457,13 +474,13 @@ class CopyTradeService:
                     """
                     INSERT INTO ct_followers (
                         follower_id, user_id, master_id, invest_amount, per_order_max_usdt,
-                        daily_loss_limit_pct, max_positions, binance_keystore_name, binance_network,
+                        daily_loss_limit_pct, max_positions, max_leverage, binance_keystore_name, binance_network,
                         status, started_at_utc
-                    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
                     """,
                     (
                         fid, user_id, master_id, invest_amount, per_order_max_usdt,
-                        daily_loss_limit_pct, max_positions, binance_keystore_name, binance_network,
+                        daily_loss_limit_pct, max_positions, max_leverage, binance_keystore_name, binance_network,
                         "active", now,
                     ),
                 )
@@ -473,12 +490,12 @@ class CopyTradeService:
                     """
                     UPDATE ct_followers SET
                         invest_amount = ?, per_order_max_usdt = ?, daily_loss_limit_pct = ?,
-                        max_positions = ?, binance_keystore_name = ?, binance_network = ?,
+                        max_positions = ?, max_leverage = ?, binance_keystore_name = ?, binance_network = ?,
                         status = 'active'
                     WHERE user_id = ? AND master_id = ?
                     """,
                     (invest_amount, per_order_max_usdt, daily_loss_limit_pct,
-                     max_positions, binance_keystore_name, binance_network, user_id, master_id),
+                     max_positions, max_leverage, binance_keystore_name, binance_network, user_id, master_id),
                 )
             conn.execute(
                 "UPDATE ct_masters SET follower_count = (SELECT COUNT(*) FROM ct_followers WHERE master_id = ? AND status = 'active') WHERE master_id = ?",
@@ -568,6 +585,7 @@ class CopyTradeService:
         order_type: Literal["market", "limit"] = "market",
         stop_loss: float | None = None,
         take_profit: float | None = None,
+        leverage: float | None = None,
         note: str = "",
     ) -> Signal:
         master = self.get_master(master_id)
@@ -583,6 +601,8 @@ class CopyTradeService:
             raise CopyTradeError("limit 单必须传 price")
         if not symbol or len(symbol) > 32:
             raise CopyTradeError("非法 symbol")
+        if leverage is not None and leverage <= 0:
+            raise CopyTradeError("leverage 必须 > 0")
         sid = _gen("signal")
         now = _now()
         conn = self._conn()
@@ -591,11 +611,11 @@ class CopyTradeService:
                 """
                 INSERT INTO ct_signals (
                     signal_id, master_id, symbol, side, quantity, price, order_type,
-                    stop_loss, take_profit, note, status, published_at_utc
-                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'live', ?)
+                    stop_loss, take_profit, leverage, note, status, published_at_utc
+                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'live', ?)
                 """,
                 (sid, master_id, symbol, side, quantity, price, order_type,
-                 stop_loss, take_profit, note, now),
+                 stop_loss, take_profit, leverage, note, now),
             )
             conn.execute(
                 "UPDATE ct_masters SET total_signals = total_signals + 1 WHERE master_id = ?",
@@ -604,7 +624,7 @@ class CopyTradeService:
             return Signal(
                 signal_id=sid, master_id=master_id, symbol=symbol, side=side,
                 quantity=quantity, price=price, order_type=order_type,
-                stop_loss=stop_loss, take_profit=take_profit, note=note,
+                stop_loss=stop_loss, take_profit=take_profit, leverage=leverage, note=note,
                 status="live", published_at_utc=now,
             )
         finally:
@@ -754,6 +774,7 @@ def _row_to_follower(row: sqlite3.Row | None) -> Follower | None:  # type: ignor
         per_order_max_usdt=row["per_order_max_usdt"] or 100,
         daily_loss_limit_pct=row["daily_loss_limit_pct"] or 0.05,
         max_positions=row["max_positions"] or 5,
+        max_leverage=row["max_leverage"],
         binance_keystore_name=row["binance_keystore_name"] or "",
         binance_network=row["binance_network"] or "testnet",
         status=row["status"],  # type: ignore[arg-type]
@@ -771,6 +792,7 @@ def _row_to_signal(row: sqlite3.Row | None) -> Signal | None:  # type: ignore[re
         quantity=row["quantity"], price=row["price"],
         order_type=row["order_type"] or "market",  # type: ignore[arg-type]
         stop_loss=row["stop_loss"], take_profit=row["take_profit"],
+        leverage=row["leverage"],
         note=row["note"] or "", status=row["status"],  # type: ignore[arg-type]
         published_at_utc=row["published_at_utc"],
     )

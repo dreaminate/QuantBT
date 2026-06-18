@@ -22,16 +22,32 @@ import yaml
 logger = logging.getLogger(__name__)
 
 
-DAGTaskStatus = Literal["pending", "running", "succeeded", "failed", "skipped", "timeout"]
+DAGTaskStatus = Literal[
+    "pending", "running", "succeeded", "failed", "skipped", "timeout",
+    "reused",   # 脊柱内核：durable 命中工件 / effectful 幂等命中，未重跑
+    "halted",   # 脊柱内核：effectful 边界在 replay/fork/rollback 被截断（HALT_AT_BOUNDARY）
+]
+
+# 节点分类（脊柱内核 01）：pure 可自由 replay/fork/rollback；effectful 触达券商/资金，
+# 必带 effect_idempotency_key，且在 replay/fork/rollback 路径一律 HALT，绝不重发副作用。
+NodeKind = Literal["pure", "effectful"]
 
 
 _OPS: dict[str, Callable[..., Any]] = {}
+# op 代码版本（脊柱内核：进 node_id 的 structure，op 实现变了 → 工件失效，复核 #3）。
+# 声明式 version 优先；未声明则内核按 fn.__code__.co_code 自动指纹（改逻辑即失效，安全方向）。
+_OP_VERSIONS: dict[str, str] = {}
 
 
-def register_op(name: str | None = None) -> Callable[[Callable[..., Any]], Callable[..., Any]]:
+def register_op(
+    name: str | None = None, *, version: str | None = None
+) -> Callable[[Callable[..., Any]], Callable[..., Any]]:
     def _decorator(fn: Callable[..., Any]) -> Callable[..., Any]:
         key = name or fn.__name__
         _OPS[key] = fn
+        if version is not None:
+            _OP_VERSIONS[key] = version
+            fn._op_version = version  # type: ignore[attr-defined]
         return fn
     return _decorator
 
@@ -49,8 +65,27 @@ class DAGTask:
     retries: int = 0
     retry_backoff_seconds: float = 1.0
     timeout_seconds: float | None = None
-    idempotency_key: str | None = None
+    idempotency_key: str | None = None        # deprecated 别名；effectful 节点会迁移到下面的新字段
     sla_seconds: float | None = None
+    # 脊柱内核 01（决策 R10/M17）：节点分类 + effectful 幂等键。默认 pure（安全默认）。
+    kind: NodeKind = "pure"
+    effect_idempotency_key: str | None = None  # 00-contracts C8
+
+    def __post_init__(self) -> None:
+        # 「字段 → 强制约束」升级（任务书核心要求）：effectful 节点不带幂等键 = 会重发单的雷，
+        # 构造即拒。pure 节点带 effect 键 = 误标，也拒。旧 idempotency_key 仅对 effectful 迁移。
+        if self.kind == "effectful":
+            if self.effect_idempotency_key is None and self.idempotency_key is not None:
+                self.effect_idempotency_key = self.idempotency_key  # 迁移旧别名
+            if not self.effect_idempotency_key:
+                raise ValueError(
+                    f"effectful 节点 {self.id!r} 必须带 effect_idempotency_key（否则 replay/重试=重发单，M17 雷）"
+                )
+        elif self.kind == "pure":
+            if self.effect_idempotency_key is not None:
+                raise ValueError(f"pure 节点 {self.id!r} 不应带 effect_idempotency_key（误标 effectful？）")
+        else:
+            raise ValueError(f"非法 kind={self.kind!r}，须 ∈ ('pure','effectful')")
 
 
 @dataclass
@@ -253,6 +288,7 @@ __all__ = [
     "DAGTask",
     "DAGTaskResult",
     "DAGTaskStatus",
+    "NodeKind",
     "Scheduler",
     "list_ops",
     "register_op",

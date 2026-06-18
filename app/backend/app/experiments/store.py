@@ -202,9 +202,11 @@ class RunStore:
 
 
 class ModelRegistry:
-    def __init__(self, root: Path) -> None:
+    def __init__(self, root: Path, *, gate_service: Any = None) -> None:
         self._root = Path(root)
         self._store = _JsonlStore(self._root / "models.jsonl")
+        # T-019：注入审批门服务。None = dev/archived 直翻（向后兼容）；staging/production 在 None 时 raise（禁裸翻）。
+        self._gate_service = gate_service
 
     def register_version(
         self,
@@ -229,13 +231,80 @@ class ModelRegistry:
         self._store.append(mv.to_dict())
         return mv
 
-    def promote(self, model_id: str, version: int, stage: ModelStage) -> ModelVersion:
+    def apply_stage(self, model_id: str, version: int, stage: ModelStage) -> ModelVersion:
+        """公开翻 stage：仅限 dev/archived（探索通道直翻）。staging/production 须经 promote()→审批门→
+        approve_promotion（防 #2/#15 侧门：公开方法不得直翻进 production）。"""
+
+        if stage in ("staging", "production"):
+            from ..approval.schema import GateStateError
+            raise GateStateError(
+                f"apply_stage 不可直翻到 {stage}（须 promote()→审批门→approve_promotion；防侧门 bare-flip）"
+            )
+        return self._apply_stage_unchecked(model_id, version, stage)
+
+    def _apply_stage_unchecked(self, model_id: str, version: int, stage: ModelStage) -> ModelVersion:
+        """实际翻转（私有）：dev/archived 经 apply_stage、staging/production 仅经审批门 execute_fn 到达。"""
+
         for v in self.list_versions(model_id):
             if v.version == version:
                 v.stage = stage
                 self._store.append(v.to_dict())
                 return v
         raise KeyError(f"model={model_id} version={version} 未注册")
+
+    def approve_promotion(self, gate_id: str, *, approver: str, reason: str,
+                          risk_restated: str | None = None) -> Any:
+        """批准一个 pending promote 门并【真翻 stage】（绑 execute_fn=_apply_stage_unchecked，复核 #2b）。"""
+
+        from ..approval.schema import GateStateError
+        if self._gate_service is None:
+            raise GateStateError("无 gate_service，无法 approve_promotion")
+
+        def _exec(gate: Any) -> str:
+            self._apply_stage_unchecked(gate.model_id, gate.version, gate.to_stage)
+            return f"stage:{gate.model_id}:v{gate.version}:{gate.to_stage}"
+
+        return self._gate_service.approve(gate_id, approver=approver, reason=reason,
+                                          risk_restated=risk_restated, execute_fn=_exec)
+
+    def promote(
+        self,
+        model_id: str,
+        version: int,
+        stage: ModelStage,
+        *,
+        created_by: str | None = None,
+        verification_record_id: str | None = None,
+        evidence: dict[str, Any] | None = None,
+        strategy_goal_ref: str | None = None,
+    ) -> Any:
+        """T-019：dev/archived 直翻（探索通道，向后兼容）；staging/production 走审批门。
+
+        晋升 staging/production 返 `ApprovalGate`（pending，待 approve）或 `GateRejection`（缺要件+缺口清单），
+        **不裸翻 stage**。实际翻转在 `gate_service.approve(gate_id, execute_fn=apply_stage)` 时发生。
+        """
+
+        if stage in ("dev", "archived"):
+            return self.apply_stage(model_id, version, stage)   # 探索通道直翻
+
+        from ..approval.schema import GateRejection, GateStateError
+        if self._gate_service is None:
+            raise GateStateError(
+                f"promote 到 {stage} 必须接 ApprovalGateService（裸翻已禁用，T-019）"
+            )
+        cur = next((v for v in self.list_versions(model_id) if v.version == version), None)
+        if cur is None:
+            raise KeyError(f"model={model_id} version={version} 未注册")
+        gate = self._gate_service.open_gate(
+            model_id=model_id, version=version, from_stage=cur.stage, to_stage=stage,
+            action_kind=("promote_production" if stage == "production" else "promote_staging"),
+            created_by=created_by or "unknown", verification_record_id=verification_record_id,
+            evidence=evidence, strategy_goal_ref=strategy_goal_ref,
+        )
+        if gate.decision == "rejected":
+            return GateRejection(gate_id=gate.gate_id, model_id=model_id, version=version,
+                                 to_stage=stage, gap_list=gate.gap_list, verdict_text=gate.verdict_text)
+        return gate   # pending：caller 另行 approve（approver≠creator）
 
     def list_versions(self, model_id: str) -> list[ModelVersion]:
         latest: dict[tuple[str, int], dict[str, Any]] = {}

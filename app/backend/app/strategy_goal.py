@@ -89,6 +89,28 @@ class EvaluationWindow(BaseModel):
         return self
 
 
+class EconomicMechanism(BaseModel):
+    """因果优先的可证伪经济故事（T-017 / spine 04 §3.2）。dossier §5.4：引导写故事 + 人工审阅，
+    不自动跑因果发现算法（PC/LiNGAM 在金融观察序列不可靠，dossier §7 降权）。"""
+
+    risk_premium_or_bias: str = Field(..., min_length=12,
+        description="赌哪个风险溢价 / 行为偏差（如 动量=处置效应+反应不足）")
+    causal_chain: str = Field(..., min_length=12,
+        description="一句话因果链：X 驱动 → Y 错价 → 我们收割 Z")
+    confounder_concerns: list[str] = Field(default_factory=list,
+        description="混杂/对撞担忧（可空，但空会在裁决里降信心）")
+
+
+class FalsifiableTriplet(BaseModel):
+    """冻结 confirmatory 卡时强制非空的三必填（探索期可空，P2 不挡）。"""
+
+    economic_mechanism: EconomicMechanism
+    falsification_condition: str = Field(..., min_length=12,
+        description="若 X 则该效应应消失/反号（必须含一个可观测、独立于结果的判据）")
+    stop_rule: str = Field(..., min_length=8,
+        description="停机规则：达到什么条件就停（回撤/样本/时段/失效信号）")
+
+
 class StrategyGoal(BaseModel):
     """完整的策略目标——Agent / UI / YAML 三处共用同一份 schema。"""
 
@@ -105,6 +127,8 @@ class StrategyGoal(BaseModel):
     universe_id: str | None = None
     custom_python_path: str | None = None
     description: str | None = None
+    # T-017 三必填可证伪三元组：默认 None → 探索不挡（P2）；强制只在 card.freeze() 发生，不在此校验。
+    falsifiable: FalsifiableTriplet | None = None
 
     @model_validator(mode="before")
     @classmethod
@@ -212,9 +236,11 @@ __all__ = [
     "CostModel",
     "CryptoPerpCostModel",
     "CryptoSpotCostModel",
+    "EconomicMechanism",
     "EquityCostModel",
     "EvaluationWindow",
     "ExecutionMode",
+    "FalsifiableTriplet",
     "Horizon",
     "Objective",
     "PRESETS",

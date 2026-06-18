@@ -50,11 +50,14 @@ class AgentRuntime:
         tools: dict[str, ToolHandler] | None = None,
         max_steps: int = 6,
         system_prompt: str = "You are QuantBT Agent — 一个量化全栈助手。",
+        translator: Any | None = None,
     ) -> None:
         self._llm = llm
         self._tools = tools or {}
         self._max_steps = max_steps
         self._system = system_prompt
+        # 受控翻译门（T-016，可选）：LLM 输出 schema 合规但语义越界（如越权杠杆）→ 不派发、挂起。
+        self._translator = translator
 
     def register_tool(self, name: str, handler: ToolHandler) -> None:
         self._tools[name] = handler
@@ -78,6 +81,20 @@ class AgentRuntime:
                 turn.final_message = response.content
                 turn.succeeded = True
                 return turn
+            # 受控翻译门（T-016，复核 #11）：任何【非 ok】状态都不派发——
+            # human_confirm_required（语义越界，挂审批门）与 schema_invalid（结构非法，拒/退回）都拦住，
+            # 绝不让 schema_invalid 漏到派发（否则非法 tool_call 仍被执行）。
+            if self._translator is not None:
+                tr = self._translator.translate(response.tool_calls)
+                if tr.status != "ok":
+                    turn.steps.append(AgentStep(role="system", content=f"[翻译门拦截/{tr.status}] {tr.reason}"))
+                    turn.final_message = (
+                        f"该操作需人工确认，未自动执行：{tr.reason}"
+                        if tr.status == "human_confirm_required"
+                        else f"LLM 输出未通过结构校验，未派发：{tr.reason}"
+                    )
+                    turn.succeeded = False
+                    return turn
             tool_results: list[LLMMessage] = []
             for call in response.tool_calls:
                 tool_name = call.get("name") or call.get("function", {}).get("name", "")

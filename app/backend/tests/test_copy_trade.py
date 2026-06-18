@@ -9,6 +9,7 @@ import pytest
 
 from app.auth import AuthService
 from app.copy_trade import CopyTradeError, CopyTradeService, SignalRelayer
+from app.copy_trade.beta import CopyTradeBetaService
 from app.execution.base import OrderAck
 from app.security import InMemoryKeystore, KeystoreRecord, SecureKeystore
 
@@ -297,3 +298,87 @@ def test_relay_failed_when_venue_throws(auth: AuthService, ct: CopyTradeService,
     execs = ct.list_executions(signal_id=sig.signal_id)
     assert execs[0].status == "failed"
     assert "500" in (execs[0].error or "")
+
+
+# ---- v0.8.9 实盘安全护栏：幂等 + 杠杆硬截断（GOAL §8 M17） ----
+
+def test_idempotency_blocks_duplicate(
+    auth: AuthService, ct: CopyTradeService, keystore: SecureKeystore, tmp_path: Path
+) -> None:
+    """同一 signal 对同一 follower relay 两次：第二次绝不重复下单。"""
+    beta = CopyTradeBetaService(tmp_path / "beta.db")
+    a = auth.register("alice", "passw0rd")
+    b = auth.register("bob", "passw0rd")
+    m = ct.register_master(a.user_id, "A")
+    ct.subscribe(b.user_id, m.master_id, invest_amount=100, binance_keystore_name="follower_btc",
+                 per_order_max_usdt=10_000_000)
+    sig = ct.publish_signal(m.master_id, a.user_id, symbol="BTCUSDT", side="buy",
+                             quantity=0.1, price=30000, order_type="limit")
+
+    place_mocks: list[MagicMock] = []
+
+    def mock_factory(follower, ks):
+        v = MagicMock()
+        v.name = "mock"
+        v.place_order = MagicMock(return_value=OrderAck(order_id="ord-1", client_order_id="c", status="filled"))
+        place_mocks.append(v.place_order)
+        return v
+
+    relayer = SignalRelayer(ct, keystore, mock_factory, beta=beta)
+    r1 = relayer.relay(sig)
+    assert r1[0]["status"] == "filled"
+
+    r2 = relayer.relay(sig)
+    assert r2[0]["status"] == "skipped"
+    assert r2[0]["reason"] == "duplicate"
+
+    # venue.place_order 只被真正调用一次（第二次在幂等门处就短路，未建 venue）
+    assert sum(pm.call_count for pm in place_mocks) == 1
+    # dispatch 幂等表只有一条
+    assert len(beta.list_dispatches(f"{b.user_id}::{m.master_id}")) == 1
+    # 真实成交 execution 只有一条；第二次是 skipped
+    execs = ct.list_executions(signal_id=sig.signal_id)
+    assert len([e for e in execs if e.status == "filled"]) == 1
+    assert any(e.status == "skipped" and "duplicate" in (e.error or "") for e in execs)
+
+
+def test_leverage_cap_enforced(
+    auth: AuthService, ct: CopyTradeService, keystore: SecureKeystore, tmp_path: Path
+) -> None:
+    """master 发 10x 信号，follower cap 2x → 实际下单杠杆被硬截断到 2x。"""
+    beta = CopyTradeBetaService(tmp_path / "beta.db")
+    a = auth.register("alice", "passw0rd")
+    b = auth.register("bob", "passw0rd")
+    m = ct.register_master(a.user_id, "A", asset_class="crypto_perp")
+    ct.subscribe(b.user_id, m.master_id, invest_amount=100, binance_keystore_name="follower_btc",
+                 per_order_max_usdt=10_000_000, max_leverage=2.0)
+    sig = ct.publish_signal(m.master_id, a.user_id, symbol="BTCUSDT", side="buy",
+                             quantity=0.1, price=30000, order_type="limit", leverage=10.0)
+
+    captured: dict[str, float | None] = {}
+
+    def mock_factory(follower, ks):
+        v = MagicMock()
+        v.name = "mock"
+
+        def place(order):
+            captured["leverage"] = order.leverage  # 落到 venue 的实际杠杆
+            return OrderAck(order_id="ord-1", client_order_id="c", status="filled")
+
+        v.place_order = MagicMock(side_effect=place)
+        return v
+
+    relayer = SignalRelayer(ct, keystore, mock_factory, beta=beta)
+    results = relayer.relay(sig)
+    assert results[0]["status"] == "filled"
+
+    # 实际下单参数被截断到 follower 上限，而非 master 的 10x
+    assert captured["leverage"] == 2.0
+    assert results[0]["leverage_clamped"] is True
+
+    # dispatch 审计：master 10x / applied 2x / clamped
+    disp = beta.list_dispatches(f"{b.user_id}::{m.master_id}")
+    assert len(disp) == 1
+    assert disp[0].master_leverage == 10.0
+    assert disp[0].follower_applied_leverage == 2.0
+    assert disp[0].clamped is True

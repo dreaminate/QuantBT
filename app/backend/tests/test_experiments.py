@@ -53,9 +53,15 @@ def test_model_registry_versioning_and_promotion(tmp_path: Path) -> None:
     assert v1.version == 1
     assert v2.version == 2
     assert v1.stage == "dev"
-    promoted = reg.promote("lgbm_xs", 2, "production")
-    assert promoted.stage == "production"
+    # T-019：staging/production 需经审批门；dev/archived 仍直翻（向后兼容）。这里测直翻路径。
+    promoted = reg.promote("lgbm_xs", 2, "archived")
+    assert promoted.stage == "archived"
     # 重新拉取
     versions = reg.list_versions("lgbm_xs")
-    assert any(v.version == 2 and v.stage == "production" for v in versions)
+    assert any(v.version == 2 and v.stage == "archived" for v in versions)
     assert "lgbm_xs" in reg.list_models()
+    # 无 gate_service 时晋升 production 必 raise（禁裸翻）。
+    import pytest as _pytest
+    from app.approval.schema import GateStateError
+    with _pytest.raises(GateStateError):
+        reg.promote("lgbm_xs", 2, "production")

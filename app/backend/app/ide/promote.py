@@ -39,6 +39,7 @@ class PromotedRun:
     run_id: str
     run_dir: Path
     metrics: dict[str, float]
+    gate_verdict: dict | None = None   # T-015 多证据三角裁决（仅当传入 ledger 时有值）
 
 
 _DEFAULT_METADATA = {
@@ -58,10 +59,16 @@ def promote_ide_run(
     result: dict[str, Any],
     record_name: str | None = None,
     run_root: Path = RUN_ROOT,
+    ledger: Any = None,
+    returns_store: Any = None,
 ) -> PromotedRun:
     """把 IDE 沙箱结果落到 runs/<id>/，跑 metrics，返回新 run_id。
 
     raises PromoteError 当 result 不含可识别的 equity_curve。
+
+    T-015 接线（**opt-in，向后兼容**）：传入 `ledger`（T-013 一本账）时跑多证据三角 gate，
+    把 dsr/pbo/bootstrap 注入 metrics（让 risk_summary 守门规则从死接活）并把 gate_verdict 写进
+    run.json。不传 → 行为与既有完全一致（不记账、不跑 gate）。
     """
 
     equity_curve = result.get("equity_curve")
@@ -86,6 +93,14 @@ def promote_ide_run(
 
     metrics = _compute_metrics(rows)
 
+    # —— T-015 多证据三角 gate（opt-in：仅当传入 ledger）——
+    gate_verdict: dict | None = None
+    if ledger is not None:
+        gate_verdict = _run_overfit_gate(
+            rows=rows, result=result, metadata=metadata, strategy_name=strategy_name,
+            strategy_code=strategy_code, metrics=metrics, ledger=ledger, returns_store=returns_store,
+        )
+
     manifest = {
         "run_id": run_id,
         "strategy_id": f"ide_{owner_username}",
@@ -103,12 +118,53 @@ def promote_ide_run(
             "owner_username": owner_username,
         },
     }
+    if gate_verdict is not None:
+        manifest["gate_verdict"] = gate_verdict
+
     (run_dir / "run.json").write_text(
         json.dumps(manifest, ensure_ascii=False, indent=2),
         encoding="utf-8",
     )
 
-    return PromotedRun(run_id=run_id, run_dir=run_dir, metrics=metrics)
+    return PromotedRun(run_id=run_id, run_dir=run_dir, metrics=metrics, gate_verdict=gate_verdict)
+
+
+def _run_overfit_gate(
+    *, rows, result, metadata, strategy_name, strategy_code, metrics, ledger, returns_store,
+) -> dict:
+    """记账 + 跑三角 gate + 把 dsr/pbo/bootstrap 注入 metrics（就地改 metrics dict）。"""
+
+    from ..eval.gate_runner import asset_class_of, evaluate_overfit_gate, freq_to_ppy
+
+    meta = result.get("metadata") if isinstance(result.get("metadata"), dict) else {}
+    returns = [r["net_return"] or 0.0 for r in rows]
+    theme = (meta.get("research_theme_id") or strategy_name)
+    gr = evaluate_overfit_gate(
+        returns=returns,
+        factor=meta.get("factor_formula") or (strategy_code[:2000] if strategy_code else strategy_name),
+        params=meta.get("params") or {},
+        universe=metadata["market"],
+        dataset_version=str(meta.get("dataset_version") or "unknown"),
+        freq=metadata["frequency"],
+        label=str(meta.get("label") or "net_return"),
+        strategy_goal_ref=str(theme),
+        asset_class=asset_class_of(metadata["market"]),
+        periods_per_year=freq_to_ppy(metadata["frequency"]),
+        ledger=ledger,
+        returns_store=returns_store,
+        record=True,
+    )
+    v = gr.verdict
+    # 注入 → risk_summary._rule_dsr/_rule_pbo 真生效（活性证明）。insufficient 时不注入误导单点。
+    if v.color != "insufficient_evidence":
+        metrics["dsr"] = v.dsr_conservative
+        if v.pbo is not None:
+            metrics["pbo"] = v.pbo
+        metrics["bootstrap_sharpe_lower"] = v.bootstrap_ci[0]
+    gv = v.to_dict()
+    gv["honest_n"] = gr.honest_n
+    gv["config_hash"] = gr.config_hash
+    return gv
 
 
 # -------- helpers --------
