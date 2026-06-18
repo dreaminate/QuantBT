@@ -16,7 +16,7 @@
 | — | `RULES.project.md` | **本项目铁律**(冻结文件/范围/安全不变量) | 【项目级别】填 |
 | — | `ISSUES.md` | **跨任务问题/风险登记册**(未决 Open Q 不掉地) | 【项目级别】填 |
 | 任务台 | `tasks/` | `BOARD.md`(活跃板) + `active/<id>/` + `done/<id>/` + `_templates/` | 结构/模板【开发os级别】· 内容【项目级别】 |
-| 研究台 | `research/` | `INDEX.md` + `TRACE.md` + `ideas/`(创新入口) + `active/`(在研) + `findings/`(已蒸馏) + `archive/`(归档) | 结构/模板【开发os级别】· 内容【项目级别】 |
+| 研究台 | `research/` | `INDEX` + `TRACE`(溯源) + `DISTILL`(取舍账) + `WORKFLOW`(研究方法) + `ideas/active/findings/archive` | 结构/模板/方法【开发os级别】· 内容【项目级别】 |
 | 执行台 | `exec/` | `LOG.md`(滚动记录台) + `HANDOFF.md`(新 session 入口) | 格式【开发os级别】· 内容【项目级别】 |
 | 闸 | `scripts/` | `validate_dev.py`(OS 结构自检) + `validate_project.py`(项目锚点/旧路径) + `build_ledger.py`(全含量账本) | validate_dev/build_ledger【开发os级别】· validate_project【项目级别】 |
 

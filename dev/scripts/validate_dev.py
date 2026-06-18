@@ -40,7 +40,7 @@ def run_os_checks(dev: Path) -> tuple[list[str], list[str]]:
 
     # 2b. OS 结构文件（固定名,改名/删 → FAIL；变动的任务卡/研究文件名不在内）
     os_files = [
-        "research/TRACE.md",
+        "research/TRACE.md", "research/DISTILL.md", "research/WORKFLOW.md",
         "scripts/validate_project.py", "scripts/build_ledger.py", "scripts/README.md",
         "tasks/_templates/TASK.md",
         "research/ideas/README.md", "research/ideas/_TEMPLATE.md",
