@@ -1,16 +1,12 @@
 #!/usr/bin/env python3
-"""dev/ 开发 OS 完整性校验器 —— 让 harness 能自检，不靠手工纪律。
+"""dev/ 开发 OS 结构校验器（【开发os级别】勿改 · clone 自 dev-os）。
 
-跑：  python dev/scripts/validate_dev.py      （仓库根或任意目录均可）
-退出码 0 = 全过；1 = 有 FAIL。CI/pre-commit 可挂这个。
+只管 **OS 结构**：四台文件齐全 / 目录齐全 / BOARD↔done 一致 / 活跃任务孤儿。
+**项目专属检查在同目录 `validate_project.py`（【项目级别】填）**——本脚本会自动连带跑它。
 
-校验项（全部 exact，无误报）：
-  1. 四台必需文件齐全
-  2. tasks/{active,done,_templates} 目录存在
-  3. BOARD 标 ✅done 的任务 ↔ done/<id>/TASK.md 一一对应（抓「标 done 却没落档」）
-  4. 每个 done/<id>/ 有 TASK.md
-  5. 活跃文档无「迁移前旧路径」悬空引用（DECISIONS append-only + research/archive 豁免）
-  6. 脊柱地基 lineage/ids.py + 其对抗测试存在
+跑：  python dev/scripts/validate_dev.py
+退出码 0 = 全过；1 = 有 FAIL。CI / pre-commit 可挂这个。
+适配新项目：**别动本文件**，只改 `validate_project.py`。
 """
 from __future__ import annotations
 
@@ -21,87 +17,82 @@ from pathlib import Path
 DEV = Path(__file__).resolve().parents[1]          # dev/
 ROOT = DEV.parent                                  # 仓库根
 
-fails: list[str] = []
-oks: list[str] = []
+
+def run_os_checks(dev: Path) -> tuple[list[str], list[str]]:
+    """纯 OS 结构检查（项目无关）。"""
+    oks: list[str] = []
+    fails: list[str] = []
+
+    # 1. 四台必需文件
+    required = [
+        "GOAL.md", "STATE.md", "RULES.md", "RULES.project.md", "DECISIONS.md",
+        "ISSUES.md", "README.md",
+        "tasks/BOARD.md", "research/INDEX.md", "exec/HANDOFF.md", "exec/LOG.md",
+    ]
+    for rel in required:
+        (oks if (dev / rel).is_file() else fails).append(f"四台文件 {rel}")
+
+    # 2. 目录骨架（文件夹结构,固定·不可改名）
+    for rel in ["tasks/active", "tasks/done", "tasks/_templates",
+                "research/ideas", "research/active", "research/findings", "research/archive",
+                "exec", "scripts"]:
+        (oks if (dev / rel).is_dir() else fails).append(f"目录 {rel}/")
+
+    # 2b. OS 结构文件（固定名,改名/删 → FAIL；变动的任务卡/研究文件名不在内）
+    os_files = [
+        "research/TRACE.md",
+        "scripts/validate_project.py", "scripts/build_ledger.py", "scripts/README.md",
+        "tasks/_templates/TASK.md",
+        "research/ideas/README.md", "research/ideas/_TEMPLATE.md",
+        "research/active/README.md", "research/active/_TEMPLATE.md",
+        "research/findings/_TEMPLATE.md",
+    ]
+    for rel in os_files:
+        (oks if (dev / rel).is_file() else fails).append(f"OS 结构文件 {rel}")
+    (oks if (dev.parent / "CLAUDE.md").is_file() else fails).append("OS 结构文件 CLAUDE.md(根)")
+
+    # 3. BOARD ✅done ↔ done/<id>/
+    board = (dev / "tasks/BOARD.md").read_text(encoding="utf-8") if (dev / "tasks/BOARD.md").is_file() else ""
+    done_in_board = set()
+    for line in board.splitlines():
+        if "✅" in line and "done" in line:
+            m = re.search(r"\bT-\d{3,4}\b", line)
+            if m:
+                done_in_board.add(m.group(0))
+    for tid in sorted(done_in_board):
+        if (dev / "tasks/done" / tid / "TASK.md").is_file():
+            oks.append(f"落档一致 {tid}（BOARD done ↔ done/{tid}/TASK.md）")
+        else:
+            fails.append(f"{tid} 在 BOARD 标 ✅done 但缺 done/{tid}/TASK.md")
+    for tid in sorted({p.name for p in (dev / "tasks/done").glob("T-*") if p.is_dir()}):
+        if not (dev / "tasks/done" / tid / "TASK.md").is_file():
+            fails.append(f"done/{tid}/ 缺 TASK.md")
+
+    # 4. active/<id>/ 应在 BOARD(活跃版)有行 —— 孤儿任务检查
+    board_ids = set(re.findall(r"\bT-\d{3,4}\b", board))
+    for tid in sorted({p.name for p in (dev / "tasks/active").glob("T-*") if p.is_dir()}):
+        if tid in board_ids:
+            oks.append(f"BOARD 含活跃任务 {tid}")
+        else:
+            fails.append(f"active/{tid}/ 不在 BOARD 活跃版（孤儿任务,主力板漏了）")
+
+    return oks, fails
 
 
-def ok(msg: str) -> None:
-    oks.append(msg)
+oks, fails = run_os_checks(DEV)
 
+# 连带跑项目检查（validate_project.py，【项目级别】填；缺了不算错）
+try:
+    sys.path.insert(0, str(DEV / "scripts"))
+    from validate_project import project_checks  # type: ignore
 
-def fail(msg: str) -> None:
-    fails.append(msg)
+    p_oks, p_fails = project_checks(DEV, ROOT)
+    oks += p_oks
+    fails += p_fails
+except ModuleNotFoundError:
+    oks.append("（无 validate_project.py，跳过项目检查）")
 
-
-# --- 1. 四台必需文件 -------------------------------------------------------
-REQUIRED = [
-    "GOAL.md", "STATE.md", "RULES.md", "DECISIONS.md", "README.md", "ISSUES.md",
-    "tasks/BOARD.md", "research/INDEX.md", "exec/HANDOFF.md", "exec/LOG.md",
-]
-for rel in REQUIRED:
-    (ok if (DEV / rel).is_file() else fail)(f"四台文件 {rel}")
-
-# --- 2. 任务台 + 研究台工位目录 -------------------------------------------
-for rel in ["tasks/active", "tasks/done", "tasks/_templates",
-            "research/active", "research/ideas", "research/findings"]:
-    (ok if (DEV / rel).is_dir() else fail)(f"目录 {rel}/")
-
-# --- 3 + 4. BOARD ✅done ↔ done/<id>/ -------------------------------------
-board = (DEV / "tasks/BOARD.md").read_text(encoding="utf-8") if (DEV / "tasks/BOARD.md").is_file() else ""
-# 表格行：| T-012 | ... | ✅ done | ...
-done_in_board = set()
-for line in board.splitlines():
-    if "✅" in line and "done" in line:
-        m = re.search(r"\bT-\d{3,4}\b", line)
-        if m:
-            done_in_board.add(m.group(0))
-
-done_dirs = {p.name for p in (DEV / "tasks/done").glob("T-*") if p.is_dir()}
-
-for tid in sorted(done_in_board):
-    rec = DEV / "tasks/done" / tid / "TASK.md"
-    if rec.is_file():
-        ok(f"落档一致 {tid}（BOARD done ↔ done/{tid}/TASK.md）")
-    else:
-        fail(f"{tid} 在 BOARD 标 ✅done 但缺 done/{tid}/TASK.md（落档纪律漏了）")
-
-for tid in sorted(done_dirs):
-    if not (DEV / "tasks/done" / tid / "TASK.md").is_file():
-        fail(f"done/{tid}/ 缺 TASK.md")
-
-# --- 5. 活跃文档无迁移前旧路径悬空引用 ------------------------------------
-# 这些前缀的内容已迁走/归位；活跃文档若还引用 = 悬空。
-STALE_PREFIXES = [
-    "docs/institutional-agent-os",
-    "docs/codex_know", "docs/codex_rules",
-    "docs/strategy/_",          # 旧 GPT-Pro 握手提示已进 exec/archive/handoffs
-    "docs/templates/",          # 已进 tasks/_templates
-    "docs/tasks/",              # 已进 dev/tasks
-    "docs/roadmap/", "docs/references/",
-]
-# 活跃文档（不含 append-only 的 DECISIONS、不含 research/archive 历史档）
-LIVE_DOCS = [
-    "GOAL.md", "STATE.md", "RULES.md", "README.md", "ISSUES.md",
-    "tasks/BOARD.md", "research/INDEX.md", "exec/HANDOFF.md", "exec/LOG.md",
-]
-stale_hits = 0
-for rel in LIVE_DOCS:
-    p = DEV / rel
-    if not p.is_file():
-        continue
-    text = p.read_text(encoding="utf-8")
-    for pre in STALE_PREFIXES:
-        if pre in text:
-            fail(f"活跃文档 {rel} 含迁移前旧路径 `{pre}`（悬空引用）")
-            stale_hits += 1
-if stale_hits == 0:
-    ok("活跃文档无迁移前旧路径悬空引用")
-
-# --- 6. 脊柱地基 -----------------------------------------------------------
-for rel in ["app/backend/app/lineage/ids.py", "app/backend/tests/test_lineage_node_id.py"]:
-    (ok if (ROOT / rel).is_file() else fail)(f"脊柱地基 {rel}")
-
-# --- 报告 ------------------------------------------------------------------
+# 报告
 print(f"dev/ 完整性校验 —— {len(oks)} ✅  /  {len(fails)} ❌\n")
 for m in oks:
     print(f"  ✅ {m}")

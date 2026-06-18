@@ -1,6 +1,6 @@
 # T-023 · 确定性内核（T-014）接进 jobs / agent 执行路径
 
-- **状态**：pending_review（卡待用户过目，未动代码）
+- **状态**：todo（卡已过目，待 2 岔路点头后开工）
 - **review_status**：0
 - **来源**：spine-designs 01（§4 接线 / §5 对抗）+ 00-contracts C1/C5/C7/C8 + R10/R11/M17
 - **优先级**：P0（**STATE 头号 gap#4**：内核已建并验证 T-014，但 deferred 未接进真实执行路径——不接=验证白做）

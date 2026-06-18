@@ -1,55 +1,36 @@
-# TASK-0000
+<!-- 【开发os级别·模板】勿改本文件。造卡:复制到 tasks/active/T-XXXX/TASK.md,删本行再填。
+     脚手架非枷锁:[必填]不能省;[按需]用得上才留,用不上就删;能力小就精简,别为填而填。 -->
+# T-XXXX · <标题>
 
-status: pending_review
+- **状态**:todo | in_progress | done   ·   **review_status**:0 未确认 | 1 已确认
+<!-- 「等用户确认」= 状态 done + review_status 0;落档由"工作完成"触发,你确认后 review_status→1 -->
+- **来源**:<finding / 决策 / STATE gap>  ·  **优先级**:P?  ·  **依赖**:<其它任务>
 
-review_status: 0
+## Scope [必填]
+<单一能力单元,1 句「做什么 + 不做什么」>
 
-confirmed_by:
+## 上下文 / 动机 [按需]
+<为什么现在做,链到 finding / gap>
 
-confirmed_at:
+## 接线点（file:line，实现时复核）[必填]
+| 文件 | 位置 | 改什么(扩展不替换) |
+|---|---|---|
+| <path> | <行/符号> | <接什么线> |
 
-id: TASK-0000
-version: v1
-depends_on:
-layer:
+## 对抗测试设计（种已知 bug，门必抓）[必填]
+1. <名>:种 <已知的坏> → 门必 <抓的表现>(含变异要杀的点)
 
-## Scope
+## 复用 [按需]
+<现有可复用的 file:符号,别重造>
 
-说明本任务覆盖的单一能力单元。
+## 红线 [按需]
+<相关 RULES.project 红线 / 致命错误>
 
-## Inputs
+## 非目标 [按需]
+<明确不做什么,防 scope 蔓延>
 
-列出数据、配置、上游接口、用户输入。
+## Open Questions [按需]
+<进实现前关闭;需用户拍板的标 [需拍板]>
 
-## Outputs
-
-列出输出 artifact、API response、模型输出、优化结果或文档。
-
-## Interfaces
-
-列出 Python 函数、HTTP API、文件协议或前端契约。
-
-## State Changes
-
-说明是否改变任务状态、实验状态、数据目录、run artifact。
-
-## Acceptance Matrix
-
-| 项 | 状态 | 命令 | 通过标准 |
-|---|---|---|---|
-| 文档一致性 | required | python docs/codex_rules/scripts/validate_harness.py --stage rules | harness 基础结构通过 |
-| 数据契约 | N/A + 原因 | 无 | 说明原因 |
-| 研究接口 | N/A + 原因 | 无 | 说明原因 |
-| 风控约束 | N/A + 原因 | 无 | 说明原因 |
-| 回测现实性 | N/A + 原因 | 无 | 说明原因 |
-| Artifact 导出 | N/A + 原因 | 无 | 说明原因 |
-| API/UI | N/A + 原因 | 无 | 说明原因 |
-| 回归测试 | N/A + 原因 | 无 | 说明原因 |
-
-## Allowed Files
-
-列出允许修改的路径。
-
-## Open Questions
-
-列出进入实现前必须关闭的问题。
+## 验收一句话 [必填]
+<种什么坏 → 门必抓;不破坏现有测试基线>

@@ -1,31 +1,59 @@
-# QuantBT 开发 OS（dev/）
+# 开发 OS（dev/）· OS 规约
 
-这里是「**怎么建**」——四台 + Goal Loop。产品本身的手册/运行数据在 `../docs/`（glossary、model_cards 是 app 运行时读的，留在 docs/）。
+<!-- 【开发os级别】勿改 · clone 自 dev-os。本文件是 OS 规约/方法,跨项目一致。 -->
 
-## 四台
+这里是「**怎么建**」——四台 + Goal Loop。本文件随骨架走,任何用本 OS 的项目都带一份。
+产品本身的手册/运行数据放项目自己的 `docs/` 等处(app 运行时读的留在项目侧)。
 
-| 台 | 文件/目录 | 职责 |
-|---|---|---|
-| 目标台 | `GOAL.md` | 项目**完整最终形态**（终态，非任何过渡阶段）。慢变契约，所有 gap 对照它。 |
-| — | `DECISIONS.md` | 决策账本 R1–R29 / S1–S4（**append-only**，`confirmed_by` 锁定后不改既往）。 |
-| — | `STATE.md` | **诚实 gap 陈述器**输出：现状 vs GOAL（每 loop 重生；🟡未验证 ≠ ✅）。 |
-| — | `RULES.md` | 开发铁律：复用+性能 / 对抗测试标准 / 不破坏测试 / 致命错误即停工。 |
-| — | `ISSUES.md` | **跨任务问题/风险登记册**：卡 done 时未决 Open Q / 跨部件风险 / 诚实残余——不随卡消失、不掉地。 |
-| 任务台 | `tasks/` | `BOARD.md`(活跃板) + `active/<id>/` + `done/<id>/` + `_templates/`。 |
-| 研究台 | `research/` | `INDEX.md` + `ideas/`(架构RFC/论文笔记·探索自由) + `active/<topic>/`(在研线程) + `findings/`(已蒸馏) + `archive/`。生命周期 **ideas→active→findings→任务**。 |
-| 执行台 | `exec/` | `LOG.md`(滚动日志) + `HANDOFF.md`(新 session 入口) + `archive/`。 |
+## 四台 + 两本账 + 一道闸
+
+| 件 | 文件/目录 | 职责 | 级别 |
+|---|---|---|---|
+| 目标台 | `GOAL.md` | 项目**完整最终形态**(终态契约,慢变,所有 gap 对照它) | 【项目级别】填 |
+| — | `STATE.md` | **诚实 gap 陈述器**输出:现状 vs GOAL(每 loop 重生;🟡未验证 ≠ ✅) | 【项目级别】填 |
+| — | `DECISIONS.md` | 决策账本(**append-only**,锁定后不改既往) | 【项目级别】填 |
+| — | `RULES.md` | **OS 通用铁律**(诚实/对抗测试/扩展不替换/防漂/审计纪律) | **【开发os级别】** |
+| — | `RULES.project.md` | **本项目铁律**(冻结文件/范围/安全不变量) | 【项目级别】填 |
+| — | `ISSUES.md` | **跨任务问题/风险登记册**(未决 Open Q 不掉地) | 【项目级别】填 |
+| 任务台 | `tasks/` | `BOARD.md`(活跃板) + `active/<id>/` + `done/<id>/` + `_templates/` | 结构/模板【开发os级别】· 内容【项目级别】 |
+| 研究台 | `research/` | `INDEX.md` + `TRACE.md` + `ideas/`(创新入口) + `active/`(在研) + `findings/`(已蒸馏) + `archive/`(归档) | 结构/模板【开发os级别】· 内容【项目级别】 |
+| 执行台 | `exec/` | `LOG.md`(滚动记录台) + `HANDOFF.md`(新 session 入口) | 格式【开发os级别】· 内容【项目级别】 |
+| 闸 | `scripts/` | `validate_dev.py`(OS 结构自检) + `validate_project.py`(项目锚点/旧路径) + `build_ledger.py`(全含量账本) | validate_dev/build_ledger【开发os级别】· validate_project【项目级别】 |
 
 ## Goal Loop（开发循环）
 
 ```
-诚实查现状(STATE gap) → gap变任务(BOARD) → 执行(active/<id> 建+对抗测试 pytest绿)
-   → 完成落档(active→done, BOARD刷新) → 重跑 gap陈述器(STATE) → 再循环
+诚实查现状(STATE gap) → gap 变任务(BOARD) → 执行(active/<id> 写实现 + 对抗测试,测试跑绿)
+   → 完成落档(active→done, BOARD 刷新) → 重跑 gap 陈述器(STATE) → 再循环
 ```
 
-dogfood：开发 OS 用产品同款治理纪律（诚实 gap 不假绿灯、决策账本不改既往、对抗测试「种已知bug门必抓」）。
+## 研究 → 任务（方法 · 通用,所有项目一样）
 
-**自检**：`python dev/scripts/validate_dev.py` —— harness 不靠手工纪律，能自检（四台文件齐全 / BOARD✅done ↔ `done/<id>/` 一一对应 / 活跃文档无迁移前悬空路径 / 脊柱地基在）。挂 CI 或 pre-commit 即防漂移。
+**研究生命周期**:`research/ideas/`(灵感·RFC·论文笔记) → `research/active/<topic>/`(在研深挖) → `research/findings/`(build-ready 设计) → `tasks/BOARD.md`(T-xxx)。**立成任务(开始建 + 对抗测试)才进 Goal Loop**;在研阶段 informal,不要求严格验收。原料归 `research/archive/`,蒸馏成 finding、拍板进 `DECISIONS.md`。
+
+**蒸馏 6 步**(把又长又乐观的研究变成可落地任务,AI 照此走;不是死流程,是手艺骨架):
+1. **先读怀疑面再读结论** — 先看研究自己的对抗核查/反方,把乐观推荐打折。
+2. **抽承重的可证伪主张** — 剥掉 hype,留一句「如果 X 则 Y」+ 适用域 + 证据强度。
+3. **诚实标未验证残余** — 研究没建立的明写出来,绝不带进 finding 当真。
+4. **落成可落地设计** — 接到本项目 `file:line` + 复用现有模块 + 设计对抗测试。落 `research/findings/`(模板 `findings/_TEMPLATE.md`)。
+5. **拆成任务** — 一个 finding 拆成 BOARD 行,每行一个验收一句话 + 优先级 + 依赖。
+6. **溯源回填** — finding↔研究↔任务 写进 `research/TRACE.md`。
+
+> 硬不变量(对抗测试门必抓 / 诚实标未验证)见 `RULES.md` §2/§3——蒸馏**继承**,不在此重复。
+> `research/INDEX.md` 只放**本项目**的研究指针(内容),方法看这里(README)。
+
+## 核心纪律（全文 RULES.md）
+
+- **诚实**:🟡 声称 ≠ ✅ 验证,状态文件不假绿灯。
+- **对抗测试**:「种一个已知的坏,门必须抓住,否则门是纸做的」。
+- **防漂**:易变的东西(测试数/进度/当前任务)**绝不写进慢变文件**(GOAL/RULES/CLAUDE),只在 STATE/BOARD。
+- **审计先立框架**:大结构→小结构→细节;框架是假设、可被细节推翻(防过度审计 + 防漏审)。
+- **不擅自 commit/push**;改现有文件「扩展不替换」。
+
+## 自检
+
+`python dev/scripts/validate_dev.py` —— harness 不靠手工纪律,能自检(四台文件齐全 / BOARD ✅done ↔ `done/<id>/` 一一对应 / 目录齐全 / 项目锚点在)。挂 CI 或 pre-commit 即防漂。
 
 ## 新 session 怎么开始
 
-读 `GOAL.md`(终态) + `STATE.md`(现状) + `tasks/BOARD.md`(下一步)，拿 `exec/HANDOFF.md` 当入口提示词。重资料（dossier/蓝图）在 `research/archive/`，**read-on-demand，不默认加载**——这就是「瘦身」：活跃面只 4 个小文件。
+读 `GOAL.md`(终态) + `STATE.md`(现状) + `tasks/BOARD.md`(下一步),拿 `exec/HANDOFF.md` 当入口提示词。重资料在 `research/archive/`,**read-on-demand,不默认加载**——活跃面只 4 个小文件。

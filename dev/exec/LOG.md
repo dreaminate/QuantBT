@@ -2,6 +2,21 @@
 
 > 每个 session/Goal Loop 一条，最新在上。只记**做了什么 + 结果 + 下一步**，详情进 `tasks/done/<id>/`。
 
+<!-- 格式·防跑偏 | 追加型：最新追加到本注释下方第一位。每条照此：
+## <日期> · <标题>
+- 建/改了什么 + 命门  - 验收：<对抗测试 + 变异 + 全量数字>  - 下一步：<…> -->
+
+## 2026-06-19 · 装回 dev-os：保内容 + 升结构（融合）
+
+- 从可复用 dev-os 骨架融合回 QuantBT：**保**全部内容（GOAL/DECISIONS R1–R29/ISSUES/TRACE/研究 archive+findings/12 张 done 卡/wave-A 卡），**升**结构件。
+- **新增**：根 `CLAUDE.md`（新 Claude Code 自动入口）· `dev/RULES.project.md`（项目红线，从旧混合 RULES.md 抽出）· `scripts/build_ledger.py`（全含量账本）· `research/findings/_TEMPLATE.md`。
+- **替换 OS 自带件**：`RULES.md`（转 OS 通用层 + 审计纪律）· `README.md`（OS 规约）· `validate_dev.py`（配置化 PROJECT_ANCHORS=lineage/ids + STALE_PREFIXES + 孤儿检查）· TASK/ideas/active 模板（含格式·防跑偏注释）。
+- **升约定**：BOARD 转活跃版（删 done 行，全档走 build_ledger）· wave-A 卡 `状态` pending_review→todo（正交模型）· 内容台账加 in-file 格式注释 · 删 4 个旧 codex 模板。
+- 备份：git tag `dev-pre-devos-merge`(f598cbd) + tarball。
+- **下一步**：用户过目融合 → 点头 commit/push；收口 wave-A 仍等 2 岔路。
+
+---
+
 ## 2026-06-18 · 补 dev OS 两个工位（创新/在研 + 问题登记册）
 
 - 用户审视 dev OS 后拍板补两缺口：① 研究台加 `research/ideas/`(架构RFC/论文笔记·探索自由) + `research/active/<topic>/`(在研线程，镜像 tasks/active)，生命周期 **ideas→active→findings→任务**（各带 README + `_TEMPLATE.md`）；② 加 `dev/ISSUES.md` **跨任务问题/风险登记册**（卡 done 时未决 Open Q / 跨部件风险 / 诚实残余不掉地）。

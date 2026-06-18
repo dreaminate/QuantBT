@@ -2,7 +2,11 @@
 
 > 每个 Goal Loop 重生。**纪律：🟡「声称但未验证」绝不写成 ✅「已建并验证」——不假绿灯（= 产品「不给小白假绿灯」原则掉转枪口对准我们自己）。**
 > 上次刷新：2026-06-18（T-022 INV-3 lease-唯一-key 通道闭合：LeasedBinanceVenue 构造不持 key、真 key 只在门放行后 S4 物化、has_key 不 fetch；既有 venue 零改动 additive；10 对抗测试 + 4 变异全杀 + 5-lens 复核 15→1[LOW]修；全量 1000 测试绿。**安全门生产接线全链闭合，BOARD 无 todo**。上上次：T-021 安全门生产接线：relay 必经 deny-by-default 策略门（INV-2/M17 生产强制）+ 默认门模板 + 防重放 + 真钱 fail-closed；16 对抗测试 + 8 变异全杀 + 5-lens 复核 4 真发现全修（现货/市价全拒）；全量 990 测试绿。🟡 INV-3 lease-唯一-key 通道→T-022。上上次：T-020 验证官=脊柱最后一块：异模型一致性，产 content-addressed verdict_id，喂 T-017/T-019；异模型不一致即 BLOCK(不取均值)/独立性度量非假定/concern≠pass/措辞禁组织独立；含生产接线 + verdict↔工件绑定 + 防篡改读路径；31 对抗测试 + 10 变异全杀 + 5-lens 复核 18→5 真发现全修；全量 974 测试绿。**脊柱 8 块全建并验证**，T-018 生产接线→T-021）
-> **harness 自检**：`python dev/scripts/validate_dev.py` → 17 ✅ / 0 ❌（对抗验证过：藏掉 done 记录即 FAIL）。
+> **harness 自检**：`python dev/scripts/validate_dev.py` → PASS（对抗验证过：藏掉 done 记录即 FAIL）。
+
+<!-- 格式·防跑偏 | 结构型（每 loop 整篇重生,不是追加）：固定两块——
+① 子系统现状表(列：子系统 | 状态 ⬜未建/🟡部分未验证/✅已建并验证 | 证据 | gap) ② 头号 gap 编号列表。
+铁律：🟡 绝不写成 ✅（不假绿灯）。 -->
 > 审计修复：v2/v3 项目设计文档归位 `docs/plans/`（曾误卷进 dev archive）· 旧 codex 任务残留归 `tasks/_archive/` · 补 `done/T-012/` 落档 · 建 `exec/LOG.md` + `scripts/validate_dev.py`。
 
 ## 终态结构（GOAL §1 两层相乘）
