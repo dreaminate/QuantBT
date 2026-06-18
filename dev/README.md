@@ -10,8 +10,9 @@
 | — | `DECISIONS.md` | 决策账本 R1–R29 / S1–S4（**append-only**，`confirmed_by` 锁定后不改既往）。 |
 | — | `STATE.md` | **诚实 gap 陈述器**输出：现状 vs GOAL（每 loop 重生；🟡未验证 ≠ ✅）。 |
 | — | `RULES.md` | 开发铁律：复用+性能 / 对抗测试标准 / 不破坏测试 / 致命错误即停工。 |
+| — | `ISSUES.md` | **跨任务问题/风险登记册**：卡 done 时未决 Open Q / 跨部件风险 / 诚实残余——不随卡消失、不掉地。 |
 | 任务台 | `tasks/` | `BOARD.md`(活跃板) + `active/<id>/` + `done/<id>/` + `_templates/`。 |
-| 研究台 | `research/` | `INDEX.md` + `findings/` + `archive/`(36 dossier / 蓝图 / plans / survey)。研究归研究。 |
+| 研究台 | `research/` | `INDEX.md` + `ideas/`(架构RFC/论文笔记·探索自由) + `active/<topic>/`(在研线程) + `findings/`(已蒸馏) + `archive/`。生命周期 **ideas→active→findings→任务**。 |
 | 执行台 | `exec/` | `LOG.md`(滚动日志) + `HANDOFF.md`(新 session 入口) + `archive/`。 |
 
 ## Goal Loop（开发循环）

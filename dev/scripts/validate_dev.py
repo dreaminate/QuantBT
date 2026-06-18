@@ -35,14 +35,15 @@ def fail(msg: str) -> None:
 
 # --- 1. 四台必需文件 -------------------------------------------------------
 REQUIRED = [
-    "GOAL.md", "STATE.md", "RULES.md", "DECISIONS.md", "README.md",
+    "GOAL.md", "STATE.md", "RULES.md", "DECISIONS.md", "README.md", "ISSUES.md",
     "tasks/BOARD.md", "research/INDEX.md", "exec/HANDOFF.md", "exec/LOG.md",
 ]
 for rel in REQUIRED:
     (ok if (DEV / rel).is_file() else fail)(f"四台文件 {rel}")
 
-# --- 2. 任务台目录 ---------------------------------------------------------
-for rel in ["tasks/active", "tasks/done", "tasks/_templates"]:
+# --- 2. 任务台 + 研究台工位目录 -------------------------------------------
+for rel in ["tasks/active", "tasks/done", "tasks/_templates",
+            "research/active", "research/ideas", "research/findings"]:
     (ok if (DEV / rel).is_dir() else fail)(f"目录 {rel}/")
 
 # --- 3 + 4. BOARD ✅done ↔ done/<id>/ -------------------------------------
@@ -80,7 +81,7 @@ STALE_PREFIXES = [
 ]
 # 活跃文档（不含 append-only 的 DECISIONS、不含 research/archive 历史档）
 LIVE_DOCS = [
-    "GOAL.md", "STATE.md", "RULES.md", "README.md",
+    "GOAL.md", "STATE.md", "RULES.md", "README.md", "ISSUES.md",
     "tasks/BOARD.md", "research/INDEX.md", "exec/HANDOFF.md", "exec/LOG.md",
 ]
 stale_hits = 0

@@ -1,7 +1,7 @@
 # T-012 · `lineage/ids.py` 单一身份源
 
 - **状态**：✅ done（2026-06-16）
-- **review_status**：0（未经用户确认）
+- **review_status**：1（用户 2026-06-19 确认）
 - **来源**：spine-designs 01/03 + S1（单一身份源裁决）
 - **优先级**：P0
 

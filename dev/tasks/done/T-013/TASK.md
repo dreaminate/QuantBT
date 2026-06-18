@@ -1,7 +1,7 @@
 # T-013 · lineage 一本账（SQLite WAL + JSONL，honest-N + memoize）
 
 - **状态**：✅ done（2026-06-17）
-- **review_status**：0（未经用户确认）
+- **review_status**：1（用户 2026-06-19 确认）
 - **来源**：spine-designs 03（§3.4 ledger / §5 T3/T7/T8/T9/T11）+ 05（§5 T10–T15）+ S2/S4 + 复核 00 §1.2-A/I
 - **优先级**：P0 · **依赖**：T-012（`ids.py` 单一身份源）
 

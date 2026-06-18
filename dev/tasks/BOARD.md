@@ -19,9 +19,14 @@
 | T-022 | 06 安全门 INV-3：venue 只认 lease 签名（移除 self-fetch）+ 生产注入 broker | spine 06 §4 | ✅ done | P2 | T-021 | INV-3 relay 闭合（落档 `done/T-022/`，LeasedBinanceVenue 构造不持 key/真 key 只在门后 S4 物化/has_key 不 fetch；10 对抗测试 + 4 变异全杀 + 5-lens 复核 15→1[LOW]修；既有 venue 零改动 additive） |
 | T-019 | 07 审批门 + promote 改带审批门状态机 | spine 07 | ✅ done | P1 | T-013,T-018 | approver≠creator、缺要件拒并返缺口（落档 `done/T-019/`，22 对抗测试 + 5 变异全杀 + 5-lens 复核 17 真发现全修；含生产接线 main.py 端点 + apply_stage 侧门修复 HIGH） |
 | T-020 | 部件12 验证官（产 verdict_id，异模型一致性，S3 提前） | S3 | ✅ done | P1 | T-013,T-016 | 异模型不一致即 BLOCK、措辞禁「组织独立」（落档 `done/T-020/`，31 对抗测试 + 10 变异全杀 + 5-lens 复核 18→5 真发现全修；含生产接线 + verdict↔工件绑定 + 防篡改读路径 3 处 HIGH 修复）|
+| T-023 | 确定性内核（T-014）接进 jobs/agent 执行路径 | 收口§A | 🟡 pending_review | P0 | T-014,T-013,T-016 | 种重发单/重跑LLM/fork撤单→内核边界必截断走对账不重发（`active/T-023/`，4B 待用户过目） |
+| T-024 | 可证伪假设卡接进 Run 生命周期（P2 不挡探索） | 收口§A | 🟡 pending_review | P1 | T-017,T-013,T-020 | 空机制当 confirmatory→拒、探索留空→放行、冻结改字段→拒、措辞黑名单 0 hit（`active/T-024/`，4B 待用户过目） |
+| T-025 | 真钱执行路径审计 + 急停/kill 控件收尾 | 收口§A | 🟡 pending_review | P1 | T-021,T-022 | 种绕门 place_order→审计必抓、kill 端点无鉴权→403、emergency 真平仓非空 log（`active/T-025/`，4B 待用户过目） |
 
 ## 建设顺序（spine/00 §标注②）
 
 第0层 T-012(✅)+T-013(✅)+T-014(✅) → 第1层 T-015(✅) → 第2层 T-016(✅)+T-017(✅) → 第3层 T-018(✅ gate 组件，生产接线→T-021)+T-019(✅)+T-020(✅)。
 **脊柱 8 块全建并验证 + 安全门生产接线全链闭合**（T-021 relay 闸门 INV-2/M17/INV-4 生产强制 + T-022 INV-3 key 只在门后物化）。
-**BOARD 无 todo**——脊柱 + 治理漏斗 + 安全门生产强制全部建并验证（1000 测试绿）。诚实残余：TCB 天花板（本地门=防篡改证据，唯一硬墙在交易所侧）+ 非 relay live 路径未逐一接线（复核未确认真实漏洞）。
+脊柱 8 块全建并验证（1001 测试绿，已合并 main）。**进入收口阶段（D-CLOSEOUT：1A 混合 / 2B 分两轮 / 3C 最大自驱 / 4B 先看卡）。**
+
+**收口第一波 = 簇A 脊柱收尾**（T-023/T-024/T-025，pending_review，4B 待用户过目卡后开跑）：把已建但 deferred 的内核接活、假设卡接进 Run、真钱路径审计坐实 + 急停控件收尾。第二波起按 1A 混合（C 组合三角 + D 双时态 → B 因子轨 → E/F 交织）。诚实残余：TCB 天花板（本地门=防篡改证据，唯一硬墙在交易所侧）。

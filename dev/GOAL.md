@@ -2,6 +2,7 @@
 
 > **终态契约，非任何过渡阶段。** 慢变。所有 `STATE.md` 的 gap 都对照本文。
 > 蒸馏自：原始 GOAL（`research/archive/QuantBT-GOAL.original.md` §0/1/4/6/13）+ 36 dossier 终态 + `DECISIONS.md`（R1–R29/S1–S4）。剔除路线图/v0.1 范围/当前差距等过渡内容。
+> **研究溯源附录**：每节终态 ↔ 文献(dossier) ↔ 研究台结论(finding) ↔ 决策(R) ↔ 任务(T) 的单一总表见 [`research/TRACE.md`](research/TRACE.md)（兼收口覆盖率体检）。
 
 ## 0. 北极星
 

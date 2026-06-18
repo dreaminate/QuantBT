@@ -2,6 +2,16 @@
 
 > 每个 session/Goal Loop 一条，最新在上。只记**做了什么 + 结果 + 下一步**，详情进 `tasks/done/<id>/`。
 
+## 2026-06-18 · 补 dev OS 两个工位（创新/在研 + 问题登记册）
+
+- 用户审视 dev OS 后拍板补两缺口：① 研究台加 `research/ideas/`(架构RFC/论文笔记·探索自由) + `research/active/<topic>/`(在研线程，镜像 tasks/active)，生命周期 **ideas→active→findings→任务**（各带 README + `_TEMPLATE.md`）；② 加 `dev/ISSUES.md` **跨任务问题/风险登记册**（卡 done 时未决 Open Q / 跨部件风险 / 诚实残余不掉地）。
+- ISSUES 种 7 条真实项：I-001 TCB 残余[accepted] · I-002 对齐闸空转[open，用户处理中] · I-003 reconcile 下游未定 · I-004 node_id 跨部件 · I-005 OOS 切片 · I-006 Sentry 假死[resolving] · I-007 急停控件[→T-025]。
+- `validate_dev.py` 升级自检新工位（REQUIRED+ISSUES.md / 目录+research/{active,ideas,findings} / LIVE_DOCS+ISSUES.md）；README + INDEX 同步生命周期。
+- **下一步**：用户审 12 张 done 卡（review_status 0→1，I-002）；簇A 三张卡（T-023/24/25）+ 2 岔路待点头。
+
+---
+
+
 ## 2026-06-18 · T-022 安全门 INV-3：venue 只认 lease 签名（relay key 只在门后物化）
 
 - **建** `app/execution/leased_binance.py` `LeasedBinanceVenue`（构造不持 key；place_order(order,lease) 从 lease 现造 creds 签名；无 lease→fail-closed；get_mark_price keyless 公共端点保 T-021 fix B）+ `KeyBroker.has_key`（list_names 不 fetch）+ main.py ORDER_BROKER + 工厂改 lease-only（不 eager fetch）+ relayer 注入 broker。既有 binance venue/client 零改动（additive）。
