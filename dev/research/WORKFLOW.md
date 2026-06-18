@@ -16,9 +16,29 @@
 3. **综合 + 诚实残余** — 合并存活发现,逐条标**证据强度 + 适用域 + 未验证残余**;别把单 agent 的乐观当结论。
 4. **落 finding** — 按蒸馏 6 步落 `findings/<slug>.md`(模板 `findings/_TEMPLATE.md`)。
 
-## 工具
-- Claude Code 的 **Workflow**(并行 agent + 结构化输出)/ **deep-research** 技能。
-- 无工具时:人工按上面四步顺序走,一样防过度自信。
+## 执行细节（Claude Code Workflow）
+- **并行/串行**:默认 `pipeline`(每项独立流过各阶段,无栅栏,墙钟=最慢单链);只有阶段 N 真需要 N-1 的**全部**结果(去重/早停/互比)才用 `parallel` 栅栏。并发上限 ≈ min(16, 核数-2),多的排队。
+- **结构化输出**:给 agent 传 `schema`(JSON Schema)→ 强制返结构化、免解析、不合规自动重试。
+- **agent 模型(按角色选 tier,不是越强越好;默认继承会话模型,只在确信更合适才 `opts.model` 覆盖):**
+
+  | 角色 | 选哪档 | 为什么 |
+  |---|---|---|
+  | 扇出 scout(广扫 / 定位 / 只读) | 继承会话模型,或快档(Haiku/Sonnet) | 量大、浅读,省 token 省时 |
+  | 深读 / 落地设计 / 综合 | **最强档（当前 Opus 4.8）** | 要推理、要把研究蒸成 build-ready |
+  | 对抗验证 skeptic | **最强档（Opus 4.8）** + 异角度/异模型 | 证伪要硬,弱模型会放水 |
+
+  Opus 4.8 可开 **fast 模式**(更快、不降智)。模型名会变——记住的是"**深读/验证用最强,广扫用快档**"这条 role→tier 映射。
+- **预算**:用户给 "+Nk" 目标时,按 `budget` 动态定 agent 数 / 深度(`while budget.total && budget.remaining()>阈值: 再派一轮`);没给目标就别无限循环。
+- **工具**:简单调查直接用 Workflow;要多源 fact-check 报告用 **`deep-research`** 技能。无工具时人工按上面四步顺序走,一样防过度自信。
+
+## 一个最小骨架（扇出→验证→综合）
+```
+pipeline(子问题列表,
+  q => agent(`只读扫 ${q}`, {schema: 发现SCHEMA, model:可省}),        // 扇出·继承/快档
+  发现 => parallel(发现.map(f => () =>
+           agent(`异角度证伪：${f}`, {schema: 裁决SCHEMA})))           // 验证·最强档
+) → 过滤存活 → 按蒸馏 6 步落 findings/
+```
 
 ## 纪律（继承 RULES）
 - 先读研究自己的**怀疑面**(打折乐观),再综合——和 `../RULES.md` §6 审计纪律同理:先框架后细节、框架可被细节推翻。

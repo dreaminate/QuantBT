@@ -6,8 +6,7 @@
 研究归档进 archive/ 后在此加一行指针,不复述内容(read-on-demand)。**方法(生命周期+蒸馏6步)在 ../README.md,本台只放项目研究指针。** -->
 
 ## 溯源总表
-- `TRACE.md` · **GOAL 每节 ↔ 文献(dossier) ↔ 结论(finding) ↔ 决策(R) ↔ 任务(T)** 单一视图 + 收口覆盖率体检。
-- `DISTILL.md` · GOAL **蒸馏取舍账**:拿了啥 / 没拿啥(R20 暂缓、R6 改锚…) / 依据(TRACE 的反面)。
+- `TRACE.md` · **GOAL 每节 ↔ 文献(dossier) ↔ 结论(finding) ↔ 决策(R) ↔ 任务(T)** + **取舍/未采纳**(R20 暂缓、R6 改锚…拿了/没拿/依据) + 收口覆盖率体检。
 
 ## 当前权威研究
 - `archive/dossiers/01-36` · **36 环节前沿研究 dossier**（读时**先看 §7 对抗核查**，§5 乐观推荐按 §7 打折）— 见 `dossiers/README.md`
