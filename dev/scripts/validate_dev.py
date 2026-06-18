@@ -79,7 +79,58 @@ def run_os_checks(dev: Path) -> tuple[list[str], list[str]]:
     return oks, fails
 
 
+def _lint_state_evidence(dev: Path) -> tuple[list[str], list[str]]:
+    """STATE 的「确定 ✅」行必须挂可指认证据(防假绿灯)。只查同时带「状态」「证据」两列的表。"""
+    oks: list[str] = []
+    fails: list[str] = []
+    p = dev / "STATE.md"
+    if not p.is_file():
+        return oks, fails
+    status_i = ev_i = None
+    n = 0
+    for ln in p.read_text(encoding="utf-8").splitlines():
+        if "|" not in ln:
+            status_i = ev_i = None
+            continue
+        cells = [c.strip() for c in ln.strip().strip("|").split("|")]
+        if "状态" in cells and "证据" in cells:
+            status_i, ev_i = cells.index("状态"), cells.index("证据")
+            continue
+        if status_i is None or set(ln.strip()) <= set("|-: "):
+            continue
+        if len(cells) <= max(status_i, ev_i):
+            continue
+        status, ev = cells[status_i], cells[ev_i]
+        # 只查「确定的 ✅」:有 ✅ 且不含 ⬜/🟡(排除图例/占位行)、非 <占位>
+        if "✅" in status and "⬜" not in status and "🟡" not in status and "<" not in status:
+            n += 1
+            if not re.search(r"\.\w{1,5}\b|passed|passing|绿|通过|\d", ev):
+                fails.append(f"STATE ✅ 行证据空泛(疑假绿灯):状态「{status[:20]}」/ 证据「{ev[:30]}」")
+    if n and not fails:
+        oks.append(f"STATE ✅ 行均挂可指认证据({n} 行)")
+    return oks, fails
+
+
+RULES_CANARY = ["对抗测试", "扩展不替换", "不自作主张改", "致命错误", "🟡", "框架"]
+
+
+def _canary_rules(dev: Path) -> list[str]:
+    """RULES.md 核心 OS 不变量哨兵:缺失 → WARN(疑被精简;改 OS 文件须用户授权 + 回流 dev-os)。"""
+    p = dev / "RULES.md"
+    if not p.is_file():
+        return []
+    txt = p.read_text(encoding="utf-8")
+    missing = [s for s in RULES_CANARY if s not in txt]
+    if missing:
+        return [f"RULES.md 缺核心不变量 {missing} —— 疑被精简;非用户授权的 OS 级改动请复原,授权了请同步回 dev-os"]
+    return []
+
+
 oks, fails = run_os_checks(DEV)
+s_oks, s_fails = _lint_state_evidence(DEV)
+oks += s_oks
+fails += s_fails
+warns = _canary_rules(DEV)
 
 # 连带跑项目检查（validate_project.py，【项目级别】填；缺了不算错）
 try:
@@ -93,9 +144,13 @@ except ModuleNotFoundError:
     oks.append("（无 validate_project.py，跳过项目检查）")
 
 # 报告
-print(f"dev/ 完整性校验 —— {len(oks)} ✅  /  {len(fails)} ❌\n")
+print(f"dev/ 完整性校验 —— {len(oks)} ✅  /  {len(fails)} ❌  /  {len(warns)} ⚠️\n")
 for m in oks:
     print(f"  ✅ {m}")
+if warns:
+    print()
+    for m in warns:
+        print(f"  ⚠️  {m}")
 if fails:
     print()
     for m in fails:
