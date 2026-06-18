@@ -11,6 +11,7 @@ from __future__ import annotations
 import json
 import logging
 import os
+import sys
 import threading
 import traceback
 from dataclasses import dataclass, field
@@ -20,6 +21,16 @@ from typing import Any
 
 
 logger = logging.getLogger(__name__)
+
+
+def _under_pytest() -> bool:
+    """跑在 pytest 进程里吗。
+
+    pytest 整个进程生命周期内 `pytest` 都在 `sys.modules`，比只在单测执行期间
+    存在的 PYTEST_CURRENT_TEST 更可靠；两者任一命中即判定为测试进程。
+    """
+
+    return "pytest" in sys.modules or "PYTEST_CURRENT_TEST" in os.environ
 
 
 @dataclass
@@ -95,12 +106,18 @@ def init_error_reporting(log_path: Path | None = None) -> ErrorReporter:
         try:
             import sentry_sdk  # type: ignore[import-not-found]
 
-            sentry_sdk.init(
+            init_kwargs: dict[str, Any] = dict(
                 dsn=dsn,
                 traces_sample_rate=float(os.environ.get("SENTRY_TRACES_SAMPLE_RATE", "0.0")),
                 send_default_pii=False,
                 environment=os.environ.get("QUANTBT_ENV", "dev"),
             )
+            if _under_pytest():
+                # 测试进程：退出时不要为不可达 DSN 阻塞 flush（否则进程在
+                # "Sentry is attempting to send N pending events" 处长时间挂死）。
+                # 生产从不跑在 pytest 下，行为不变。
+                init_kwargs["shutdown_timeout"] = 0
+            sentry_sdk.init(**init_kwargs)
             reporter.sentry_enabled = True
             logger.info("Sentry 已启用（dsn 前缀 %s...）", dsn[:18])
         except ImportError:
