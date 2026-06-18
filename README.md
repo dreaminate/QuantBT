@@ -4,13 +4,15 @@
 > Agent 工坊 · 一键导出 — 一个仓库一行命令跑通。所有产物以 Parquet/CSV/JSON/MD
 > 落盘可独立审计。
 
-终态 spec：[`QuantBT-GOAL.md`](QuantBT-GOAL.md)（1080+ 行，每次决策都追加 v0.x 段，只增不删）
+终态 spec：[`dev/GOAL.md`](dev/GOAL.md)（蒸馏的终态契约）· 完整**开发 OS** 见 [`dev/`](dev/)（四台：目标/任务/研究/执行 + 决策账本 [`dev/DECISIONS.md`](dev/DECISIONS.md) append-only + 机构级治理脊柱）
 
 ---
 
 ## 架构总览
 
 从数据接入到执行的七段流水线 —— Agent 与前端用**同一套 REST + tool API** 驱动；回测阶段强制做 **PBO / DSR / Bootstrap** 过拟合体检（信任门）；**A股**最多到 Paper（不接券商），**加密**走到 Binance 实盘。
+
+整条流程被一条**不可绕过的机构级治理脊柱**贯穿：确定性 DAG 内核（动钱副作用设不可幂等边界，绝不重发单）+ honest-N 一本账 + 多证据三角守门 + 安全门 / 审批门 / 异模型验证官——把"零件"接成不可绕过的闸门。设计与决策见 [`dev/`](dev/) 开发 OS。
 
 <p align="center">
   <img src="docs/images/architecture.svg" alt="QuantBT 全流程架构：数据接入 → 特征/因子 → 模型训练 → 信号融合 → 组合优化 → 回测+过拟合体检 → 执行；A股到 Paper、加密到 Binance 实盘" width="760">
@@ -86,8 +88,10 @@ docker compose up -d
 
 ## 仓库形态
 
-- `app/backend/` — FastAPI + 16 业务模块（connectors/factor_factory/labels/models/signals/portfolio/execution/risk/security/eval/experiments/dag/agent/observability/paper/monitor）
+- `app/backend/` — FastAPI 业务模块（connectors/factor_factory/labels/models/signals/portfolio/execution/risk/security/eval/experiments/dag/agent/observability/paper/monitor）+ **机构级治理脊柱**（lineage/hypothesis/approval/verification/security.gate — 内核 + 一本账 + 三角 gate + 安全门 + 审批门 + 验证官）
 - `app/frontend/` — Vite + React + Claude Code 风 cc-* shell + 5 个独立 workshop 页 + RunDetailPage（jq-* 冻结）
+- `dev/` — **开发 OS**（四台：目标/任务/研究/执行 + 决策本/铁律/问题登记 ISSUES/研究溯源 TRACE + 自检 `validate_dev.py`），见 [`dev/README.md`](dev/README.md)
+- `docs/` — 产品手册 + 运行时数据（glossary/model_cards 由 app 运行时读）+ 设计规格 plans/ + 发布说明
 - `examples/` — 3 个端到端 demo（A股合成 / 加密永续 / Tushare 真数据）
 - `data/artifacts/experiments/{run_id}/` — 标准 run 目录（run.json / portfolio.csv / trades.csv / metrics.json / report.md）
 - `deploy/` — docker / PyInstaller spec / secrets 模板
@@ -97,5 +101,5 @@ docker compose up -d
 
 ```bash
 python -m pytest app/backend/tests -q
-# 189 passed
+# 1001 passed / 13 skipped
 ```
