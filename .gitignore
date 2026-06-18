@@ -39,6 +39,11 @@ data/training_runs/
 data/model_artifacts/
 # 临时跑 e2e 测试产出的 run 目录（pytest 用 _test 后缀）
 data/artifacts/experiments/*_test/
+# Agent OS 脊柱运行时账本 + LLM record/replay fixture（含 HMAC 密钥），属生成态，绝不入库
+data/artifacts/llm_fixtures/
+data/lineage/
+data/security/
+data/verification/
 *.zip
 *.parquet
 
