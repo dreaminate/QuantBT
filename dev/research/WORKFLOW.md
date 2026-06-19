@@ -1,4 +1,4 @@
-<!-- 【开发os级别】勿改 · clone 自 dev-os。讲"怎么跑一次研究调查"(方法),不是研究内容。 -->
+<!-- 【开发os级别】勿改 · clone 自 Multi-Dev-Os。讲"怎么跑一次研究调查"(方法),不是研究内容。 -->
 # 研究 workflow · 怎么跑一次研究调查（方法 · 通用,所有项目一样）
 
 > 研究**产物**模板见 `ideas/active/findings` 的 `_TEMPLATE`;**蒸馏 6 步**见 `../README.md`。

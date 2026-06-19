@@ -1,12 +1,24 @@
-<!-- 【开发os级别·模板】勿改本文件。造卡:复制到 tasks/active/T-XXXX/TASK.md,删本行再填。
-     脚手架非枷锁:[必填]不能省;[按需]用得上才留,用不上就删;能力小就精简,别为填而填。 -->
-# T-XXXX · <标题>
+<!-- 【开发os级别·模板】勿改本文件(来自 Multi-Dev-Os)。
+     造卡(三晋升源:research/goal/interaction → mint)：复制到 tasks/pool/{uuid8}/TASK.md、填 frontmatter.uuid=新 32位hex、删本注释再填。
+     id 规则：文件夹名 = uuid4 前 8 位 hex；frontmatter.uuid = 全 32 位 hex(无连字符)；**依赖/引用一律锚全 32 位 uuid**(前缀可变、uuid 不变)。
+     归属由所在文件夹编码：tasks/pool/=未分配(owner: wait)；tasks/{developer_id}/=已分配；tasks/{developer_id}/done/=落档。
+     分配/落档/land 只 leader/admin 能做(见 TEAM.md)；冻结历史卡保留 legacy T-xxx id(validate 兼容,不重 mint)。
+     脚手架非枷锁：[必填]不能省；[按需]用得上才留,别为填而填。 -->
+---
+uuid:            # 全 32 位 hex 无连字符(稳定身份,永不变；文件夹名取前 8 位)
+title:
+status: todo     # todo | in_progress | done
+owner: wait      # wait(在 pool) | <developer_id>；须 == 所在文件夹(validate 校验一致)
+assigned_by:     # 分配者 developer_id(leader/admin)；pool 中留空
+review_status: 0 # 被分配者 self-review：0 未过目 | 1 已过目/确认
+priority: P1     # P0..P3
+area:            # 功能域(给 dev-map 按功能查),如 安全门 / 数据层 / 因子轨
+source:          # research | goal | interaction(三晋升源出身)
+source_ref:      # 溯源句柄：finding 路径 / GOAL §x / 对话
+depends_on: []   # 上游卡 uuid 列表(全 32 位)= DAG 的边；锚 uuid 不锚前缀
+---
 
-- **状态**:todo | in_progress | done   ·   **review_status**:0 未过目 | 1 已过目/确认
-<!-- 状态=纯 enum,反映卡完善度+生命周期,**prose 别重述决策/过目**(各有专属字段)。
-     **todo 须**:Open Questions 待拍=0(拍板完) + [必填] 节全填。**done 须**:待拍=0 + 在 done/ + BOARD 标 done。
-     review_status = 用户**过目/确认**(任何阶段:开工前过目卡 / done 后确认完成);0→WARN(软,不挡),过目后→1。 -->
-- **来源**:<finding / 决策 / STATE gap>  ·  **优先级**:P?  ·  **依赖**:<其它任务>
+# <title>
 
 ## Scope [必填]
 <单一能力单元,1 句「做什么 + 不做什么」>

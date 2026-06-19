@@ -21,10 +21,10 @@ STALE_PREFIXES: list[str] = [
     "docs/strategy/_", "docs/templates/", "docs/tasks/",
     "docs/roadmap/", "docs/references/",
 ]
-# 活跃文档（被 STALE_PREFIXES 扫描；append-only 的 DECISIONS 不在内）
+# 活跃文档（被 STALE_PREFIXES 扫描）。团队并发：per-dev 的 state/log/decisions/issues 各自维护、不在内。
 LIVE_DOCS: list[str] = [
-    "GOAL.md", "STATE.md", "RULES.md", "RULES.project.md", "README.md", "ISSUES.md",
-    "tasks/BOARD.md", "research/INDEX.md", "exec/HANDOFF.md", "exec/LOG.md",
+    "GOAL.md", "RULES.md", "RULES.project.md", "README.md", "CODEMAP.md", "TEAM.md",
+    "research/INDEX.md", "research/TRACE.md", "research/WORKFLOW.md", "exec/HANDOFF.md",
 ]
 # ────────────────────────────────────────────────────────────────────
 

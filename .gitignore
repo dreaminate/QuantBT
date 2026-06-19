@@ -44,6 +44,7 @@ data/artifacts/llm_fixtures/
 data/lineage/
 data/security/
 data/verification/
+data/kernel/
 *.zip
 *.parquet
 
@@ -59,3 +60,6 @@ workspace/
 
 # Local editor state
 .vscode/
+
+# dev-os 团队并发：本机开发者身份(每人各异,不入项目库)
+dev/.identity

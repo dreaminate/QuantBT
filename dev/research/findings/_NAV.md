@@ -1,0 +1,15 @@
+# _NAV · research/findings/（生成 · 勿手改 · 跑 build_dev_map.py）
+
+> developer → 文件 + 梗概。**只定位；实时看原文。**
+
+## dreaminate
+- `dreaminate/spine-designs/00-contracts-and-coherence.md` — 00 · 脊柱跨部件契约一致性 + 测试真实性复核
+- `dreaminate/spine-designs/01-deterministic-kernel.md` — 01 · 确定性 DAG 内核 + checkpoint/replay/fork/rollback + 交易副作用不可幂
+- `dreaminate/spine-designs/02-llm-record-replay.md` — 02 · LLM 节点 record/replay 确定性 + 受控翻译层
+- `dreaminate/spine-designs/03-lineage-bus.md` — 03 · 谱系/溯源总线(PROV) + run 快照可复现强制属性
+- `dreaminate/spine-designs/04-hypothesis-card.md` — 04 · 可证伪假设卡 + 预注册 + confirmatory/exploratory(P2 不挡探索)
+- `dreaminate/spine-designs/05-trial-ledger.md` — 05 · R1/R8 内容寻址试验账本(honest-N + memoize 同一本) + N_eff 收益相关聚类
+- `dreaminate/spine-designs/06-security-rbac-gate.md` — 06 · Agent 安全(注入/越权/密钥) + 确定性策略门 deny-by-default + 交易所侧硬墙
+- `dreaminate/spine-designs/07-approval-gates.md` — 07 · HITL 审批门双通道(探索/确证) + promote 改造成带审批门状态机 + 幂等恢复
+- `dreaminate/spine-designs/README.md` — 机构级 Agent OS · 脊柱 build-ready 设计（二轮·第一簇）
+

@@ -6,6 +6,25 @@
 ## <日期> · <标题>
 - 建/改了什么 + 命门  - 验收：<对抗测试 + 变异 + 全量数字>  - 下一步：<…> -->
 
+## 2026-06-19 · dev-os 升级为团队并发协作范式（Phase 1–4 完成）
+- **建/改**：身份层(`TEAM.md` + `.identity`=dreaminate/leader + gitignore) · 任务卡 YAML frontmatter 模板(uuid/owner/depends_on/area…,文件名 8 位、内容+依赖 32 位、依赖锚 uuid) · 6 脚本(`validate_dev` 重写:身份∈TEAM/leader唯一/owner==folder/uuid8/依赖无悬空+DAG无环/legacy兼容;新 `build_board`/`build_dev_map`;适配 ledger/counters/log_index) · 4 提示文档(RULES +§8 团队并发 / README / HANDOFF / 根 CLAUDE 全改并发 + `dev-os`→`Multi-Dev-Os`)。
+- **folder 化迁移(c′,冻结保 legacy id)**：STATE/LOG/experience/DECISIONS/ISSUES → `{type}/dreaminate/` · 15 张 done 卡 → `tasks/dreaminate/done/`(保 T-xxx + 原格式) · findings/spine-designs → per-dev · BOARD 删(改生成 `board/dreaminate/`)。生成 `DEVMAP.md` + 8 个 `_NAV.md`。
+- **验收**：`validate_dev` 44 ✅ / 0 ❌ / 0 ⚠️ PASS;live+框架描述漂移终扫干净;**未 commit**(待用户审 + 提交)。
+- **Phase 4 回流 Multi-Dev-Os**：空仓库从零建通用框架(`~/Work/01_Projects/Multi-Dev-Os`)——拷通用文件 + 通用化 HANDOFF/TASK + 项目级模板(GOAL/RULES.project/CODEMAP/TEAM/INDEX/TRACE/validate_project 占位)+ 根 README/CLAUDE/.gitignore/.identity.example。validate 39✅/1❌(唯一 FAIL=采纳者建 .identity,自带采纳说明;demo 建后转绿)。
+- **诚实残余**：① 连通分量拆分/分配算法 = 后续 skill(留空,DAG 校验已就位) ② 只动 dev/ 文档,未碰 app 代码(项目 pytest 不受影响) ③ 两仓库均**未 commit/push**。
+- **下一步**：用户审 + 提交两仓库(Multi-Dev-Os 首次 commit/push)。
+
+## 2026-06-19 · 收口第一波 · 簇A 脊柱收尾全完成（T-023/024/025）
+
+- **闸门**：三卡 review_status 0→1（用户过目通过；AskUserQuestion 工具丢答+「继续」→ 采纳推荐项「三卡全过开跑」，同 D-T021 先例，已在响应中声明该解读）。待拍早已清零（D-T024/T025 系列）。
+- **T-023 内核接执行路径**：`run_dag(executor=...)` 切内核（executor=None 向后兼容，既有 7 测试零改）；`jobs.py` kernel_dag job（`InMemoryJobStore(kernel_root)` 共享 ArtifactStore+EffectLedger，retry=同图重跑=checkpoint 恢复+is_consumed 去重**绝不重发单**，SSE 加 halted/checkpoint，replay 模式边界 HALT）；agent **复用 T-016 RecordingLLMClient**（单一源不另造 store）；main.py JOB_STORE 携 kernel_root 生产可达。14 接线对抗测试。
+- **T-024 假设卡接 Run**：`Run.layer/hypothesis_card_id` 可空字段（旧行兼容）+ `HYPOTHESIS_STORE` + 6 端点 + promote_model 闸门（confirmatory 过 gate / 非 confirmatory 走真钱拒绝绝不自动晋级 / 无 card_id 不挡 / exploratory P2 放行）+ **D-T024-FALS**（freeze 低可证伪 = 硬透明 + 软决定 human_reviewed override 留痕进卡，启发式绝不自动硬挡；结构空机制/验证官 blocked 仍硬拒）。16 对抗测试，措辞黑名单 0 hit。
+- **T-025 真钱审计+急停+GenericVenue**：审计不变量测试（place_order 调用点 ⊆ 门后路径 + 探针自检）；kill_switch 补 IP+密码鉴权；emergency_close_all 空壳→真调 KILL_SWITCH；GenericVenue 接活（deny_by_default 白名单 + `guarded_generic_venue` OrderGuard 工厂）；relay 向后兼容真钱陷阱闭合（enforce_gate=False+CRYPTO_LIVE→fail-closed）。15 对抗测试。
+- **5-lens 对抗复核（ultracode workflow，8 agent）3 真发现全修**：**1H** 急停含 venue 平仓失败仍硬编码 ok:True+审计 result="ok"（真钱面假绿灯）→ `_killswitch_status` 据 results 派生诚实状态（ok/partial/failed）+ 失败透传审计；**1M** retry_job 丢 spec["mode"]→replay job 降级 run 触发真下单 → 透传 mode；**1L** 同 1H 源。各补对抗测试。
+- **验收**：全量 **1046 passed / 13 skipped**（基线 1001 未破，+45 新测试）。`validate_dev.py` PASS（41✅/0❌）。三卡落档 done/T-023..025、BOARD 删行、STATE 刷新。
+- **诚实残余**（非阻断，入下一波/后续）：T-023 reconcile 对账闭环 + kernel_dag 生产 producer；T-024 端到端集成（内核/验证官/regime 真落地后）。
+- **下一步**：**下一波 = 1A 价值密度混合** → C「M7–M8 组合上多证据三角」+ D「数据双时态地基」（把*每 run 可信*做实）。未提交（用户明说才 commit）。
+
 ## 2026-06-19 · dev-os 开发 OS 大幅加固（规则/检查/脚本）+ 两轮深度测试
 
 - **规则**：memory 契约定项目级单层（操作者/偏好/外部参考，绝不复制 dev/）；§0「别管太宽」；§7 规划/拍板纪律（逐一+循环到清零+左右横跳+工程取舍四面）；§4 按模板/格式骨架填；导航头约定（索引仅定位、必读原文）；exec/LOG 归档 + 强制查 LOG。
