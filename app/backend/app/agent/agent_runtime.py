@@ -7,6 +7,13 @@
    - 有 tool_calls → 派发到 ToolDispatcher，把结果作为 tool message 写回，loop 回到步骤 2
    - 否则当作终态回复给 user
 4. 步数上限避免死循环
+
+脊柱内核 01 接线（T-023，复用不重造）：每个 reAct turn 的「LLM 输出落 fixture / replay 读 fixture
+不重跑 LLM」由注入的 `RecordingLLMClient`（T-016 / spine 02）透明承担——它本身是个 `LLMClient`，
+从 main.py 注入即生效，本文件这行 `self._llm.chat(...)` 无感。fixture 内容寻址身份（fixture_key =
+node_id 的 llmfx- 别名）出自唯一身份源 `lineage/ids.py`，**绝不在 agent 侧另造第二套 store/身份**
+（C5/C7/C8 单一源红线）。故 replay 模式下整个 turn 重放零 LLM 真调用（spy 断言 chat==0 次，见
+`tests/test_kernel_wiring.py`）；R11：未命中绝不回退打真 API（由 RecordingLLMClient 抛 ReplayMiss）。
 """
 
 from __future__ import annotations

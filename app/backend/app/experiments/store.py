@@ -57,6 +57,11 @@ class Run:
     tags: dict[str, str] = field(default_factory=dict)
     parent_run_id: str | None = None
     forked_from: str | None = None
+    # 假设卡接进 Run 生命周期（T-024 / D-T024，向后兼容可空）：
+    # layer = 用户在 StrategyGoal 显式声明/晋级（exploratory→confirmatory；系统绝不自动晋级）。
+    # hypothesis_card_id = 该 run 绑定的可证伪假设卡。store 层不强制校验（不破坏既有 Run）。
+    hypothesis_card_id: str | None = None
+    layer: Literal["exploratory", "secondary", "confirmatory"] | None = None
 
     def to_dict(self) -> dict[str, Any]:
         return asdict(self)

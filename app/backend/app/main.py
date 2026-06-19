@@ -84,7 +84,9 @@ app.add_middleware(
     allow_headers=["*"],
 )
 
-JOB_STORE = InMemoryJobStore()
+# 脊柱内核 01 接线（T-023）：JOB_STORE 携内核 store（ArtifactStore+EffectLedger 落 DATA_ROOT/kernel）。
+# kernel_dag job 的 retry 即「从最近 checkpoint 恢复 + is_consumed 去重、绝不重发单」；既有数据拉取 job 零影响。
+JOB_STORE = InMemoryJobStore(kernel_root=DATA_ROOT / "kernel")
 DATASET_REGISTRY = DatasetRegistry(DATA_ROOT / "datasets" / "registry.jsonl")
 FACTOR_REGISTRY = FactorRegistry(DATA_ROOT / "factors" / "registry.json")
 if not FACTOR_REGISTRY.list():
@@ -101,6 +103,17 @@ from .lineage import Ledger as _Ledger  # noqa: E402
 
 LEDGER = _Ledger(DATA_ROOT / "lineage")
 RETURNS_STORE = _ArtifactStore(DATA_ROOT / "lineage" / "returns")
+
+# 脊柱 04：可证伪假设卡接进 Run 生命周期（T-024 / P2 不挡探索）。
+# exploratory run 一律放行；仅晋级 confirmatory 可下注结论才强制冻结三必填 + 一次性 OOS 闸门。
+from .hypothesis import (  # noqa: E402
+    FreezeRejected as _FreezeRejected,
+    HypothesisCardStore as _HypothesisCardStore,
+    PromoteRejected as _PromoteRejected,
+    can_touch_final_oos as _can_touch_final_oos,
+)
+
+HYPOTHESIS_STORE = _HypothesisCardStore(DATA_ROOT / "experiments")
 
 # 社区 / Auth / Sharing 共享同一 sqlite
 _COMMUNITY_DB = DATA_ROOT / "community.db"
@@ -454,7 +467,34 @@ def list_model_versions(model_id: str) -> list[dict]:
 
 @app.post("/api/models/{model_id}/promote")
 def promote_model(model_id: str, payload: dict = Body(...), user=Depends(require_user_dependency)) -> dict:
-    """T-019：dev/archived 直翻；staging/production 开审批门（返 pending gate 或 422+缺口清单）。"""
+    """T-019：dev/archived 直翻；staging/production 开审批门（返 pending gate 或 422+缺口清单）。
+
+    T-024 假设卡闸门（向后兼容，传 hypothesis_card_id 才启用，不破坏既有 promote）：
+    - confirmatory 卡：先过 can_touch_final_oos（探索层/未冻结/OOS 已消费 → 409 BLOCK）。
+    - 非 confirmatory 卡（exploratory/secondary）走真钱（production / live_crypto / paper）→ 409 拒：
+      绝不自动晋级，晋级是用户显式动作（D-T024）。纯探索（无真钱意图）不挡（P2）。
+    """
+    hcid = payload.get("hypothesis_card_id")
+    if hcid:
+        try:
+            _hcard = HYPOTHESIS_STORE.get(hcid)
+        except KeyError as exc:
+            raise HTTPException(404, f"假设卡不存在: {hcid}") from exc
+        _real_money = (payload.get("stage") in {"production"}
+                       or payload.get("execution_mode") in {"live_crypto", "paper"})
+        if _hcard.layer == "confirmatory":
+            _gate = _can_touch_final_oos(_hcard, honest_n_now=LEDGER.honest_n(_hcard.strategy_goal_ref))
+            if not _gate.allow:
+                raise HTTPException(409, detail={
+                    "hypothesis_gate_blocked": True, "block_reason": _gate.block_reason,
+                    "warnings": _gate.warnings, "disclaimer": _gate.disclaimer,
+                })
+        elif _real_money:
+            raise HTTPException(409, detail={
+                "hypothesis_gate_blocked": True,
+                "block_reason": (f"假设卡 layer={_hcard.layer} 非 confirmatory，不得直接走真钱执行/晋级；"
+                                 "先显式 promote 为 confirmatory 并冻结假设卡（P2/D-T024，晋级是用户显式动作）"),
+            })
     try:
         result = MODEL_REGISTRY.promote(
             model_id, int(payload["version"]), payload["stage"],
@@ -543,6 +583,94 @@ def get_verdict(verdict_id: str, user=Depends(require_user_dependency)) -> dict:
         return VERDICT_STORE.get(verdict_id).to_dict()
     except KeyError as exc:
         raise HTTPException(404, str(exc)) from exc
+
+
+# -------- 脊柱 04 · 可证伪假设卡端点（T-024，P2 不挡探索）--------
+@app.post("/api/hypothesis_cards")
+def create_hypothesis_card(payload: dict = Body(...), user=Depends(require_user_dependency)) -> dict:
+    """建 draft 假设卡。P2：探索卡 falsifiable 可空，create 永不校验可证伪性。
+
+    body: {strategy_goal_ref, layer, falsifiable?, touched_versions?, parent_card_id?}
+    """
+    try:
+        card = HYPOTHESIS_STORE.create(
+            strategy_goal_ref=payload["strategy_goal_ref"],
+            layer=payload.get("layer", "exploratory"),
+            falsifiable=payload.get("falsifiable"),
+            touched_versions=payload.get("touched_versions"),
+            parent_card_id=payload.get("parent_card_id"),
+        )
+    except KeyError as exc:
+        raise HTTPException(422, f"缺字段: {exc}") from exc
+    return card.to_dict()
+
+
+@app.get("/api/hypothesis_cards/{card_id}")
+def get_hypothesis_card(card_id: str, user=Depends(require_user_dependency)) -> dict:
+    try:
+        return HYPOTHESIS_STORE.get(card_id).to_dict()
+    except KeyError as exc:
+        raise HTTPException(404, str(exc)) from exc
+
+
+@app.post("/api/hypothesis_cards/{card_id}/promote")
+def promote_hypothesis_card(card_id: str, payload: dict = Body(...),
+                            user=Depends(require_user_dependency)) -> dict:
+    """探索→确认晋级（用户显式动作，D-T024）：校验新 OOS 切片未被源卡触碰过（防探索污染）。"""
+    try:
+        card = HYPOTHESIS_STORE.promote_to_confirmatory(card_id, payload["fresh_dataset_version"])
+    except KeyError as exc:
+        raise HTTPException(404, str(exc)) from exc
+    except _PromoteRejected as exc:
+        raise HTTPException(409, str(exc)) from exc
+    return card.to_dict()
+
+
+@app.post("/api/hypothesis_cards/{card_id}/freeze")
+def freeze_hypothesis_card(card_id: str, payload: dict = Body(...),
+                           user=Depends(require_user_dependency)) -> dict:
+    """冻结 confirmatory 卡：三必填非空 + 可证伪性 + honest-N 实读（自 LEDGER，绝不收调用方传 N）。
+
+    body: {frozen_oos:{dataset_version,...}, review?, human_reviewed?, override_note?}
+    可证伪性 low + human_reviewed=False → 409（硬透明，不静默冻结）；human_reviewed=True 显式 override
+    后仍可冻结，override 留痕进卡（D-T024-FALS，启发式绝不自动硬挡）。结构空机制 / 验证官 blocked 仍硬拒。
+    """
+    try:
+        card = HYPOTHESIS_STORE.freeze(
+            card_id,
+            frozen_oos=payload.get("frozen_oos"),
+            ledger=LEDGER,
+            review=payload.get("review"),
+            human_reviewed=bool(payload.get("human_reviewed", False)),
+            override_note=payload.get("override_note"),
+        )
+    except KeyError as exc:
+        raise HTTPException(404, str(exc)) from exc
+    except _FreezeRejected as exc:
+        raise HTTPException(409, str(exc)) from exc
+    return card.to_dict()
+
+
+@app.get("/api/hypothesis_cards/{card_id}/gate")
+def hypothesis_card_gate(card_id: str, user=Depends(require_user_dependency)) -> dict:
+    """can_touch_final_oos 软闸门：探索层/未冻结/OOS 已消费 → BLOCK；其余产风险提示 + needs_human_review。"""
+    try:
+        card = HYPOTHESIS_STORE.get(card_id)
+    except KeyError as exc:
+        raise HTTPException(404, str(exc)) from exc
+    decision = _can_touch_final_oos(card, honest_n_now=LEDGER.honest_n(card.strategy_goal_ref))
+    return decision.to_dict()
+
+
+@app.post("/api/hypothesis_cards/{card_id}/deviation")
+def hypothesis_card_deviation(card_id: str, payload: dict = Body(...),
+                              user=Depends(require_user_dependency)) -> dict:
+    """提交偏离：append + 自动降级标记 + 发 PROV 事件（deviations 非只读字段）。"""
+    try:
+        card = HYPOTHESIS_STORE.deviation(card_id, payload.get("deviation") or {})
+    except KeyError as exc:
+        raise HTTPException(404, str(exc)) from exc
+    return card.to_dict()
 
 
 # -------- 模型中心 · 训练台 (v3) --------
@@ -990,12 +1118,16 @@ def mainnet_emergency_close_all(payload: dict = Body(...), user=Depends(require_
         raise HTTPException(403, f"IP {source_ip} 不在白名单 - emergency 仍需 IP 校验")
     if not password_verified:
         raise HTTPException(403, "emergency_close_all 必须先验证密码")
-    # 实际 cancel 调 BinanceUMFuturesVenue（生产中要做 + 这里只记录意图）
+    # T-025/D-T025：从空壳改为真执行——真调 KILL_SWITCH（cancel_all_open + close_position 全 symbol）。
+    # 平仓本体 fail-open（门坏也要能平仓），护栏在上面的 IP+密码二次鉴权，不在「能不能平仓」。
+    results = KILL_SWITCH.trigger(close_positions=True)
+    # 含 venue 平仓失败 → 绝不报 ok:True（5-lens HIGH：操作者读 ok 会误信已平仓，真钱面不假绿灯）。
+    ok, audit_result, err = _killswitch_status(results)
     MAINNET_GUARDS.log_operation(
         user.user_id, "emergency_close_all",
-        source_ip=source_ip, password_verified=True, result="ok",
+        source_ip=source_ip, password_verified=True, result=audit_result, error=err,
     )
-    return {"ok": True, "note": "已记录 emergency 意图；venue 端取消所有挂单 + 平仓由 SignalRelayer 调用真 venue"}
+    return {"ok": ok, "status": audit_result, "results": results}
 
 
 @app.get("/api/security/binance/verify")
@@ -1319,10 +1451,40 @@ def risk_alerts() -> dict[str, Any]:
     }
 
 
+def _killswitch_status(results: dict[str, Any]) -> tuple[bool, str, str | None]:
+    """据 KILL_SWITCH.trigger 的 per-venue results 派生【诚实】状态——绝不一律 ok（不假绿灯）。
+
+    trigger 是 fail-open（cancel/close 抛错不上抛，塞 {error,stage,...} 进 results）：故含 error 项时
+    顶层绝不能报 ok=True。全成功→ok/ok；部分失败→partial；全失败→failed。失败 symbol/error 透传供审计。
+    （5-lens 复核 HIGH：真钱急停最不容假绿灯——含失败的平仓硬编码 ok:True = 🟡当✅。）
+    """
+    items = [it for v in (results or {}).values() for it in v if isinstance(it, dict)]
+    errors = [it for it in items if it.get("error")]
+    if not errors:
+        return True, "ok", None
+    audit = "failed" if len(errors) == len(items) else "partial"
+    return False, audit, "; ".join(str(it.get("error")) for it in errors[:5])
+
+
 @app.post("/api/risk/kill_switch")
-def trigger_kill_switch(payload: dict = Body(default_factory=dict)) -> dict:
+def trigger_kill_switch(payload: dict = Body(default_factory=dict),
+                        user=Depends(require_user_dependency)) -> dict:
+    """急停红按钮：撤单 + 平仓全 symbol。
+
+    D-T025：护栏放在「谁能按按钮」= 人在环 IP + 密码二次鉴权（复用 mainnet_guards）；平仓/撤单本体
+    fail-open（风险降低动作永不被策略门挡——门坏也要能救命平仓，与「下新单 fail-closed」相反方向）。
+    """
+    source_ip = payload.get("source_ip", "unknown")
+    if not MAINNET_GUARDS.check_ip(user.user_id, source_ip):
+        raise HTTPException(403, f"IP {source_ip} 不在白名单 - kill_switch 需 IP 校验")
+    if not bool(payload.get("password_verified", False)):
+        raise HTTPException(403, "kill_switch 必须先验证密码")
     close = bool(payload.get("close_positions", True))
-    return KILL_SWITCH.trigger(close_positions=close)
+    results = KILL_SWITCH.trigger(close_positions=close)
+    ok, audit_result, err = _killswitch_status(results)   # 含 venue 失败 → 绝不报 ok（不假绿灯）
+    MAINNET_GUARDS.log_operation(user.user_id, "kill_switch", source_ip=source_ip,
+                                 password_verified=True, result=audit_result, error=err)
+    return {"ok": ok, "status": audit_result, "results": results}
 
 
 # -------- M14 Agent --------

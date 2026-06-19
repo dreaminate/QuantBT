@@ -7,7 +7,7 @@ from pydantic import BaseModel, Field, model_validator
 
 
 ProgressMode = Literal["basic", "detailed"]
-JobStatus = Literal["queued", "running", "succeeded", "failed", "interrupted"]
+JobStatus = Literal["queued", "running", "succeeded", "failed", "interrupted", "halted"]
 SymbolMode = Literal["manual", "all", "stock_pool", "preset"]
 NumericFilterOperator = Literal[">", ">=", "<", "<=", "=", "between"]
 
@@ -129,6 +129,9 @@ class JobRecord:
     duration_seconds: float | None = None
     payload_summary: dict[str, Any] | None = None
     cancel_requested: bool = False
+    # 脊柱内核 01 接线（T-023）：最近完成/复用的 durable 节点 node_id（checkpoint 句柄）。
+    # 默认 None（向后兼容既有 job）；仅 kernel_dag 类型 job 在节点推进时回填，SSE 据它发 checkpoint 事件。
+    checkpoint: str | None = None
 
     def to_dict(self) -> dict[str, Any]:
         return {
@@ -145,6 +148,7 @@ class JobRecord:
             "run_id": self.run_id,
             "duration_seconds": self.duration_seconds,
             "payload_summary": self.payload_summary or {},
+            "checkpoint": self.checkpoint,
         }
 
 

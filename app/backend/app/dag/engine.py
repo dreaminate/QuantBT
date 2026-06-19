@@ -14,9 +14,12 @@ import threading
 import time
 from dataclasses import dataclass, field
 from datetime import UTC, datetime, timedelta
-from typing import Any, Callable, Iterable, Literal
+from typing import TYPE_CHECKING, Any, Callable, Iterable, Literal
 
 import yaml
+
+if TYPE_CHECKING:                       # 仅类型：kernel import 自 engine，运行期再 import 会循环
+    from .kernel import DurableExecutor
 
 
 logger = logging.getLogger(__name__)
@@ -126,11 +129,24 @@ class DAGRunResult:
     tasks: list[DAGTaskResult]
 
 
-def run_dag(definition: DAGDefinition, *, context: dict[str, Any] | None = None) -> DAGRunResult:
-    """串行 + topological 执行。生产可换并发，但保持简单。"""
+def run_dag(
+    definition: DAGDefinition,
+    *,
+    context: dict[str, Any] | None = None,
+    executor: "DurableExecutor | None" = None,
+) -> DAGRunResult:
+    """串行 + topological 执行。生产可换并发，但保持简单。
+
+    脊柱内核 01 接线（T-023，扩展不替换）：传入 `executor`（DurableExecutor）即把这条编排路径
+    切到确定性内核——durable 复用 pure 工件、effectful 经统一幂等账去重、replay/fork/rollback 在
+    effectful 边界 HALT。`executor=None`（默认）保持现有全量串行语义，既有 DAG 测试零改动。
+    身份单一源（C5/C7/C8）：node_id 由内核（lineage.ids）计算，engine 绝不另算第二套。
+    """
 
     if context is None:
         context = {}
+    if executor is not None:
+        return _run_dag_via_kernel(definition, context, executor)
     ordered = _topological_sort(definition.tasks)
     started = datetime.now(UTC).isoformat()
     results: dict[str, DAGTaskResult] = {}
@@ -153,6 +169,39 @@ def run_dag(definition: DAGDefinition, *, context: dict[str, Any] | None = None)
         finished_at_utc=datetime.now(UTC).isoformat(),
         succeeded=succeeded,
         tasks=list(results.values()),
+    )
+
+
+def _run_dag_via_kernel(
+    definition: DAGDefinition, context: dict[str, Any], executor: "DurableExecutor"
+) -> DAGRunResult:
+    """把 DAG 交确定性内核执行，再把 KernelRunResult 映射回 DAGRunResult（对外协议不变）。
+
+    内核 `run` 路径产出的节点状态（succeeded/reused/halted/failed/skipped）全在 DAGTaskStatus 内；
+    halted 表示 effectful 边界被截断（未触达券商，待对账），调用方据 `succeeded=False` 即知未全绿。
+    """
+
+    started = datetime.now(UTC).isoformat()
+    kr = executor.run(definition.tasks, context)
+    finished = datetime.now(UTC).isoformat()
+    tasks = [
+        DAGTaskResult(
+            task_id=n.task_id,
+            status=n.status,          # type: ignore[arg-type]  # 内核状态 ⊆ DAGTaskStatus
+            attempts=1,
+            started_at_utc=started,
+            finished_at_utc=finished,
+            result=n.result,
+            error=n.error,
+        )
+        for n in kr.nodes
+    ]
+    return DAGRunResult(
+        dag_name=definition.name,
+        started_at_utc=started,
+        finished_at_utc=finished,
+        succeeded=kr.succeeded,
+        tasks=tasks,
     )
 
 

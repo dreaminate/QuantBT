@@ -119,7 +119,11 @@ class SignalRelayer:
         """
 
         if not self._enforce_gate:
-            return venue.place_order(order)                 # 向后兼容路径（测试/旧调用）
+            # T-025 #3：闭「向后兼容陷阱」——直发路径仅限非真钱（testnet/paper）。真钱档(CRYPTO_LIVE)
+            # 即便 enforce_gate=False 也绝不裸发（生产恒 enforce_gate=True，此为纵深防御，防误配旁路真钱）。
+            if live_requires_deps(follower_tier(f)):
+                raise OrderGated(_fail_closed_decision(follower_tier(f)))
+            return venue.place_order(order)                 # 向后兼容路径（测试/旧调用，仅非真钱）
 
         tier = follower_tier(f)
         gate = follower_gate(f, signal, tier=tier)

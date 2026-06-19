@@ -89,8 +89,15 @@ class HypothesisCardStore:
 
     def freeze(self, card_id: str, *, frozen_oos: dict[str, Any] | None = None,
                ledger=None, review: dict[str, Any] | None = None,
-               human_reviewed: bool = False) -> HypothesisCard:
-        """冻结 confirmatory 卡。强制门：三必填非空 + 可证伪性 + 验证官 + honest-N 实读。幂等。"""
+               human_reviewed: bool = False, override_note: str | None = None) -> HypothesisCard:
+        """冻结 confirmatory 卡。强制门：三必填非空 + 可证伪性 + 验证官 + honest-N 实读。幂等。
+
+        可证伪性 confidence=low（D-T024-FALS · 硬透明 + 软决定）：默认 `human_reviewed=False` → 拒并
+        返回可读原因（不静默冻结=硬透明）；用户显式 `human_reviewed=True` acknowledge/override 后仍可冻结
+        ——**启发式绝不自动硬挡晋级**，但 override 留痕进卡（multiplicity.falsifiability_override，进
+        content_hash 防篡改）+ needs_human_review 永不静音。保留的硬边界：结构空机制（三必填空白）与
+        验证官 blocked 仍硬拒，不被 human_reviewed 放过。
+        """
 
         with self._freeze_lock:
             card = self.get(card_id)
@@ -165,6 +172,15 @@ class HypothesisCardStore:
                 "n_cluster_note": "honest_n 实读自 T-013 一本账（card_freeze 条目计入）；真值下界，不可改小",
                 "falsifiability": fv.to_dict(),
             }
+            # D-T024-FALS：低可证伪性被用户显式 override 放行 → 留痕进卡（进 content_hash，防篡改、绝不渲染绿）。
+            if fv.confidence == "low" and human_reviewed:
+                card.multiplicity["falsifiability_override"] = {
+                    "acknowledged": True,
+                    "overridden_confidence": fv.confidence,
+                    "flags": [c for c, _ in fv.flags],
+                    "note": override_note or "",
+                    "when": _now(),
+                }
             card.frozen_at_utc = _now()
             card.content_hash = compute_content_hash(card)
             card.status = "frozen"               # 翻状态最后做 → 之后核心字段只读

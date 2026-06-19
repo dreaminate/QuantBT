@@ -59,6 +59,10 @@ class GenericTradingConfig(BaseModel):
     permission_check: _EndpointSpec | None = None
     blacklist_symbols: list[str] = Field(default_factory=list)
     per_order_max_notional: float | None = None
+    # D-T025-DIY 接活进真钱面：deny-by-default 白名单。deny_by_default=True 时不在 allowed_symbols
+    # （含空白名单 = 全拒）一律拒。默认 False → 向后兼容既有黑名单语义（死代码期行为不变）。
+    allowed_symbols: list[str] = Field(default_factory=list)
+    deny_by_default: bool = False
 
     @classmethod
     def from_yaml(cls, text: str) -> "GenericTradingConfig":
@@ -112,6 +116,12 @@ class GenericTradingVenue(ExecutionVenue):
         return {"ok": True, "checked": True, "raw": payload}
 
     def place_order(self, order: Order) -> OrderAck:
+        # deny-by-default 白名单（D-T025-DIY，接活进真钱面的红线）：开启后不在白名单（含空白名单）一律拒。
+        # 这是 venue 级纵深防御；OrderGuard.wrap 后还要再过会话外策略门（见 guarded_generic_venue）。
+        if self._cfg.deny_by_default and order.symbol not in set(self._cfg.allowed_symbols):
+            raise PermissionError(
+                f"{order.symbol} 不在 deny-by-default 白名单(allowed_symbols)，拒绝下单（DIY venue 接活红线）"
+            )
         if order.symbol in self._cfg.blacklist_symbols:
             raise PermissionError(f"{order.symbol} 在 blacklist 中，禁止下单")
         if self._cfg.per_order_max_notional and order.price:
@@ -181,4 +191,27 @@ class GenericTradingVenue(ExecutionVenue):
         return os.environ.get(env_name, "")
 
 
-__all__ = ["GenericTradingConfig", "GenericTradingVenue"]
+def guarded_generic_venue(
+    config: GenericTradingConfig,
+    *,
+    gate: Any,
+    nonce_ledger: Any | None = None,
+    on_event: Any | None = None,
+    http: requests.Session | None = None,
+    audit: ExecutionAuditLog | None = None,
+) -> Any:
+    """接活 GenericTradingVenue 进真钱执行面（D-T025-DIY，D2）。
+
+    与 relay/lease 同一道门：强制 deny_by_default 白名单（venue 级）+ OrderGuard.wrap（会话外策略门：
+    S1 防重放 → S2 deny-by-default 策略门 → S3 升级）。CRYPTO_LIVE 缺 nonce 台 → OrderGuard 内部 fail-closed。
+    **唯一受支持的「把 DIY venue 放进真钱面」入口**——绕过它直发 place_order 即触审计不变量红线（T-025 #1）。
+    """
+
+    from ..security.gate.enforcer import OrderGuard  # 局部 import 避免 execution→security 模块级耦合
+
+    guarded_cfg = config.model_copy(update={"deny_by_default": True})  # 接活恒 deny-by-default，不可关
+    venue = GenericTradingVenue(guarded_cfg, http=http, audit=audit)
+    return OrderGuard.wrap(venue, gate=gate, nonce_ledger=nonce_ledger, on_event=on_event)
+
+
+__all__ = ["GenericTradingConfig", "GenericTradingVenue", "guarded_generic_venue"]
