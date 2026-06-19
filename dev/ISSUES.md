@@ -3,7 +3,7 @@
 > 卡 done 时未决的 Open Question、跨部件风险、诚实残余——**不随卡消失、不掉地**。
 > 这是「发现问题」的持久容器：决策岔路→`DECISIONS.md`，要做的活→`BOARD.md`，**没现成归宿的风险/问题→这里**。
 > 状态：`open` 待处理 · `watching` 观察中 · `accepted` 已接受残余(不修·文档化) · `resolving` 处理中 · `resolved` 已闭 · `→T-xxx` 已升任务。
-> 闭环纪律：升任务即标 `→T-xxx`；接受为残余即标 `accepted` 并写理由；解决即标 `resolved` 并留闭合条件。
+> 闭环纪律：升任务即标 `→T-xxx`；接受为残余即标 `accepted` 并写理由；解决即标 `resolved` 并留闭合条件；**解决中踩到可复用技术坑 → 同步记一条进 `experience.md`**（ISSUES 管未决、experience 管已学,衔接别断）。
 
 <!-- 格式·防跑偏 | 追加型：登记一行表格 + 下方一块明细。新问题照此：
 表格行：| I-XXX | <标题> | 高/中/低 | <来源> | <状态> |
