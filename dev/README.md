@@ -57,6 +57,11 @@
 **铁律二:只描述结构与查法,绝不枚举每条内容**——枚举=和正文双份必漂(append 一条就得回头更新顶部,十有八九忘)。要"每条都列"只能靠脚本从正文自动生成(像 `build_ledger.py`),绝不手维护。
 同理:任务卡 `## Open Questions` 标题用**计数器 `待拍/总`**(0/N=全闭、可进实现),不写"含 N 个需拍板"这种会 stale 的散文。
 
+## LOG 归档 + 强制查 LOG
+
+`exec/LOG.md` 是活跃滚动日志(最新在上)。长了把**旧条目挪进 `exec/LOG.archive.md`**(归档,read-on-demand)。
+**强制查 LOG 逻辑**:要查过去某 session 干了啥,先看活跃 `LOG.md`;**没查到必查归档**——跑 `python dev/scripts/build_log_index.py` 看**活跃+归档的统一索引**(脚本生成、从正文重生、不手维护 = 防漂),据 `文件:行` 定位 `LOG.archive.md` 原文(索引仅定位、必读原文)。**别因活跃没有就当没发生过。**
+
 ## 自检
 
 `python dev/scripts/validate_dev.py` —— harness 不靠手工纪律,能自检(四台文件齐全 / BOARD ✅done ↔ `done/<id>/` 一一对应 / 目录齐全 / 项目锚点在)。挂 CI 或 pre-commit 即防漂。
