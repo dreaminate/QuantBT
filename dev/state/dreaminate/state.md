@@ -2,12 +2,10 @@
 
 > 每个 Goal Loop 重生。**纪律：🟡「声称但未验证」绝不写成 ✅「已建并验证」——不假绿灯（= 产品「不给小白假绿灯」原则掉转枪口对准我们自己）。**
 > 上次刷新：2026-06-19（**簇A 脊柱收尾全完成**——收口第一波。T-023 确定性内核接进 jobs/agent/engine 执行路径（run_dag executor 参 / kernel_dag job：checkpoint 恢复 + EffectLedger 去重绝不重发单 / replay 边界 HALT / agent 复用 T-016 RecordingLLMClient 不另造 store；14 接线对抗测试）；T-024 可证伪假设卡接进 Run 生命周期（Run.layer/card_id 可空字段 + 6 端点 + promote_model 闸门 + D-T024-FALS 低可证伪硬透明+软决定 override 留痕；16 对抗测试，措辞 0 hit）；T-025 真钱审计不变量 + 急停 IP+密码鉴权 + emergency 真平仓 + GenericVenue 接活 deny-by-default+OrderGuard + relay 向后兼容真钱陷阱闭合（15 对抗测试）。**5-lens 对抗复核 3 真发现全修**（1H：急停含失败硬编码 ok:True=假绿灯→据 results 派生诚实状态；1M：retry 丢 replay mode→重放降级真下单；1L 同源）。全量 **1046 测试绿**（基线 1001 未破）。**下一步/todo 以 `board/dreaminate/board.md` + `DEVMAP` 为准，勿据此头部摘要判断**。上次：T-022 INV-3 lease-唯一-key 通道闭合；全量 1000 测试绿。上上次：T-021 安全门生产接线 relay 必经 deny-by-default 策略门；全量 990 测试绿。**脊柱 8 块全建并验证**）
-> **harness 自检**：`python dev/scripts/validate_dev.py` → PASS（对抗验证过：藏掉 done 记录即 FAIL）。
-
 <!-- 格式·防跑偏 | 结构型（每 loop 整篇重生,不是追加）：固定三块——
 ① 子系统现状表(列：子系统 | 状态 ⬜未建/🟡部分未验证/✅已建并验证 | 证据 | gap) ② 头号 gap 编号列表 ③ 待决策岔路(点名,别让人翻卡)。
 铁律：🟡 绝不写成 ✅（不假绿灯）；测试数等易变值别写死,以实跑为准。 -->
-> 审计修复：v2/v3 项目设计文档归位 `docs/plans/`（曾误卷进 dev archive）· 旧 codex 任务残留归 `tasks/_archive/` · 补 `done/T-012/` 落档 · 建 `exec/LOG.md` + `scripts/validate_dev.py`。
+> 审计修复：v2/v3 项目设计文档归位 `docs/plans/`（曾误卷进 dev archive）。
 
 ## 终态结构（GOAL §1 两层相乘）
 

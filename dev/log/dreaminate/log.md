@@ -6,14 +6,6 @@
 ## <日期> · <标题>
 - 建/改了什么 + 命门  - 验收：<对抗测试 + 变异 + 全量数字>  - 下一步：<…> -->
 
-## 2026-06-19 · dev-os 升级为团队并发协作范式（Phase 1–4 完成）
-- **建/改**：身份层(`TEAM.md` + `.identity`=dreaminate/leader + gitignore) · 任务卡 YAML frontmatter 模板(uuid/owner/depends_on/area…,文件名 8 位、内容+依赖 32 位、依赖锚 uuid) · 6 脚本(`validate_dev` 重写:身份∈TEAM/leader唯一/owner==folder/uuid8/依赖无悬空+DAG无环/legacy兼容;新 `build_board`/`build_dev_map`;适配 ledger/counters/log_index) · 4 提示文档(RULES +§8 团队并发 / README / HANDOFF / 根 CLAUDE 全改并发 + `dev-os`→`Multi-Dev-Os`)。
-- **folder 化迁移(c′,冻结保 legacy id)**：STATE/LOG/experience/DECISIONS/ISSUES → `{type}/dreaminate/` · 15 张 done 卡 → `tasks/dreaminate/done/`(保 T-xxx + 原格式) · findings/spine-designs → per-dev · BOARD 删(改生成 `board/dreaminate/`)。生成 `DEVMAP.md` + 8 个 `_NAV.md`。
-- **验收**：`validate_dev` 44 ✅ / 0 ❌ / 0 ⚠️ PASS;live+框架描述漂移终扫干净;**未 commit**(待用户审 + 提交)。
-- **Phase 4 回流 Multi-Dev-Os**：空仓库从零建通用框架(`~/Work/01_Projects/Multi-Dev-Os`)——拷通用文件 + 通用化 HANDOFF/TASK + 项目级模板(GOAL/RULES.project/CODEMAP/TEAM/INDEX/TRACE/validate_project 占位)+ 根 README/CLAUDE/.gitignore/.identity.example。validate 39✅/1❌(唯一 FAIL=采纳者建 .identity,自带采纳说明;demo 建后转绿)。
-- **诚实残余**：① 连通分量拆分/分配算法 = 后续 skill(留空,DAG 校验已就位) ② 只动 dev/ 文档,未碰 app 代码(项目 pytest 不受影响) ③ 两仓库均**未 commit/push**。
-- **下一步**：用户审 + 提交两仓库(Multi-Dev-Os 首次 commit/push)。
-
 ## 2026-06-19 · 收口第一波 · 簇A 脊柱收尾全完成（T-023/024/025）
 
 - **闸门**：三卡 review_status 0→1（用户过目通过；AskUserQuestion 工具丢答+「继续」→ 采纳推荐项「三卡全过开跑」，同 D-T021 先例，已在响应中声明该解读）。待拍早已清零（D-T024/T025 系列）。
@@ -24,35 +16,6 @@
 - **验收**：全量 **1046 passed / 13 skipped**（基线 1001 未破，+45 新测试）。`validate_dev.py` PASS（41✅/0❌）。三卡落档 done/T-023..025、BOARD 删行、STATE 刷新。
 - **诚实残余**（非阻断，入下一波/后续）：T-023 reconcile 对账闭环 + kernel_dag 生产 producer；T-024 端到端集成（内核/验证官/regime 真落地后）。
 - **下一步**：**下一波 = 1A 价值密度混合** → C「M7–M8 组合上多证据三角」+ D「数据双时态地基」（把*每 run 可信*做实）。未提交（用户明说才 commit）。
-
-## 2026-06-19 · dev-os 开发 OS 大幅加固（规则/检查/脚本）+ 两轮深度测试
-
-- **规则**：memory 契约定项目级单层（操作者/偏好/外部参考，绝不复制 dev/）；§0「别管太宽」；§7 规划/拍板纪律（逐一+循环到清零+左右横跳+工程取舍四面）；§4 按模板/格式骨架填；导航头约定（索引仅定位、必读原文）；exec/LOG 归档 + 强制查 LOG。
-- **卡机制**：状态=纯 enum、review_status=过目软 WARN、Open Questions 计数器改「已决/总」（满格=完成）由 `build_card_counters` 从标签派生 + 标签名硬约定。
-- **机器闸门**（validate_dev 新增，全实测种坏门必抓）：STATE 假绿灯 / RULES canary / review_status / todo·done·必填节 / 计数器漂 / 标签漂。新增脚本 `build_log_index`、`build_card_counters`。
-- **验收**：两轮冷启动深度测试（模拟使用）11/11 维全 PASS、steered=True；修掉 HANDOFF S1-S4、CLAUDE 两闸歧义、卡写死 1001 等 gap。done 卡状态行清成纯 enum；dev-os↔QuantBT OS 文件字节一致、全程对齐推送。
-- **下一步**：收口 wave-A 待用户过目 T-023/24/25（review_status 0→1）后开工。
-
-## 2026-06-19 · 装回 dev-os：保内容 + 升结构（融合）
-
-- 从可复用 dev-os 骨架融合回 QuantBT：**保**全部内容（GOAL/DECISIONS R1–R29/ISSUES/TRACE/研究 archive+findings/12 张 done 卡/wave-A 卡），**升**结构件。
-- **新增**：根 `CLAUDE.md`（新 Claude Code 自动入口）· `dev/RULES.project.md`（项目红线，从旧混合 RULES.md 抽出）· `scripts/build_ledger.py`（全含量账本）· `research/findings/_TEMPLATE.md`。
-- **替换 OS 自带件**：`RULES.md`（转 OS 通用层 + 审计纪律）· `README.md`（OS 规约）· `validate_dev.py`（配置化 PROJECT_ANCHORS=lineage/ids + STALE_PREFIXES + 孤儿检查）· TASK/ideas/active 模板（含格式·防跑偏注释）。
-- **升约定**：BOARD 转活跃版（删 done 行，全档走 build_ledger）· wave-A 卡 `状态` pending_review→todo（正交模型）· 内容台账加 in-file 格式注释 · 删 4 个旧 codex 模板。
-- 备份：git tag `dev-pre-devos-merge`(f598cbd) + tarball。
-- **下一步**：用户过目融合 → 点头 commit/push；收口 wave-A 仍等 2 岔路。
-
----
-
-## 2026-06-18 · 补 dev OS 两个工位（创新/在研 + 问题登记册）
-
-- 用户审视 dev OS 后拍板补两缺口：① 研究台加 `research/ideas/`(架构RFC/论文笔记·探索自由) + `research/active/<topic>/`(在研线程，镜像 tasks/active)，生命周期 **ideas→active→findings→任务**（各带 README + `_TEMPLATE.md`）；② 加 `dev/ISSUES.md` **跨任务问题/风险登记册**（卡 done 时未决 Open Q / 跨部件风险 / 诚实残余不掉地）。
-- ISSUES 种 7 条真实项：I-001 TCB 残余[accepted] · I-002 对齐闸空转[open，用户处理中] · I-003 reconcile 下游未定 · I-004 node_id 跨部件 · I-005 OOS 切片 · I-006 Sentry 假死[resolving] · I-007 急停控件[→T-025]。
-- `validate_dev.py` 升级自检新工位（REQUIRED+ISSUES.md / 目录+research/{active,ideas,findings} / LIVE_DOCS+ISSUES.md）；README + INDEX 同步生命周期。
-- **下一步**：用户审 12 张 done 卡（review_status 0→1，I-002）；簇A 三张卡（T-023/24/25）+ 2 岔路待点头。
-
----
-
 
 ## 2026-06-18 · T-022 安全门 INV-3：venue 只认 lease 签名（relay key 只在门后物化）
 
