@@ -58,14 +58,9 @@
 
 > 硬不变量(对抗测试门必抓 / 诚实标未验证)见 `RULES.md` §2/§3——蒸馏**继承**,不在此重复。
 
-## 核心纪律（全文 RULES.md）
+## 核心纪律
 
-- **诚实**:🟡 声称 ≠ ✅ 验证,状态文件不假绿灯。
-- **对抗测试**:「种一个已知的坏,门必须抓住,否则门是纸做的」。
-- **防漂**:易变的东西(测试数/进度/当前任务)**绝不写进慢变文件**(GOAL/RULES/CLAUDE),只在各人 state/board。
-- **审计先立框架**:大结构→小结构→细节;框架是假设、可被细节推翻。
-- **不擅自 commit/push**;改现有文件「扩展不替换」。
-- **团队并发**(§8):身份/分配-land 仅 leader-admin/遍历聚合读/pull-before-work/生成视图不手编。
+铁律全文在 `RULES.md` §0–§8(哲学 / 单一源 / 对抗测试 / 诚实 / 工程红线 / 致命错误即停工 / 审计 / 拍板 / 团队并发);常驻**硬不变量摘要**在 `CLAUDE.md`。本规约**只指路、不复述**(复述 = 双份必漂)。
 
 ## 导航头 + 导航 map（可查 + 防漂）
 
@@ -75,9 +70,9 @@
 同理:任务卡 `## Open Questions` 标题用**计数器 `已决/总`**(满格=全决、可进实现),不写"含 N 个需拍板"这种会 stale 的散文。
 **folder 层导航**:folder 全 per-dev 化后,读要遍历——`DEVMAP.md`(任务,按 developer + area)、各 `_NAV.md`(decisions/issues/state/log/experience/research) 是这层的导航,生成、只定位。
 
-## 强制查 LOG（per-dev）
+## 查 LOG
 
-`log/{developer_id}/log.md` 是各人滚动日志(最新在上)。查过去某 session 干了啥:**别手翻**——跑 `python dev/scripts/build_log_index.py` 看**全员 log 统一索引**(脚本生成、从正文重生、不手维护),据 `dev/文件:行` 定位原文(索引仅定位、必读原文)。**别因自己 log 没有就当没发生过——别人可能记了。**
+各人滚动日志 `log/{developer_id}/log.md`(最新在上)。**查历史别手翻**——跑 `python dev/scripts/build_log_index.py` 看全员统一索引(脚本生成、不手维护)定位再读原文。纪律(每 session 落一行 / 别因自己没记就当没发生)见 `RULES.md` §8。
 
 ## 自检
 
@@ -85,4 +80,4 @@
 
 ## 新 session 怎么开始
 
-读 `.identity`(你是谁)+ `TEAM.md`(全员/role)+ `GOAL.md` + 你的 `state/{你}/state.md` + `board/{你}/board.md`,拿 `exec/HANDOFF.md` 当入口提示词。decisions/issues 等遍历聚合读(先看 `DEVMAP`/各 `_NAV` 定位再读原文)。重资料 `research/archive/` read-on-demand。
+入口脚本 = `exec/HANDOFF.md`(复制即接上);读序见 `CLAUDE.md`「动手前按顺序读」。**单一源,不在此复述。**
