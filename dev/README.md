@@ -23,7 +23,7 @@
 | 决策/问题 | `decisions/{id}/` · `issues/{id}/` | 一决策/问题一文件;**canonical 归 leader** | per-dev·committed |
 | 任务台 | `tasks/` | `pool/{uuid8}/`(待分配) + `{id}/{uuid8}/`(已分配) + `{id}/done/` + `_templates/` | 结构框架·卡 committed |
 | 研究台 | `research/` | `ideas/active/findings/{id}/` + `INDEX`/`TRACE`(全局聚合) + `WORKFLOW`(方法) + `archive` | 结构框架·内容 per-dev |
-| 执行台 | `exec/` | `HANDOFF.md`(入口) + `archive/` | 框架 |
+| 执行台 | `exec/` | `HANDOFF.md`(入口) | 框架 |
 | 闸+脚本 | `scripts/` | `validate_dev` `validate_project` `build_{board,dev_map,ledger,card_counters,log_index}` | framework |
 
 > 导航 map(**生成、勿手维护**):`DEVMAP.md`(全员→卡,按 area 功能查)+ 各 folder `_NAV.md`。跑 `build_dev_map.py` 刷新。
@@ -69,7 +69,7 @@
 
 ## 导航头 + 导航 map（可查 + 防漂）
 
-长引用文件(`GOAL.md` / `RULES.md` / `DECISIONS` 类)顶部放一句**导航 + 查法**:本文件怎么组织 + 怎么 grep 找一条。
+长引用文件(`GOAL.md` / `RULES.md` / `decisions/` 类)顶部放一句**导航 + 查法**:本文件怎么组织 + 怎么 grep 找一条。
 **铁律一:索引/导航头/导航 map 只为定位,不是原文的替代品** —— 据它 grep/跳到位后**必须读对应原文 + 对应代码再行事**(RULES 顶部索引、§ 标题、`DEVMAP`/`_NAV`、卡计数器同理)。
 **铁律二:只描述结构与查法,绝不枚举每条内容**——枚举=和正文双份必漂。要"每条都列"只能靠脚本从正文/目录自动生成(`build_ledger`/`build_dev_map`/`build_log_index`),**绝不手维护**。
 同理:任务卡 `## Open Questions` 标题用**计数器 `已决/总`**(满格=全决、可进实现),不写"含 N 个需拍板"这种会 stale 的散文。

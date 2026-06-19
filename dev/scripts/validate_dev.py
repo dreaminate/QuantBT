@@ -188,6 +188,24 @@ def check_my_status(dev: Path, my_id: str | None) -> tuple[list[str], list[str]]
         return oks, fails
     sp = dev / "state" / my_id / "state.md"
     (oks if sp.is_file() else fails).append(f"本机 state（state/{my_id}/state.md）")
+    lp = dev / "log" / my_id / "log.md"
+    (oks if lp.is_file() else fails).append(f"本机 log（log/{my_id}/log.md）—— 每 session 末落一行（RULES §8）")
+    return oks, fails
+
+
+def check_task_folders(dev: Path, devs: list[str]) -> tuple[list[str], list[str]]:
+    """tasks/ 下每个文件夹须是 pool / _* 元目录 / TEAM 里的 developer_id —— 防孤儿卡 / owner 不在 TEAM。"""
+    oks: list[str] = []
+    fails: list[str] = []
+    base = dev / "tasks"
+    if not base.is_dir():
+        return oks, fails
+    unknown = [d.name for d in sorted(base.glob("*"))
+               if d.is_dir() and d.name != "pool" and not d.name.startswith("_") and d.name not in devs]
+    if unknown:
+        fails.append(f"tasks/ 下未知归属文件夹 {unknown} —— 须是 pool / TEAM 里的 developer_id（孤儿卡 / owner 不在 TEAM）")
+    else:
+        oks.append("tasks/ 文件夹归属合法（pool + TEAM developer_id）")
     return oks, fails
 
 
@@ -372,6 +390,8 @@ m_oks, m_fails = check_my_status(DEV, my_id)
 oks += m_oks; fails += m_fails
 c_oks, c_fails = check_cards(DEV, cards)
 oks += c_oks; fails += c_fails
+tf_oks, tf_fails = check_task_folders(DEV, devs)
+oks += tf_oks; fails += tf_fails
 s_oks, s_fails = _lint_state_evidence(DEV)
 oks += s_oks; fails += s_fails
 t_fails, t_warns = _lint_task_cards(cards)
