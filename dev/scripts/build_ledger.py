@@ -3,6 +3,8 @@
 
 团队并发：扫 pool + 每个 developer 的 active/done → 全含量任务表（含 owner 列）。
 **从目录现生成,不落第二份手维护账本 → 永不跑偏。** board/{dev}/board.md 是各人活跃版。
+`render(dev)` 返回 {LEDGER.md 路径:内容} 供 validate_dev 重算比对新鲜度;LEDGER.md 是
+**opt-in committed**(`--write` 才落盘),一旦落盘即被新鲜度门守(改卡没刷→过期 FAIL)。
 跑:  python dev/scripts/build_ledger.py          # 打印
      python dev/scripts/build_ledger.py --write  # 另写 dev/tasks/LEDGER.md
 """
@@ -11,9 +13,6 @@ from __future__ import annotations
 import re
 import sys
 from pathlib import Path
-
-DEV = Path(__file__).resolve().parents[1]
-TASKS = DEV / "tasks"
 
 
 def fm(txt: str) -> dict:
@@ -34,8 +33,8 @@ def fm(txt: str) -> dict:
     return d
 
 
-def read_team() -> dict:
-    p = DEV / "TEAM.md"
+def read_team(dev: Path) -> dict:
+    p = dev / "TEAM.md"
     t: dict = {}
     if not p.is_file():
         return t
@@ -66,41 +65,48 @@ def card_info(d: Path, owner: str, loc: str) -> dict:
             "review": (rv.group(1) if rv else "?"), "owner": owner, "位置": loc}
 
 
-team = read_team()
-rows: list[dict] = []
-pool = TASKS / "pool"
-if pool.is_dir():
-    for d in sorted(pool.glob("*")):
-        if d.is_dir():
-            rows.append(card_info(d, "wait", "pool"))
-for dev_id in team:
-    base = TASKS / dev_id
-    if not base.is_dir():
-        continue
-    for d in sorted(base.glob("*")):
-        if d.name == "done" or not d.is_dir():
+def render(dev: Path) -> dict:
+    """返回 {tasks/LEDGER.md 绝对路径(str): 内容}。不写盘。"""
+    tasks = dev / "tasks"
+    team = read_team(dev)
+    rows: list[dict] = []
+    pool = tasks / "pool"
+    if pool.is_dir():
+        for d in sorted(pool.glob("*")):
+            if d.is_dir() and not d.name.startswith("."):
+                rows.append(card_info(d, "wait", "pool"))
+    for dev_id in team:
+        base = tasks / dev_id
+        if not base.is_dir():
             continue
-        rows.append(card_info(d, dev_id, "active"))
-    if (base / "done").is_dir():
-        for d in sorted((base / "done").glob("*")):
-            if d.is_dir():
-                rows.append(card_info(d, dev_id, "done"))
+        for d in sorted(base.glob("*")):
+            if d.name == "done" or not d.is_dir() or d.name.startswith("."):
+                continue
+            rows.append(card_info(d, dev_id, "active"))
+        if (base / "done").is_dir():
+            for d in sorted((base / "done").glob("*")):
+                if d.is_dir() and not d.name.startswith("."):
+                    rows.append(card_info(d, dev_id, "done"))
+    lines = [
+        "# LEDGER · 全含量任务账本（自动生成 · 勿手改 · 跑 build_ledger.py 刷新）",
+        "",
+        "| id | 标题 | 状态 | review | owner | 位置 |",
+        "|----|------|------|--------|-------|------|",
+    ]
+    for r in rows:
+        lines.append(f"| {r['id']} | {r['title']} | {r['状态']} | {r['review']} | {r['owner']} | {r['位置']} |")
+    n_active = sum(1 for r in rows if r["位置"] == "active")
+    n_pool = sum(1 for r in rows if r["位置"] == "pool")
+    lines += ["", f"共 {len(rows)} 任务（pool {n_pool} / active {n_active} / done {len(rows) - n_active - n_pool}）"]
+    return {str(tasks / "LEDGER.md"): "\n".join(lines) + "\n"}
 
-lines = [
-    "# LEDGER · 全含量任务账本（自动生成 · 勿手改 · 跑 build_ledger.py 刷新）",
-    "",
-    "| id | 标题 | 状态 | review | owner | 位置 |",
-    "|----|------|------|--------|-------|------|",
-]
-for r in rows:
-    lines.append(f"| {r['id']} | {r['title']} | {r['状态']} | {r['review']} | {r['owner']} | {r['位置']} |")
-n_active = sum(1 for r in rows if r["位置"] == "active")
-n_pool = sum(1 for r in rows if r["位置"] == "pool")
-lines += ["", f"共 {len(rows)} 任务（pool {n_pool} / active {n_active} / done {len(rows) - n_active - n_pool}）"]
-out = "\n".join(lines) + "\n"
 
-if "--write" in sys.argv:
-    (TASKS / "LEDGER.md").write_text(out, encoding="utf-8")
-    print(f"已写 {TASKS / 'LEDGER.md'}（{len(rows)} 任务）")
-else:
-    print(out)
+if __name__ == "__main__":
+    DEV = Path(__file__).resolve().parents[1]
+    out = next(iter(render(DEV).values()))
+    if "--write" in sys.argv:
+        path = DEV / "tasks" / "LEDGER.md"
+        path.write_text(out, encoding="utf-8")
+        print(f"已写 {path}")
+    else:
+        print(out)

@@ -3,6 +3,7 @@
 
 从 tasks/{本机 .identity}/ 的 active 卡现生成 board/{developer_id}/board.md（只含本人卡）。
 board 是**生成视图、不手维护**；改了卡跑一次即同步。**只定位；实时依据看卡原文 + 代码。**
+`render(dev, me)` 返回 {路径:内容} 供 validate_dev 重算比对新鲜度;main 才写盘。
 跑：  python dev/scripts/build_board.py
 """
 from __future__ import annotations
@@ -10,8 +11,6 @@ from __future__ import annotations
 import re
 import sys
 from pathlib import Path
-
-DEV = Path(__file__).resolve().parents[1]
 
 
 def fm(txt: str) -> dict:
@@ -46,36 +45,42 @@ def fm(txt: str) -> dict:
     return d
 
 
-idp = DEV / ".identity"
-me = idp.read_text(encoding="utf-8").strip().splitlines()[0].strip() if idp.is_file() and idp.read_text(encoding="utf-8").strip() else None
-if not me:
-    print("无 dev/.identity（本机开发者身份），无法生成 board")
-    sys.exit(1)
+def render(dev: Path, me: str) -> dict:
+    """返回 {board/{me}/board.md 绝对路径(str): 内容}。不写盘。"""
+    base = dev / "tasks" / me
+    rows = []
+    if base.is_dir():
+        for d in sorted(base.glob("*")):
+            if d.name == "done" or not d.is_dir() or not (d / "TASK.md").is_file():
+                continue
+            f = fm((d / "TASK.md").read_text(encoding="utf-8"))
+            rows.append((d.name, f.get("title", "?"), f.get("status", "?"), f.get("area", "-"),
+                         f.get("priority", "-"), " ".join(x[:8] for x in (f.get("depends_on") or []))))
+    lines = [
+        f"# BOARD · {me} 的工作板（生成 · 勿手改 · 跑 build_board.py 刷新）",
+        "",
+        f"> 只含 **{me}** 名下 active 卡（从 tasks/{me}/ 现生成）。**导航 only，实时依据看卡原文 + 对应代码。**",
+        "",
+        "| uuid8 | 标题 | status | area | 优先级 | 依赖(uuid8) |",
+        "|---|---|---|---|---|---|",
+    ]
+    for r in rows:
+        lines.append("| " + " | ".join(c or "-" for c in r) + " |")
+    if not rows:
+        lines.append("| _（名下无 active 卡）_ | | | | | |")
+    return {str(dev / "board" / me / "board.md"): "\n".join(lines) + "\n"}
 
-base = DEV / "tasks" / me
-rows = []
-if base.is_dir():
-    for d in sorted(base.glob("*")):
-        if d.name == "done" or not d.is_dir() or not (d / "TASK.md").is_file():
-            continue
-        f = fm((d / "TASK.md").read_text(encoding="utf-8"))
-        rows.append((d.name, f.get("title", "?"), f.get("status", "?"), f.get("area", "-"),
-                     f.get("priority", "-"), " ".join(x[:8] for x in (f.get("depends_on") or []))))
 
-out = DEV / "board" / me / "board.md"
-out.parent.mkdir(parents=True, exist_ok=True)
-lines = [
-    f"# BOARD · {me} 的工作板（生成 · 勿手改 · 跑 build_board.py 刷新）",
-    "",
-    f"> 只含 **{me}** 名下 active 卡（从 tasks/{me}/ 现生成）。**导航 only，实时依据看卡原文 + 对应代码。**",
-    "",
-    "| uuid8 | 标题 | status | area | 优先级 | 依赖(uuid8) |",
-    "|---|---|---|---|---|---|",
-]
-for r in rows:
-    lines.append("| " + " | ".join(c or "-" for c in r) + " |")
-if not rows:
-    lines.append("| _（名下无 active 卡）_ | | | | | |")
-out.write_text("\n".join(lines) + "\n", encoding="utf-8")
-print(f"已写 board/{me}/board.md（{len(rows)} 卡）")
-sys.exit(0)
+if __name__ == "__main__":
+    DEV = Path(__file__).resolve().parents[1]
+    idp = DEV / ".identity"
+    me = idp.read_text(encoding="utf-8").strip().splitlines()[0].strip() if idp.is_file() and idp.read_text(encoding="utf-8").strip() else None
+    if not me:
+        print("无 dev/.identity（本机开发者身份），无法生成 board")
+        sys.exit(1)
+    for p, c in render(DEV, me).items():
+        path = Path(p)
+        path.parent.mkdir(parents=True, exist_ok=True)
+        path.write_text(c, encoding="utf-8")
+    print(f"已写 board/{me}/board.md")
+    sys.exit(0)

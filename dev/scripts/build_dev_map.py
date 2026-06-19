@@ -5,7 +5,7 @@
   dev/DEVMAP.md   developer(+role) → 拿了哪些卡 [uuid8·标题·status·area]；+ 按 area 索引；+ pool 待分配
   {decisions,issues,state,log,experience,research/ideas,research/active,research/findings}/_NAV.md
                   developer → 文件 + 一行梗概
-folder 全 per-dev 化后,agent 读任何一类都要遍历——这些 map 是快路径,但**只是导航**。
+`render(dev)` 返回 {路径:内容} 供 validate_dev 重算比对新鲜度;main 才写盘。
 跑：  python dev/scripts/build_dev_map.py
 """
 from __future__ import annotations
@@ -13,7 +13,8 @@ from __future__ import annotations
 import re
 from pathlib import Path
 
-DEV = Path(__file__).resolve().parents[1]
+_NAV_FOLDERS = ["decisions", "issues", "state", "log", "experience",
+                "research/ideas", "research/active", "research/findings"]
 
 
 def fm(txt: str) -> dict:
@@ -34,8 +35,8 @@ def fm(txt: str) -> dict:
     return d
 
 
-def read_team() -> dict:
-    p = DEV / "TEAM.md"
+def read_team(dev: Path) -> dict:
+    p = dev / "TEAM.md"
     t: dict = {}
     if not p.is_file():
         return t
@@ -60,46 +61,6 @@ def card_rows(base: Path, loc: str) -> list[tuple]:
     return rows
 
 
-team = read_team()
-
-# ---- DEVMAP.md（任务全局导航） ----
-lines = [
-    "# DEVMAP · 全局任务导航（生成 · 勿手改 · 跑 build_dev_map.py 刷新）",
-    "",
-    "> 谁拿了哪些卡 + 在哪步 + 什么功能。**只定位；实时依据永远是卡原文 + 对应代码。**",
-    "",
-]
-all_rows: list[tuple] = []
-for dev_id, role in team.items():
-    rows = card_rows(DEV / "tasks" / dev_id, "active") + card_rows(DEV / "tasks" / dev_id / "done", "done")
-    lines += [f"## {dev_id} · {role}", "", "| uuid8 | 标题 | status | area | 位置 |", "|---|---|---|---|---|"]
-    for r in rows:
-        lines.append("| " + " | ".join(str(c or "-") for c in r) + " |")
-        all_rows.append((dev_id,) + r)
-    if not rows:
-        lines.append("| _（名下无卡）_ | | | | |")
-    lines.append("")
-
-pool = card_rows(DEV / "tasks/pool", "pool")
-lines += ["## pool · 待分配", "", "| uuid8 | 标题 | status | area |", "|---|---|---|---|"]
-for r in pool:
-    lines.append("| " + " | ".join(str(c or "-") for c in r[:4]) + " |")
-if not pool:
-    lines.append("| _（池空）_ | | | |")
-lines.append("")
-
-areas: dict = {}
-for r in all_rows:  # r = (dev, uuid8, title, status, area, loc)
-    areas.setdefault(r[4] or "-", []).append(r)
-lines += ["## 按 area 功能索引", "", "| area | 卡(uuid8 · status) | developer |", "|---|---|---|"]
-for a in sorted(areas):
-    for r in areas[a]:
-        lines.append(f"| {a} | {r[1]} · {r[3]} | {r[0]} |")
-
-(DEV / "DEVMAP.md").write_text("\n".join(lines) + "\n", encoding="utf-8")
-
-# ---- 各 folder _NAV.md ----
-
 def first_title(p: Path) -> str:
     for ln in p.read_text(encoding="utf-8").splitlines():
         if ln.startswith("#"):
@@ -109,25 +70,66 @@ def first_title(p: Path) -> str:
     return ""
 
 
-nav_count = 0
-for rel in ["decisions", "issues", "state", "log", "experience",
-            "research/ideas", "research/active", "research/findings"]:
-    base = DEV / rel
-    if not base.is_dir():
-        continue
-    nl = [f"# _NAV · {rel}/（生成 · 勿手改 · 跑 build_dev_map.py）", "",
-          "> developer → 文件 + 梗概。**只定位；实时看原文。**", ""]
-    for devdir in sorted(base.glob("*")):
-        if not devdir.is_dir():
-            continue
-        nl.append(f"## {devdir.name}")
-        files = [p for p in sorted(devdir.rglob("*.md"))]
-        for p in files:
-            nl.append(f"- `{p.relative_to(base)}` — {first_title(p)}")
-        if not files:
-            nl.append("- _（空）_")
-        nl.append("")
-    (base / "_NAV.md").write_text("\n".join(nl) + "\n", encoding="utf-8")
-    nav_count += 1
+def render(dev: Path) -> dict:
+    """返回 {绝对路径(str): 内容} for DEVMAP.md + 各存在 folder 的 _NAV.md。不写盘。"""
+    out: dict = {}
+    team = read_team(dev)
+    lines = [
+        "# DEVMAP · 全局任务导航（生成 · 勿手改 · 跑 build_dev_map.py 刷新）",
+        "",
+        "> 谁拿了哪些卡 + 在哪步 + 什么功能。**只定位；实时依据永远是卡原文 + 对应代码。**",
+        "",
+    ]
+    all_rows: list[tuple] = []
+    for dev_id, role in team.items():
+        rows = card_rows(dev / "tasks" / dev_id, "active") + card_rows(dev / "tasks" / dev_id / "done", "done")
+        lines += [f"## {dev_id} · {role}", "", "| uuid8 | 标题 | status | area | 位置 |", "|---|---|---|---|---|"]
+        for r in rows:
+            lines.append("| " + " | ".join(str(c or "-") for c in r) + " |")
+            all_rows.append((dev_id,) + r)
+        if not rows:
+            lines.append("| _（名下无卡）_ | | | | |")
+        lines.append("")
+    pool = card_rows(dev / "tasks/pool", "pool")
+    lines += ["## pool · 待分配", "", "| uuid8 | 标题 | status | area |", "|---|---|---|---|"]
+    for r in pool:
+        lines.append("| " + " | ".join(str(c or "-") for c in r[:4]) + " |")
+    if not pool:
+        lines.append("| _（池空）_ | | | |")
+    lines.append("")
+    areas: dict = {}
+    for r in all_rows:
+        areas.setdefault(r[4] or "-", []).append(r)
+    lines += ["## 按 area 功能索引", "", "| area | 卡(uuid8 · status) | developer |", "|---|---|---|"]
+    for a in sorted(areas):
+        for r in areas[a]:
+            lines.append(f"| {a} | {r[1]} · {r[3]} | {r[0]} |")
+    out[str(dev / "DEVMAP.md")] = "\n".join(lines) + "\n"
 
-print(f"已写 DEVMAP.md + {nav_count} 个 folder _NAV.md")
+    for rel in _NAV_FOLDERS:
+        base = dev / rel
+        if not base.is_dir():
+            continue
+        nl = [f"# _NAV · {rel}/（生成 · 勿手改 · 跑 build_dev_map.py）", "",
+              "> developer → 文件 + 梗概。**只定位；实时看原文。**", ""]
+        for devdir in sorted(base.glob("*")):
+            if not devdir.is_dir():
+                continue
+            nl.append(f"## {devdir.name}")
+            files = [p for p in sorted(devdir.rglob("*.md"))]
+            for p in files:
+                nl.append(f"- `{p.relative_to(base)}` — {first_title(p)}")
+            if not files:
+                nl.append("- _（空）_")
+            nl.append("")
+        out[str(base / "_NAV.md")] = "\n".join(nl) + "\n"
+    return out
+
+
+if __name__ == "__main__":
+    DEV = Path(__file__).resolve().parents[1]
+    written = render(DEV)
+    for p, c in written.items():
+        Path(p).write_text(c, encoding="utf-8")
+    n_nav = sum(1 for p in written if p.endswith("_NAV.md"))
+    print(f"已写 DEVMAP.md + {n_nav} 个 folder _NAV.md")

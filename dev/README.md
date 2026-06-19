@@ -5,7 +5,7 @@
 这里是「**怎么建**」——身份 + 五台 + 并发 Goal Loop。本文件随骨架走,任何用本 OS 的项目都带一份。
 产品本身的手册/运行数据放项目自己的 `docs/` 等处。
 
-> **团队并发**:多 developer 协作。**有主的过程内容全 folder 化**(`{type}/{developer_id}/`)→ 各写各文件、并发零冲突;**读任何一类 = 遍历 `{type}/*/` 聚合**,靠生成式导航 map(`DEVMAP.md` / 各 `_NAV.md`)快定位,但**导航只定位、实时依据永远是原文 + 对应代码**。
+> **团队并发**:多 developer 协作。**有主的过程内容全 folder 化**(`{type}/{developer_id}/`)→ 各写各文件、per-dev 内容零冲突(全局少数单文件 land 时由 leader 合);**读任何一类 = 遍历 `{type}/*/` 聚合**,靠生成式导航 map(`DEVMAP.md` / 各 `_NAV.md`)快定位,但**导航只定位、实时依据永远是原文 + 对应代码**。
 
 ## 身份 + 布局
 
@@ -81,7 +81,7 @@
 
 ## 自检
 
-`python dev/scripts/validate_dev.py` —— harness 不靠手工纪律,自检:身份∈TEAM / leader 唯一 / 卡 owner==所在文件夹 / 文件名==uuid8 / **依赖无悬空 + DAG 无环** / state 不假绿灯 / 目录骨架齐。挂 CI 或 pre-commit 即防漂。
+`python dev/scripts/validate_dev.py` —— harness 不靠手工纪律,自检:身份∈TEAM / leader 唯一 / 卡 owner==所在文件夹 / 文件名==uuid8 / **依赖无悬空 + DAG 无环** / 生成视图新鲜(DEVMAP/_NAV/board) / state 不假绿灯 / 目录骨架齐。挂 CI 或 pre-commit 即防漂。
 
 ## 新 session 怎么开始
 

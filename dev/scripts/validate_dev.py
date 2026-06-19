@@ -402,6 +402,32 @@ def _lint_task_cards(cards: list[dict]) -> tuple[list[str], list[str]]:
     return fails, warns
 
 
+def check_views_fresh(dev: Path, my_id: str | None) -> tuple[list[str], list[str]]:
+    """生成视图(DEVMAP/_NAV/board/LEDGER)是 committed 文件 → 会过期。重算 render() 比对盘上,
+    不一致即 FAIL(改了卡/状态没跑 build_*)。只查盘上已存在的文件(LEDGER opt-in,没落盘不强求)。"""
+    oks: list[str] = []
+    fails: list[str] = []
+    import importlib
+    sys.path.insert(0, str(dev / "scripts"))
+    try:
+        expected = dict(importlib.import_module("build_dev_map").render(dev))
+        expected.update(importlib.import_module("build_ledger").render(dev))
+        if my_id:
+            expected.update(importlib.import_module("build_board").render(dev, my_id))
+    except Exception as e:  # noqa: BLE001 —— 生成器炸了也别静默放行
+        return oks, [f"生成视图新鲜度检查失败（build_* 异常）：{e}"]
+    stale = sorted(
+        Path(p).relative_to(dev).as_posix()
+        for p, c in expected.items()
+        if Path(p).is_file() and Path(p).read_text(encoding="utf-8") != c
+    )
+    if stale:
+        fails.append(f"生成视图过期 {stale} —— 跑对应 build_*.py(dev_map/board/ledger)刷新后再提交")
+    elif expected:
+        oks.append("生成视图新鲜（DEVMAP/_NAV/board/LEDGER 与源卡一致）")
+    return oks, fails
+
+
 # ---------- 主流程 ----------
 
 team = read_team(DEV)
@@ -417,6 +443,8 @@ c_oks, c_fails = check_cards(DEV, cards)
 oks += c_oks; fails += c_fails
 tf_oks, tf_fails = check_task_folders(DEV, devs)
 oks += tf_oks; fails += tf_fails
+v_oks, v_fails = check_views_fresh(DEV, my_id)
+oks += v_oks; fails += v_fails
 s_oks, s_fails = _lint_state_evidence(DEV)
 oks += s_oks; fails += s_fails
 t_fails, t_warns = _lint_task_cards(cards)
