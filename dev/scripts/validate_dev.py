@@ -84,19 +84,28 @@ _UUID32 = re.compile(r"^[0-9a-f]{32}$")
 
 
 def load_card(d: Path, owner_folder: str, loc: str) -> dict:
-    """读一张卡 → 统一结构。新卡读 frontmatter；冻结历史卡（无 frontmatter）走 legacy。"""
-    txt = (d / "TASK.md").read_text(encoding="utf-8")
+    """读一张卡 → 统一结构。新卡读 frontmatter；冻结历史卡(**T-xxx 命名**)走 legacy；
+    缺 TASK.md / 无 uuid 又非 legacy 命名 → 标坏卡(check_cards 会 FAIL,不放行)。"""
+    tm = d / "TASK.md"
+    if not tm.is_file():
+        return {"legacy": False, "key": "", "name": d.name, "owner": owner_folder, "status": "",
+                "deps": [], "review": "", "folder": owner_folder, "loc": loc, "txt": "", "dir": d, "no_task_md": True}
+    txt = tm.read_text(encoding="utf-8")
     fm = parse_frontmatter(txt)
     if fm.get("uuid"):
         return {"legacy": False, "key": fm.get("uuid", ""), "name": d.name, "owner": fm.get("owner", ""),
                 "status": fm.get("status", ""), "deps": fm.get("depends_on", []) or [],
                 "review": fm.get("review_status", ""), "folder": owner_folder, "loc": loc, "txt": txt, "dir": d}
-    # legacy 冻结卡：从 body 抽 状态/review
-    ms = re.search(r"\*\*状态\*\*[：:]\s*(todo|in_progress|done)", txt)
-    mr = re.search(r"review_status[^\d]{0,4}(\d)", txt)
-    return {"legacy": True, "key": d.name, "name": d.name, "owner": owner_folder,
-            "status": ms.group(1) if ms else "", "deps": [], "review": mr.group(1) if mr else "",
-            "folder": owner_folder, "loc": loc, "txt": txt, "dir": d}
+    if _LEGACY_ID.match(d.name):  # 冻结历史卡:T-xxx 命名 + body 抽 状态/review
+        ms = re.search(r"\*\*状态\*\*[：:]\s*(todo|in_progress|done)", txt)
+        mr = re.search(r"review_status[^\d]{0,4}(\d)", txt)
+        return {"legacy": True, "key": d.name, "name": d.name, "owner": owner_folder,
+                "status": ms.group(1) if ms else "", "deps": [], "review": mr.group(1) if mr else "",
+                "folder": owner_folder, "loc": loc, "txt": txt, "dir": d}
+    # 无 uuid 又非 legacy 命名 → 坏的新卡(frontmatter 缺 uuid);key="" 会被 check_cards 的 uuid 检查抓
+    return {"legacy": False, "key": "", "name": d.name, "owner": fm.get("owner", ""),
+            "status": fm.get("status", ""), "deps": fm.get("depends_on", []) or [],
+            "review": fm.get("review_status", ""), "folder": owner_folder, "loc": loc, "txt": txt, "dir": d}
 
 
 def gather_cards(dev: Path, devs: list[str]) -> list[dict]:
@@ -104,20 +113,20 @@ def gather_cards(dev: Path, devs: list[str]) -> list[dict]:
     pool = dev / "tasks/pool"
     if pool.is_dir():
         for d in sorted(pool.glob("*")):
-            if d.is_dir() and (d / "TASK.md").is_file():
+            if d.is_dir() and not d.name.startswith("."):  # 缺 TASK.md 的也收(load_card 标坏卡、不静默忽略)
                 cards.append(load_card(d, "wait", "pool"))
     for dev_id in devs:
         base = dev / "tasks" / dev_id
         if not base.is_dir():
             continue
         for d in sorted(base.glob("*")):
-            if d.name == "done" or not d.is_dir() or not (d / "TASK.md").is_file():
+            if d.name == "done" or not d.is_dir() or d.name.startswith("."):
                 continue
             cards.append(load_card(d, dev_id, "active"))
         donebase = base / "done"
         if donebase.is_dir():
             for d in sorted(donebase.glob("*")):
-                if d.is_dir() and (d / "TASK.md").is_file():
+                if d.is_dir() and not d.name.startswith("."):
                     cards.append(load_card(d, dev_id, "done"))
     return cards
 
@@ -146,7 +155,9 @@ def run_os_checks(dev: Path) -> tuple[list[str], list[str]]:
         "scripts/validate_project.py", "scripts/build_ledger.py", "scripts/build_log_index.py",
         "scripts/build_card_counters.py", "scripts/build_board.py", "scripts/build_dev_map.py", "scripts/README.md",
         "tasks/_templates/TASK.md",
-        "research/ideas/_TEMPLATE.md", "research/active/_TEMPLATE.md", "research/findings/_TEMPLATE.md",
+        "research/ideas/README.md", "research/ideas/_TEMPLATE.md",
+        "research/active/README.md", "research/active/_TEMPLATE.md",
+        "research/findings/_TEMPLATE.md",
     ]
     for rel in os_files:
         (oks if (dev / rel).is_file() else fails).append(f"OS 结构文件 {rel}")
@@ -213,34 +224,48 @@ def check_cards(dev: Path, cards: list[dict]) -> tuple[list[str], list[str]]:
     """卡：owner==folder · 新卡文件名==uuid8 · status 合法 · 依赖无悬空 · DAG 无环。"""
     oks: list[str] = []
     fails: list[str] = []
-    keys = {c["key"] for c in cards if c["key"]}
+    keys = {c["key"] for c in cards if c["key"] and not c.get("no_task_md")}
+    # 重复 uuid/id 检查(身份须唯一,否则依赖锚多义、DAG 判失真)
+    seen: dict = {}
+    for c in cards:
+        if c["key"] and not c.get("no_task_md"):
+            seen.setdefault(c["key"], []).append(c["name"])
+    for k, names in seen.items():
+        if len(names) > 1:
+            fails.append(f"uuid/id 重复：{k[:12]} 被 {names} 多卡共用（身份须唯一）")
+    dangling = False
     for c in cards:
         tag = c["name"]
+        # 缺 TASK.md 的空壳目录(坏卡,绝不静默忽略)
+        if c.get("no_task_md"):
+            fails.append(f"卡目录 {c['folder']}/{tag}/ 缺 TASK.md（空壳/坏卡）")
+            continue
         # owner == 所在 folder
         if not c["legacy"] and c["owner"] != c["folder"]:
             fails.append(f"卡 {tag}：frontmatter owner「{c['owner']}」≠ 所在文件夹「{c['folder']}」")
-        # 新卡：文件夹名 == uuid 前 8 位
+        # 新卡：uuid 合法 + 文件夹名 == uuid 前 8 位
         if not c["legacy"]:
             if not _UUID32.match(c["key"]):
-                fails.append(f"卡 {tag}：uuid「{c['key']}」非 32 位 hex")
+                fails.append(f"卡 {tag}：uuid「{c['key']}」非 32 位 hex（新卡 frontmatter.uuid 必填且合法）")
             elif c["name"] != c["key"][:8]:
                 fails.append(f"卡 {tag}：文件夹名应 = uuid 前 8 位「{c['key'][:8]}」")
         # status 合法
         if c["status"] and c["status"] not in ("todo", "in_progress", "done"):
             fails.append(f"卡 {tag}：status「{c['status']}」非法（todo|in_progress|done）")
-        # done 卡须在 done/ 且 status=done
-        if c["loc"] == "done" and c["status"] and c["status"] != "done":
-            fails.append(f"卡 {tag}：在 done/ 但 status≠done")
-        # 依赖无悬空（uuid 或 legacy id 都接受）
+        # done/ 里的新卡必须 status=done(缺 status 也不行;legacy 冻结卡格式各异、宽容)
+        if c["loc"] == "done" and not c["legacy"] and c["status"] != "done":
+            fails.append(f"卡 {tag}：在 done/ 但 status≠done（实「{c['status'] or '空'}」）")
+        # 依赖无悬空
         for dep in c["deps"]:
             if dep and dep not in keys:
                 fails.append(f"卡 {tag}：依赖「{dep[:12]}」无对应卡（悬空依赖）")
-    # DAG 无环（只对有 deps 的卡建图）
-    graph = {c["key"]: [d for d in c["deps"] if d in keys] for c in cards if c["key"]}
+                dangling = True
+    # DAG 无环（只对有 key 的卡建图）
+    graph = {c["key"]: [d for d in c["deps"] if d in keys] for c in cards if c["key"] and not c.get("no_task_md")}
     cycle = _find_cycle(graph)
     if cycle:
         fails.append(f"任务 DAG 成环：{' → '.join(x[:8] for x in cycle)}（依赖必须无环）")
-    elif graph:
+    elif graph and not dangling:
         oks.append(f"任务 DAG 无环 + 依赖无悬空（{len(cards)} 卡）")
     return oks, fails
 

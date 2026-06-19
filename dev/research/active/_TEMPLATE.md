@@ -1,4 +1,4 @@
-<!-- 【开发os级别·模板】勿改本文件。开新在研线程:复制到 ../active/<topic>/NOTES.md,删掉本行再填。 -->
+<!-- 【开发os级别·模板】勿改本文件。开新在研线程:复制到 ../active/{developer_id}/<topic>/NOTES.md,删掉本行再填。 -->
 # 在研 · <topic>
 
 - 开线:

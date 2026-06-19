@@ -12,7 +12,7 @@ owner: wait      # wait(在 pool) | <developer_id>；须 == 所在文件夹(vali
 assigned_by:     # 分配者 developer_id(leader/admin)；pool 中留空
 review_status: 0 # 被分配者 self-review：0 未过目 | 1 已过目/确认
 priority: P1     # P0..P3
-area:            # 功能域(给 dev-map 按功能查),如 安全门 / 数据层 / 因子轨
+area:            # 功能域(给 dev-map 按功能查),如 auth / 数据 / api
 source:          # research | goal | interaction(三晋升源出身)
 source_ref:      # 溯源句柄：finding 路径 / GOAL §x / 对话
 depends_on: []   # 上游卡 uuid 列表(全 32 位)= DAG 的边；锚 uuid 不锚前缀

@@ -40,7 +40,7 @@
 
 ## 任务卡 id + 分配
 
-- id = `{developer_id|wait}-{uuid4}`:**文件名 = uuid 前 8 位**;内容 + 依赖 = 全 32 位;**依赖锚 uuid**(前缀 = 所在文件夹、可变;uuid 不变)。冻结历史卡保 legacy id。
+- **逻辑 id = `{owner}-{uuid}`**(owner = `wait`(在 pool)或 `developer_id`);**物理:文件夹名 = uuid 前 8 位 hex,归属由所在父文件夹(`pool`/`{developer_id}`)编码、名字不带前缀**;内容 + 依赖 = 全 32 位 uuid;**依赖锚 uuid**(前缀可变、uuid 不变)。冻结历史卡保 legacy id。
 - **三晋升源**(研究台 / GOAL gap / dev×claude)→ mint uuid 入 `tasks/pool/`;leader/admin 分配(pool→`{developer_id}`,改归属文件夹)与 land。
 - 全任务 `depends_on` 构成 **DAG**(validate 校验无环 + 无悬空);连通分量拆分 / 分配算法 = 后续 skill(留空)。
 
