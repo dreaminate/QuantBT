@@ -152,8 +152,7 @@ def _lint_task_cards(dev: Path) -> tuple[list[str], list[str]]:
         return m.group(1) if m else None
 
     def _pending(txt: str):
-        m = re.search(r"待拍[^\d\n]{0,4}(\d+)\s*/\s*\d+", txt)  # Open Questions 计数器 待拍/总;无→None
-        return int(m.group(1)) if m else None
+        return txt.count("[需拍板")  # 待拍数 = [需拍板] 标签数(0=全决;无 OQ 也=0)
 
     def _headers(txt: str):
         return [ln[3:].strip() for ln in txt.splitlines() if ln.startswith("## ")]
@@ -179,12 +178,12 @@ def _lint_task_cards(dev: Path) -> tuple[list[str], list[str]]:
                 bad.append(mt.group(1))
         if bad:
             issues.append(f"非规范决策标签 {bad} —— 只认 [需拍板]/[已决](标签漂→计数连锁错,RULES §7)")
-        m = re.search(r"待拍[^\d\n]{0,4}(\d+)\s*/\s*(\d+)", header)
+        m = re.search(r"已决[^\d\n]{0,4}(\d+)\s*/\s*(\d+)", header)
         if m:
             b = "\n".join(body)
             ap, ad = b.count("[需拍板"), b.count("[已决")  # 前缀计数:标签是 [已决 · 注]
-            if (int(m.group(1)), int(m.group(2))) != (ap, ap + ad):
-                issues.append(f"计数器 {m.group(1)}/{m.group(2)} 与标签不符(实有 [需拍板]×{ap}/[已决]×{ad} → 应 {ap}/{ap + ad};跑 build_card_counters.py 修)")
+            if (int(m.group(1)), int(m.group(2))) != (ad, ap + ad):
+                issues.append(f"计数器 已决 {m.group(1)}/{m.group(2)} 与标签不符(实有 [已决]×{ad}/[需拍板]×{ap} → 应 {ad}/{ap + ad};跑 build_card_counters.py 修)")
         return issues
 
     for p in sorted((dev / "tasks/active").glob("T-*/TASK.md")):

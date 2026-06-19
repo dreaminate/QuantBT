@@ -2,7 +2,7 @@
 """任务卡 Open Questions 计数器生成器（【开发os级别】勿改 · clone 自 dev-os）。
 
 从每张 active 卡 `## Open Questions` 区的**实际决策标签**重算计数,写回标题
-`（待拍板 N/M）`:**N = `[需拍板]` 数,M = `[需拍板]`+`[已决]` 数**。
+`（已决 D/T）`:**D = `[已决]` 数,T = `[已决]`+`[需拍板]` 数**(D=T 即全决、可进实现)。
 **计数派生自标签、人别手敲**——改完 Open Questions 标签后跑一次本脚本即同步。
 
 ⚠️ 整个机制依赖**标签名一致**:只认规范名 `[需拍板]` / `[已决]`(见 RULES §7)。
@@ -28,9 +28,9 @@ for p in sorted(ACTIVE.glob("T-*/TASK.md")):
         continue
     bj = next((j for j in range(hi + 1, len(lines)) if lines[j].startswith("## ")), len(lines))
     body = "\n".join(lines[hi + 1:bj])
-    n = body.count("[需拍板")          # 待拍数（前缀计数:标签是 [需拍板 · 注]）
-    m = n + body.count("[已决")        # 总决策数
-    new = re.sub(r"待拍板\s*\d+\s*/\s*\d+", f"待拍板 {n}/{m}", lines[hi])
+    decided = body.count("[已决")      # 已决数（前缀计数:标签是 [已决 · 注]）
+    total = decided + body.count("[需拍板")   # 总决策数（已决 + 待拍）
+    new = re.sub(r"(?:已决|待拍板)\s*\d+\s*/\s*\d+", f"已决 {decided}/{total}", lines[hi])
     if new != lines[hi]:               # 只动有计数器格式且数字变了的标题
         old = lines[hi].strip()
         lines[hi] = new
