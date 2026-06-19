@@ -138,11 +138,50 @@ def _lint_review_status(dev: Path) -> list[str]:
     return []
 
 
+_TASK_REQUIRED = ["Scope", "接线点", "对抗测试", "验收"]
+
+
+def _lint_task_cards(dev: Path) -> tuple[list[str], list[str]]:
+    """卡的 状态↔决策↔模板 一致性(RULES §7):
+    todo 须 Open Questions 待拍=0 + [必填] 节全填(否则 WARN);done 不可有未拍板项(否则 FAIL)。"""
+    fails: list[str] = []
+    warns: list[str] = []
+
+    def _status(txt: str):
+        m = re.search(r"\*\*状态\*\*[：:]\s*(todo|in_progress|done)", txt)
+        return m.group(1) if m else None
+
+    def _pending(txt: str):
+        m = re.search(r"待拍[^\d\n]{0,4}(\d+)\s*/\s*\d+", txt)  # Open Questions 计数器 待拍/总;无→None
+        return int(m.group(1)) if m else None
+
+    def _headers(txt: str):
+        return [ln[3:].strip() for ln in txt.splitlines() if ln.startswith("## ")]
+
+    for p in sorted((dev / "tasks/active").glob("T-*/TASK.md")):
+        tid = p.parent.name
+        txt = p.read_text(encoding="utf-8")
+        if _status(txt) == "todo":
+            pend = _pending(txt)
+            if pend:  # 待拍>0
+                warns.append(f"{tid} 状态=todo 但 Open Questions 待拍={pend}>0 —— todo 应拍板完(RULES §7)")
+            missing = [k for k in _TASK_REQUIRED if not any(k in h for h in _headers(txt))]
+            if missing:
+                warns.append(f"{tid} 状态=todo 但缺 [必填] 节 {missing} —— 卡未完善(按 TASK 模板)")
+    for p in sorted((dev / "tasks/done").glob("T-*/TASK.md")):
+        pend = _pending(p.read_text(encoding="utf-8"))
+        if pend:
+            fails.append(f"{p.parent.name}(done)Open Questions 待拍={pend}>0 —— done 不可有未拍板项")
+    return fails, warns
+
+
 oks, fails = run_os_checks(DEV)
 s_oks, s_fails = _lint_state_evidence(DEV)
 oks += s_oks
 fails += s_fails
-warns = _canary_rules(DEV) + _lint_review_status(DEV)
+t_fails, t_warns = _lint_task_cards(DEV)
+fails += t_fails
+warns = _canary_rules(DEV) + _lint_review_status(DEV) + t_warns
 
 # 连带跑项目检查（validate_project.py，【项目级别】填；缺了不算错）
 try:
