@@ -26,7 +26,7 @@ def run_os_checks(dev: Path) -> tuple[list[str], list[str]]:
     # 1. 四台必需文件
     required = [
         "GOAL.md", "STATE.md", "RULES.md", "RULES.project.md", "DECISIONS.md",
-        "ISSUES.md", "README.md",
+        "ISSUES.md", "LESSONS.md", "README.md",
         "tasks/BOARD.md", "research/INDEX.md", "exec/HANDOFF.md", "exec/LOG.md",
     ]
     for rel in required:

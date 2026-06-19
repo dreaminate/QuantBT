@@ -15,6 +15,7 @@
 | — | `RULES.md` | **OS 通用铁律**(诚实/对抗测试/扩展不替换/防漂/审计纪律) | **【开发os级别】** |
 | — | `RULES.project.md` | **本项目铁律**(冻结文件/范围/安全不变量) | 【项目级别】填 |
 | — | `ISSUES.md` | **跨任务问题/风险登记册**(未决 Open Q 不掉地) | 【项目级别】填 |
+| — | `LESSONS.md` | **技术坑经验库**(已学教训:坑 + 正解;append) | 【项目级别】填 |
 | 任务台 | `tasks/` | `BOARD.md`(活跃板) + `active/<id>/` + `done/<id>/` + `_templates/` | 结构/模板【开发os级别】· 内容【项目级别】 |
 | 研究台 | `research/` | `INDEX` + `TRACE`(溯源+取舍) + `WORKFLOW`(研究方法) + `ideas/active/findings/archive` | 结构/模板/方法【开发os级别】· 内容【项目级别】 |
 | 执行台 | `exec/` | `LOG.md`(滚动记录台) + `HANDOFF.md`(新 session 入口) | 格式【开发os级别】· 内容【项目级别】 |
