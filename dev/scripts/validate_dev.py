@@ -126,11 +126,23 @@ def _canary_rules(dev: Path) -> list[str]:
     return []
 
 
+def _lint_review_status(dev: Path) -> list[str]:
+    """active 卡 review_status:0 = 尚未用户确认/过目 → WARN(可见性兜底,非阻断;实现/落档前需用户点头,见 RULES §7)。"""
+    pending = []
+    for p in sorted((dev / "tasks/active").glob("T-*/TASK.md")):
+        m = re.search(r"review_status[^\d]{0,4}(\d)", p.read_text(encoding="utf-8"))
+        if m and m.group(1) == "0":
+            pending.append(p.parent.name)
+    if pending:
+        return [f"active 卡未经用户确认(review_status:0):{', '.join(pending)} —— 取卡实现/落档前需用户过目点头(RULES §7)"]
+    return []
+
+
 oks, fails = run_os_checks(DEV)
 s_oks, s_fails = _lint_state_evidence(DEV)
 oks += s_oks
 fails += s_fails
-warns = _canary_rules(DEV)
+warns = _canary_rules(DEV) + _lint_review_status(DEV)
 
 # 连带跑项目检查（validate_project.py，【项目级别】填；缺了不算错）
 try:
