@@ -1,7 +1,7 @@
 # STATE · 现状 vs GOAL（诚实 gap 陈述器输出）
 
 > 每个 Goal Loop 重生。**纪律：🟡「声称但未验证」绝不写成 ✅「已建并验证」——不假绿灯（= 产品「不给小白假绿灯」原则掉转枪口对准我们自己）。**
-> 上次刷新：2026-06-18（T-022 INV-3 lease-唯一-key 通道闭合：LeasedBinanceVenue 构造不持 key、真 key 只在门放行后 S4 物化、has_key 不 fetch；既有 venue 零改动 additive；10 对抗测试 + 4 变异全杀 + 5-lens 复核 15→1[LOW]修；全量 1000 测试绿。**安全门生产接线全链闭合，BOARD 无 todo**。上上次：T-021 安全门生产接线：relay 必经 deny-by-default 策略门（INV-2/M17 生产强制）+ 默认门模板 + 防重放 + 真钱 fail-closed；16 对抗测试 + 8 变异全杀 + 5-lens 复核 4 真发现全修（现货/市价全拒）；全量 990 测试绿。🟡 INV-3 lease-唯一-key 通道→T-022。上上次：T-020 验证官=脊柱最后一块：异模型一致性，产 content-addressed verdict_id，喂 T-017/T-019；异模型不一致即 BLOCK(不取均值)/独立性度量非假定/concern≠pass/措辞禁组织独立；含生产接线 + verdict↔工件绑定 + 防篡改读路径；31 对抗测试 + 10 变异全杀 + 5-lens 复核 18→5 真发现全修；全量 974 测试绿。**脊柱 8 块全建并验证**，T-018 生产接线→T-021）
+> 上次刷新：2026-06-18（T-022 INV-3 lease-唯一-key 通道闭合：LeasedBinanceVenue 构造不持 key、真 key 只在门放行后 S4 物化、has_key 不 fetch；既有 venue 零改动 additive；10 对抗测试 + 4 变异全杀 + 5-lens 复核 15→1[LOW]修；全量 1000 测试绿。**安全门生产接线全链闭合**（此后进入收口阶段——**下一步/todo 一律以 BOARD 实时为准，勿据此头部摘要判断**）。上上次：T-021 安全门生产接线：relay 必经 deny-by-default 策略门（INV-2/M17 生产强制）+ 默认门模板 + 防重放 + 真钱 fail-closed；16 对抗测试 + 8 变异全杀 + 5-lens 复核 4 真发现全修（现货/市价全拒）；全量 990 测试绿。🟡 INV-3 lease-唯一-key 通道→T-022。上上次：T-020 验证官=脊柱最后一块：异模型一致性，产 content-addressed verdict_id，喂 T-017/T-019；异模型不一致即 BLOCK(不取均值)/独立性度量非假定/concern≠pass/措辞禁组织独立；含生产接线 + verdict↔工件绑定 + 防篡改读路径；31 对抗测试 + 10 变异全杀 + 5-lens 复核 18→5 真发现全修；全量 974 测试绿。**脊柱 8 块全建并验证**，T-018 生产接线→T-021）
 > **harness 自检**：`python dev/scripts/validate_dev.py` → PASS（对抗验证过：藏掉 done 记录即 FAIL）。
 
 <!-- 格式·防跑偏 | 结构型（每 loop 整篇重生,不是追加）：固定三块——
@@ -75,5 +75,4 @@
 
 ## 待决策岔路（等用户拍板）
 > 卡在用户经济/产品判断上的开口——**点名**,别让人去翻任务卡 Open Questions。
-- **T-024 · exploratory↔confirmatory 判定信号从哪来**（谁判一个 run 是探索还是可下注确认）。建议:用户在 `StrategyGoal` 显式声明/晋级。
-- **T-025 · 急停 kill/emergency 的 fail 模式**（平仓本体 fail-open 不被门挡 vs 全过门）。建议:平仓 fail-open + 端点加鉴权。
+- 簇A 两岔路**已决**（2026-06-18→拍板 2026-06-19,见 `DECISIONS.md` D-T024 / D-T025）——**当前无待决岔路**;簇A 待用户过目最终卡 + review_status 0→1 后开跑。

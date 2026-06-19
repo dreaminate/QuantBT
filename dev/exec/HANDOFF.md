@@ -5,7 +5,7 @@
 ---
 继续在 QuantBT 用 dev/ 开发 OS 干活。先读 `dev/` 四台、再按 BOARD 接着干（当前阶段/进度以 `STATE.md` + `BOARD.md` 实时为准，本文件不写死）。
 
-1. 读 `dev/GOAL.md`(终态) + `dev/STATE.md`(现状 gap) + `dev/tasks/BOARD.md`(下一步) + `dev/RULES.md`(OS 铁律) + `dev/RULES.project.md`(本项目红线) + `dev/DECISIONS.md`(R1–R29/S1–S4)。重资料在 `dev/research/archive/`，read-on-demand。
+1. 读 `dev/GOAL.md`(终态) + `dev/STATE.md`(现状 gap) + `dev/tasks/BOARD.md`(下一步) + `dev/RULES.md`(OS 铁律) + `dev/RULES.project.md`(本项目红线) + `dev/DECISIONS.md`(R1–R29 / P1–P3 / D-XXXX）。重资料在 `dev/research/archive/`，read-on-demand。
 2. 按 BOARD 取**最高优先 `todo`**（以 BOARD 实时为准——**别认这里写死的 task id**，防漂）。读 `dev/research/findings/` 里对应设计的接线 + 对抗测试要点。
 3. 复用现有模块（`experiments/store.py`、`data_packages.py`、`lineage/ids.py` 等），写实现 + 对抗测试（「种已知 bug 门必抓」），`cd app/backend && python -m pytest <新测试> -v` 跑绿。
 4. 完成：`tasks/active/<id>/` 落档到 `tasks/done/<id>/`、更新 `BOARD.md`、刷新 `STATE.md`（诚实标 ✅/🟡/⬜）、跑 `python dev/scripts/validate_dev.py`。

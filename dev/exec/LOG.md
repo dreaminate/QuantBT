@@ -6,6 +6,14 @@
 ## <日期> · <标题>
 - 建/改了什么 + 命门  - 验收：<对抗测试 + 变异 + 全量数字>  - 下一步：<…> -->
 
+## 2026-06-19 · dev-os 开发 OS 大幅加固（规则/检查/脚本）+ 两轮深度测试
+
+- **规则**：memory 契约定项目级单层（操作者/偏好/外部参考，绝不复制 dev/）；§0「别管太宽」；§7 规划/拍板纪律（逐一+循环到清零+左右横跳+工程取舍四面）；§4 按模板/格式骨架填；导航头约定（索引仅定位、必读原文）；exec/LOG 归档 + 强制查 LOG。
+- **卡机制**：状态=纯 enum、review_status=过目软 WARN、Open Questions 计数器改「已决/总」（满格=完成）由 `build_card_counters` 从标签派生 + 标签名硬约定。
+- **机器闸门**（validate_dev 新增，全实测种坏门必抓）：STATE 假绿灯 / RULES canary / review_status / todo·done·必填节 / 计数器漂 / 标签漂。新增脚本 `build_log_index`、`build_card_counters`。
+- **验收**：两轮冷启动深度测试（模拟使用）11/11 维全 PASS、steered=True；修掉 HANDOFF S1-S4、CLAUDE 两闸歧义、卡写死 1001 等 gap。done 卡状态行清成纯 enum；dev-os↔QuantBT OS 文件字节一致、全程对齐推送。
+- **下一步**：收口 wave-A 待用户过目 T-023/24/25（review_status 0→1）后开工。
+
 ## 2026-06-19 · 装回 dev-os：保内容 + 升结构（融合）
 
 - 从可复用 dev-os 骨架融合回 QuantBT：**保**全部内容（GOAL/DECISIONS R1–R29/ISSUES/TRACE/研究 archive+findings/12 张 done 卡/wave-A 卡），**升**结构件。
@@ -100,21 +108,3 @@
 - **关键设计纠正**（对抗复核揪出）：计数键从 `config_hash` 单键 → **复合键 `(config_hash, strategy_goal_ref)`**——否则第二个主题的同 config 试验撞行被静默吞掉（honest-N 洗白，HIGH）。
 - **验收**：25 对抗测试绿 + **13 变异全杀**（种坏门必抓）+ ultracode 5-lens 对抗复核确认 **11 真发现全修** + 二轮 second-look 无缺陷。全量 **796 passed / 13 skipped**（763 基线未破）。
 - **下一步**：**T-014 确定性内核**（node 身份/durable/effectful 不可幂等边界，依赖 ids+ledger 已就绪）；其后 T-015 接 M10 守门进 run 闸门（头号 gap）。
-
-## 2026-06-17 · 审计 dev/ + 修复边界与 harness 卫生
-
-- **审计**：迁移字节级完整（34/34 git-删除文件全等落点）；无 runtime 读取指向被移走文件（功能安全）；dev→docs 方向分得干净。
-- **发现并修复**：
-  1. v2/v3 plans 是被项目代码引用的**项目设计文档**，被误卷进 `dev/research/archive/plans/` → 归位 `docs/plans/`（3 处 field_catalog 注释引用零改动重新生效）；`agent-os-technical-architecture`（超期研究、不同来源）留 dev。
-  2. 旧 codex 任务残留 `TASK-0001/` + `index.md` → 移 `tasks/_archive/`。
-  3. 补 `done/T-012/`（BOARD 标 done 却缺落档）。
-  4. 建本 `LOG.md`（README 描述过但从未创建）。
-  5. 写 `dev/scripts/validate_dev.py` —— harness 从「纯手工纪律」升级为**可自检**（BOARD↔done 一致 / 四台文件齐全 / 无迁移前悬空路径）。
-- **下一步**：T-013 一本账（SQLite WAL + JSONL，honest-N + memoize）。
-
-## 2026-06-16 · 建脊柱第 0 层地基 + 蒸馏 GOAL
-
-- T-012 `lineage/ids.py` 单一身份源 ✅（8 对抗测试绿）。
-- T-001 蒸馏 `dev/GOAL.md` 完整最终形态 ✅（两层相乘：功能平台 × 治理）。
-- 重构 docs/ → dev/ 四台开发 OS（只搬开发那一套；glossary/model_cards 留 docs/ 因 app 运行时读）。
-- **下一步**：T-013 一本账。

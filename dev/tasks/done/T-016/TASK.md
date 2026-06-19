@@ -1,6 +1,6 @@
 # T-016 · LLM record/replay + 受控翻译层
 
-- **状态**：✅ done（2026-06-18）
+- **状态**：done
 - **review_status**：1（用户 2026-06-19 确认）
 - **来源**：spine-designs 02（§4 接线 + §5 A1–A6/B1–B3/C1/D1–D4/E1）+ R11/R7/R12 + 00 §1.2-E（fixture_key=node_id）
 - **优先级**：P1 · **依赖**：T-013（一本账 honest-N）

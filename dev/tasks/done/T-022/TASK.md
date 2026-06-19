@@ -1,6 +1,6 @@
 # T-022 · 安全门 INV-3：venue 只认 lease 签名（移除 self-fetch）+ 生产注入 broker
 
-- **状态**：✅ done（2026-06-18，relay 路径 INV-3 闭合）· **review_status**：1（用户 2026-06-19 确认）
+- **状态**：done · **review_status**：1（用户 2026-06-19 确认）
 - **来源**：spine 06 §4 + INV-3 + R7/R12 · **依赖**：T-021（relay 闸门生产强制）
 - **优先级**：P2
 

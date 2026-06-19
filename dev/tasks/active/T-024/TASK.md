@@ -1,6 +1,6 @@
 # T-024 · 可证伪假设卡接进 Run 生命周期（P2 不挡探索）
 
-- **状态**：todo（卡已过目，待 2 岔路点头后开工）
+- **状态**：todo
 - **review_status**：0
 - **来源**：spine-designs 04（§4 接线 / §5 对抗）+ P2/R1 + R5/R7 措辞
 - **优先级**：P1（STATE 标 04「[集成必补]：Run 连接」——组件已建 T-017，但未接进 Run→promote 流）
@@ -27,7 +27,7 @@
 
 ## 对抗测试设计（种已知 bug，门必抓）
 
-1. **不可证伪伪装**：套套逻辑/无前置/无阈值条件（含字数达标的套套逻辑）→ `assess_falsifiability` 判 low/medium、`FreezeRejected` + `needs_human_review`；**绝不退化为字数门**。反向：真机制判 high。
+1. **不可证伪伪装 = 硬透明 + 软决定（非硬挡，D-T024-FALS）**：套套逻辑/无前置/无阈值（含字数达标的套套逻辑）→ `assess_falsifiability` 判 low/medium、`needs_human_review=True`、醒目警示 + 记进 honest-N 账本、**绝不渲染成绿/可信**;但用户显式 acknowledge/override 后**仍可 freeze**(override 留痕进卡,R26)、**启发式 confidence=low 绝不自动硬挡晋级**。**绝不退化为字数门**。反向:真机制判 high、无谓警示不触发。结构空机制(三必填空白)走 T2 硬拒、不在本条软放。
 2. **空机制 BLOCK + 探索反向**：confirmatory 三必填任一空白 → freeze 拒；exploratory 留空 → 放行（P2）。
 3. **OOS 探索污染 + 一次性消费**：promote 用已被源卡触碰的数据集 → 拒；`consumed=True` → `can_touch_final_oos` block。
 4. **探索层越权**：`layer=exploratory` 调 `can_touch_final_oos` → block（P2 硬边界）。
@@ -51,14 +51,14 @@
 - **措辞绝对化清零**（R5/T12）：中英双语黑名单 grep → 0 hit。
 - **谱系漏发**：状态跃迁必调 `lineage_hook.emit`，hook 未就绪走 pending 不静默吞。
 
-## Open Questions（需关闭——含 1 个需用户拍板的新岔路）
+## Open Questions（已决 4/4）
 
-- **[需拍板·新岔路]** **exploratory↔confirmatory 的判定信号从哪来?** DECISIONS 未覆盖。候选：(a) 用户显式点「晋级 confirmatory」；(b) 由 `execution_mode=paper/live` 自动判；(c) 在 `StrategyGoal` 里声明 `layer`。建议 **(a)+(c) 组合**（用户在 StrategyGoal 向导显式声明/晋级，execution_mode 仅作辅助校验），但需你定。
-- 「晋级用一次性 OOS」与「运营滚动验证集」是否同一切片？建议**分两套**、文档钉死各自消费口径（避免把元科学范式生搬运营 walk-forward）。
-- 可证伪启发式误判：`confidence=low` 放行是否强制「人工确认+验证官二次挑战」？建议是（T1/T5b 钉成门必抓）。
-- 卡级 garden-of-forking-paths 计数：每冻结一张 confirmatory 卡向账本写 `kind=card_freeze`；该条目独立计数还是混入因子聚类？建议独立计数、并列展示。
+- **[已决 · D-T024]** **exploratory↔confirmatory 的判定信号从哪来?** → 用户在 `StrategyGoal` 向导**显式声明/晋级** `layer`（a+c 组合）；`execution_mode=paper/live` 仅作**辅助校验**（声明 exploratory 却要走真钱执行 → 告警/拒，**绝不自动晋级**）。用户 2026-06-19 拍板,权威记录见 `DECISIONS.md` D-T024。
+- **[已决 · D-T024-OOS]** 「晋级用一次性 OOS」与「运营滚动验证集」**分两套独立切片**、文档钉死各自消费口径(避免把元科学范式生搬运营 walk-forward)。闭 I-005。用户 2026-06-19 拍板。
+- **[已决 · D-T024-FALS]** 可证伪启发式判 `confidence=low` → **硬透明(警示 + needs_human_review + honest-N 记账 + 绝不渲染绿) + 软决定(用户显式 override 仍可 freeze、留痕)**,启发式**不自动硬挡晋级**(§0.1 / R26)。保留:结构空机制(三必填空白)仍硬拒、验证官独立 block 仍有效。用户 2026-06-19 拍板。
+- **[已决 · 工程]** 卡级 forking-paths 计数:每冻结一张 confirmatory 卡向账本写 `kind=card_freeze`,**独立计数**并列展示(不混入因子聚类)。
 - 前端 Card 管理页（独立 vs 内嵌 StrategyGoal）——**不碰冻结的 RunDetailPage**；归 E 簇信任层,本卡只做后端契约+端点。
 
 ## 验收一句话
 
-空机制当 confirmatory→拒；探索 run 留空卡→放行；冻结卡改字段→拒；晋级后 OOS 二次消费→拒；措辞黑名单 0 hit；不破坏 1001 基线。
+空机制当 confirmatory→拒；探索 run 留空卡→放行；冻结卡改字段→拒；晋级后 OOS 二次消费→拒；措辞黑名单 0 hit；不破坏 现有基线（数目以实跑 pytest 为准）。

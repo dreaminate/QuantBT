@@ -1,6 +1,6 @@
 # T-023 · 确定性内核（T-014）接进 jobs / agent 执行路径
 
-- **状态**：todo（卡已过目，待 2 岔路点头后开工）
+- **状态**：todo
 - **review_status**：0
 - **来源**：spine-designs 01（§4 接线 / §5 对抗）+ 00-contracts C1/C5/C7/C8 + R10/R11/M17
 - **优先级**：P0（**STATE 头号 gap#4**：内核已建并验证 T-014，但 deferred 未接进真实执行路径——不接=验证白做）
@@ -38,7 +38,7 @@
 8. **LLM 当控制器被阻挡**：LLM 输出试图改 deps → 执行顺序==静态拓扑序，与 LLM 输出无关。
 9. **memoize 复用不把 honest-N 改小**：同配置连跑 3 次，工件命中 2 次但账本 `on_attempt` 被调 3 次。
 10. **裁决措辞诚实**：replay/fork 报告不含 `reproducible/可信/安全/组织独立`，含 `durable/复用工件/未验证`。
-- 配套变异：删 lease-required、`is_consumed` 改 noop、忽略 checkpoint → 须全杀。不破坏全量 1001 基线。
+- 配套变异：删 lease-required、`is_consumed` 改 noop、忽略 checkpoint → 须全杀。不破坏全量 现有基线（数目以实跑 pytest 为准）。
 
 ## 复用模块
 
@@ -52,9 +52,9 @@
 - **R1/R8**：memoize 省 compute 但绝不低估 N（命中仍通知账本）。
 - **C5/C7/C8**：`node_id` 单一源，不在 kernel/engine/jobs 各自算。
 
-## Open Questions（需关闭，部分需用户拍板）
+## Open Questions（已决 1/1）
 
-- **[需拍板]** `effect_idempotency_key` 由谁生成？**建议确定性派生**（`node_id`+业务维度，如 `client_order_id`），**禁 LLM 直接产**（否则重跑漂移换 key 绕过幂等）。`kernel.py:386` `derive_effect_key` 是正向示范。
+- **[已决 · A1 · 工程归内核]** `effect_idempotency_key` 由谁生成？→ **内核确定性派生**（`node_id`+业务维度，如 `client_order_id`）,同一逻辑下单永远同 key、调用方无谎报口;`kernel.py:386 derive_effect_key` 为示范。**硬红线**:绝不由 LLM 生成(见 `RULES.project.md` key 不进 LLM)。用户 2026-06-19 知情确认取 A1(架构选择归工程,非用户经济判断)。
 - `reconcile`（对账）下游消费方是谁、失败如何阻断？本卡只发 `RECONCILE_REQUIRED` 事件 + 留 hook，对账闭环归后续（与执行侧/审批门对接）。
 - agent turn 节点化后每 turn LLM 成本/stall 预算：本轮先留 hook 不接 Progress Ledger。
 - `run_id ↔ node_id` 一对多存储：建议复用 `JobRecord.run_id` 作句柄，索引细节实现时定。
@@ -62,4 +62,4 @@
 
 ## 验收一句话
 
-种重发单 / 重跑 LLM / fork 撤单 → 内核 effectful 边界必截断、走对账不重发；replay 读工件 op 调用 0 次；不破坏 1001 基线。
+种重发单 / 重跑 LLM / fork 撤单 → 内核 effectful 边界必截断、走对账不重发；replay 读工件 op 调用 0 次；不破坏 现有基线（数目以实跑 pytest 为准）。

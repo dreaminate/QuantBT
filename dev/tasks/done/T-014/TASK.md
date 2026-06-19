@@ -1,6 +1,6 @@
 # T-014 · 确定性内核（node 身份 / durable / effectful 不可幂等边界）
 
-- **状态**：✅ done（2026-06-17）
+- **状态**：done
 - **review_status**：1（用户 2026-06-19 确认）
 - **来源**：spine-designs 01（§4 接线 + §5 T-DET-1..10）+ 复核 00 §1.2-C/E（checkpoint_id==node_id）+ R10/R11/M17
 - **优先级**：P0 · **依赖**：T-012（`ids.node_id`）、T-013（一本账，N 通知对账）
