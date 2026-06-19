@@ -26,7 +26,7 @@ def _entries(p: Path) -> list[tuple[str, str, int]]:
         return []
     out: list[tuple[str, str, int]] = []
     for i, ln in enumerate(p.read_text(encoding="utf-8").splitlines(), 1):
-        if ln.startswith("## "):
+        if ln.startswith("## ") and not ln[3:].lstrip().startswith("<"):  # 跳过模板占位 `## <日期>`
             out.append((ln[3:].strip(), p.name, i))
     return out
 
