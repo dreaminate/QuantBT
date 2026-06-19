@@ -175,7 +175,7 @@ def _lint_task_cards(dev: Path) -> tuple[list[str], list[str]]:
         if not m:
             return None  # 没用计数器格式,不查
         b = "\n".join(body)
-        ap, ad = b.count("[需拍板]"), b.count("[已决]")
+        ap, ad = b.count("[需拍板"), b.count("[已决")  # 前缀计数:卡里标签是 [已决 · 注] / [需拍板 · 注]
         if (int(m.group(1)), int(m.group(2))) != (ap, ap + ad):
             return f"计数器 {m.group(1)}/{m.group(2)} 与标签不符(实有 [需拍板]×{ap}/[已决]×{ad} → 应 {ap}/{ap + ad})"
         return None
