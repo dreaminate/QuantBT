@@ -41,7 +41,7 @@ def run_os_checks(dev: Path) -> tuple[list[str], list[str]]:
     # 2b. OS 结构文件（固定名,改名/删 → FAIL；变动的任务卡/研究文件名不在内）
     os_files = [
         "research/TRACE.md", "research/WORKFLOW.md",
-        "scripts/validate_project.py", "scripts/build_ledger.py", "scripts/build_log_index.py", "scripts/README.md",
+        "scripts/validate_project.py", "scripts/build_ledger.py", "scripts/build_log_index.py", "scripts/build_card_counters.py", "scripts/README.md",
         "tasks/_templates/TASK.md",
         "research/ideas/README.md", "research/ideas/_TEMPLATE.md",
         "research/active/README.md", "research/active/_TEMPLATE.md",
@@ -158,8 +158,8 @@ def _lint_task_cards(dev: Path) -> tuple[list[str], list[str]]:
     def _headers(txt: str):
         return [ln[3:].strip() for ln in txt.splitlines() if ln.startswith("## ")]
 
-    def _oq_drift(txt: str):
-        """Open Questions 计数器 待拍/总 必须 = 实际 [需拍板]/([需拍板]+[已决]) 标签数,否则返回不符描述(防手敲漂)。"""
+    def _oq_issues(txt: str):
+        """Open Questions 区:① 决策标签名须规范 [需拍板]/[已决] ② 计数器须=实际标签数。返回问题列表。"""
         header, body, grab = None, [], False
         for ln in txt.splitlines():
             if ln.startswith("## ") and "Open Questions" in ln:
@@ -170,22 +170,28 @@ def _lint_task_cards(dev: Path) -> tuple[list[str], list[str]]:
             if grab:
                 body.append(ln)
         if not header:
-            return None
+            return []
+        issues: list[str] = []
+        bad = []
+        for ln in body:
+            mt = re.match(r"-\s*\*{0,2}\[([^\]\s·]+)", ln)  # bullet 起头第一个 [标签]
+            if mt and mt.group(1) not in ("需拍板", "已决"):
+                bad.append(mt.group(1))
+        if bad:
+            issues.append(f"非规范决策标签 {bad} —— 只认 [需拍板]/[已决](标签漂→计数连锁错,RULES §7)")
         m = re.search(r"待拍[^\d\n]{0,4}(\d+)\s*/\s*(\d+)", header)
-        if not m:
-            return None  # 没用计数器格式,不查
-        b = "\n".join(body)
-        ap, ad = b.count("[需拍板"), b.count("[已决")  # 前缀计数:卡里标签是 [已决 · 注] / [需拍板 · 注]
-        if (int(m.group(1)), int(m.group(2))) != (ap, ap + ad):
-            return f"计数器 {m.group(1)}/{m.group(2)} 与标签不符(实有 [需拍板]×{ap}/[已决]×{ad} → 应 {ap}/{ap + ad})"
-        return None
+        if m:
+            b = "\n".join(body)
+            ap, ad = b.count("[需拍板"), b.count("[已决")  # 前缀计数:标签是 [已决 · 注]
+            if (int(m.group(1)), int(m.group(2))) != (ap, ap + ad):
+                issues.append(f"计数器 {m.group(1)}/{m.group(2)} 与标签不符(实有 [需拍板]×{ap}/[已决]×{ad} → 应 {ap}/{ap + ad};跑 build_card_counters.py 修)")
+        return issues
 
     for p in sorted((dev / "tasks/active").glob("T-*/TASK.md")):
         tid = p.parent.name
         txt = p.read_text(encoding="utf-8")
-        drift = _oq_drift(txt)
-        if drift:
-            warns.append(f"{tid} Open Questions {drift}")
+        for iss in _oq_issues(txt):
+            warns.append(f"{tid} Open Questions {iss}")
         if _status(txt) == "todo":
             pend = _pending(txt)
             if pend:  # 待拍>0
