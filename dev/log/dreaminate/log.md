@@ -6,6 +6,72 @@
 ## <日期> · <标题>
 - 建/改了什么 + 命门  - 验收：<对抗测试 + 变异 + 全量数字>  - 下一步：<…> -->
 
+## 2026-06-20 · T-033 完成 · 诚实残余核验（2 verified / 4 gap 升级 pool）
+
+- **核验**（workflow 7 agent 逐项复证，无假绿灯）：✅ venue_lease(INV-3 lease-only 生产做实) · ✅ jsonl_tamper(hash chain 防篡改 25 tests) · 🟡 monitor_loop / portfolio_triangle / stacking_oof / pit_bitemporal 确为 gap。
+- **verified 探针** `test_venue_lease_invariant.py` 2 passed（lease-only 签名 + fail-closed）。
+- **gap 升级 pool**：d0e5d208 monitor闭环 · 46f1cb3c 组合三角 · 87ad21fc stacking-R18(N/A) · 3a8b2360 双时态-R28（诚实 tracked 进 DAG）。
+- **下一步**：批次 T-027→T-034 实装完成；T-035 epic 占位待拆。未提交。
+
+## 2026-06-20 · T-034 完成 · 实盘因子血统门（警告+知情确认）
+
+- **核心**：新模块 `provenance.py` `gate_live_promotion`——未走完治理流程（假设卡→验证→审批）的因子上真钱线 → 列出 + 要求知情确认；已 ack → 放行留痕（硬透明+软决定，不死挡）；查询异常 fail-safe 按未过。
+- **测试** `test_provenance_gate.py` 5 passed（未过必警告/知情放行/fail-safe/不误拦）。
+- **残余（接线）**：status_lookup 接 lineage 谱系 + hypothesis/verification；上真钱线端点插门 + 前端弹窗（拆子卡）。
+- **下一步**：T-033（诚实残余核验）。未提交。
+
+## 2026-06-20 · T-030 完成 · 单人 self-approve 仅非真钱通道（真钱硬双人）
+
+- **核心**：`gate.approve(self_approve, acknowledged, cooling_seconds)`——真钱场景（MONEY_ACTIONS）self-approve → SelfApproveForbidden；非真钱须二次确认 + 可冷却 + `self_approved=True` 诚实标注（不伪装双控）；未开 self_approve 仍 approver≠creator 硬拒。schema 加 self_approved 字段 + SelfApproveForbidden。
+- **测试** `test_self_approve.py` 6 passed（真钱禁/缺确认拒/冷却拒/双人不误标）+ approval 回归 23。
+- **残余（端点接线）**：approve 端点经 MODEL_REGISTRY 透传 self_approve + 客户端冷却 UI（拆子卡）。
+- **下一步**：T-034（实盘因子血统门）。未提交。
+
+## 2026-06-20 · T-032 完成 · GOAL 对齐 + RULES.project 禁裸 place_order 红线
+
+- **GOAL.md:67** M10「待接进 run 闸门」→「已接进(T-015)」（授权对齐 state）。
+- **RULES.project** 加红线「下单唯一入口 / 新增端点·venue 禁裸调 place_order」（承接 T-026/T-029）。
+- **测试** `test_doc_alignment.py` 2 passed（防文档再漂）。
+- **残余（前端文案）**：409 flag 引导句 / market_mode / paper 文案随前端批做；后端逻辑不动。
+- **下一步**：T-030（单人 self-approve）。未提交。
+
+## 2026-06-20 · T-029 完成 · 入口×门覆盖矩阵（不可绕过结构化）
+
+- **核心**：`test_entrypoint_gate_coverage.py` AST 审计 main.py 全部 route，高危端点（/signals //promote //approve //kill_switch //emergency //subscribe //redeem //mainnet //place_order //upgrade）断言体内必带门/鉴权标志。全部通过 + 探针抓无门端点。与 T-025 place_order 扫描互补（端点层 vs venue 层）。
+- **测试** 2 passed。修过程：main.py 有 BOM → read_text 用 utf-8-sig。
+- **残余（转 T-032）**：禁裸 place_order 钉 RULES.project 红线（文档）。
+- **下一步**：T-030（单人 self-approve）。未提交。
+
+## 2026-06-20 · T-031 完成 · 审批 SLA/杠杆可配 + 真钱超时铁律
+
+- **改**：`channels.py` `sla_seconds(overrides)` / `timeout_default(overrides)`（动钱类 default_reject 不可 override 放行）；`main._agent_leverage_cap()` 从 env 读、无硬上限（D-LEVERAGE）。
+- **测试** `test_approval_sla_leverage_config.py` 6 passed（真钱铁律种坏门 + SLA 可配 + 杠杆无硬上限 + 非法回退）+ approval 回归 22。
+- **残余（前端）**：客户端档位设置 UI；后端 overrides/env 已就绪。
+- **下一步**：T-029（入口×门覆盖矩阵 + venue OrderGuard.wrap CI 静态检查）。未提交。
+
+## 2026-06-20 · T-028 完成 · 工具真实状态诚实暴露（防绿灯错觉）
+
+- **核心**：`/api/agent/tools` 加 `tool_status`——TOOL_SCHEMA 18 工具逐一标 live/stub/unwired + side_effect。揭穿能力名不副实：8 接通（含 factor.run_ic=stub），10 个（backtest.run/eval.pbo/model.train/report.generate…）声明未接=unwired。
+- **测试** `test_agent_tool_status.py` 5 passed（unwired/stub/live + 全标 live 假绿探针）；全量 **1075 passed / 13 skipped**（基线 1070 未破，+5）。
+- **残余（前端 UI）**：red/yellow 按权限模式一等呈现分层属 RunDetailPage 渲染（冻结只能加显示），随 T-035 窗口做；后端裁决已由 ide_promote gate_verdict 暴露。
+- **下一步**：T-029（入口×门覆盖矩阵 + venue OrderGuard.wrap CI 静态检查）。未提交。
+
+## 2026-06-20 · T-027 完成 · agent 权限三态 + 权限轴⟂治理轴 + chat 接 AgentRuntime
+
+- **机制**：`agent_runtime.py` 加 `permission_gate(mode, side_effect)` + `register_tool(side_effect)` + dispatch 前权限门。none=ask 确认/auto·bypass 自动；external=仅 bypass 自动；**realmoney=任何模式（含 bypass）都挂起**（权限轴绝不跳治理门）。
+- **chat 入口接 AgentRuntime**：`chat_send_message` 从裸 client.chat → `_agent_runtime(permission_mode, system_prompt=RAG)`，支持工具派发 + permission_mode；RAG/metadata 保留、round-trip 回归绿。
+- **测试** `test_agent_permission_tristate.py` 16 passed（矩阵 9 + realmoney 三模式全挂起探针 + 分模式）；全量 **1070 passed / 13 skipped**（基线 1054 未破，+16）。
+- **残余（拆子卡）**：无副作用业务工具接真引擎让 agent「一句话真跑回测」（backtest.run/eval.pbo/report.generate 真 handler）—— 机制已做实，接真 handler 是独立功能。
+- **下一步**：T-028（防绿灯错觉呈现，依赖 T-027 权限模式已就绪）。未提交。
+
+## 2026-06-20 · T-026 完成 · R11 前端派发审计（裁决 no_bypass）
+
+- **审计**（三角调查 workflow）：治理门钉在端点/执行层（OrderGuard 会话外硬墙「agent 注入成功也下不了单」），前端 agent 页 display-only（tool_call 仅渲染 chip），前端绕 agent 直调端点也越不过门 → R11 前端侧无缺口，非 §5、未停工。
+- **测试** `tests/test_r11_frontend_dispatch_audit.py` 8 passed：白名单守门 / dispatch 不执行未注册高危 / 翻译门拦非 ok / 前端不直 fetch 执行端点，各配探针。过程修正：黑名单 `/api/security/` 过宽误报 reloadSecrets（手动按钮）→ 收窄执行端点。
+- **验收**：全量 **1054 passed / 13 skipped**（基线 1046 未破，+8）。
+- **转交**：copy_trade service 内门逐一压测 + main.py:282 注释钉 RULES.project 红线 → T-029；enforcer lease 退化 → T-033。
+- **下一步**：T-026 落档 done；可接 T-027（前置已满足）。未提交（用户明说才 commit）。
+
 ## 2026-06-20 · 二轮 UX/agent 能力收口规划 · 立 10 卡 + 4 决策（回测全流程审计驱动）
 
 - **审计**：ultracode workflow（6 agent）审回测全流程合理性 / 机构级严谨 vs 过严摩擦 / Agent OS 角色 —— 结论：动钱侧治理脊柱真扎实（种坏门必抓），但 agent「干活能力」重门已建、轻活未接（主对话入口 RAG-only、`backtest.run` 未注册）；GOAL §7 M10「待接进 run 闸门」是陈旧文档（T-015 已接进）。

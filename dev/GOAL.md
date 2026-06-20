@@ -64,7 +64,7 @@
 | M6 模型训练 | 训练台(主进程不碰 torch) + 19 模型卡 + DL harness | 已建 |
 | M7–M8 信号/组合 | 信号融合 + HRP/ERC/NCO（→§4）+ 策略级 meta-allocation | 部分·待治理化 |
 | M9 执行/风控 | A股 paper + 加密 Binance 实盘(testnet 矩阵/killswitch/三档风控/成本) | 已建 |
-| M10 回测/归因/监控 | PBO/DSR/bootstrap + Brinson + cost-drift | 已建·**待接进 run 闸门** |
+| M10 回测/归因/监控 | PBO/DSR/bootstrap + Brinson + cost-drift | 已建·已接进 run 闸门(T-015) |
 | M11 因子生命周期 | 五态机 → 机构级（→§3） | 已建 toy·待升级 |
 | M12 实验/模型注册表 | append-only + lineage + promote（→§2 审批门改造） | 已建·待治理化 |
 | M13 编排调度 | mini DAG（→§2 确定性内核改造） | 已建·待升级 |

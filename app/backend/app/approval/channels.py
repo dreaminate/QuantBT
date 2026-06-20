@@ -35,11 +35,28 @@ def classify_channel(action_kind: str, to_stage: str) -> str:
     return "exploratory"
 
 
-def timeout_default(action_kind: str) -> str:
-    return TIMEOUT_DEFAULT.get(action_kind, "escalate")
+def timeout_default(action_kind: str, overrides: dict[str, str] | None = None) -> str:
+    """超时默认动作。**真钱铁律（T-031 / D-LEVERAGE）**：base=default_reject 的动钱类
+    永远不可被 overrides 改成放行（无人确认却动钱=灾难）；非动钱类可被收紧/放宽。
+    """
+    base = TIMEOUT_DEFAULT.get(action_kind, "escalate")
+    if overrides and action_kind in overrides:
+        requested = overrides[action_kind]
+        if base == "default_reject" and requested != "default_reject":
+            return base  # 动钱类超时永远 default_reject，override 被拒
+        return requested
+    return base
 
 
-def sla_seconds(action_kind: str) -> int:
+def sla_seconds(action_kind: str, overrides: dict[str, int] | None = None) -> int:
+    """SLA 等待窗口（秒），可配（仅影响「等多久」、不影响超时后动作）。非正值忽略。"""
+    if overrides and action_kind in overrides:
+        try:
+            v = int(overrides[action_kind])
+            if v > 0:
+                return v
+        except (TypeError, ValueError):
+            pass
     return _SLA_SECONDS.get(action_kind, 3600)
 
 

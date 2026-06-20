@@ -21,13 +21,31 @@ from __future__ import annotations
 import json
 from dataclasses import asdict, dataclass, field
 from datetime import UTC, datetime
-from typing import Any, Callable
+from typing import Any, Callable, Literal
 
 from .llm_client import LLMClient, LLMMessage, LLMResponse
 from .tool_schema import TOOL_SCHEMA
 
 
 ToolHandler = Callable[[str, dict[str, Any]], dict[str, Any]]
+
+# T-027 / D-PERM：工具副作用分级。none=无外部副作用（回测/IC/PBO/报告，本地可重置）；
+# external=有外部副作用（如 testnet 真发单，假钱但真打交易所）；realmoney=动钱/晋级（永不注册给 agent）。
+ToolSideEffect = Literal["none", "external", "realmoney"]
+
+
+def permission_gate(mode: str, side_effect: str) -> str:
+    """权限三态 × 副作用 → 'execute' | 'confirm'。
+
+    权限轴 ⟂ 治理轴（D-PERM）：权限模式只调「要不要停下确认」，绝不跳治理门——
+    realmoney 在【任何】模式（含 bypass）都 confirm（agent 永不自动执行动钱/晋级，纵深防御）。
+    none：ask 每步确认、auto/bypass 自动；external：仅 bypass 自动、ask/auto 需确认。
+    """
+    if side_effect == "realmoney":
+        return "confirm"  # 治理正交：bypass 也不跳
+    if side_effect == "external":
+        return "execute" if mode == "bypass" else "confirm"
+    return "confirm" if mode == "ask" else "execute"
 
 
 @dataclass
@@ -58,6 +76,7 @@ class AgentRuntime:
         max_steps: int = 6,
         system_prompt: str = "You are QuantBT Agent — 一个量化全栈助手。",
         translator: Any | None = None,
+        permission_mode: str = "auto",
     ) -> None:
         self._llm = llm
         self._tools = tools or {}
@@ -65,9 +84,13 @@ class AgentRuntime:
         self._system = system_prompt
         # 受控翻译门（T-016，可选）：LLM 输出 schema 合规但语义越界（如越权杠杆）→ 不派发、挂起。
         self._translator = translator
+        # 权限三态（T-027 / D-PERM）：ask|auto|bypass，只调「要不要停下确认」、绝不跳治理门。
+        self._permission_mode = permission_mode
+        self._side_effects: dict[str, str] = {}
 
-    def register_tool(self, name: str, handler: ToolHandler) -> None:
+    def register_tool(self, name: str, handler: ToolHandler, side_effect: ToolSideEffect = "none") -> None:
         self._tools[name] = handler
+        self._side_effects[name] = side_effect
 
     def run(self, user_input: str) -> AgentTurn:
         turn = AgentTurn(user_input=user_input)
@@ -100,6 +123,19 @@ class AgentRuntime:
                         if tr.status == "human_confirm_required"
                         else f"LLM 输出未通过结构校验，未派发：{tr.reason}"
                     )
+                    turn.succeeded = False
+                    return turn
+            # 权限三态门（T-027 / D-PERM）：按 (mode, side_effect) 决定执行/挂起确认。
+            # 治理正交：realmoney 在任何模式（含 bypass）都挂起——权限轴绝不跳治理门。
+            for call in response.tool_calls:
+                tname = call.get("name") or call.get("function", {}).get("name", "")
+                se = self._side_effects.get(tname, "none")
+                if permission_gate(self._permission_mode, se) == "confirm":
+                    turn.steps.append(AgentStep(
+                        role="system",
+                        content=f"[权限门/{self._permission_mode}] 工具 {tname}（{se}）需确认，未自动执行",
+                    ))
+                    turn.final_message = f"该操作（{tname}）在 {self._permission_mode} 模式下需你确认后执行。"
                     turn.succeeded = False
                     return turn
             tool_results: list[LLMMessage] = []
@@ -141,4 +177,4 @@ class AgentRuntime:
         return turn
 
 
-__all__ = ["AgentRuntime", "AgentStep", "AgentTurn", "ToolHandler"]
+__all__ = ["AgentRuntime", "AgentStep", "AgentTurn", "ToolHandler", "ToolSideEffect", "permission_gate"]

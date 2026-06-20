@@ -20,6 +20,7 @@ from .schema import (
     EvidenceSnapshot,
     GateRejection,
     GateStateError,
+    SelfApproveForbidden,
 )
 from .store import ApprovalGateStore
 
@@ -162,13 +163,30 @@ class ApprovalGateService:
 
     # ── 审批 / 拒绝 ──
     def approve(self, gate_id: str, *, approver: str, reason: str, risk_restated: str | None = None,
+                self_approve: bool = False, acknowledged: bool = False, cooling_seconds: int = 0,
                 execute_fn: Callable[[ApprovalGate], str] | None = None) -> ApprovalGate:
         gate = self._store.get(gate_id)
         if gate.decision != "pending":
             raise GateStateError(f"非 pending 不可批准: {gate.decision}")
         # 复核 #7：归一后比较，大小写/空白差异不能绕过 approver≠creator。
-        if (approver or "").strip().casefold() == (gate.created_by or "").strip().casefold():
-            raise ApproverEqualsCreator("approver 不得等于 creator（归一比较，防自审，R7）")
+        is_self = (approver or "").strip().casefold() == (gate.created_by or "").strip().casefold()
+        if is_self:
+            # T-030 / D-SELFAPPROVE：单人 self-approve 仅限【非真钱】场景 + 冷却 + 二次确认 + 诚实标注。
+            if not self_approve:
+                raise ApproverEqualsCreator("approver 不得等于 creator（归一比较，防自审，R7）")
+            if gate.action_kind in MONEY_ACTIONS:
+                raise SelfApproveForbidden(
+                    f"真钱场景（{gate.action_kind}）禁 self-approve：CRYPTO_LIVE/动钱/production 保留硬双人（§5）")
+            if not acknowledged:
+                raise EmptyReason("self-approve 需二次确认（acknowledged=True），绝不伪装双控")
+            if cooling_seconds > 0 and gate.created_at_utc:
+                try:
+                    elapsed = (datetime.now(UTC) - datetime.fromisoformat(gate.created_at_utc)).total_seconds()
+                    if elapsed < cooling_seconds:
+                        raise GateStateError(f"self-approve 冷却未过（需 {cooling_seconds}s，已过 {int(elapsed)}s）")
+                except ValueError:
+                    pass
+            gate.self_approved = True  # 诚实标注（审计可查），绝不伪装成双人
         if gate.channel == "confirmatory" and not _is_substantive(reason):
             raise EmptyReason("confirmatory 审批理由不可空/不可纯套话")
         gate.approver = approver
@@ -176,7 +194,8 @@ class ApprovalGateService:
         gate.risk_restated = risk_restated
         gate.decision = "approved"
         gate.decided_at_utc = _now()
-        gate.verdict_text = _verdict(True, [], f"{gate.to_stage}/已审批(approver={approver})")  # 复核 low：刷新陈旧措辞
+        tag = "self-approved(单人非真钱·冷却+留痕)" if gate.self_approved else f"approver={approver}"
+        gate.verdict_text = _verdict(True, [], f"{gate.to_stage}/已审批({tag})")
         self._store.append(gate)
         return self._after_approved_execute(gate, execute_fn)
 

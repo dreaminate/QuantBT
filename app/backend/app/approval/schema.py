@@ -23,6 +23,10 @@ class ApproverEqualsCreator(Exception):
     """approver == creator：防自审（R7 生成≠验证不可自我满足）。"""
 
 
+class SelfApproveForbidden(Exception):
+    """真钱场景禁 self-approve（T-030 / D-SELFAPPROVE：CRYPTO_LIVE/动钱/production 保留硬双人）。"""
+
+
 class GateStateError(Exception):
     """对非法状态的门做非法转移（如 approve 一个非 pending 门）。"""
 
@@ -93,6 +97,7 @@ class ApprovalGate:
     side_effect_ref: str | None = None
     nist_phase: str = "MEASURE"                   # R6：非合规宣称
     verdict_text: str = ""
+    self_approved: bool = False                    # T-030：单人非真钱自批（诚实标注，绝不伪装双控）
 
     def to_dict(self) -> dict[str, Any]:
         return asdict(self)
@@ -121,5 +126,6 @@ class GateRejection:
 
 __all__ = [
     "ActionKind", "ApprovalGate", "ApproverEqualsCreator", "EmptyReason", "EvidenceSnapshot",
-    "GateChannel", "GateDecision", "GateRejection", "GateStateError", "MONEY_ACTIONS", "TimeoutDefault",
+    "GateChannel", "GateDecision", "GateRejection", "GateStateError", "MONEY_ACTIONS",
+    "SelfApproveForbidden", "TimeoutDefault",
 ]

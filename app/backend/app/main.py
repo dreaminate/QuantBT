@@ -251,7 +251,17 @@ FIXTURE_STORE = FixtureStore(
     on_event=lambda e, p: _main_logger.info("llm_fixture_event %s %s", e, p),
 )
 # 受控翻译门（脊柱 02）：LLM 输出 schema 合规但语义越界（如越权杠杆）→ 不自动派发、挂人工确认。
-AGENT_TRANSLATOR = ControlledTranslator(leverage_cap=3.0)
+def _agent_leverage_cap() -> float:
+    # T-031 / D-LEVERAGE：翻译门杠杆阈值可配（默认 3.0），不钉系统硬上限（用户风险偏好）。
+    # 真钱门不受影响——OrderGuard/PolicyGate 在端点层独立管真钱杠杆（杠杆放开数值≠绕门）。
+    import os
+    try:
+        return float(os.environ.get("QUANTBT_AGENT_LEVERAGE_CAP", "3.0"))
+    except ValueError:
+        return 3.0
+
+
+AGENT_TRANSLATOR = ControlledTranslator(leverage_cap=_agent_leverage_cap())
 
 
 def _current_agent_llm(run_id: str | None = None):
@@ -273,16 +283,19 @@ def _current_agent_llm(run_id: str | None = None):
 AGENT_LLM = _current_agent_llm()
 
 
-def _agent_runtime(run_id: str | None = None) -> AgentRuntime:
-    # 每次 agent turn 用唯一 run_id（复核 #1/#7）+ 武装受控翻译门（复核 #3）。
+def _agent_runtime(run_id: str | None = None, permission_mode: str = "auto", system_prompt: str | None = None) -> AgentRuntime:
+    # 每次 agent turn 用唯一 run_id（复核 #1/#7）+ 武装受控翻译门（复核 #3）+ 权限三态（T-027/D-PERM）。
     runtime = AgentRuntime(
         _current_agent_llm(run_id=run_id or f"agent-{uuid.uuid4().hex[:12]}"),
         translator=AGENT_TRANSLATOR,
+        permission_mode=permission_mode,
+        **({"system_prompt": system_prompt} if system_prompt else {}),
     )
-    # 注册若干 tool handler；正式的 backend 调用由前端继续派发
-    runtime.register_tool("strategy_goal.create", lambda _n, args: {"strategy_goal": args})
-    runtime.register_tool("factor.run_ic", lambda _n, args: {"queued": True, "args": args})
-    runtime.register_tool("code.replicate", lambda _n, args: CODE_REPLICATOR.replicate(args.get("code", ""), args.get("source_dialect", "pandas")).__dict__)
+    # 注册【无副作用】工具（side_effect=none，auto/bypass 可自主执行）；
+    # 动钱/晋级永不注册给 agent —— 治理门钉在端点层（D-PERM 权限轴⟂治理轴）。
+    runtime.register_tool("strategy_goal.create", lambda _n, args: {"strategy_goal": args}, side_effect="none")
+    runtime.register_tool("factor.run_ic", lambda _n, args: {"queued": True, "args": args}, side_effect="none")
+    runtime.register_tool("code.replicate", lambda _n, args: CODE_REPLICATOR.replicate(args.get("code", ""), args.get("source_dialect", "pandas")).__dict__, side_effect="none")
     # v2 数据平台 · 字段对齐工具（list_sources / describe_fields / infer_mapping / apply_mapping / validate_columns）
     from .agent.tool_handlers import register_field_tools
     register_field_tools(
@@ -1491,7 +1504,17 @@ def trigger_kill_switch(payload: dict = Body(default_factory=dict),
 
 @app.get("/api/agent/tools")
 def agent_tools() -> dict[str, Any]:
-    return {"functions": TOOL_SCHEMA, "llm_provider": AGENT_LLM.provider}
+    # T-028：诚实暴露每个 schema 工具的真实可用状态（live/stub/unwired）+ 副作用级别——
+    # 打击「能力名不副实」（schema 声明 N 个、实际只接通部分），符合 R25「弱点一等呈现」。
+    rt = _agent_runtime()
+    registered = set(rt._tools.keys())
+    stub = {"factor.run_ic"}  # 已注册但未接真引擎（仅返回 queued）
+    tool_status = []
+    for fn in TOOL_SCHEMA:
+        name = fn.get("name") or fn.get("function", {}).get("name", "")
+        status = "unwired" if name not in registered else ("stub" if name in stub else "live")
+        tool_status.append({"name": name, "status": status, "side_effect": rt._side_effects.get(name, "none")})
+    return {"functions": TOOL_SCHEMA, "llm_provider": AGENT_LLM.provider, "tool_status": tool_status}
 
 
 @app.post("/api/agent/chat")
@@ -3077,15 +3100,13 @@ def chat_send_message(
         conversation_history=history_text,
     )
 
-    # 2. LLM
-    from .agent.llm_client import LLMMessage
+    # 2. Agent（T-027/D-PERM）：经 AgentRuntime 支持工具派发 + 权限三态（ask/auto/bypass），
+    #    替代裸 client.chat。无副作用工具 auto/bypass 自主执行；动钱/晋级永不注册（治理门在端点层）。
+    permission_mode = str(payload.get("permission_mode") or "auto")
     try:
-        client = _current_agent_llm()
-        reply = client.chat([
-            LLMMessage(role="system", content=sys_prompt),
-            LLMMessage(role="user", content=user_text),
-        ])
-        reply_text = reply.content or "(LLM 无内容)"
+        runtime = _agent_runtime(permission_mode=permission_mode, system_prompt=sys_prompt)
+        turn = runtime.run(user_text)
+        reply_text = turn.final_message or "(LLM 无内容)"
     except Exception as exc:  # noqa: BLE001
         reply_text = f"[LLM 错误] {exc}"
 

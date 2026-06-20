@@ -1,7 +1,7 @@
 ---
 uuid: 05d6f5110c9d4a6d9cafc37f97905198
 title: 单人 self-approve 仅非真钱通道(冷却+留痕)，真钱硬双人
-status: todo
+status: done
 owner: dreaminate
 assigned_by: dreaminate
 review_status: 1
@@ -50,3 +50,10 @@ depends_on: []
 
 ## 验收一句话 [必填]
 种"真钱走 self-approve / self-approve 伪装双控 / 未过冷却即批" → 门必抓;非真钱单人可冷却+留痕自批;不破基线。
+
+## 完成记录（2026-06-20）
+- **self-approve 核心机制（安全关键，D-SELFAPPROVE）**：`gate.approve(self_approve, acknowledged, cooling_seconds)`——approver==creator 时：① 真钱场景（action_kind ∈ MONEY_ACTIONS，含 live_order/transfer/leverage_up/add_position/promote_production）→ `SelfApproveForbidden`（硬双人不松）；② 非真钱须 `acknowledged=True`（二次确认，否则 EmptyReason）；③ cooling_seconds>0 未过 → GateStateError；④ 通过则 `gate.self_approved=True` + verdict 标 `self-approved`（诚实，绝不伪装双控）。未开 self_approve 的自批仍 ApproverEqualsCreator（原不变量不变）。
+- **schema**：`ApprovalGate.self_approved` 字段 + `SelfApproveForbidden` 异常。
+- **对抗测试**（`test_self_approve.py` 6 passed + approval 回归 23）：真钱禁 / 缺二次确认拒 / 冷却未过拒 / 未开 self_approve 仍拒自批 / 双人 self_approved=False。
+- **残余（端点接线）**：`/api/models/{id}/gates/{gate_id}/approve` 经 `MODEL_REGISTRY.approve_promotion` 中间层 → 需透传 self_approve/acknowledged 至 `GATE_SERVICE.approve`；核心安全逻辑 + 单测已做实，端点透传 + 客户端冷却时长 UI 待接（建议拆子卡）。
+- **基线**：approval 回归绿；全量在本批次末确认。

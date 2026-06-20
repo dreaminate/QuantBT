@@ -10,6 +10,7 @@
 - 前端 `frontend-run-detail/src/pages/RunDetailPage.tsx`「收益概述」页**冻结**,只可排版 / 显示逻辑 / 加字段。
 - **A股永不实盘**;禁 `import vnpy / easytrader / ths_trader` 等券商网关。
 - **安全不变量**(开发不得削弱,产品代码运行时强制):实盘 key 不进 LLM · 杠杆护栏接所有执行路径(含中继/桥,M17) · API key 关提币 + IP 白名单 · 下单 HMAC 防重放。
+- **下单唯一入口**:任何 `place_order` 必经 OrderGuard;下单唯一封装 = `SignalRelayer`(enforce_gate=True) / lease venue / guarded venue;**新增端点 / venue 禁裸调 `place_order`**(D-PERM 治理门在端点层;T-026/T-029 审计钉死:`test_realmoney_audit_killswitch` + `test_entrypoint_gate_coverage` 守)。
 - **单一源锚点**:身份源 `app/backend/app/lineage/ids.py`(一套 config_hash、一本账),不另造。
 - **honest-N 不可手动改小**(防作弊,硬);但试验可自由跑(研究自由)。「不让你藏试验 ≠ 不让你跑试验」。
 

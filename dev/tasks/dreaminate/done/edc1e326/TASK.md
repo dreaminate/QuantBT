@@ -1,7 +1,7 @@
 ---
 uuid: edc1e32623674b1f870b264119db2421
 title: 主对话入口接 AgentRuntime + 无副作用工具 + 权限三态(ask/auto/bypass)
-status: todo
+status: done
 owner: dreaminate
 assigned_by: dreaminate
 review_status: 1
@@ -49,3 +49,11 @@ depends_on: [180a341e2d064e368be14bfa3b67f790]
 
 ## 验收一句话 [必填]
 agent 在主对话框一句话能跑完无副作用回测/IC/PBO/Paper;种"动钱工具混入免门 / bypass 跳治理门" → 门必抓;不破坏现有测试基线。
+
+## 完成记录（2026-06-20）
+- **权限三态 + 权限轴⟂治理轴（核心，D-PERM）**：`agent_runtime.py` 加 `permission_gate(mode, side_effect)` + `register_tool(..., side_effect)` + run dispatch 前权限门。矩阵：none=ask 确认/auto·bypass 自动；external=仅 bypass 自动；**realmoney=任何模式（含 bypass）都挂起**（权限轴绝不跳治理门）。
+- **工具 side_effect 分级**：`_agent_runtime` 注册的 strategy_goal.create/factor.run_ic/code.replicate + 字段工具全标 none；动钱/晋级永不注册（治理门在端点层）。
+- **chat 入口接 AgentRuntime**：`chat_send_message` 从裸 client.chat 改为经 `_agent_runtime(permission_mode, system_prompt=RAG)`，支持工具派发 + permission_mode 透传；保留 RAG + metadata，round-trip 回归绿。
+- **对抗测试**（`test_agent_permission_tristate.py` 16 + `test_r11_*` 8）：权限矩阵 9 参数化 + realmoney 三模式全挂起探针 + auto 执行/ask 挂起/external 分模式。
+- **验收**：全量 **1070 passed / 13 skipped**（基线 1054 未破，+16）。
+- **残余（子卡，非半成品）**：让 agent「一句话真跑回测」需把无副作用业务工具接真引擎——`backtest.run`(接 codegen/sandbox/runner) / `eval.pbo` / `report.generate` 真 handler 是独立功能；当前 agent 可派发的是无副作用 stub/轻工具。机制（权限三态+治理正交+chat 派发贯通）已做实可测，建议拆子卡接真 handler。

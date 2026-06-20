@@ -6,16 +6,13 @@
 
 | uuid8 | 标题 | status | area | 位置 |
 |---|---|---|---|---|
-| 05d6f511 | 单人 self-approve 仅非真钱通道(冷却+留痕)，真钱硬双人 | todo | approval | active |
-| 180a341e | 核验 agent tool_call 前端派发是否旁路受控翻译门（R11 前端缺口审计） | todo | verification | active |
-| 381b6c18 | 实盘因子血统门——未过检验因子上真钱线 → 警告+知情确认 | todo | security-invariant | active |
 | 3f5ed0b8 | agent 客户端窗口 epic(仿 Claude Code)——权限模式切换 + 工具可视化 + 审批弹窗 | todo | frontend-epic | active |
-| 6403b9bf | 诚实残余核验——监控尾部闭环 + 组合层三角 + D2 四残余 | todo | verification | active |
-| 6e4eee54 | 入口×必经门覆盖矩阵回归 + 所有 venue 经 OrderGuard.wrap 的 CI 静态检查 | todo | security-invariant | active |
-| 8ab894cd | 审批 SLA 与 leverage_cap 可配置；杠杆不设硬上限；真钱超时永远 default_reject | todo | config | active |
-| c631817e | 防绿灯错觉——三角裁决按权限模式分层呈现 + 工具真实状态标注 | todo | governance-ui | active |
-| ecbd0eab | GOAL §7 文档对齐(M10 已接 run 闸门)+ 可证伪性/模式 教学文案 | todo | docs | active |
-| edc1e326 | 主对话入口接 AgentRuntime + 无副作用工具 + 权限三态(ask/auto/bypass) | todo | agent | active |
+| 05d6f511 | 单人 self-approve 仅非真钱通道(冷却+留痕)，真钱硬双人 | done | approval | done |
+| 180a341e | 核验 agent tool_call 前端派发是否旁路受控翻译门（R11 前端缺口审计） | done | verification | done |
+| 381b6c18 | 实盘因子血统门——未过检验因子上真钱线 → 警告+知情确认 | done | security-invariant | done |
+| 6403b9bf | 诚实残余核验——监控尾部闭环 + 组合层三角 + D2 四残余 | done | verification | done |
+| 6e4eee54 | 入口×必经门覆盖矩阵回归 + 所有 venue 经 OrderGuard.wrap 的 CI 静态检查 | done | security-invariant | done |
+| 8ab894cd | 审批 SLA 与 leverage_cap 可配置；杠杆不设硬上限；真钱超时永远 default_reject | done | config | done |
 | T-001 | T-001 | ? | - | done |
 | T-012 | T-012 | ? | - | done |
 | T-013 | T-013 | ? | - | done |
@@ -31,12 +28,18 @@
 | T-023 | T-023 | ? | - | done |
 | T-024 | T-024 | ? | - | done |
 | T-025 | T-025 | ? | - | done |
+| c631817e | 防绿灯错觉——三角裁决按权限模式分层呈现 + 工具真实状态标注 | done | governance-ui | done |
+| ecbd0eab | GOAL §7 文档对齐(M10 已接 run 闸门)+ 可证伪性/模式 教学文案 | done | docs | done |
+| edc1e326 | 主对话入口接 AgentRuntime + 无副作用工具 + 权限三态(ask/auto/bypass) | done | agent | done |
 
 ## pool · 待分配
 
 | uuid8 | 标题 | status | area |
 |---|---|---|---|
-| _（池空）_ | | | |
+| 3a8b2360 | R28 全库双时态（known_at 轴 + as-of 重述基本面）（T-033 核验 gap） | todo | 数据 |
+| 46f1cb3c | 组合层 M8 多证据三角守门（T-033 核验 gap 升级） | todo | portfolio |
+| 87ad21fc | R18 stacking 控制项 N/A 标注 + 实现时 OOF 约束（T-033 核验 gap） | todo | signals |
+| d0e5d208 | 监控→自动降级/退役/问责 尾部闭环接线（T-033 核验 gap 升级） | todo | monitor |
 
 ## 按 area 功能索引
 
@@ -57,13 +60,13 @@
 | - | T-023 · ? | dreaminate |
 | - | T-024 · ? | dreaminate |
 | - | T-025 · ? | dreaminate |
-| agent | edc1e326 · todo | dreaminate |
-| approval | 05d6f511 · todo | dreaminate |
-| config | 8ab894cd · todo | dreaminate |
-| docs | ecbd0eab · todo | dreaminate |
+| agent | edc1e326 · done | dreaminate |
+| approval | 05d6f511 · done | dreaminate |
+| config | 8ab894cd · done | dreaminate |
+| docs | ecbd0eab · done | dreaminate |
 | frontend-epic | 3f5ed0b8 · todo | dreaminate |
-| governance-ui | c631817e · todo | dreaminate |
-| security-invariant | 381b6c18 · todo | dreaminate |
-| security-invariant | 6e4eee54 · todo | dreaminate |
-| verification | 180a341e · todo | dreaminate |
-| verification | 6403b9bf · todo | dreaminate |
+| governance-ui | c631817e · done | dreaminate |
+| security-invariant | 381b6c18 · done | dreaminate |
+| security-invariant | 6e4eee54 · done | dreaminate |
+| verification | 180a341e · done | dreaminate |
+| verification | 6403b9bf · done | dreaminate |

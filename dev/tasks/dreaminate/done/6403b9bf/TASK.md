@@ -1,7 +1,7 @@
 ---
 uuid: 6403b9bfd46749bab7ef4885f5b763ad
 title: 诚实残余核验——监控尾部闭环 + 组合层三角 + D2 四残余
-status: todo
+status: done
 owner: dreaminate
 assigned_by: dreaminate
 review_status: 1
@@ -46,3 +46,17 @@ RULES §3 诚实——未验证就是未验证，核验结果如实落 `state/`/
 
 ## 验收一句话 [必填]
 每个残余项产出"已验证✅ / 缺口🟡"的诚实结论 + 对应探针；不破基线。
+
+## 完成记录（2026-06-20）
+- **诚实核验（workflow 7 agent，逐项独立复证，无一假绿灯 §3）**：6 项残余 → **2 verified / 4 gap**。
+  - ✅ **venue_lease**：INV-3 lease-only 生产做实——生产 crypto factory(main.py:209-225)只产 `LeasedBinanceVenue`(place_order 显含 `*,lease=None`→走 lease 通道)，`_kernel(None)` fail-closed，真 key venue 仅 `_kernel(lease)` 内构造；enforcer 退化分支对 broker-keyed venue 不可达。
+  - ✅ **jsonl_tamper**：`ledger.py` 真 hash chain 防篡改（_ChainStore prev_hash 链 + verify_chain 重算 + verify_integrity 三道 + SQLite↔JSONL 对账），实跑 `test_lineage_ledger.py` 25 passed（含中间行/列篡改/截断/坏 payload 对抗套件）。
+  - 🟡 **monitor_loop** → **pool d0e5d208**：尾部闭环未接线（cost_drift/retire/lifecycle 零生产调用方、Scheduler 生产未实例化、漂移仅 append-note）。
+  - 🟡 **portfolio_triangle** → **pool 46f1cb3c**：组合层未上多证据三角（portfolio/signals 不 import eval/*）。
+  - 🟡 **stacking_oof** → **pool 87ad21fc**：无 stacking/meta 对象，R18 控制项 N/A（待实现 stacking）。
+  - 🟡 **pit_bitemporal** → **pool 3a8b2360**：全双时态未做（known_at/knowledge_date 全 0 命中）。
+- **verified 防回归探针**（`test_venue_lease_invariant.py` 2 passed）：lease-only 签名 + fail-closed 默认 None；jsonl 已有 25 tests 充分。
+- **gap 升级**：4 个 gap 诚实 mint 进 pool（tracked 进任务 DAG，绝不标绿）。
+
+## 升级卡（gap → pool）
+- d0e5d208 monitor 尾部闭环 · 46f1cb3c 组合三角 · 87ad21fc stacking-R18(N/A) · 3a8b2360 双时态-R28

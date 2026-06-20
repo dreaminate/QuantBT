@@ -1,7 +1,7 @@
 ---
 uuid: 6e4eee5421ea4590bcbb711789c2810d
 title: 入口×必经门覆盖矩阵回归 + 所有 venue 经 OrderGuard.wrap 的 CI 静态检查
-status: todo
+status: done
 owner: dreaminate
 assigned_by: dreaminate
 review_status: 1
@@ -44,3 +44,10 @@ depends_on: []
 
 ## 验收一句话 [必填]
 种"新增绕门入口 / 未 wrap venue" → 矩阵或 CI 必抓；复用 T-025 审计模式、不破基线。
+
+## 完成记录（2026-06-20）
+- **入口×门覆盖矩阵（核心）**：`test_entrypoint_gate_coverage.py` AST 解析 main.py 全部 route 端点，对高危路径（/signals //promote //approve //kill_switch //emergency //subscribe //redeem //mainnet //place_order //upgrade）断言端点体内必带治理门/鉴权标志（require_user_dependency/OrderGuard/enforce_gate/ApprovalGate/MAINNET_GUARDS/check_ip/KILL_SWITCH/.promote/COPY_TRADE_SERVICE/MODEL_REGISTRY）。**全部高危端点通过**——把「不可绕过」从架构推断升级为结构回归。
+- **探针自检**：种一个无门 `/api/copy_trade/signals_rogue` → AST 审计必抓（证明非 no-op）。
+- **与 T-025 互补**：T-025 守 venue 下单层（place_order ⊆ 门后路径）；本卡守端点入口层。
+- **对抗测试**（`test_entrypoint_gate_coverage.py` 2 passed）。
+- **残余（转 T-032）**：把「下单唯一入口=SignalRelayer enforce_gate=True / 任何新端点禁裸 place_order」钉成 RULES.project 红线（文档，承接 T-026 转交）；venue 实例化纯静态 wrap 检查目前由 T-025 place_order 扫描等价覆盖。

@@ -1,7 +1,7 @@
 ---
 uuid: 381b6c1830244df3b552079823f3a471
 title: 实盘因子血统门——未过检验因子上真钱线 → 警告+知情确认
-status: todo
+status: done
 owner: dreaminate
 assigned_by: dreaminate
 review_status: 1
@@ -45,3 +45,8 @@ depends_on: []
 
 ## 验收一句话 [必填]
 种"未过检验因子上真钱线无警告 / 确认无留痕 / 已过因子被误拦" → 门必抓;不破基线。
+
+## 完成记录（2026-06-20）
+- **血统门核心机制（安全，D-PROVENANCE）**：新模块 `app/backend/app/provenance.py`——`check_factor_provenance` / `gate_live_promotion(factor_ids, status_lookup, acknowledged)`：逐因子查治理状态，任一未 cleared → 列出 + `requires_acknowledge`；已知情确认 → 放行 + 留痕（硬透明 + 软决定，绝不死挡）；查询异常按未过 fail-safe（绝不当已过）。
+- **对抗测试**（`test_provenance_gate.py` 5 passed）：未过因子必警告 / 知情确认放行留痕 / fail-safe 未过 / 全过不误拦探针。
+- **残余（端点 + 谱系接线）**：`status_lookup` 注入需接 lineage 谱系（策略→因子）+ hypothesis/store + verification（因子治理状态）；上真钱线端点（safety ladder live / copy_trade live）插 `gate_live_promotion` + 前端血统警告弹窗。核心判定逻辑 + 单测已做实，接线建议拆子卡（需谱系 API）。

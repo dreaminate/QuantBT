@@ -1,7 +1,7 @@
 ---
 uuid: 180a341e2d064e368be14bfa3b67f790
 title: 核验 agent tool_call 前端派发是否旁路受控翻译门（R11 前端缺口审计）
-status: todo
+status: done
 owner: dreaminate
 assigned_by: dreaminate
 review_status: 1
@@ -43,3 +43,10 @@ R11 LLM 绝不当控制器——前端派发若旁路门 = 安全治理不变量
 
 ## 验收一句话 [必填]
 种"前端旁路门派发动钱/越权 tool_call" → 审计测试必抓；若现状已旁路，产出诚实 finding（🟡缺口）而非假绿灯。
+
+## 完成记录（2026-06-20）
+- **审计结论 = no_bypass / r11_gap=False**：治理门钉在端点/执行层（OrderGuard 会话外硬墙「agent 注入成功也下不了单」），前端 agent 对话页 display-only（tool_call 仅渲染 chip、无 onClick/fetch 桥接），前端绕 agent 直调端点也越不过门。**非 §5 缺口，未停工。**
+- **审计测试**（`app/backend/tests/test_r11_frontend_dispatch_audit.py`，8 passed）：① agent 白名单守门（生产注册集无动钱/晋级/回测工具）+ 误注册探针；② dispatch 不执行未注册高危工具（place_order→「未注册工具」）+ 已注册被调探针；③ 翻译门拦非 ok 不派发 + ok 放行探针；④ 前端 agent 页不直 fetch 动钱/晋级/回测执行端点 + 探针。
+- **过程修正**：黑名单初版 `/api/security/` 过宽，误报 `reloadSecrets`（用户手动重载密钥按钮、非 tool_call 桥接，main.py:973）→ 收窄到执行端点。
+- **验收**：新 8 测试全绿；全量 **1054 passed / 13 skipped**（基线 1046 未破）。
+- **转交（unverified，诚实标注非本卡范畴）**：① copy_trade subscribe/redeem 把校验下沉 COPY_TRADE_SERVICE、端点本体未见显式 OrderGuard，需逐一压测确认 service 内门有效 → **T-029**；② main.py:282「正式 backend 调用由前端继续派发」注释是心智风险点，建议钉 RULES.project 红线「任何新端点禁裸 place_order / 下单唯一入口=SignalRelayer enforce_gate=True」→ **T-029**；③ enforcer.py:108-110 lease 退化分支（venue 不支持 lease 时自取 key）属执行层 INV-3 残余 → **T-033**。

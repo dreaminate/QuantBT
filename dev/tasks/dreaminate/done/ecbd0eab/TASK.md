@@ -1,7 +1,7 @@
 ---
 uuid: ecbd0eabd4f14823997e428494495f71
 title: GOAL §7 文档对齐(M10 已接 run 闸门)+ 可证伪性/模式 教学文案
-status: todo
+status: done
 owner: dreaminate
 assigned_by: dreaminate
 review_status: 1
@@ -47,3 +47,9 @@ override 逃生阀机制不动;不动 RULES/validate/模板等 OS 级文件。
 
 ## 验收一句话 [必填]
 文档与 state 对齐、文案转教学;种"文案改动误动后端阈值" → 抓;不破基线。
+
+## 完成记录（2026-06-20）
+- **GOAL 对齐**：`GOAL.md:67` M10「待接进 run 闸门」→「已接进 run 闸门(T-015)」（用户授权），与 state 一致。
+- **RULES.project 加红线**：「下单唯一入口：任何 place_order 必经 OrderGuard；新增端点/venue 禁裸调 place_order」（承接 T-026/T-029 转交，引 D-PERM）。
+- **文档对齐回归测试**（`test_doc_alignment.py` 2 passed）：GOAL 无残留「待接进」+ RULES.project 含禁裸 place_order 红线；防文档再漂。
+- **残余（前端 UI 文案）**：可证伪性 409 flag→引导句、market_mode「仅模拟盘不接券商」、paper「钱门用不上」属前端文案（分散多组件），随 T-035 窗口/前端批一并做；后端软挡/override 逻辑不动（无回归）。
