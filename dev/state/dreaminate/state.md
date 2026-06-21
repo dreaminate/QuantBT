@@ -36,13 +36,13 @@
 | M4–M5 特征/标签 | ✅ 三重障碍 + 防泄露 | 🟡 N_eff 泄露门已建（T-015：等价写法收益聚类）；特征级泄露探针仍待接 | 因子轨 §3 |
 | M6 模型训练 | ✅ 训练台 + 19 卡 + DL harness | 🟡 输出未走信号契约（R17） | 因子轨 §3 |
 | M7–M8 信号/组合 | 🟡 部分（融合 + HRP/ERC/NCO） | ⬜ 组合未上多证据三角 | 方法学 §4 |
-| M9 执行/风控 | ✅ A股 paper + 加密 live + ladder | ✅ 安全门 relay 全链生产强制（T-021/T-022）+ **真钱审计不变量 + 急停 IP+密码鉴权 + emergency 真平仓 + GenericVenue 接活经门 + 向后兼容真钱陷阱闭合（T-025）** | TCB 天花板：唯一硬墙在交易所侧（诚实） |
+| M9 执行/风控 | ✅ A股 paper + 加密 live + ladder | ✅ 安全门 relay 全链生产强制（T-021/T-022）+ **真钱审计不变量 + 急停 IP+密码鉴权 + emergency 真平仓 + GenericVenue 接活经门 + 向后兼容真钱陷阱闭合（T-025）** + **急停/紧急平仓 IP 改服务端从连接派生 + 二次鉴权升级为服务端真校验密码(PBKDF2)/2FA TOTP、废自证 bool（D-KILLSWITCH-IP，2026-06-22）** | TCB 天花板：唯一硬墙在交易所侧（诚实） |
 | M10 回测/归因/监控 | ✅ PBO/DSR/bootstrap 存在 | ✅ **已接进 run 闸门**（T-015 多证据三角 gate：promote 注入 dsr/pbo→risk_summary 真触发、honest_n 兜底通缩） | — |
 | M11 因子生命周期 | 🟡 toy 五态机 | ⬜ 机构级（衰减/拥挤/容量/因子族）未做 | 因子轨 §3 |
 | M12 实验/模型注册表 | ✅ append-only + lineage | ✅ honest-N 一本账（T-013）+ **promote 审批门状态机（T-019：三要件/approver≠creator/缺口清单，端点已接）** | — |
 | M13 编排调度 | 🟡 mini DAG | ✅ 确定性内核 `DurableExecutor` 已建（T-014）+ **接进 run_dag/jobs/agent 执行路径（T-023：checkpoint 恢复去重绝不重发单 / replay 边界 HALT）** | — |
 | M14 Agent | ✅ tool schema + 工作台 | ✅ LLM 受控（T-016：record/replay + 受控翻译门挡越权；opt-in `LLM_REPLAY_MODE`）| — |
-| M15 前端 | ✅ RunDetailPage 冻结 | ⬜ 治理新页面（证据下钻 L1–L4）未加 | 信任层 §6 |
+| M15 前端 | ✅ RunDetailPage 冻结 | 🟡 治理新页面 epic 完成（cfb0fea9：**24 卡 done** 整套台 DC→React · 后端 pytest 1231 + 前端 vitest 241 passed + tsc + build 绿 · 残余诚实：部分未接端点仍 mock / T-042 桌面 tauri build 待工具链 / 3 pre-existing bug 已 spawn）· **导航收口（D-NAV-UNIFY，2026-06-22）：Research/Workshop/Models 三 tab→单 Workshop + 新增总览台、6 台切换器、旧分散页搬台/退役** | 信任层 §6 |
 | M16–M21 社区/跟单/IDE/教学/实盘安全/示例 | ✅ 全已建 | n/a | — |
 
 ## 层2 脊柱（A 簇 · 第 0–3 层）
@@ -73,4 +73,6 @@
 
 ## 待决策岔路（等用户拍板）
 > 卡在用户经济/产品判断上的开口——**点名**,别让人去翻任务卡 Open Questions。
-- **当前无待决岔路**。簇A（T-023/024/025）已 2026-06-19 用户过目通过（review_status 0→1）+ 实现落档完成。下一波 = 1A 价值密度混合（C 组合三角 + D 双时态地基 → B 因子轨 → E 信任层 / F 可上线 交织）——若进实现遇 `decisions/` 未覆盖的新岔路再点名。
+- **前端整套台 epic（cfb0fea9）已实装完成**：24 子卡全 done（地基4+台前端6+Agent4+后端接真7+教学/桌面2），最终全量验证绿（后端 1231 / 前端 241 / tsc / build）；commit·合并 main 待用户授权（不擅自 commit）。残余：部分 mock 未接真(P1)/T-042 桌面待工具链/pre-existing bug spawn task。
+- 簇A（T-023/024/025）已 2026-06-19 用户过目通过 + 落档完成；下一波 1A 价值密度混合（C 组合三角 + D 双时态地基 → B 因子轨 → E 信任层 / F 可上线 交织）若遇 `decisions/` 未覆盖新岔路再点名。
+- **导航收口 + killswitch 加固（2026-06-22「a+b / 都做 / 升级」已做完）**：前端三 tab 合一为 Workshop + 总览台 + 旧页搬台/退役（D-NAV-UNIFY）；后端急停/紧急平仓 IP 改服务端派生防伪造 + 二次鉴权升级为服务端真校验密码(PBKDF2)/TOTP、废自证 bool（D-KILLSWITCH-IP）。验证全绿：tsc 0 / 前端 241 / 后端全量 1240 passed（含 IP 防伪造 + 错密码 + 自证 bool 失效 3 条回归）/ 6 台浏览器实证 + 零 console 报错。**commit·合并 main 待用户授权（未擅自 commit）**。

@@ -408,3 +408,59 @@ def test_verdict_id_includes_target_ref():
     b = _v().reconcile(target_ref="cfg_B", generator_model="g", checker_model="c",
                        claims={"x": 1.0}, recomputed={"x": 1.0})
     assert a.verdict_id != b.verdict_id, "target_ref 不同必须产不同 verdict_id"
+
+
+# ── HTTP 路由回归：POST /api/verification/verdicts 真跑不得 500 ─────────────────────
+# 既往单测只调 Verifier 类，绕过路由里 `_dt.datetime.now(_dt.UTC)` 的 created_at_utc，
+# 模块作用域缺 `import datetime as _dt` → 真实 HTTP 调用 NameError 500（此前漏网）。
+# 本测试经 TestClient 真打路由，钉住 200 + verdict_id + created_at_utc。
+def test_create_verdict_route_does_not_500():
+    from types import SimpleNamespace
+
+    from fastapi.testclient import TestClient
+
+    from app.auth import require_user_dependency
+    from app.main import app
+
+    app.dependency_overrides[require_user_dependency] = lambda: SimpleNamespace(user_id="tester")
+    try:
+        client = TestClient(app)
+        resp = client.post(
+            "/api/verification/verdicts",
+            json={
+                "target_ref": "cfg_route_smoke",
+                "generator_model": "gpt-gen",
+                "checker_model": "claude-chk",
+                "claims": {"sharpe": 1.0},
+                "recomputed": {"sharpe": 1.0},
+            },
+        )
+        assert resp.status_code == 200, f"路由 500/异常说明 created_at_utc 的 _dt 名字未解析：{resp.text}"
+        body = resp.json()
+        assert body["verdict_id"].startswith("vd_")
+        assert body["verdict"] == "consistent"  # 异模型容差内一致
+        assert body.get("created_at_utc"), "created_at_utc 必须落值（_dt.datetime.now 真跑过）"
+    finally:
+        app.dependency_overrides.pop(require_user_dependency, None)
+
+
+# ── 复核：路由对 VerifierError(非法输入) 应 422 而非 500（错误分支也走 _dt 之外的路径）──
+def test_create_verdict_route_illegal_input_422():
+    from types import SimpleNamespace
+
+    from fastapi.testclient import TestClient
+
+    from app.auth import require_user_dependency
+    from app.main import app
+
+    app.dependency_overrides[require_user_dependency] = lambda: SimpleNamespace(user_id="tester")
+    try:
+        client = TestClient(app)
+        resp = client.post(
+            "/api/verification/verdicts",
+            json={"target_ref": "", "generator_model": "g", "checker_model": "c",
+                  "claims": {"x": 1.0}, "recomputed": {"x": 1.0}},
+        )
+        assert resp.status_code == 422, f"非法输入应 422 而非 500：{resp.text}"
+    finally:
+        app.dependency_overrides.pop(require_user_dependency, None)

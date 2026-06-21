@@ -109,14 +109,23 @@ class _FailingCloseVenue:
         raise RuntimeError("exchange 5xx on close")
 
 
+class _StubAuth:
+    """测试替身：服务端密码校验 = 密码须等于 'pw-ok'（隔离真 auth DB，验 _verify_second_factor 真比对）。"""
+
+    def verify_password(self, user_id, password):
+        return password == "pw-ok"
+
+
 def _setup_kill_app(tmp_path, monkeypatch, venue):
     guards = MainnetGuardsService(tmp_path / "guards.db")
     guards.upsert_config(MainnetGuardConfig(user_id="tester", trusted_ips=["1.2.3.4"],
                                             require_password_per_order=True))
     monkeypatch.setattr("app.main.MAINNET_GUARDS", guards)
     monkeypatch.setattr("app.main.KILL_SWITCH", KillSwitch([venue]))
+    monkeypatch.setattr("app.main.AUTH_SERVICE", _StubAuth())
     app.dependency_overrides[require_user_dependency] = lambda: SimpleNamespace(user_id="tester")
-    return TestClient(app), guards
+    # source_ip 由服务端从连接派生（_client_ip）—— 用 client= 设真实来源 IP（已加白）。
+    return TestClient(app, client=("1.2.3.4", 12345)), guards
 
 
 @pytest.fixture
@@ -127,9 +136,11 @@ def kill_client(tmp_path, monkeypatch):
     spy = _SpyVenue()
     monkeypatch.setattr("app.main.MAINNET_GUARDS", guards)
     monkeypatch.setattr("app.main.KILL_SWITCH", KillSwitch([spy]))
+    monkeypatch.setattr("app.main.AUTH_SERVICE", _StubAuth())
     app.dependency_overrides[require_user_dependency] = lambda: SimpleNamespace(user_id="tester")
     try:
-        yield TestClient(app), spy
+        # source_ip 由服务端从连接派生 —— client= 设真实来源 IP（1.2.3.4 已加白）。
+        yield TestClient(app, client=("1.2.3.4", 12345)), spy
     finally:
         app.dependency_overrides.pop(require_user_dependency, None)
 
@@ -142,20 +153,44 @@ def test_kill_switch_requires_login():
 
 
 def test_kill_switch_rejects_untrusted_ip(kill_client):
-    client, _spy = kill_client
-    r = client.post("/api/risk/kill_switch", json={"password_verified": True})  # source_ip=unknown
-    assert r.status_code == 403
+    _client, _spy = kill_client  # 复用 fixture 的 guards/auth override（trusted=1.2.3.4）
+    untrusted = TestClient(app, client=("9.9.9.9", 1))  # 真实来源 IP 未加白
+    r = untrusted.post("/api/risk/kill_switch", json={"password": "pw-ok"})
+    assert r.status_code == 403  # 服务端按真实连接 IP 拒绝（非看 body）
+
+
+def test_kill_switch_body_source_ip_cannot_spoof_whitelist(kill_client):
+    """加固回归：body 塞一个已加白的 source_ip 也旁路不了——IP 以服务端连接为准（防伪造）。"""
+    _client, _spy = kill_client
+    untrusted = TestClient(app, client=("9.9.9.9", 1))  # 真实来源未加白
+    r = untrusted.post("/api/risk/kill_switch",
+                       json={"source_ip": "1.2.3.4", "password": "pw-ok"})  # 伪造已加白 IP
+    assert r.status_code == 403  # body 伪造无效，仍按真实 9.9.9.9 拒绝
 
 
 def test_kill_switch_rejects_without_password(kill_client):
-    client, _spy = kill_client
-    r = client.post("/api/risk/kill_switch", json={"source_ip": "1.2.3.4"})  # 无密码
+    client, _spy = kill_client  # 真实来源 1.2.3.4 已加白
+    r = client.post("/api/risk/kill_switch", json={})  # IP 过，但无二次鉴权凭据 → 403
     assert r.status_code == 403
+
+
+def test_kill_switch_rejects_wrong_password(kill_client):
+    """升级回归：密码服务端真校验——错密码（IP 已加白）仍 403。"""
+    client, _spy = kill_client
+    r = client.post("/api/risk/kill_switch", json={"password": "wrong-pw"})
+    assert r.status_code == 403
+
+
+def test_kill_switch_self_attested_bool_no_longer_bypasses(kill_client):
+    """升级回归（核心）：旧自证 password_verified=true 已废弃——光给 bool、无真密码 → 403。"""
+    client, _spy = kill_client  # IP 已加白，唯一缺的就是真凭据
+    r = client.post("/api/risk/kill_switch", json={"password_verified": True})
+    assert r.status_code == 403  # 自证 bool 不再被信任，必须服务端真校验密码/TOTP
 
 
 def test_kill_switch_real_execution_and_idempotent(kill_client):
     client, spy = kill_client
-    body = {"source_ip": "1.2.3.4", "password_verified": True}
+    body = {"password": "pw-ok"}  # 服务端真校验密码；IP 由连接派生(1.2.3.4 已加白)
     r1 = client.post("/api/risk/kill_switch", json=body)
     assert r1.status_code == 200
     assert spy.cancelled == 1 and spy.closed == ["BTCUSDT"]  # 真撤单 + 真平仓
@@ -169,7 +204,7 @@ def test_emergency_close_all_real_execution(kill_client):
     """emergency 从空壳→真调 KILL_SWITCH（非空 log）。"""
     client, spy = kill_client
     r = client.post("/api/security/mainnet/emergency_close_all",
-                    json={"source_ip": "1.2.3.4", "password_verified": True})
+                    json={"password": "pw-ok"})  # 服务端真校验密码；IP 由连接派生(1.2.3.4 已加白)
     assert r.status_code == 200
     assert spy.cancelled == 1 and spy.closed == ["BTCUSDT"]
     assert r.json()["ok"] is True
@@ -177,9 +212,10 @@ def test_emergency_close_all_real_execution(kill_client):
 
 
 def test_emergency_close_all_rejects_untrusted_ip(kill_client):
-    client, _spy = kill_client
-    r = client.post("/api/security/mainnet/emergency_close_all",
-                    json={"source_ip": "9.9.9.9", "password_verified": True})
+    _client, _spy = kill_client
+    untrusted = TestClient(app, client=("9.9.9.9", 1))  # 真实来源未加白
+    r = untrusted.post("/api/security/mainnet/emergency_close_all",
+                       json={"password": "pw-ok"})
     assert r.status_code == 403
 
 
@@ -188,7 +224,7 @@ def test_emergency_close_all_partial_failure_not_reported_ok(tmp_path, monkeypat
     client, guards = _setup_kill_app(tmp_path, monkeypatch, _FailingCloseVenue())
     try:
         r = client.post("/api/security/mainnet/emergency_close_all",
-                        json={"source_ip": "1.2.3.4", "password_verified": True})
+                        json={"password": "pw-ok"})  # 服务端真校验密码；IP 由连接派生(1.2.3.4 已加白)
         assert r.status_code == 200
         body = r.json()
         assert body["ok"] is False                       # 平仓失败 → 不报 ok
@@ -205,7 +241,7 @@ def test_kill_switch_partial_failure_not_reported_ok(tmp_path, monkeypatch):
     client, guards = _setup_kill_app(tmp_path, monkeypatch, _FailingCloseVenue())
     try:
         r = client.post("/api/risk/kill_switch",
-                        json={"source_ip": "1.2.3.4", "password_verified": True})
+                        json={"password": "pw-ok"})  # 服务端真校验密码；IP 由连接派生(1.2.3.4 已加白)
         assert r.status_code == 200
         assert r.json()["ok"] is False and r.json()["status"] in ("partial", "failed")
         assert guards.list_audit_log("tester")[0]["result"] in ("partial", "failed")

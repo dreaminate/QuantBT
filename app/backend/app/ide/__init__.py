@@ -14,7 +14,8 @@ from __future__ import annotations
 from .ai_context import AIContext, build_ai_context
 from .promote import PromoteError, PromotedRun, promote_ide_run
 from .sandbox import SandboxResult, run_user_strategy
-from .service import IDEError, IDEService, StrategyFile
+from .service import IDEError, IDEService, StrategyFile, StrategyVersion
+from .strategy_graph import compat, strategy_content_hash, validate_graph
 
 __all__ = [
     "AIContext",
@@ -24,7 +25,11 @@ __all__ = [
     "PromotedRun",
     "SandboxResult",
     "StrategyFile",
+    "StrategyVersion",
     "build_ai_context",
+    "compat",
     "promote_ide_run",
     "run_user_strategy",
+    "strategy_content_hash",
+    "validate_graph",
 ]

@@ -6,7 +6,7 @@
 from __future__ import annotations
 
 from .backtest_bridge import backtest_job, backtest_trained_model, scores_to_weights
-from .codegen import spec_to_code
+from .codegen import GraphCodegenError, graph_to_code, spec_to_code
 from .emit import EMIT_MARKER, format_emit, parse_emit
 from .lib import emit, load_model, pick_device, predict_with
 from .runner import RunnerResult, run_code
@@ -15,6 +15,7 @@ from .store import TrainingJob, TrainingJobStore
 
 __all__ = [
     "EMIT_MARKER",
+    "GraphCodegenError",
     "RunnerResult",
     "TrainingJob",
     "TrainingJobStore",
@@ -24,6 +25,7 @@ __all__ = [
     "backtest_trained_model",
     "emit",
     "format_emit",
+    "graph_to_code",
     "load_model",
     "parse_emit",
     "pick_device",

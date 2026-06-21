@@ -3,8 +3,34 @@
 from __future__ import annotations
 
 from .alpha_lite import alpha_lite_specs, register_alpha_lite
+from .correlation import (
+    CorrPair,
+    CorrelationError,
+    CorrelationReport,
+    correlation_matrix,
+)
 from .expression import ExpressionError, compile_expression, evaluate_on_panel, parse_expression
-from .ic import ICReport, attach_forward_returns, compute_ic_decay, compute_ic_report
+from .factor_audit import (
+    DEFAULT_THRESHOLDS,
+    AuditCheck,
+    FactorAuditError,
+    FactorAuditReport,
+    resolve_thresholds,
+    run_factor_audit,
+)
+from .ic import (
+    ICReport,
+    attach_forward_returns,
+    compute_ic_decay,
+    compute_ic_report,
+    newey_west_tstat,
+)
+from .layered import (
+    LayeredBucket,
+    LayeredError,
+    LayeredReport,
+    layered_backtest,
+)
 from .lifecycle import (
     FactorObservation,
     LifecycleEvent,
@@ -12,28 +38,97 @@ from .lifecycle import (
     LifecycleThresholds,
     evaluate_transition,
 )
+from .panel_source import (
+    PanelSourceError,
+    factor_panel,
+    load_market_panel,
+)
+from .mining import (
+    GATE_METRIC_KEYWORDS,
+    GENERATOR_SORT_KEYS,
+    GateResult,
+    HonestNReport,
+    MiningCandidate,
+    MiningError,
+    MiningGateLeakError,
+    assert_generator_sort_key_clean,
+    evaluate_gate,
+    generate_candidates,
+    honest_n,
+    is_gate_metric_key,
+    run_mining,
+)
 from .operators import OPERATOR_REGISTRY, list_operators
 from .registry import Factor, FactorRegistry, LifecycleState
+from .signal_contract import (
+    MODEL_BODY_EXTS,
+    LeakageDeclaration,
+    SignalContract,
+    SignalContractError,
+    SignalContractRegistry,
+    admit_artifact_to_factor_lib,
+    compute_signal_id,
+    looks_like_model_body,
+)
 
 __all__ = [
+    "DEFAULT_THRESHOLDS",
+    "AuditCheck",
+    "CorrPair",
+    "CorrelationError",
+    "CorrelationReport",
     "ExpressionError",
     "Factor",
+    "FactorAuditError",
+    "FactorAuditReport",
     "FactorObservation",
     "FactorRegistry",
+    "LayeredBucket",
+    "LayeredError",
+    "LayeredReport",
+    "PanelSourceError",
+    "correlation_matrix",
+    "factor_panel",
+    "layered_backtest",
+    "load_market_panel",
+    "newey_west_tstat",
+    "resolve_thresholds",
+    "run_factor_audit",
+    "GATE_METRIC_KEYWORDS",
+    "GENERATOR_SORT_KEYS",
+    "GateResult",
+    "HonestNReport",
     "ICReport",
+    "LeakageDeclaration",
     "LifecycleEvent",
     "LifecycleManager",
     "LifecycleState",
     "LifecycleThresholds",
+    "MODEL_BODY_EXTS",
+    "MiningCandidate",
+    "MiningError",
+    "MiningGateLeakError",
     "OPERATOR_REGISTRY",
+    "SignalContract",
+    "SignalContractError",
+    "SignalContractRegistry",
+    "admit_artifact_to_factor_lib",
     "alpha_lite_specs",
+    "assert_generator_sort_key_clean",
     "attach_forward_returns",
     "compile_expression",
     "compute_ic_decay",
     "compute_ic_report",
+    "compute_signal_id",
+    "evaluate_gate",
     "evaluate_on_panel",
     "evaluate_transition",
+    "generate_candidates",
+    "honest_n",
+    "is_gate_metric_key",
     "list_operators",
+    "looks_like_model_body",
     "parse_expression",
     "register_alpha_lite",
+    "run_mining",
 ]

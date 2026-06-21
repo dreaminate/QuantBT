@@ -172,6 +172,26 @@ class AuthService:
         finally:
             conn.close()
 
+    def verify_password(self, user_id: str, password: str) -> bool:
+        """服务端按 user_id 真校验账户密码（PBKDF2）。
+
+        动钱端点 per-request 二次鉴权用：纯校验，绝不创建会话 / 不返回 token（避免被当登录旁路）。
+        与 login() 同一 PBKDF2 口径，但按 user_id 查（调用方已持鉴权后的 user）。
+        """
+        if not password:
+            return False
+        conn = self._conn()
+        try:
+            row = conn.execute(
+                "SELECT password_hash, password_salt FROM users WHERE user_id = ?",
+                (user_id,),
+            ).fetchone()
+            if row is None:
+                return False
+            return _hash_pwd(password, row["password_salt"]) == row["password_hash"]
+        finally:
+            conn.close()
+
     def _create_session(self, conn: sqlite3.Connection, user_id: str) -> str:
         token = secrets.token_urlsafe(32)
         now = datetime.now(UTC)

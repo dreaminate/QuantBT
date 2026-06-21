@@ -45,6 +45,10 @@ class TrainingJob:
     tensorboard: bool = False  # 该模型是否产 TensorBoard
     error: str | None = None
     elapsed_seconds: float | None = None
+    # 动机/设计富文档（why/data/window/label/design/arch/hparams + sections + io_spec）。
+    # 提交时从 request 持久化进 job 快照，`to_dict` 透传给前端作业台 dashboard。
+    # 空 dict = 旧 job 无富文档（向后兼容，前端按 mock/缺省渲染、不假绿）。
+    detail: dict[str, Any] = field(default_factory=dict)
 
     def to_dict(self) -> dict[str, Any]:
         return asdict(self)

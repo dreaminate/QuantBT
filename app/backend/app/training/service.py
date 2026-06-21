@@ -82,6 +82,9 @@ class TrainingRequest:
     # 模型组合：用已训练模型的输出当输入特征。
     # 每项 {"artifact_path": "...", "feature_cols": [...], "as_col": "model_x_pred"}
     input_models: list[dict[str, Any]] = field(default_factory=list)
+    # 动机/设计富文档（作业台 dashboard 动机卡）：why/data/window/label/design/arch/hparams
+    # + sections(逐项设计细节) + io_spec(输入输出规格)。纯文档、不参与执行；持久化进 job 快照透传前端。
+    detail: dict[str, Any] = field(default_factory=dict)
 
     def to_dict(self) -> dict[str, Any]:
         return asdict(self)
@@ -177,6 +180,7 @@ class TrainingService:
             task=request.task,
             request=request.to_dict(),
             tensorboard=card.tensorboard,
+            detail=dict(request.detail or {}),
         )
 
     def _build_code_job(self, name: str, asset_class: str) -> TrainingJob:

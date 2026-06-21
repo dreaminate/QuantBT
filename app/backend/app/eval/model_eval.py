@@ -112,4 +112,59 @@ def summarize_metrics(result: dict[str, Any]) -> dict[str, float]:
     return {k: float(v) for k, v in (result.get("oos_metrics") or {}).items() if isinstance(v, (int, float))}
 
 
-__all__ = ["build_eval_charts", "summarize_metrics"]
+def _primary_metric_key(fold_metrics: list[dict[str, Any]]) -> str | None:
+    """挑一个有意义的逐窗指标：优先 ndcg / ic / sharpe / ir，再退化到首个数值型。"""
+    if not fold_metrics:
+        return None
+    m0 = fold_metrics[0].get("metrics", {}) if isinstance(fold_metrics[0], dict) else {}
+    for pref in ("ndcg", "ndcg@k", "ic", "rank_ic", "sharpe", "ir", "auc", "r2"):
+        if pref in m0 and isinstance(m0[pref], (int, float)):
+            return pref
+    for k, v in m0.items():
+        if isinstance(v, (int, float)):
+            return k
+    return None
+
+
+def walk_forward_windows(result: dict[str, Any]) -> dict[str, Any]:
+    """从 TrainResult dict 提逐窗 walk-forward 明细（DRILL-IN 用）。
+
+    诚实合约（不假绿）：
+    - `ran`：仅当 spec.cv_scheme == 'walk_forward' 时为 True；purged_kfold 等其它方案 → False
+      （前端据此显示「walk-forward 待跑」而非把 k-fold 冒充成 walk-forward 通过）。
+    - 每窗带 `n_train`/`n_test`（真实训练段/测试段样本数，来自 FoldMetrics）+ `metric`
+      （该窗 OOS 主指标，可正可负——前端按正负上色，负窗不洗成绿）。
+    - 无 result / 无 fold_metrics → windows=[]，绝不编造逐窗。
+    """
+    spec = result.get("spec") or {}
+    cv_scheme = spec.get("cv_scheme", "")
+    fold_metrics = result.get("fold_metrics") or []
+    metric_key = _primary_metric_key(fold_metrics)
+    windows: list[dict[str, Any]] = []
+    for i, f in enumerate(fold_metrics):
+        if not isinstance(f, dict):
+            continue
+        metrics = f.get("metrics", {}) or {}
+        raw = metrics.get(metric_key) if metric_key else None
+        windows.append({
+            "w": f"W{f.get('fold_index', i) + 1}",
+            "fold_index": int(f.get("fold_index", i)),
+            "n_train": int(f.get("n_train", 0)),
+            "n_test": int(f.get("n_test", 0)),
+            "metric_key": metric_key,
+            "metric": float(raw) if isinstance(raw, (int, float)) else None,
+        })
+    n_positive = sum(1 for w in windows if w["metric"] is not None and w["metric"] > 0)
+    n_scored = sum(1 for w in windows if w["metric"] is not None)
+    return {
+        "ran": cv_scheme == "walk_forward",
+        "cv_scheme": cv_scheme,
+        "metric_key": metric_key,
+        "n_windows": len(windows),
+        "n_positive": n_positive,
+        "n_scored": n_scored,
+        "windows": windows,
+    }
+
+
+__all__ = ["build_eval_charts", "summarize_metrics", "walk_forward_windows"]

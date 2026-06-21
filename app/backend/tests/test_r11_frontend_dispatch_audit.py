@@ -1,11 +1,14 @@
 """T-026 · R11 前端派发审计——agent tool_call 不旁路治理门。
 
 裁决（三角调查 no_bypass / r11_gap=False）：治理门钉在端点/执行层，前端 display-only，
-agent 层物理上派发不了动钱/晋级/回测动作。本测试把该裁决钉成回归不变量。
+agent 层物理上派发不了动钱/晋级/实盘动作。本测试把该裁决钉成回归不变量。
+
+A4 更新：backtest.run（side_effect=none，本地可重置）改由 agent 接真引擎，已从高危标记移除；
+真正动钱/晋级/实盘控制工具（place_order/promote/kill_switch/…）仍永不可注册（详见 _HIGH_RISK_MARKERS）。
 
 种已知坏门必抓（每组配探针自检证明非 no-op）：
-1. agent 白名单守门：生产 agent 注册的工具集绝不含动钱/晋级/回测高危工具；种一个误注册 → 必抓。
-2. dispatch 不执行未注册工具：LLM 即便吐 place_order/backtest.run tool_call → 返回「未注册工具」、handler 绝不调；探针：已注册工具确会被调（证明非 no-op）。
+1. agent 白名单守门：生产 agent 注册的工具集绝不含动钱/晋级/实盘高危工具；种一个误注册 → 必抓。
+2. dispatch 不执行未注册工具：LLM 即便吐 place_order tool_call → 返回「未注册工具」、handler 绝不调；探针：已注册工具确会被调（证明非 no-op）。
 3. 翻译门拦非 ok：语义越界 tool_call → 不派发、handler 0 调用；探针：ok 时同 tool_call 放行派发。
 4. 前端 display-only：agent 对话页绝不直接 fetch 业务/动钱模块端点（只 /api/agent/*）；探针：种一个直调 /api/ide/.../run → 必抓。
 
@@ -30,9 +33,16 @@ from app.main import _agent_runtime
 APP_ROOT = Path(app_pkg.__file__).resolve().parent
 FRONTEND_SRC = APP_ROOT.parents[1] / "frontend" / "src"
 
-# 永不该被 agent 注册的高危工具标记（动钱 / 晋级 / 回测 / 跟单）：
+# 永不该被 agent 注册的高危工具标记（动钱 / 晋级 / 跟单 / 实盘控制）：
+#
+# A4 更新（2026-06）：`backtest.run` 改由 agent 接真引擎（side_effect="none"，本地可重置、不动钱、
+# 不外发单——策略台脊柱终点，设计稿剧本核心动作）。故从高危标记里移除 "backtest"——它不再是
+# 「永不可注册」类，而是受治理门管控（permission_gate）的 none 副作用能力。**真正动钱/晋级/实盘控制
+# 标记一个不少**（place_order/promote/kill_switch/leverage/withdraw/transfer/copy_trade/subscribe/
+# redeem/emergency/upgrade/ladder/approve 全保留），种这些必抓（探针 test_high_risk_tool_guard_probe
+# 用 place_order 证守门非 no-op）。
 _HIGH_RISK_MARKERS = (
-    "place_order", "backtest", "copy_trade", "subscribe", "redeem",
+    "place_order", "copy_trade", "subscribe", "redeem",
     "promote", "approve", "kill_switch", "emergency", "upgrade",
     "leverage", "withdraw", "transfer", "ladder",
 )

@@ -39,6 +39,25 @@ class StrategyFile:
 
 
 @dataclass
+class StrategyVersion:
+    """策略草稿一次保存/Fork 留痕的版本史条目（lineage ledger 风：append-only，不可改小）。
+
+    身份单一源：`content_hash` 经 lineage.content_hash 产（见 strategy_graph.strategy_content_hash）。
+    `parent_content_hash` 是血缘父锚：Fork 出来的草稿指向被 fork 版本，非 Fork 时为 None。
+    """
+
+    version_id: str
+    strategy_id: str
+    owner_username: str
+    content_hash: str
+    parent_content_hash: str | None
+    parent_strategy_id: str | None
+    label: str
+    origin: str  # save / fork
+    created_at_utc: str
+
+
+@dataclass
 class IDERun:
     run_id: str
     strategy_id: str
@@ -92,6 +111,21 @@ def _schema() -> list[str]:
         )
         """,
         "CREATE INDEX IF NOT EXISTS idx_runs_owner ON i_runs(owner_username, started_at_utc DESC)",
+        """
+        CREATE TABLE IF NOT EXISTS i_strategy_versions (
+            version_id TEXT PRIMARY KEY,
+            strategy_id TEXT NOT NULL,
+            owner_username TEXT NOT NULL,
+            content_hash TEXT NOT NULL,
+            parent_content_hash TEXT,
+            parent_strategy_id TEXT,
+            label TEXT NOT NULL DEFAULT '',
+            origin TEXT NOT NULL DEFAULT 'save',
+            created_at_utc TEXT NOT NULL,
+            FOREIGN KEY (strategy_id) REFERENCES i_strategies(strategy_id)
+        )
+        """,
+        "CREATE INDEX IF NOT EXISTS idx_versions_sid ON i_strategy_versions(strategy_id, created_at_utc DESC)",
     ]
 
 
@@ -179,8 +213,103 @@ class IDEService:
                     "INSERT INTO i_strategies (strategy_id, owner_username, name, code, asset_class, description, updated_at_utc) VALUES (?,?,?,?,?,?,?)",
                     (sid, owner_username, name, code, asset_class, description, now),
                 )
+            # 版本史留痕（append-only，身份经 lineage.content_hash；同一作者草稿谱系）。
+            self._record_version_locked(
+                c, strategy_id=sid, owner_username=owner_username, name=name, code=code,
+                asset_class=asset_class, parent_content_hash=None, parent_strategy_id=None,
+                origin="save", now=now,
+            )
             c.commit()
         return self.get_strategy(owner_username, name)
+
+    # ---------- 版本史 + Fork（身份锚 lineage/ids.py 单一源） ----------
+
+    def _record_version_locked(
+        self,
+        conn: sqlite3.Connection,
+        *,
+        strategy_id: str,
+        owner_username: str,
+        name: str,
+        code: str,
+        asset_class: str,
+        parent_content_hash: str | None,
+        parent_strategy_id: str | None,
+        origin: str,
+        now: str,
+    ) -> str:
+        """在已开连接里 append 一条版本史（身份经 strategy_content_hash → lineage.content_hash）。
+
+        延迟 import 防循环（strategy_graph import lineage，service 被 strategy_graph 间接拉）。
+        """
+
+        from .strategy_graph import strategy_content_hash
+
+        chash = strategy_content_hash(name=name, code=code, asset_class=asset_class)
+        vid = "sv_" + token_urlsafe(8)
+        label = f"fork←{parent_strategy_id}" if origin == "fork" else f"save {now}"
+        conn.execute(
+            "INSERT INTO i_strategy_versions (version_id, strategy_id, owner_username, content_hash, "
+            "parent_content_hash, parent_strategy_id, label, origin, created_at_utc) VALUES (?,?,?,?,?,?,?,?,?)",
+            (vid, strategy_id, owner_username, chash, parent_content_hash, parent_strategy_id, label, origin, now),
+        )
+        return chash
+
+    def list_versions(self, owner_username: str, name: str) -> list[StrategyVersion]:
+        """读策略的版本史（新→旧）。仅本人可读（owner 命名空间隔离）。"""
+
+        s = self.get_strategy(owner_username, name)  # 触发 404 + owner 校验
+        with self._conn() as c:
+            rows = c.execute(
+                "SELECT version_id, strategy_id, owner_username, content_hash, parent_content_hash, "
+                "parent_strategy_id, label, origin, created_at_utc FROM i_strategy_versions "
+                "WHERE strategy_id=? AND owner_username=? ORDER BY created_at_utc DESC, rowid DESC",
+                (s.strategy_id, owner_username),
+            ).fetchall()
+        return [StrategyVersion(**dict(r)) for r in rows]
+
+    def fork_strategy(self, owner_username: str, name: str, *, fork_name: str | None = None) -> StrategyFile:
+        """策略级 Fork：复制为新草稿，血缘锚定父策略（content_hash 经 lineage 单一源）。
+
+        与模板 fork / 社区分享 fork 不同语义：这里是同一作者把自己某草稿派生出可编辑副本，
+        新草稿的版本史首条 origin='fork'、parent_content_hash 指向父策略当前内容指纹。
+        """
+
+        parent = self.get_strategy(owner_username, name)
+        from .strategy_graph import strategy_content_hash
+
+        parent_chash = strategy_content_hash(
+            name=parent.name, code=parent.code, asset_class=parent.asset_class,
+        )
+        new_name = (fork_name or f"{parent.name}_fork").strip()
+        if not new_name.replace("_", "").replace("-", "").isalnum():
+            raise IDEError("fork 名只能用字母数字 - _")
+        # 名字冲突时追加短后缀，保证 (owner, name) 唯一约束不炸。
+        candidate = new_name
+        with self._conn() as c:
+            for _ in range(50):
+                exists = c.execute(
+                    "SELECT 1 FROM i_strategies WHERE owner_username=? AND name=?",
+                    (owner_username, candidate),
+                ).fetchone()
+                if not exists:
+                    break
+                candidate = f"{new_name}_{token_urlsafe(3)}"
+            now = _utc_now()
+            sid = "stg_" + token_urlsafe(8)
+            c.execute(
+                "INSERT INTO i_strategies (strategy_id, owner_username, name, code, asset_class, description, updated_at_utc) VALUES (?,?,?,?,?,?,?)",
+                (sid, owner_username, candidate, parent.code, parent.asset_class,
+                 f"fork of {parent.name}", now),
+            )
+            self._record_version_locked(
+                c, strategy_id=sid, owner_username=owner_username, name=candidate,
+                code=parent.code, asset_class=parent.asset_class,
+                parent_content_hash=parent_chash, parent_strategy_id=parent.strategy_id,
+                origin="fork", now=now,
+            )
+            c.commit()
+        return self.get_strategy(owner_username, candidate)
 
     def delete_strategy(self, owner_username: str, name: str) -> None:
         with self._conn() as c:
@@ -310,12 +439,18 @@ def run_to_dict(r: IDERun) -> dict[str, Any]:
     return asdict(r)
 
 
+def version_to_dict(v: StrategyVersion) -> dict[str, Any]:
+    return asdict(v)
+
+
 __all__ = [
     "IDEError",
     "IDERun",
     "IDEService",
     "StrategyFile",
+    "StrategyVersion",
     "init_ide_db",
     "run_to_dict",
     "strategy_to_dict",
+    "version_to_dict",
 ]

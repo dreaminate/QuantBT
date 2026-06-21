@@ -135,3 +135,60 @@ def test_factor_registry_round_trip(tmp_path: Path) -> None:
     factor = fresh.get("mom20")
     assert factor.ic_summary == {"ic_mean": 0.04, "rank_ic_mean": 0.05}
     assert factor.description == "20日动量"
+
+
+# ════════════════ 对抗：ts_corr / ts_cov 多 symbol 不得跨界泄露 ════════════════
+# 坏门：`pl.rolling_corr(x,y).over("symbol")`（无 order_by）会走物理行序滚动——
+# panel 未必按 (symbol,ts) 物理排时，rolling 跨 symbol 穿窗 / 乱序 → 因子值污染。
+# 断言：拼接 panel 每个 symbol 的 ts_corr/ts_cov 必须与该 symbol【单独算】逐行一致
+# （无跨界泄露 + 行序不变性），shuffle 输入也成立。
+def _two_symbol_corr_panel() -> pl.DataFrame:
+    base = datetime(2024, 1, 1, tzinfo=UTC)
+    rows = []
+    # 两 symbol 用【不同】的 x/y 关系，跨界泄露会立刻产出错误有限值（非 null）。
+    specs = {
+        "AAA": lambda i: (float(i % 11) * 1.3, float((i * 7) % 13) - 4.0),
+        "BBB": lambda i: (float((i * 5) % 9) - 2.0, float(i % 17) * 0.7),
+    }
+    for sym, fn in specs.items():
+        for i in range(40):
+            x, y = fn(i)
+            rows.append({"ts": base + timedelta(days=i), "symbol": sym, "x": x, "y": y})
+    return pl.DataFrame(rows)
+
+
+def _strict_match(joined: pl.DataFrame, a: str, b: str) -> int:
+    """返回严格不匹配行数：两侧都 null 算匹配，否则差需 < 1e-9。"""
+    mism = joined.filter(
+        ~(
+            (pl.col(a).is_null() & pl.col(b).is_null())
+            | ((pl.col(a) - pl.col(b)).abs() < 1e-9)
+        )
+    )
+    return mism.height
+
+
+@pytest.mark.parametrize("formula", ["ts_corr(x, y, 5)", "ts_cov(x, y, 5)"])
+@pytest.mark.parametrize("shuffle", [False, True])
+def test_ts_corr_cov_no_cross_symbol_leak(formula: str, shuffle: bool) -> None:
+    panel = _two_symbol_corr_panel()
+    if shuffle:
+        # 故意打乱物理行序（symbol/ts 都不再连续）——坏门在此暴露。
+        panel = panel.sample(fraction=1.0, shuffle=True, seed=20240601)
+
+    combined = evaluate_on_panel(panel, formula, alias="f")
+
+    for sym in ("AAA", "BBB"):
+        # 该 symbol 单独成 panel，独立算同一公式 = 权威参照（绝无跨界可能）。
+        solo = panel.filter(pl.col("symbol") == sym)
+        ref = evaluate_on_panel(solo, formula, alias="f").sort("ts")
+        got = combined.filter(pl.col("symbol") == sym).sort("ts")
+        joined = got.join(ref, on=["ts", "symbol"], suffix="_ref")
+        assert joined.height == ref.height
+        assert _strict_match(joined, "f", "f_ref") == 0, (
+            f"{formula} 在 symbol={sym} (shuffle={shuffle}) 与单独算不一致 → 跨界泄露/行序依赖"
+        )
+        # 同时钉住 null 形态：前 (window-1) 个有效时点必为 null（窗口未满），
+        # 证明分区内 rolling 是从该 symbol 自身起点起算、没被上一 symbol 的尾部喂满。
+        head_nulls = ref.head(4)["f"].null_count()
+        assert head_nulls == 4, f"{sym} 头部应全 null（窗口未满），实得 {head_nulls}"

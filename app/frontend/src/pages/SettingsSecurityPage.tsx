@@ -324,6 +324,9 @@ export function SettingsSecurityPage() {
         </button>
       </div>
 
+      {/* === LLM Providers（自旧 Agent 工作台抢救：连接测试 + reload secrets）=== */}
+      <LlmProvidersPanel />
+
       {/* === 5. Audit log === */}
       <section className="cc-card">
         <h2>Audit Log (最近 {log.length} 条)</h2>
@@ -373,6 +376,108 @@ export function SettingsSecurityPage() {
         </div>
       </section>
     </div>
+  );
+}
+
+/**
+ * LLM Providers 面板：自旧 Agent 工作台(/agent, 已退役)抢救来的「连接测试 + reload secrets」。
+ * provider 实时状态在底部 StatusBar 也有；此处保留旧页独有的 /api/llm/test + reload_secrets 管理动作。
+ */
+interface LlmProviderStatus {
+  provider: string;
+  configured: boolean;
+  base_url?: string;
+  model?: string;
+  default_model?: string;
+}
+
+function LlmProvidersPanel() {
+  const [providers, setProviders] = useState<LlmProviderStatus[]>([]);
+  const [testResult, setTestResult] = useState<string | null>(null);
+
+  const load = () => {
+    fetch("/api/llm/status")
+      .then((r) => r.json())
+      .then((j) => setProviders(Array.isArray(j) ? j : j.providers || []))
+      .catch(() => {
+        /* best-effort：离线静默 */
+      });
+  };
+  useEffect(() => {
+    load();
+  }, []);
+
+  const testLlm = async (provider: string) => {
+    setTestResult(`pinging ${provider}…`);
+    try {
+      const res = await fetch("/api/llm/test", {
+        method: "POST",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify({ provider, ping: "回我一句 ok" }),
+      });
+      const j = await res.json();
+      setTestResult(
+        j.ok
+          ? `✓ ${j.provider}: ${(j.reply_preview || "").slice(0, 80)}`
+          : `✗ ${j.provider}: ${j.error}`,
+      );
+    } catch (e) {
+      setTestResult(`✗ ${e}`);
+    }
+  };
+
+  const reloadSecrets = async () => {
+    setTestResult("reloading secrets…");
+    await fetch("/api/security/reload_secrets", { method: "POST" });
+    load();
+    setTestResult("✓ secrets reloaded");
+  };
+
+  return (
+    <section className="cc-card">
+      <div className="cc-row" style={{ justifyContent: "space-between", marginBottom: 10 }}>
+        <h2 style={{ margin: 0 }}>LLM Providers · 连接测试</h2>
+        <button type="button" className="cc-btn cc-btn--sm cc-btn--ghost" onClick={reloadSecrets}>
+          ↻ reload secrets
+        </button>
+      </div>
+      <div className="cc-row" style={{ flexWrap: "wrap", gap: 10 }}>
+        {providers.map((p) => (
+          <div key={p.provider} className="cc-card" style={{ padding: 10, minWidth: 220, flex: "1 1 220px" }}>
+            <div className="cc-row" style={{ justifyContent: "space-between" }}>
+              <span className="cc-mono" style={{ fontSize: 12 }}>{p.provider}</span>
+              {p.configured ? (
+                <span className="cc-chip cc-chip--success">ready</span>
+              ) : (
+                <span className="cc-chip">dim</span>
+              )}
+            </div>
+            <div className="cc-dim" style={{ fontSize: 11, marginTop: 4 }}>
+              {p.model || p.default_model || "—"}
+            </div>
+            <button
+              type="button"
+              className="cc-btn cc-btn--sm"
+              disabled={!p.configured}
+              onClick={() => testLlm(p.provider)}
+              style={{ marginTop: 8, width: "100%" }}
+            >
+              测试连接
+            </button>
+          </div>
+        ))}
+        {providers.length === 0 && (
+          <span className="cc-dim" style={{ fontSize: 12 }}>
+            无 provider 信息（/api/llm/status 空或离线）
+          </span>
+        )}
+      </div>
+      {testResult && (
+        <pre className="cc-code" style={{ marginTop: 12, fontSize: 11 }}>
+          {testResult}
+        </pre>
+      )}
+    </section>
   );
 }
 

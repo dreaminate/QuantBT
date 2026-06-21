@@ -105,7 +105,7 @@ function buildNumericFilters(values: NumericInputs): RunNumericFilter[] {
   return filters;
 }
 
-export function RunsPage() {
+export function RunsPage({ onCompare }: { onCompare?: (ids: string[]) => void } = {}) {
   const navigate = useNavigate();
   const [searchParams] = useSearchParams();
   const queryClient = useQueryClient();
@@ -249,9 +249,13 @@ export function RunsPage() {
             type="button"
             className="primary-button"
             disabled={sortedSelectedIds.length === 0}
-            onClick={() =>
-              navigate(`/compare?${sortedSelectedIds.map((runId) => `run_ids=${encodeURIComponent(runId)}`).join("&")}`)
-            }
+            onClick={() => {
+              if (onCompare) {
+                onCompare(sortedSelectedIds);
+                return;
+              }
+              navigate(`/compare?${sortedSelectedIds.map((runId) => `run_ids=${encodeURIComponent(runId)}`).join("&")}`);
+            }}
           >
             {T.runsPage.compareAction} {sortedSelectedIds.length || ""}
           </button>

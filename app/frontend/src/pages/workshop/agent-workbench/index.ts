@@ -1,0 +1,10 @@
+// Agent 工作台出口（策略台客户端窗口 · data-desk="agent"）。
+export * from "./AgentWorkbenchPage";
+export * from "./agentMock";
+export * from "./permGate";
+export * from "./MilestoneLadder";
+export * from "./CoworkCards";
+export * from "./WorkspaceViews";
+export * from "./GatePanel";
+export * from "./HandoffCard";
+export * from "./TeachingPopups";

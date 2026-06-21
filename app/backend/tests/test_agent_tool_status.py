@@ -19,10 +19,27 @@ def _status_map():
 
 
 def test_tool_status_marks_unwired():
-    """schema 声明但未接通的高价值工具必须诚实标 unwired（防绿灯错觉）。"""
+    """schema 声明但未接通的高价值工具必须诚实标 unwired（防绿灯错觉）。
+
+    A4 后：backtest.run/eval.pbo/report.generate 已接真引擎（转 live）；model.train 仍未接通
+    （训练去 Model台，agent 不在策略台训）→ 保持 unwired。
+    """
     m = _status_map()
-    for name in ("backtest.run", "eval.pbo", "model.train", "report.generate"):
+    for name in ("model.train", "model.train"):
         assert m[name]["status"] == "unwired", f"{name} 应标 unwired（schema 声明未接通）"
+
+
+def test_a4_business_tools_wired_live():
+    """A4：8 个新/补 handler 工具应转 live（接真 store/引擎，非 unwired/stub）。"""
+    m = _status_map()
+    for name in (
+        "hypothesis.create", "factor_set.compose", "model_registry.select",
+        "signal.define", "portfolio.construct",
+        "backtest.run", "eval.pbo", "report.generate",
+    ):
+        assert name in m, f"{name} 应在 tool_status 中（schema 已声明）"
+        assert m[name]["status"] == "live", f"{name} 已接真引擎，应标 live（实得 {m[name]['status']}）"
+        assert m[name]["side_effect"] == "none", f"{name} 必须 side_effect=none（动钱/晋级永不注册给 agent）"
 
 
 def test_tool_status_marks_stub():

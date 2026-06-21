@@ -90,6 +90,69 @@ TOOL_SCHEMA: list[dict[str, Any]] = [
         },
     },
     {
+        "name": "hypothesis.create",
+        "description": "把策略需求立成可证伪的 exploratory 假设卡（接 HypothesisCardStore；confirmatory 冻结是端点层人工动作，agent 不冻结）",
+        "parameters": {
+            "type": "object",
+            "properties": {
+                "goal_ref": {"type": "string", "description": "strategy_goal 引用"},
+                "falsifiable": {
+                    "type": "object",
+                    "description": "可选的三必填（economic_mechanism/falsification_condition/stop_rule）；探索卡可空",
+                },
+            },
+            "required": ["goal_ref"],
+        },
+    },
+    {
+        "name": "factor_set.compose",
+        "description": "从因子台选 QUALIFIED+ 因子组成 factor_set（血统门：state>=QUALIFIED；策略台不在此造因子）",
+        "parameters": {
+            "type": "object",
+            "properties": {
+                "factor_ids": {"type": "array", "items": {"type": "string"},
+                               "description": "指定因子 id；缺省则取全部 QUALIFIED+"},
+            },
+        },
+    },
+    {
+        "name": "model_registry.select",
+        "description": "【只读】从 Model台选用已发布(staging/production)模型；绝不训练/翻 stage（写动作经审批门 approver≠creator）",
+        "parameters": {
+            "type": "object",
+            "properties": {
+                "model_id": {"type": "string", "description": "缺省则列出可选模型"},
+                "stage": {"type": "string", "enum": ["staging", "production"]},
+            },
+        },
+    },
+    {
+        "name": "signal.define",
+        "description": "把模型分数转成可交易信号规则（rank→选股→调仓频率；接 signals.fuse_signals 真融合）",
+        "parameters": {
+            "type": "object",
+            "properties": {
+                "rule": {"type": "string"},
+                "rebalance": {"type": "string"},
+                "top_pct": {"type": "number"},
+                "long_only": {"type": "boolean"},
+            },
+        },
+    },
+    {
+        "name": "portfolio.construct",
+        "description": "定风控+组合权重（仓位 sizing + 单票上限 + 回撤熔断；接 portfolio.optimizers 真权重）。进场/监控由模拟台决定",
+        "parameters": {
+            "type": "object",
+            "properties": {
+                "sizing": {"type": "string", "enum": ["equal_weight", "risk_parity", "equal_risk"]},
+                "symbols": {"type": "array", "items": {"type": "string"}},
+                "max_pos": {"type": "number"},
+                "dd_halt": {"type": "number"},
+            },
+        },
+    },
+    {
         "name": "strategy_goal.create",
         "description": "把一句话需求落成 StrategyGoal Pydantic 对象",
         "parameters": {

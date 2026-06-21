@@ -15,27 +15,19 @@ interface SidebarItem {
   icon?: string;
 }
 
+// 导航收口：原 Research/Workshop/Models 三个 tab 合并为单一「Workshop」，下放 6 个全屏台。
+// 6 个台是 DeskShell（绕 cc Shell），cc 顶栏「Workshop」入口落到总览台，台间用 DeskSwitcher 互切；
+// 移动端 drawer 也列这 6 个台作为入口。
+const DESK_LINKS: SidebarItem[] = [
+  { to: "/overview", label: "总览台", icon: "▦" },
+  { to: "/strategy", label: "策略台", icon: "◆" },
+  { to: "/factors", label: "因子台", icon: "∑" },
+  { to: "/models", label: "Model台", icon: "⊟" },
+  { to: "/paper", label: "模拟台", icon: "$" },
+  { to: "/agent-workbench", label: "Agent台", icon: "◉" },
+];
+
 const SIDEBAR_BY_AREA: Record<string, SidebarItem[]> = {
-  research: [
-    { to: "/runs", label: "回测列表", icon: "▦" },
-    { to: "/strategies", label: "策略索引", icon: "◆" },
-    { to: "/compare", label: "对比分析", icon: "⇄" },
-    { to: "/data", label: "数据中心", icon: "⊞" },
-  ],
-  workshop: [
-    { to: "/workshop", label: "策略工坊", icon: "✎" },
-    { to: "/ide", label: "IDE · 代码工坊", icon: "{}" },
-    { to: "/chat", label: "Mode 2 · 量化教练", icon: "💬" },
-    { to: "/agent", label: "Agent 工作台", icon: "◉" },
-    { to: "/factors", label: "因子市场", icon: "∑" },
-    { to: "/templates", label: "策略模板", icon: "≣" },
-    { to: "/trading", label: "Binance 交易台", icon: "$" },
-    { to: "/experiments", label: "实验追踪", icon: "⌥" },
-  ],
-  models: [
-    { to: "/training", label: "训练台", icon: "⚙" },
-    { to: "/models", label: "模型库", icon: "⊟" },
-  ],
   community: [
     { to: "/community", label: "社区广场", icon: "#" },
     { to: "/square", label: "策略广场", icon: "★" },
@@ -45,9 +37,7 @@ const SIDEBAR_BY_AREA: Record<string, SidebarItem[]> = {
 };
 
 const AREA_LABEL: Record<string, string> = {
-  research: "回测研究",
-  workshop: "工坊",
-  models: "模型中心",
+  workshop: "工作台",
   community: "社区",
 };
 
@@ -97,9 +87,7 @@ export function Shell({ children, wide = false }: { children: ReactNode; wide?: 
 
 function MobileDrawer({ open, onClose, currentArea }: { open: boolean; onClose: () => void; currentArea: string }) {
   const allItems: { area: string; items: SidebarItem[] }[] = [
-    { area: "research", items: SIDEBAR_BY_AREA.research },
-    { area: "workshop", items: SIDEBAR_BY_AREA.workshop },
-    { area: "models", items: SIDEBAR_BY_AREA.models },
+    { area: "workshop", items: DESK_LINKS },
     { area: "community", items: SIDEBAR_BY_AREA.community },
   ];
   return (
@@ -148,22 +136,10 @@ function TopNav({ theme, onToggleTheme, onHamburger }: { theme: Theme; onToggleT
           Home
         </NavLink>
         <NavLink
-          to="/runs"
-          className={area === "research" ? "cc-nav-item active" : "cc-nav-item"}
-        >
-          Research
-        </NavLink>
-        <NavLink
-          to="/workshop"
+          to="/overview"
           className={area === "workshop" ? "cc-nav-item active" : "cc-nav-item"}
         >
           Workshop
-        </NavLink>
-        <NavLink
-          to="/training"
-          className={area === "models" ? "cc-nav-item active" : "cc-nav-item"}
-        >
-          Models
         </NavLink>
         <NavLink
           to="/community"
@@ -378,32 +354,16 @@ function UserMenu() {
   );
 }
 
+// 收口后只有三个 area：home / workshop（6 个全屏台 + 旧分散页重定向源）/ community。
+const WORKSHOP_PREFIXES = [
+  "/overview", "/strategy", "/factors", "/models", "/paper", "/agent-workbench",
+  // 旧分散页（已重定向到台）—— 命中也归 workshop，保证顶栏高亮稳定
+  "/runs", "/compare", "/data", "/strategies", "/workshop", "/ide", "/templates",
+  "/chat", "/agent", "/trading", "/experiments", "/training", "/model-cards",
+];
+
 function areaOf(pathname: string): string {
   if (pathname === "/" || pathname.startsWith("/home")) return "home";
-  if (
-    pathname.startsWith("/runs") ||
-    pathname.startsWith("/compare") ||
-    pathname.startsWith("/data") ||
-    pathname.startsWith("/strategies")
-  )
-    return "research";
-  if (
-    pathname.startsWith("/workshop") ||
-    pathname.startsWith("/agent") ||
-    pathname.startsWith("/factors") ||
-    pathname.startsWith("/templates") ||
-    pathname.startsWith("/trading") ||
-    pathname.startsWith("/experiments") ||
-    pathname.startsWith("/ide") ||
-    pathname.startsWith("/chat")
-  )
-    return "workshop";
-  if (
-    pathname.startsWith("/training") ||
-    pathname.startsWith("/models") ||
-    pathname.startsWith("/model-cards")
-  )
-    return "models";
   if (
     pathname.startsWith("/community") ||
     pathname.startsWith("/square") ||
@@ -414,7 +374,8 @@ function areaOf(pathname: string): string {
     pathname === "/register"
   )
     return "community";
-  return "research";
+  if (WORKSHOP_PREFIXES.some((p) => pathname === p || pathname.startsWith(p + "/"))) return "workshop";
+  return "home";
 }
 
 export default Shell;

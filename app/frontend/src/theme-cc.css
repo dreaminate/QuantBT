@@ -82,6 +82,84 @@
     0 0 0 1px rgba(255, 255, 255, 0.02) inset;
 }
 
+/* ============== Desk 暗色台地基 (G1 d11d1426) ==============
+ * DC handoff 精确暗色值，扩展不替换 --cc-*。
+ * per-desk accent 由台根 [data-desk] 注入，不污染全局 --cc-accent。 */
+:root {
+  --desk-bg: #1c1b19;
+  --desk-topbar: #201f1c;
+  --desk-panel: #1b1a17;
+  --desk-canvas: #191815;
+  --desk-card: #1d1c19;
+  --desk-input: #161512;
+  --desk-soft-btn: #1a1916;
+  --desk-hover: #2a2723;
+  --desk-border: #302d29;
+  --desk-border-soft: #262320;
+  --desk-border-strong: #3a3733;
+  --desk-border-hover: #4a463f;
+  --desk-text: #e6e1d6;
+  --desk-text-soft: #cfc8ba;
+  --desk-text-dim: #a39a8a;
+  --desk-text-muted: #8f897c;
+  --desk-text-faint: #6f6a61;
+  --desk-success: #9bbd5a;
+  --desk-warning: #d9b25f;
+  --desk-danger: #d97066;
+  --desk-info: #6f9bd1;
+  --desk-ghost: #b89cd8;
+  --desk-mono: "JetBrains Mono", ui-monospace, "SF Mono", "Menlo", monospace;
+  --desk-accent: #d97757;
+  --desk-accent-ink: #1c1b19;
+  --desk-radius-sm: 6px;
+  --desk-radius: 8px;
+  --desk-radius-lg: 11px;
+  --desk-radius-pill: 20px;
+
+  /* ── G2 共享画布引擎 token（DC parseConsole §4/§7，扩展不替换）── */
+  /* 节点类别色 CAT：research/scope/eval=info · factor=success · model=ghost
+   * · signal=warning · risk=danger · exec=accent；data/position 无对应语义，新增 */
+  --desk-cat-data: #c89b6f;     /* data 类（暖棕） */
+  --desk-cat-position: #6fb0a0; /* position 类（青） */
+  /* 连线 stroke（_edgeStroke，比类别色更暗的描边变体） */
+  --desk-edge-ok: #5d6f4c;
+  --desk-edge-adapt: #3f6178;
+  --desk-edge-warn: #8a6a2a;
+  --desk-edge-bad: #8a3a30;
+  --desk-edge-idle: #4a463f;    /* compat '?' 待校验 */
+  --desk-edge-arrow: #6a6258;   /* #sbarrow marker fill */
+  /* 阶段框（虚线圆角框） */
+  --desk-stage-frame: #34302a;
+  --desk-stage-frame-gap: #5a4a2a;
+  --desk-stage-fill: rgba(255, 255, 255, 0.012);
+  /* 节点卡默认边 / head 默认底 / 选中环 / 默认阴影 */
+  --desk-node-border: #34302a;
+  --desk-node-head: #221f1c;
+  --desk-node-line: #9a9488;
+  --desk-node-shadow: 0 4px 14px rgba(0, 0, 0, 0.32);
+  --desk-node-shadow-sel: 0 0 0 3px rgba(217, 119, 87, 0.2), 0 8px 22px rgba(0, 0, 0, 0.42);
+  /* 点阵网格 */
+  --desk-grid-dot: #2a2723;
+  /* MiniMap */
+  --desk-minimap-bg: rgba(22, 21, 18, 0.82);
+  --desk-minimap-view: rgba(217, 119, 87, 0.08);
+}
+[data-desk="overview"] { --desk-accent: #58b3b8; --desk-accent-ink: #10201f; }
+[data-desk="strategy"] { --desk-accent: #d97757; --desk-accent-ink: #1c1b19; }
+[data-desk="agent"]    { --desk-accent: #d97757; --desk-accent-ink: #1c1b19; }
+[data-desk="factor"]   { --desk-accent: #a98fd4; --desk-accent-ink: #1c1726; }
+[data-desk="model"]    { --desk-accent: #6f9bd1; --desk-accent-ink: #16202c; }
+[data-desk="paper"]    { --desk-accent: #9bbd5a; --desk-accent-ink: #16200f; }
+.desk-root ::-webkit-scrollbar { width: 9px; height: 9px; }
+.desk-root ::-webkit-scrollbar-thumb { background: var(--desk-border-strong); border-radius: 6px; }
+.desk-root ::-webkit-scrollbar-track { background: transparent; }
+.desk-root ::selection { background: rgba(217, 119, 87, 0.28); }
+@keyframes desk-pulse { 0%, 100% { opacity: 1; } 50% { opacity: 0.35; } }
+@keyframes desk-ring {
+  0% { box-shadow: 0 0 0 0 rgba(217, 119, 87, 0.45); }
+  100% { box-shadow: 0 0 0 7px rgba(217, 119, 87, 0); }
+}
+
 /* ============== Shell 框架 ============== */
 
 .cc-app {

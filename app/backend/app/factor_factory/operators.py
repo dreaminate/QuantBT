@@ -82,11 +82,14 @@ def ts_skew(expr: pl.Expr, window: int) -> pl.Expr:
 
 
 def ts_corr(x: pl.Expr, y: pl.Expr, window: int) -> pl.Expr:
-    return pl.rolling_corr(x, y, window_size=window).over("symbol")
+    # 双输入 rolling 必须在每个 symbol 分区【内】沿时间窗口算，且按 ts 排序——
+    # 否则 rolling 走物理行序（panel 未必按 (symbol,ts) 排）会跨 symbol 穿窗/乱序。
+    # over(..., order_by="ts") 强制分区内时序滚动，杜绝跨界泄露与行序依赖。
+    return pl.rolling_corr(x, y, window_size=window).over("symbol", order_by="ts")
 
 
 def ts_cov(x: pl.Expr, y: pl.Expr, window: int) -> pl.Expr:
-    return pl.rolling_cov(x, y, window_size=window).over("symbol")
+    return pl.rolling_cov(x, y, window_size=window).over("symbol", order_by="ts")
 
 
 def ts_decay_linear(expr: pl.Expr, window: int) -> pl.Expr:

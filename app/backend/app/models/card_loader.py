@@ -47,6 +47,10 @@ class ModelCard:
     compute: str = "cpu"  # cpu / gpu
     persistence: str = ""  # 保存本体说明
     related: tuple[str, ...] = ()
+    # IO 数据规格（单一来源：作业台 dashboard / 注册表 drill-in / 构建台 io 节点三处共用）。
+    # frontmatter 可选 io_spec: {in_groups:[{group,type,fields}], out_groups:[...], in_src, in_pre, out_note}。
+    # 缺省 {} = 该卡未声明 IO 规格（前端不渲染、不假绿）。
+    io_spec: dict[str, Any] = field(default_factory=dict)
     body: str = ""  # L1-L4 正文（详情页用）
 
     def is_available(self) -> bool:
@@ -114,6 +118,7 @@ def parse_model_card(path: Path) -> ModelCard:
         compute=fm.get("compute", "cpu"),
         persistence=fm.get("persistence", ""),
         related=tuple(fm.get("related") or ()),
+        io_spec=dict(fm.get("io_spec") or {}),
         body=body.strip(),
     )
 
@@ -188,6 +193,8 @@ def write_model_card(info: dict[str, Any], *, directory: Path | None = None, ove
         "related": list(info.get("related") or []),
         "source": info.get("source", "agent_added"),
     }
+    if info.get("io_spec"):
+        fm["io_spec"] = dict(info["io_spec"])  # 单一来源 IO 规格（可选）
     path.write_text(render_card_md(fm, info.get("body", "")), encoding="utf-8")
     return path
 
