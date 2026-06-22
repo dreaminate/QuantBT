@@ -4,7 +4,7 @@
  * 视图代码无需改。fetch 失败/未接处由调用方回退 mock 并保留 MockBadge（诚实不假绿灯）。
  */
 import { authFetch } from "../../../lib/auth";
-import { signColor, pnlColor, pct } from "./colors";
+import { signColor, pnlColor } from "./colors";
 import type {
   SchedRow,
   BookPosition,
@@ -147,8 +147,6 @@ export function runCountLabelLive(runs: PaperRunListItem[]): string {
   const running = runs.filter((r) => r.running).length;
   return `${runs.length} 个 · ${running} 跑`;
 }
-
-export { pct };
 
 // ════════════════ 后端响应 → 视图 typed 形状映射 ════════════════
 export function statusToSchedRows(s: PaperStatusResp): SchedRow[] {
