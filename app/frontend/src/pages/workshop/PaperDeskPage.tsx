@@ -34,6 +34,9 @@ import {
   fillsToView,
   balanceToCells,
   promotionToChecks,
+  runsToList,
+  runCountLabelLive,
+  type PaperRunListItem,
 } from "./paper/paperApi";
 import { RunView } from "./paper/views/RunView";
 import { BookView } from "./paper/views/BookView";
@@ -68,6 +71,8 @@ interface LiveData {
   balance: BalanceCell[];
   promoChecks: PromoCheck[];
   promoGateId: string | null;
+  /** 真喂数据计数：>0 才算「接真跑出净值」（LIVE 角标硬绑此值，空壳不盖绿）。 */
+  barsFed: number;
 }
 
 const TABS: { value: PaperView; label: string }[] = [
@@ -96,9 +101,28 @@ export function PaperDeskPage() {
   const [listOpen, setListOpen] = useState(true);
   const [promoted, setPromoted] = useState(false);
   const [live, setLive] = useState<LiveData | null>(null);
+  const [liveRuns, setLiveRuns] = useState<PaperRunListItem[] | null>(null);
 
   const run = findRun(selRun);
-  const runList = buildRunList(selRun);
+  // 侧栏：后端可达（liveRuns 非 null，含空数组）一律用真数据——空后端就显示「0 个」，绝不退回 mock 假造 run。
+  // 仅 fetch 失败/无后端（liveRuns === null，如单测）才回退 mock RUNS（诚实标 MockBadge）。
+  const runList = liveRuns !== null ? runsToList(liveRuns, selRun) : buildRunList(selRun);
+
+  // 侧栏列表接真：拉 /api/paper/runs（真候选/真 run）。失败/无后端 → 保留 mock 回退。
+  useEffect(() => {
+    let alive = true;
+    (async () => {
+      try {
+        const { runs } = await paperApi.runs();
+        if (alive) setLiveRuns(runs);
+      } catch {
+        if (alive) setLiveRuns(null);
+      }
+    })();
+    return () => {
+      alive = false;
+    };
+  }, []);
 
   // 接真：拉 status/positions/fills/balance/promotion，映射成视图形状。
   // 失败/无后端（如单测）→ live=null → 视图回退 mock + 保留 MockBadge（诚实不假绿灯）。
@@ -123,6 +147,7 @@ export function PaperDeskPage() {
           balance: balanceToCells(bal, market),
           promoChecks: promotionToChecks(promo),
           promoGateId: promo.gate_id,
+          barsFed: status.bars_fed ?? 0,
         });
         setPromoted(promo.promoted);
       } catch {
@@ -180,8 +205,10 @@ export function PaperDeskPage() {
   );
 
   // 已接真的 tab（run/book/promo）在 live 数据就位后挂 LIVE 角标；review/risk 仍 mock 挂 MockBadge。
+  // run tab 的 LIVE 角标【硬绑 bars_fed>0】：真喂到模拟 bars 才算接真，空壳（bars_fed=0）不盖绿（§3）。
   const wiredTab = view === "run" || view === "book" || view === "promo";
-  const tabIsLive = wiredTab && live !== null;
+  const liveReady = live !== null && (view !== "run" || live.barsFed > 0);
+  const tabIsLive = wiredTab && liveReady;
 
   const subtabs = (
     <SubTabBar
@@ -220,7 +247,7 @@ export function PaperDeskPage() {
       >
         <span style={{ color: "var(--desk-text-muted)", fontSize: 11 }}>模拟盘</span>
         <span style={{ marginLeft: "auto", fontSize: 11, color: "var(--desk-text-faint)" }}>
-          {runCountLabel()}
+          {liveRuns !== null ? runCountLabelLive(liveRuns) : runCountLabel()}
         </span>
         <span
           role="button"
