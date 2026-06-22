@@ -6,6 +6,12 @@
 
 | uuid8 | 标题 | status | area | 位置 |
 |---|---|---|---|---|
+| 07b10903 | DS-6 装机收口——跨平台一键启动 + mkdir（可缓·docker compose 兜底） | todo | onboarding-docs | active |
+| cb463286 | DS-5 §3 假绿灯修——乐观假成功改诚实失败（correctness） | todo | frontend | active |
+| cfb7d950 | DS-4 paper 接真——submit→register_run + POST 端点 + 真 provider 产净值 | todo | paper-fullstack | active |
+| d4cb88f4 | DS-3 裁决接真——run_id 贯穿真裁决卡 + Bootstrap 第三腿前端补全 | todo | frontend | active |
+| defe660c | DS-2 造站接真——Agent台默认接真 + 无key slot-filling 真落库 + Hermes 预设（Fork1=C+Hermes） | todo | agent-frontend | active |
+| f6bb5e8e | DS-1 run_id 脊梁——agent backtest 接真引擎写 RUN_ROOT + run_id 贯穿（Fork3=A） | todo | agent-backend | active |
 | 05d6f511 | 单人 self-approve 仅非真钱通道(冷却+留痕)，真钱硬双人 | done | approval | done |
 | 180a341e | 核验 agent tool_call 前端派发是否旁路受控翻译门（R11 前端缺口审计） | done | verification | done |
 | 1e0e65b4 | 组合消费者——agent 可调组合三角 gate（SEQ-CONSUMER=A · C full-fat 触发器） | done | agent | done |
@@ -92,6 +98,8 @@
 | agent | 3bb62d7d · done | dreaminate |
 | agent | b961f08b · done | dreaminate |
 | agent | edc1e326 · done | dreaminate |
+| agent-backend | f6bb5e8e · todo | dreaminate |
+| agent-frontend | defe660c · todo | dreaminate |
 | approval | 05d6f511 · done | dreaminate |
 | backend | 4562d903 · done | dreaminate |
 | backend | 51271d38 · done | dreaminate |
@@ -102,6 +110,8 @@
 | config | 8ab894cd · done | dreaminate |
 | desktop | bc21c7c1 · done | dreaminate |
 | docs | ecbd0eab · done | dreaminate |
+| frontend | cb463286 · todo | dreaminate |
+| frontend | d4cb88f4 · todo | dreaminate |
 | frontend | 3d95e0f6 · done | dreaminate |
 | frontend | 5e47b82f · done | dreaminate |
 | frontend | 82120b9c · done | dreaminate |
@@ -121,6 +131,8 @@
 | frontend-foundation | e2de3d32 · done | dreaminate |
 | governance-ui | c631817e · done | dreaminate |
 | monitor | d0e5d208 · done | dreaminate |
+| onboarding-docs | 07b10903 · todo | dreaminate |
+| paper-fullstack | cfb7d950 · todo | dreaminate |
 | portfolio | 46f1cb3c · done | dreaminate |
 | security-invariant | 381b6c18 · done | dreaminate |
 | security-invariant | 6e4eee54 · done | dreaminate |
