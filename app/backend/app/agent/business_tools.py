@@ -31,6 +31,133 @@ def _short_id(prefix: str, *parts: Any) -> str:
     return f"{prefix}_{content_hash(list(parts))[:10]}"
 
 
+def _synth_and_promote(
+    *,
+    args: dict,
+    ledger: Any,
+    returns_store: Any,
+    data_root: Any,
+    verdict_store: Any,
+    verifier: Any,
+    llm_client: Any,
+) -> dict[str, Any]:
+    """DS-1 脊梁：对话意图 → 合成最小策略 → 沙箱跑真样本 → promote 落 RUN_ROOT → 真 run_id。
+
+    复用单一源：strategy_synth（合成）/ ide.sandbox（执行引擎）/ ide.promote（落盘契约 + 三角 gate）
+    / run_verdict（裁决投影）。零新引擎。§3 诚实：样本缺 / 沙箱无净值 → 显式失败，绝不伪造 run。
+    """
+
+    from pathlib import Path
+
+    from ..ide.promote import PromoteError, promote_ide_run
+    from ..ide.sandbox import run_user_strategy
+    from .sample_data import has_sample
+    from .strategy_synth import synthesize_strategy_code
+
+    # 单旋钮 data_root：同控样本读取位置 + run_root 派生（缺省 paths.DATA_ROOT，测试可注入 tmp）。
+    if data_root is not None:
+        eff_root = Path(data_root)
+    else:
+        from ..paths import DATA_ROOT as _DR
+        eff_root = _DR
+    run_root = eff_root / "artifacts" / "experiments"
+
+    goal = args.get("strategy_goal") if isinstance(args.get("strategy_goal"), dict) else {}
+    goal_ref = (args.get("strategy_goal_id") or args.get("strategy_goal_ref")
+                or goal.get("strategy_goal_id") or goal.get("name"))
+    lb = args.get("lookback") or 20
+    try:
+        lb = int(lb)
+    except (TypeError, ValueError):
+        lb = 20
+
+    synth = synthesize_strategy_code(
+        market=args.get("market"),
+        asset_class=args.get("asset_class") or goal.get("asset_class"),
+        strategy_name=args.get("strategy_name") or (goal.get("name") if goal else None),
+        benchmark=args.get("benchmark") or (goal.get("benchmark") if goal else None),
+        strategy_goal_ref=str(goal_ref) if goal_ref else None,
+        lookback=lb,
+        llm_client=llm_client,
+    )
+
+    # §3 诚实：样本未捆 → 显式失败（绝不伪造回测）。
+    if not has_sample(synth.market, data_root=eff_root):
+        return {
+            "error": (
+                f"market={synth.market} 的真行情样本未捆绑（{eff_root}）——不伪造回测（§3）。"
+                "crypto 样本随仓自带；stocks_cn 需设 TUSHARE_TOKEN 后跑 sample_data.bundle_hs300_daily。"
+            ),
+            "market": synth.market,
+            "needs_sample": True,
+        }
+
+    # 沙箱真跑（读 DATA_DIR 真样本产真净值）。
+    sb = run_user_strategy(synth.code, extra_env={"DATA_DIR": str(eff_root)})
+    ur = sb.user_result
+    if not isinstance(ur, dict) or not ur.get("equity_curve"):
+        return {
+            "error": (
+                f"合成策略未产出 equity_curve（沙箱 exit={sb.exit_code}）；"
+                f"stderr: {(sb.stderr or '')[:400]}"
+            ),
+            "synthesis_method": synth.method,
+        }
+
+    # 落 RUN_ROOT 单一契约 + 多证据三角 gate（opt-in ledger）。
+    try:
+        promoted = promote_ide_run(
+            ide_run_id=f"agentbt_{synth.market}",
+            owner_username=str(args.get("owner") or "agent"),
+            strategy_name=synth.strategy_name,
+            strategy_code=synth.code,
+            result=ur,
+            record_name=f"{synth.strategy_name} · agent 对话回测",
+            run_root=run_root,
+            ledger=ledger,
+            returns_store=returns_store,
+        )
+    except PromoteError as exc:
+        return {"error": f"落盘 promote 失败: {exc}", "synthesis_method": synth.method}
+
+    out: dict[str, Any] = {
+        "run_id": promoted.run_id,
+        "market": synth.market,
+        "benchmark": synth.benchmark,
+        "strategy_name": synth.strategy_name,
+        "synthesis_method": synth.method,
+        "metrics": {
+            k: promoted.metrics[k]
+            for k in ("sharpe", "total_return", "max_drawdown", "annualized_return", "volatility")
+            if k in promoted.metrics
+        },
+        "source": "synthesized_backtest_run",
+        "note": (
+            "agent 对话回测产真 run（RUN_ROOT 契约·真净值·读真捆绑样本）；run_id 可贯穿裁决/paper。"
+        ),
+    }
+    if promoted.gate_verdict is not None:
+        out["overfit"] = {
+            "color": promoted.gate_verdict.get("color"),
+            "pbo": promoted.gate_verdict.get("pbo"),
+            "dsr": promoted.metrics.get("dsr"),
+            "honest_n": promoted.gate_verdict.get("honest_n"),
+            "config_hash": promoted.gate_verdict.get("config_hash"),
+        }
+    # 顺手投影裁决（单一源 run_verdict；措辞守门走 Verifier，未验证不假绿灯）。
+    if verdict_store is not None and verifier is not None:
+        try:
+            from ..run_verdict import project_verdict
+
+            vp = project_verdict(promoted.run_id, verdict_store=verdict_store, verifier=verifier)
+            out["verdict"] = vp.get("verdict")
+            out["verdictNote"] = vp.get("verdictNote")
+            out["has_authoritative_verdict"] = vp.get("has_authoritative_verdict")
+        except Exception:  # noqa: BLE001  投影失败不阻断 run_id 返回（防御）。
+            pass
+    return out
+
+
 def register_business_tools(
     runtime,
     *,
@@ -41,11 +168,21 @@ def register_business_tools(
     experiment_store=None,
     verdict_store=None,
     verifier=None,
+    ledger=None,
+    returns_store=None,
+    data_root=None,
+    llm_client=None,
 ) -> None:
     """把策略台脊柱业务工具注册进 AgentRuntime（全部 side_effect="none"）。
 
     入参全是 main.py 的既有单例（依赖注入，便于测试替身）。任何写动作（promote/动钱）
     都不在此——这些 handler 只读/只写本地可重置产物。
+
+    DS-1 脊梁（Fork3=A）新增注入：
+      · ledger / returns_store —— promote 落 RUN_ROOT 时跑多证据三角 gate（honest-N 单一源）。
+      · data_root —— 真行情样本位置 + run_root 派生的单旋钮（缺省 paths.DATA_ROOT；测试可注入 tmp）。
+      · llm_client —— 合成器 LLM 路 seam（缺省 None 走确定性模板；DS-2 注入真客户端）。
+    全部有默认值 → 既有调用方（只传 3 store 的测试）不受影响（扩展不替换）。
     """
 
     # ── 1. hypothesis.create：建可证伪假设卡（exploratory 默认，P2 不挡探索） ──
@@ -279,40 +416,17 @@ def register_business_tools(
                 pass  # 落到组装登记分支
             except Exception as exc:  # noqa: BLE001
                 return {"error": f"run 投影失败: {type(exc).__name__}: {exc}"}
-        # 否则：登记一次组装回测意图到 RunStore（真写 run 元数据，无外部副作用、本地可重置）。
-        inputs = {
-            "factor_set": args.get("factor_set"),
-            "model_id": args.get("model_id"),
-            "signal_id": args.get("signal_id"),
-            "portfolio_id": args.get("portfolio_id"),
-            "cost_preset": args.get("cost_preset") or "neutral",
-            "strategy_goal_id": args.get("strategy_goal_id"),
-        }
-        if run_store is None or experiment_store is None:
-            # 无 store（测试替身缺省）→ 返回结构化登记回执，仍是真 handler（非 queued 占位）。
-            return {
-                "queued_run": False,
-                "assembled": inputs,
-                "note": "回测组装已校验（无 RunStore 注入，未落盘）；接 run 引擎后产 runs/ 目录。",
-            }
-        try:
-            exp = experiment_store.create_experiment(
-                name=f"agent_backtest_{inputs['cost_preset']}",
-                asset_class="equity_cn",
-                description="agent 策略台组装回测",
-            )
-            run = run_store.create_run(experiment_id=exp.experiment_id, inputs=inputs,
-                                       tags={"origin": "agent_workbench"})
-        except Exception as exc:  # noqa: BLE001
-            return {"error": f"RunStore 登记失败: {type(exc).__name__}: {exc}"}
-        return {
-            "run_id": run.run_id,
-            "experiment_id": exp.experiment_id,
-            "status": run.status,
-            "assembled": inputs,
-            "source": "registered_new_run",
-            "note": "回测组装已登记到 RunStore（本地 run 元数据，无外部副作用）；体检/裁决在 run 完成后投影。",
-        }
+        # 否则（无既有 run_id）：DS-1 脊梁——合成最小策略 → 沙箱跑真样本 → promote 落 RUN_ROOT 产真 run_id。
+        # 消灭 RunStore 占位（status=running 无净值的空 run）；run_id 自然贯穿裁决/paper（Fork3=A 单一注册表）。
+        return _synth_and_promote(
+            args=args,
+            ledger=ledger,
+            returns_store=returns_store,
+            data_root=data_root,
+            verdict_store=verdict_store,
+            verifier=verifier,
+            llm_client=llm_client,
+        )
 
     # ── 7. eval.pbo（接真）：CSCV → PBO（复用 eval.pbo 单一源，无副作用） ──
     def _eval_pbo(_n: str, args: dict) -> dict[str, Any]:

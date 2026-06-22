@@ -6,6 +6,22 @@
 ## <日期> · <标题>
 - 建/改了什么 + 命门  - 验收：<对抗测试 + 变异 + 全量数字>  - 下一步：<…> -->
 
+## 2026-06-22 · DS-2 后端核 done（造站接真 · blocker #2 · 卡未整完）
+
+- **建/改**：`strategy_goal_store.py`（新·`StrategyGoalStore` 落库 + `create_from_args`：结构化 args 补 cost_model/evaluation_window 默认校验 / 自然语言走既有 `StrategyGoalSlotFiller`→ 真 goal_id 内容寻址幂等）+ `main.py`（`strategy_goal.create` 回显 lambda→真 handler 校验落库产 goal_id）。**陌生人对话→真 goal_id→DS-1 真回测** 后端入口闭合。
+- **命门（5 测）**：结构化产真 goal_id + A股 leverage=1.0 治理不变量不破 / 自然语言 slot-fill 产 goal_id / §3 缺 asset_class 无 NL→needs_slots 不伪造 / 内容寻址幂等 / goal_id 真喂 DS-1 backtest 产真 run（链路闭合）。
+- **验收**：DS-2 5 测全绿；agent/strategy_goal/a4 基线 38 passed；main import 干净。
+- **DS-2 残余（卡未 done）**：前端 ① AgentWorkbenchPage 默认 liveMode=true + 演示挂 MockBadge ② LLMSettingsPage（Hermes 预设：复用已有 POST /api/llm/configure custom provider + 文档）③ DevLocalLLM slot-filling 追问润色（SlotFiller 已建、endpoint 已在）。均前端/文档活。
+- **下一步**：DS-2 前端 + DS-3（裁决 liveRunId 贯穿，依赖 DS-2 真 run_id 到前端）/DS-4（paper 治理敏感）；commit·land 待用户授权。
+
+## 2026-06-22 · DS-1 run_id 脊梁 done（交付门垂直切片首卡 · D-DELIVERY-SLICE / Fork3=A）
+
+- **建/改**：`agent/sample_data.py`（新·捆真行情样本，复用 binance_vision_pull 无状态原语并发拉 BTC 绕开其 reload-merge 预存 bug；TushareConnector 捆沪深300 seam）+ `agent/strategy_synth.py`（新·per-market 确定性动量模板，stdlib csv 读样本避开沙箱 socket 锁致 polars 读路径失败；LLM seam 废输出兜底防假绿灯）+ `agent/business_tools.py`（扩展·`_backtest_run` 无 run_id 分支 RunStore 占位→`_synth_and_promote`：合成→sandbox→promote_ide_run 落 RUN_ROOT+三角 gate→真 run_id；register 加注入 ledger/returns_store/data_root/llm_client 全默认）+ `main.py`（注入 LEDGER/RETURNS_STORE/DATA_ROOT，llm_client 留 DS-2）。**消灭两套并行 run 注册表**（runs.jsonl→统一 RUN_ROOT，Fork3=A）。
+- **命门（7 测 + 1 变异）**：真 run 被 project_verdict/project_overfit 真消费（非 mock）/ 同 goal config_hash 稳 honest-N 不重刷 / 断引擎(沙箱无净值)诚实失败不伪造 / 缺样本诚实失败 / 合成确定性+无前视 / LLM seam 废输出兜底+合格采纳；变异（伪造 equity_curve 分支）→ break_engine 转红（守卫 load-bearing）。
+- **验收**：DS-1 7 测全绿；**全量 1270 passed / 13 skipped**（基线 1263 完整 + 7 新，0 破坏，161s）。真回测真实数字：sharpe 1.18 / 总收益 81% / 回撤 -24% / DSR 0.956 / verdict=concern（无权威裁决→不假绿灯）。BTC 样本 516 真点（2022-2023）落 `data/samples/`。
+- **诚实残余**：① 沪深300 真样本未捆（码路已建测，需 TUSHARE_TOKEN，绝不伪造 §3——`bundle_hs300_daily` 一条命令补）；② BTC 516/730 点（Vision 免费日 K 空洞，起步样本）；③ LLM 合成真注入是 DS-2；④ 发现 binance_vision_pull reload-merge pre-existing bug（已绕开未碰，建议 mint 卡修）。
+- **下一步**：DS-3（裁决 run_id 贯穿）/DS-4（paper register）接缝已通；commit·land 待用户授权（未擅自 commit）。
+
 ## 2026-06-22 · D-WAVE1A 整波完成（C + M + 消费者）· 5 卡全 done
 
 - **C 组合三角 full-fat**（`46f1cb3c`）：新 `portfolio/gate.py`（`gate_portfolio` 复用单一源 `evaluate_overfit_gate`、`portfolio_net_returns`、ADV2 `portfolio_composition` 排序入 config_hash 不改 ids、Q3 `strictest_asset_class`）+ `overfit_gate._decide`/`run_overfit_gate` 加 `allow_pbo_absent_green`（A2 override R2，默认 False 单策略不变，A2-green 标 PBO N/A）+ 验收语义重写（「必抓」假命题→「不达 green，red 仅 strong_neg」）。

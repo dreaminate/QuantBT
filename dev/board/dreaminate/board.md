@@ -9,4 +9,3 @@
 | cfb7d950 | DS-4 paper 接真——submit→register_run + POST 端点 + 真 provider 产净值 | todo | paper-fullstack | P1 | f6bb5e8e |
 | d4cb88f4 | DS-3 裁决接真——run_id 贯穿真裁决卡 + Bootstrap 第三腿前端补全 | todo | frontend | P1 | f6bb5e8e |
 | defe660c | DS-2 造站接真——Agent台默认接真 + 无key slot-filling 真落库 + Hermes 预设（Fork1=C+Hermes） | todo | agent-frontend | P1 | - |
-| f6bb5e8e | DS-1 run_id 脊梁——agent backtest 接真引擎写 RUN_ROOT + run_id 贯穿（Fork3=A） | todo | agent-backend | P1 | - |

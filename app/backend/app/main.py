@@ -314,6 +314,10 @@ KILL_SWITCH = KillSwitch([])  # 实盘 venue 启用时由 settings 注入
 
 AGENT_SLOT_FILLER = StrategyGoalSlotFiller()
 CODE_REPLICATOR = CodeReplicator()
+# DS-2（造站接真 · blocker #2）：strategy_goal.create 校验落库产真 goal_id（被 DS-1 backtest 消费）。
+from .strategy_goal_store import StrategyGoalStore  # noqa: E402
+
+STRATEGY_GOAL_STORE = StrategyGoalStore(DATA_ROOT / "artifacts" / "strategy_goals")
 
 
 # T-016 · LLM record/replay fixture store（脊柱 02）。默认 passthrough（行为不变）；
@@ -365,7 +369,8 @@ def _agent_runtime(run_id: str | None = None, permission_mode: str = "auto", sys
     )
     # 注册【无副作用】工具（side_effect=none，auto/bypass 可自主执行）；
     # 动钱/晋级永不注册给 agent —— 治理门钉在端点层（D-PERM 权限轴⟂治理轴）。
-    runtime.register_tool("strategy_goal.create", lambda _n, args: {"strategy_goal": args}, side_effect="none")
+    # DS-2：接真——校验成 StrategyGoal（cost_model dispatch）+ 落库 → 真 goal_id（不再回显 args）。
+    runtime.register_tool("strategy_goal.create", lambda _n, args: STRATEGY_GOAL_STORE.create_from_args(args), side_effect="none")
     runtime.register_tool("factor.run_ic", lambda _n, args: {"queued": True, "args": args}, side_effect="none")
     runtime.register_tool("code.replicate", lambda _n, args: CODE_REPLICATOR.replicate(args.get("code", ""), args.get("source_dialect", "pandas")).__dict__, side_effect="none")
     # v2 数据平台 · 字段对齐工具（list_sources / describe_fields / infer_mapping / apply_mapping / validate_columns）
@@ -388,6 +393,11 @@ def _agent_runtime(run_id: str | None = None, permission_mode: str = "auto", sys
         experiment_store=EXPERIMENT_STORE,
         verdict_store=VERDICT_STORE,
         verifier=VERIFIER,
+        # DS-1 脊梁（Fork3=A）：backtest.run 无 run_id → 合成→沙箱→promote 落 RUN_ROOT 产真 run_id。
+        ledger=LEDGER,                  # 多证据三角 gate + honest-N 单一源
+        returns_store=RETURNS_STORE,
+        data_root=DATA_ROOT,            # 真行情样本位置 + run_root 派生
+        # llm_client 暂不注入 → 走确定性模板兜底；DS-2「造站接真」注入真 LLM 客户端。
     )
     return runtime
 

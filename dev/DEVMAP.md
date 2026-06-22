@@ -11,7 +11,6 @@
 | cfb7d950 | DS-4 paper 接真——submit→register_run + POST 端点 + 真 provider 产净值 | todo | paper-fullstack | active |
 | d4cb88f4 | DS-3 裁决接真——run_id 贯穿真裁决卡 + Bootstrap 第三腿前端补全 | todo | frontend | active |
 | defe660c | DS-2 造站接真——Agent台默认接真 + 无key slot-filling 真落库 + Hermes 预设（Fork1=C+Hermes） | todo | agent-frontend | active |
-| f6bb5e8e | DS-1 run_id 脊梁——agent backtest 接真引擎写 RUN_ROOT + run_id 贯穿（Fork3=A） | todo | agent-backend | active |
 | 05d6f511 | 单人 self-approve 仅非真钱通道(冷却+留痕)，真钱硬双人 | done | approval | done |
 | 180a341e | 核验 agent tool_call 前端派发是否旁路受控翻译门（R11 前端缺口审计） | done | verification | done |
 | 1e0e65b4 | 组合消费者——agent 可调组合三角 gate（SEQ-CONSUMER=A · C full-fat 触发器） | done | agent | done |
@@ -67,6 +66,7 @@
 | e2de3d32 | 前端测试设施基建 — vitest + React Testing Library + 对抗测试 harness | done | frontend-foundation | done |
 | ecbd0eab | GOAL §7 文档对齐(M10 已接 run 闸门)+ 可证伪性/模式 教学文案 | done | docs | done |
 | edc1e326 | 主对话入口接 AgentRuntime + 无副作用工具 + 权限三态(ask/auto/bypass) | done | agent | done |
+| f6bb5e8e | DS-1 run_id 脊梁——agent backtest 接真引擎写 RUN_ROOT + run_id 贯穿（Fork3=A） | done | agent-backend | done |
 
 ## pool · 待分配
 
@@ -98,7 +98,7 @@
 | agent | 3bb62d7d · done | dreaminate |
 | agent | b961f08b · done | dreaminate |
 | agent | edc1e326 · done | dreaminate |
-| agent-backend | f6bb5e8e · todo | dreaminate |
+| agent-backend | f6bb5e8e · done | dreaminate |
 | agent-frontend | defe660c · todo | dreaminate |
 | approval | 05d6f511 · done | dreaminate |
 | backend | 4562d903 · done | dreaminate |
