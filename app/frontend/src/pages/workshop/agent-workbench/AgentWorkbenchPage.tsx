@@ -122,6 +122,9 @@ export function AgentWorkbenchPage() {
   // 接真：LIVE 模式（真 /api/agent/workbench/stream SSE）vs mock 剧本（默认）。
   const [liveMode, setLiveMode] = useState(false);
   const [liveErr, setLiveErr] = useState<string | null>(null);
+  // 真回测 run_id：从 LIVE 流 backtest.run 的 tool_end result 里读取（business_tools 产真 run_id）。
+  // 存在 → 裁决卡走 LiveRunVerdictCard 接真三端点；缺 → 回退 mock + MockBadge（诚实，不假绿灯）。
+  const [liveRunId, setLiveRunId] = useState<string | null>(null);
   const liveAbort = useRef<(() => void) | null>(null);
   // handoff 提交回执（真 /api/strategy/submit_candidate）。
   const [handoffNote, setHandoffNote] = useState<string | null>(null);
@@ -231,6 +234,7 @@ export function AgentWorkbenchPage() {
     setTeachPopup(null);
     setTeachNote(null);
     setPermMode("ask");
+    setLiveRunId(null); // 重放回 mock 剧本：清旧真 run_id，裁决卡回 mock + MockBadge。
     anchorIds.current = {};
     // 下一帧重新铺。
     requestAnimationFrame(() => advance());
@@ -293,13 +297,20 @@ export function AgentWorkbenchPage() {
     (prompt: string) => {
       liveAbort.current?.();
       setLiveErr(null);
+      setLiveRunId(null); // 新流重置：旧 run_id 不串到本次（回测产真前裁决卡走 mock）。
       setBlocks([]);
       setReached([]);
       setActiveMs(null);
       const reachedSet = new Set<MilestoneKey>();
       liveAbort.current = streamAgentWorkbench(prompt, permMode, {
         onBlock: (b) => setBlocks((prev) => [...prev, b]),
-        onToolEnd: (result) =>
+        onToolEnd: (result) => {
+          // backtest.run 的 result 带真 run_id（business_tools 产真 run）→ 贯穿裁决卡。
+          // 其它工具的 result 无 run_id；只在确为非空字符串时更新，避免误清真值。
+          if (result && typeof result === "object") {
+            const rid = (result as { run_id?: unknown }).run_id;
+            if (typeof rid === "string" && rid) setLiveRunId(rid);
+          }
           setBlocks((prev) => {
             // 更新最近 running tool 块的 summary（接真结果）。
             const next = [...prev];
@@ -317,7 +328,8 @@ export function AgentWorkbenchPage() {
               }
             }
             return next;
-          }),
+          });
+        },
         onMilestone: (key) => {
           reachedSet.add(key);
           setReached(Array.from(reachedSet));
@@ -931,6 +943,7 @@ export function AgentWorkbenchPage() {
                 cowork={cowork}
                 unlocked={unlocked}
                 reached={reached}
+                liveRunId={liveRunId ?? undefined}
                 onClose={() => setWsOpen(false)}
               />
             </CollapsiblePanel>
@@ -1021,6 +1034,7 @@ function WorkspaceInner({
   cowork,
   unlocked,
   reached,
+  liveRunId,
   onClose,
 }: {
   tab: WorkspaceTab;
@@ -1029,6 +1043,8 @@ function WorkspaceInner({
   cowork: CoworkKind | null;
   unlocked: Set<CoworkKind>;
   reached: MilestoneKey[];
+  /** 真回测 run_id（LIVE 流产）——贯穿到裁决卡接真；缺省走 mock + MockBadge。 */
+  liveRunId?: string;
   onClose: () => void;
 }) {
   const hint =
@@ -1100,7 +1116,11 @@ function WorkspaceInner({
         }}
       >
         {tab === "cowork" && (
-          <CoworkArea cowork={cowork} unlocked={unlocked} />
+          <CoworkArea
+            cowork={cowork}
+            unlocked={unlocked}
+            liveRunId={liveRunId}
+          />
         )}
         {tab === "code" && <CodeView reached={reached} />}
         {tab === "report" && reportReady && <ReportView />}

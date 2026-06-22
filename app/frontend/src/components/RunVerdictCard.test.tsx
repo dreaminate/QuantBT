@@ -46,6 +46,41 @@ describe("R1 RunVerdictCard · 渲染 + mock 诚实", () => {
   });
 });
 
+describe("R1 RunVerdictCard · 多证据三角第三腿（Bootstrap CI · DS-3 #7）", () => {
+  it("footer 三格齐：PBO / DSR / Bootstrap CI（非二元）", () => {
+    renderWithDesk(<RunVerdictCard data={makeData({ bootstrapCI: [0.21, 1.97] })} />);
+    expect(screen.getByText("PBO")).toBeInTheDocument();
+    expect(screen.getByText("DSR")).toBeInTheDocument();
+    // 第三腿标签 + CI 值 + 健康判据提示。
+    expect(screen.getByText("Bootstrap CI")).toBeInTheDocument();
+    expect(screen.getByText("[0.21, 1.97]")).toBeInTheDocument();
+    expect(screen.getByText("下界>0 显著")).toBeInTheDocument();
+  });
+
+  it("CI 下界>0 → success 色；下界≤0 → danger 色（区间跨零=不显著）", () => {
+    const { rerender } = renderWithDesk(
+      <RunVerdictCard data={makeData({ bootstrapCI: [0.21, 1.97] })} />,
+    );
+    const pos = screen.getByText("[0.21, 1.97]");
+    expect(pos).toHaveStyle({ color: "var(--desk-success)" });
+    rerender(<RunVerdictCard data={makeData({ bootstrapCI: [-0.3, 1.1] })} />);
+    const neg = screen.getByText("[-0.30, 1.10]");
+    expect(neg).toHaveStyle({ color: "var(--desk-danger)" });
+  });
+
+  it("缺 bootstrapCI（或 NaN）→ 第三格显 N/A（诚实不假绿灯）", () => {
+    const { rerender } = renderWithDesk(
+      <RunVerdictCard data={makeData({ bootstrapCI: null })} />,
+    );
+    // 第三格仍在（标签恒渲染），值为 N/A。
+    expect(screen.getByText("Bootstrap CI")).toBeInTheDocument();
+    expect(screen.getByText("N/A")).toBeInTheDocument();
+    // NaN 也判无效 → N/A。
+    rerender(<RunVerdictCard data={makeData({ bootstrapCI: [NaN, 1.1] })} />);
+    expect(screen.getByText("N/A")).toBeInTheDocument();
+  });
+});
+
 describe("R1 RunVerdictCard · 对抗测试①：禁止 import 冻结页", () => {
   it("源码不含 frontend-run-detail 冻结 RunDetailPage 的 import", () => {
     expect(() => assertNoFrozenPageImport(SOURCE)).not.toThrow();
