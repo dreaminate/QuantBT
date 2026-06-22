@@ -1,5 +1,5 @@
 import { describe, it, expect, beforeEach, afterEach, vi } from "vitest";
-import { screen, waitFor, fireEvent } from "@testing-library/react";
+import { screen, waitFor, fireEvent, within } from "@testing-library/react";
 import {
   renderWithDesk,
   assertNoForbiddenWords,
@@ -114,6 +114,43 @@ describe("LiveRunVerdictCard · 切真拉端点", () => {
     );
     expect(screen.getByText("Bootstrap CI")).toBeInTheDocument();
     expect(screen.getByText("N/A")).toBeInTheDocument();
+  });
+
+  it("后端 pbo:null（未算 CSCV/PBO）→ 卡显 N/A 中性色，绝不假绿灯「0.00」", async () => {
+    routeHappy({
+      "/overfit": jsonRes({
+        pbo: null,
+        dsr_conservative: 1.34,
+        bootstrap_ci: [0.21, 1.97],
+      }),
+    });
+    renderWithDesk(<LiveRunVerdictCard runId="run_x" />);
+    await waitFor(() =>
+      expect(screen.getByTestId("live-run-verdict-card")).toBeInTheDocument(),
+    );
+    const pboRow = screen.getByText("PBO").parentElement as HTMLElement;
+    const cell = within(pboRow).getByText("N/A");
+    // 种坏门必抓：未算 PBO 绝不渲染健康绿「PBO 0.00」。
+    expect(within(pboRow).queryByText("0.00")).toBeNull();
+    expect(cell).toHaveStyle({ color: "var(--desk-text-faint)" });
+    expect(cell).not.toHaveStyle({ color: "var(--desk-success)" });
+  });
+
+  it("后端 dsr 两字段全缺 → DSR 显 N/A 中性色（不 default 0 上绿/红）", async () => {
+    routeHappy({
+      "/overfit": jsonRes({ pbo: 0.18, bootstrap_ci: [0.21, 1.97] }),
+    });
+    renderWithDesk(<LiveRunVerdictCard runId="run_x" />);
+    await waitFor(() =>
+      expect(screen.getByTestId("live-run-verdict-card")).toBeInTheDocument(),
+    );
+    const dsrRow = screen.getByText("DSR").parentElement as HTMLElement;
+    const cell = within(dsrRow).getByText("N/A");
+    expect(within(dsrRow).queryByText("0.00")).toBeNull();
+    expect(cell).toHaveStyle({ color: "var(--desk-text-faint)" });
+    expect(cell).not.toHaveStyle({ color: "var(--desk-success)" });
+    // PBO 仍真值（0.18）→ 绿（证明只 null 的腿显 N/A，不波及有值腿）。
+    expect(screen.getByText("0.18")).toBeInTheDocument();
   });
 
   it("dataSource=live：header 不再挂 MockBadge（卡顶已接真）", async () => {
