@@ -2,8 +2,8 @@
 uuid: ba59fb7b858143ea8314c4853838398e
 title: 组合 promote production 端点——组合三角 gate record=True 真记 honest-N
 status: todo
-owner: wait
-assigned_by:
+owner: dreaminate
+assigned_by: dreaminate
 review_status: 0
 priority: P2
 area: portfolio

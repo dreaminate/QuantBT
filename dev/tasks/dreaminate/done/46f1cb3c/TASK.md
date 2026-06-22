@@ -49,4 +49,4 @@ T-033：三角 gate 唯二真实调用者均作用单策略层（promote.py:142 
 
 **门必抓（6+1 测试 + 2 变异）**：`test_portfolio_gate.py` ADV1（A2 放行只在 DSR+CI 双正 / 过拟合 strong_neg→red 误绿兜底 / 单策略 allow=False 不受影响）+ ADV2（重排标的同 config_hash）+ Q3 最严 + 无 alpha 不达 green；`test_agent_business_tools_a4.py::..._portfolio_gate_tool_no_alpha_not_green`。变异：禁 strong_neg → 误绿断言 + 既有 `test_decide_no_single_point_of_failure` 双红。**全量 1258 passed/13 skipped**（基线 1251+7 未破，136s）。
 
-**诚实残余/限界**：① honest-N 记账走 promote 治理流（record=True 能力已具备：`gate_portfolio(record=True, ledger, returns_store)`），但**尚无 production 组合 promote 端点真调用**（agent 预览 record=False）——消费者的「promote 注入」面未接 production 端点（gate 路径+消费者已就绪）。② A2 反假绿灯护栏（honest-N 下限）= 用户可选档、默认未加（gate 松紧归用户，§0.1 研究侧旋钮）；A2-green 透明标 PBO N/A 为 §3 诚实表达。③ 组合净收益的 PIT join 由调用方喂已实现收益（gate 不自取数，避免前视）。
+**诚实残余/限界**：① honest-N 记账走 promote 治理流（record=True 能力已具备：`gate_portfolio(record=True, ledger, returns_store)`），但**尚无 production 组合 promote 端点真调用**（agent 预览 record=False）——消费者的「promote 注入」面未接 production 端点（gate 路径+消费者已就绪）——**→ 由后续卡 `ba59fb7b`（已自领 active/P2）承接**。② A2 反假绿灯护栏（honest-N 下限）= 用户可选档、默认未加（gate 松紧归用户，§0.1 研究侧旋钮）；A2-green 透明标 PBO N/A 为 §3 诚实表达。③ 组合净收益的 PIT join 由调用方喂已实现收益（gate 不自取数，避免前视）。

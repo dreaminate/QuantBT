@@ -2,8 +2,8 @@
 uuid: de764e1c65a242daa05848ad2ad0f56f
 title: 监控生产调度 + 因子观测记录管道——让 monitor_tick 在生产真跑
 status: todo
-owner: wait
-assigned_by:
+owner: dreaminate
+assigned_by: dreaminate
 review_status: 0
 priority: P2
 area: monitor

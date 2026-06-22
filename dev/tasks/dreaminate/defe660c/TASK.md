@@ -17,6 +17,8 @@ depends_on: []
 ## Scope [必填]
 让陌生人「对话生成策略」真成立：① Agent 工作台默认 `liveMode=true`、mock autoplay 仅作显式「看演示」入口且全程 MockBadge（blocker #1）；② 无 LLM key 时 DevLocalLLM 不死兜底，改 slot-filling 追问回路（缺 asset_class/horizon/objective 就问）+ `strategy_goal.create` 真校验落库产可下游引用的 goal_id（blocker #2）；③ **Hermes auth 预设**（Fork1）：onboarding/Settings 加引导「用 Claude Code/Codex 订阅（经 Hermes 等本地 OAuth 代理）」——复用已有 `OpenAICompatibleLLM` custom provider，预填 `http://localhost:<port>/v1` + 文档教跑 Hermes，不自实现 OAuth。
 
+> **前后端分工澄清（2026-06-22）**：blocker #2 的**后端核已 done**（commit `6726c4f`：新 `strategy_goal_store.py` 的 `StrategyGoalStore.create_from_args` 校验落库产真 goal_id + slot-filler 兜底 + §3 缺槽不伪造；`main.py` strategy_goal.create 回显 lambda→真 handler）；`StrategyGoalSlotFiller` 与 `POST /api/llm/configure` 也早已存在。**本卡剩前端/文档**：① liveMode 默认 true + 演示挂 MockBadge ② 新 `LLMSettingsPage.tsx`（Hermes 预设 UI，接已有 configure 端点）③ 后端 agent_workbench_stream 的 tool_end 带真 run_id（为 DS-3 铺路）④ Hermes onboarding 文档。status 仍 todo（前端未做）。
+
 ## 接线点（file:line，实现时复核）[必填]
 | 文件 | 位置 | 改什么 |
 |---|---|---|

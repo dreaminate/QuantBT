@@ -7,10 +7,14 @@
 | uuid8 | 标题 | status | area | 位置 |
 |---|---|---|---|---|
 | 07b10903 | DS-6 装机收口——跨平台一键启动 + mkdir（可缓·docker compose 兜底） | todo | onboarding-docs | active |
+| 9a497bde | 交付门 e2e 集成测试——陌生人 chat→backtest→裁决→paper 全后端路径真 | todo | integration-test | active |
+| ba59fb7b | 组合 promote production 端点——组合三角 gate record=True 真记 honest-N | todo | portfolio | active |
 | cb463286 | DS-5 §3 假绿灯修——乐观假成功改诚实失败（correctness） | todo | frontend | active |
 | cfb7d950 | DS-4 paper 接真——submit→register_run + POST 端点 + 真 provider 产净值 | todo | paper-fullstack | active |
 | d4cb88f4 | DS-3 裁决接真——run_id 贯穿真裁决卡 + Bootstrap 第三腿前端补全 | todo | frontend | active |
+| de764e1c | 监控生产调度 + 因子观测记录管道——让 monitor_tick 在生产真跑 | todo | monitor | active |
 | defe660c | DS-2 造站接真——Agent台默认接真 + 无key slot-filling 真落库 + Hermes 预设（Fork1=C+Hermes） | todo | agent-frontend | active |
+| e1a98c41 | binance_vision_pull reload-merge schema bug 修——多日同年 try_parse_dates 崩 | todo | data-connectors | active |
 | 05d6f511 | 单人 self-approve 仅非真钱通道(冷却+留痕)，真钱硬双人 | done | approval | done |
 | 180a341e | 核验 agent tool_call 前端派发是否旁路受控翻译门（R11 前端缺口审计） | done | verification | done |
 | 1e0e65b4 | 组合消费者——agent 可调组合三角 gate（SEQ-CONSUMER=A · C full-fat 触发器） | done | agent | done |
@@ -72,8 +76,7 @@
 
 | uuid8 | 标题 | status | area |
 |---|---|---|---|
-| ba59fb7b | 组合 promote production 端点——组合三角 gate record=True 真记 honest-N | todo | portfolio |
-| de764e1c | 监控生产调度 + 因子观测记录管道——让 monitor_tick 在生产真跑 | todo | monitor |
+| _（池空）_ | | | |
 
 ## 按 area 功能索引
 
@@ -108,6 +111,7 @@
 | backend | b106177f · done | dreaminate |
 | backend | e069d820 · done | dreaminate |
 | config | 8ab894cd · done | dreaminate |
+| data-connectors | e1a98c41 · todo | dreaminate |
 | desktop | bc21c7c1 · done | dreaminate |
 | docs | ecbd0eab · done | dreaminate |
 | frontend | cb463286 · todo | dreaminate |
@@ -130,9 +134,12 @@
 | frontend-foundation | d5ea778c · done | dreaminate |
 | frontend-foundation | e2de3d32 · done | dreaminate |
 | governance-ui | c631817e · done | dreaminate |
+| integration-test | 9a497bde · todo | dreaminate |
+| monitor | de764e1c · todo | dreaminate |
 | monitor | d0e5d208 · done | dreaminate |
 | onboarding-docs | 07b10903 · todo | dreaminate |
 | paper-fullstack | cfb7d950 · todo | dreaminate |
+| portfolio | ba59fb7b · todo | dreaminate |
 | portfolio | 46f1cb3c · done | dreaminate |
 | security-invariant | 381b6c18 · done | dreaminate |
 | security-invariant | 6e4eee54 · done | dreaminate |

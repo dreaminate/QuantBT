@@ -43,4 +43,4 @@ T-033 核验：`compute_weekly_cost_drift`/`retire`/`LifecycleManager.evaluate` 
 
 **门必抓（5 测试 + 1 变异）**：种应退役卡（WARNING+连续漂移超阈）→ 自动 RETIRED + 单一 PROV；漂移未超阈不动作；漂移>30% 降级动作真调用（非 note）；croniter strict 缺包响亮失败；签名无 gate verdict。变异：断 `manager.evaluate` → 自动退役断言红（闭环真接线非纸门）。**全量见下方 log 实跑数字**；既有 lifecycle/dag/engine 回归绿。
 
-**诚实残余**：① 生产 weekly cron 真实例化 `Scheduler(strict=True)` + 把 `compute_weekly_cost_drift` 输出喂 `monitor_tick` 的**编排接线**（哪个 job/调度起点）未落 production（闭环函数 + croniter 硬化已就绪，差一个生产调度起点）。② `hypothesis store.card.status` 作 lifecycle 权威的派生视图同步未接（A1 定 lifecycle 权威、store 跟随；本卡只立权威单发，store→lifecycle 同步留后续）。
+**诚实残余**：① 生产 weekly cron 真实例化 `Scheduler(strict=True)` + 把 `compute_weekly_cost_drift` 输出喂 `monitor_tick` 的**编排接线**（哪个 job/调度起点）未落 production（闭环函数 + croniter 硬化已就绪，差一个生产调度起点）——**→ 由后续卡 `de764e1c`（已自领 active/P2）承接**。② `hypothesis store.card.status` 作 lifecycle 权威的派生视图同步未接（A1 定 lifecycle 权威、store 跟随；本卡只立权威单发，store→lifecycle 同步留后续）——**→ 后续卡承接（本波外）**。
