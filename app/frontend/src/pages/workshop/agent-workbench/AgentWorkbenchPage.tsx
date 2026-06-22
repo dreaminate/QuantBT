@@ -129,6 +129,10 @@ export function AgentWorkbenchPage() {
   // 存在 → 裁决卡走 LiveRunVerdictCard 接真三端点；缺 → 回退 mock + MockBadge（诚实，不假绿灯）。
   const [liveRunId, setLiveRunId] = useState<string | null>(null);
   const liveAbort = useRef<(() => void) | null>(null);
+  // §M5：是否已为「当前这次进入 live」自动起过首条 prompt（一次性守卫）。
+  // 仅在进 live 时为 false → 自动铺 AGENT_FIRST_PROMPT 一次；进 demo 时复位（演示会清空 live 对话，
+  // 回切 live 应重新起一次，不留空白接真台）。同一 live 会话里 effect 再跑不重复自动起、不冲掉用户对话。
+  const didAutoStartLiveRef = useRef(false);
   // handoff 提交回执（真 /api/strategy/submit_candidate）。
   const [handoffNote, setHandoffNote] = useState<string | null>(null);
   // handoff 提交失败的诚实错误（§3：失败不显「已提交」绿，显红报错）。
@@ -212,6 +216,8 @@ export function AgentWorkbenchPage() {
     setLiveMode(false);
     setLiveErr(null);
     setDemoMode(true);
+    // 复位 live 自动起守卫：演示已清空 live 对话，回切 live 应重新自动起一次首条 prompt（M5）。
+    didAutoStartLiveRef.current = false;
     // 复位游标，让 demoMode effect 的守卫能重新铺一遍（重复进出演示也稳定）。
     didInit.current = false;
     cursorRef.current = 0;
@@ -383,9 +389,15 @@ export function AgentWorkbenchPage() {
   );
 
   // LIVE 模式开关：开 → 跑真流；关 → 回 mock 剧本。
+  // §M5：进 live 时仅自动铺 AGENT_FIRST_PROMPT 一次（didAutoStartLiveRef 守一次性）。
+  // 同一 live 会话里 effect 再跑（如其它 state 变化触发）不重复自动起、不冲掉用户已发对话；
+  // 进 demo 会复位该守卫，回切 live 重新起一次（演示已清空 live 对话，避免空白接真台）。
   useEffect(() => {
     if (liveMode) {
-      startLive(AGENT_FIRST_PROMPT);
+      if (!didAutoStartLiveRef.current) {
+        didAutoStartLiveRef.current = true;
+        startLive(AGENT_FIRST_PROMPT);
+      }
     } else {
       liveAbort.current?.();
       liveAbort.current = null;
@@ -1018,6 +1030,8 @@ export function AgentWorkbenchPage() {
                 unlocked={unlocked}
                 reached={reached}
                 liveRunId={liveRunId ?? undefined}
+                liveMode={liveMode}
+                liveError={liveErr ?? undefined}
                 onClose={() => setWsOpen(false)}
               />
             </CollapsiblePanel>
@@ -1109,6 +1123,8 @@ function WorkspaceInner({
   unlocked,
   reached,
   liveRunId,
+  liveMode,
+  liveError,
   onClose,
 }: {
   tab: WorkspaceTab;
@@ -1119,6 +1135,10 @@ function WorkspaceInner({
   reached: MilestoneKey[];
   /** 真回测 run_id（LIVE 流产）——贯穿到裁决卡接真；缺省走 mock + MockBadge。 */
   liveRunId?: string;
+  /** 接真态标记：LIVE 态无 run_id 时裁决卡显诚实空态/错态，不退 mock 绿（§3）。 */
+  liveMode?: boolean;
+  /** 接真态回测失败原因：有则裁决卡显诚实错态。 */
+  liveError?: string;
   onClose: () => void;
 }) {
   const hint =
@@ -1194,6 +1214,8 @@ function WorkspaceInner({
             cowork={cowork}
             unlocked={unlocked}
             liveRunId={liveRunId}
+            liveMode={liveMode}
+            liveError={liveError}
           />
         )}
         {tab === "code" && <CodeView reached={reached} />}
