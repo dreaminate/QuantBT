@@ -6,6 +6,15 @@
 ## <日期> · <标题>
 - 建/改了什么 + 命门  - 验收：<对抗测试 + 变异 + 全量数字>  - 下一步：<…> -->
 
+## 2026-06-23 · code-review 修复批（交付门波 land 后 xhigh 审出 15 缺陷全修）· 6 worker 并行 + land main
+
+- **缘起**：交付门波 land main 后跑 workflow code-review(xhigh)：50 候选→26 验证→**15 报告**。讽刺的是「修 §3 假绿灯」的波自己留了新假绿灯 + 默认路径断 + leader relabel 偷懒。用户「全部要修」。
+- **7 单元（文件 disjoint）6 worker 并行各 PR**：FU1 main.py 注册诚实化（#10·**§5 治理**：H3 market 派生不默认 equity_cn 伪造 600519 / H4 注册失败显 error 非静默 200 / M3 二次注册 reconcile / M6 relabel 漏 3 注释 / M7 prime 惰性化；worker 自身 code-review 还抓出 A股 spot 误判成 crypto 绕 live-forbidden 并修）/ FU2 synth 诚实化（#7·M1 组装输入落 metadata+诚实 note 不静默丢 / M8 LLM market 校验）/ FU3 裁决卡 null（#8·H2 pbo/dsr null→N/A 不假绿）/ FU4 Agent 台 live（#9·H1-fe LIVE 无 run_id 不退 mock 绿、显诚实态 / M5 不丢上下文）/ FU5 paper desk 并发（#11·M4 prime 前 stop scheduler join 防 equity_log 撕裂 / perf mtm_count）/ FU6+7（#6·M2 goal_id 纳 benchmark/cost/window 防撞覆盖 / 删 paperApi 死 export）。
+- **leader 整合**：6 PR merge（文件 disjoint，仅 FU1/FU5 共改 test_paper_desk_api 冲突→两组回归测试都留）。
+- **§5 治理终审**：A股恒拒 live（attempt_live_order 对 equity_cn 恒 AShareLiveForbidden）、INV-5、止模拟盘、market 派生不伪造标的——全不破，且更准。
+- **验收**：**全量后端 1311 passed / 13 skipped**（基线 1292 + ~19 新回归种坏门）+ 前端 **280 passed + tsc/build 绿** + e2e/治理测试全过。每 finding 配回归测试（修前红/修后绿对照验证）。
+- **下一步**：land main（用户授权全修+land）。
+
 ## 2026-06-23 · 交付门垂直切片整波收官（DS-2~6 + e2e）· 6 worker 并行 + leader 整合 land main
 
 - **审计收卡**：55 done 卡全诚实、0 假绿灯、validate PASS。微调：ba59fb7b/de764e1c pool→自领 active；defe660c Scope 澄清前后端；46f1cb3c/d0e5d208 残余加承接链路注。
