@@ -119,8 +119,11 @@ export function AgentWorkbenchPage() {
   // 知情确认留痕回执（acknowledge 后的诚实记账文案）。
   const [teachNote, setTeachNote] = useState<string | null>(null);
 
-  // 接真：LIVE 模式（真 /api/agent/workbench/stream SSE）vs mock 剧本（默认）。
-  const [liveMode, setLiveMode] = useState(false);
+  // 接真：LIVE 模式（真 /api/agent/workbench/stream SSE）默认开（DS-2：陌生人默认接真，不放假绿灯 mock）。
+  // mock 剧本退居「看演示」显式入口——仅当用户主动点「看演示」(demoMode) 才铺脚本、且全程挂 MockBadge。
+  const [liveMode, setLiveMode] = useState(true);
+  // demoMode：显式「看演示」（mock 剧本回放）入口。默认 false（默认接真，不自动放 mock）。
+  const [demoMode, setDemoMode] = useState(false);
   const [liveErr, setLiveErr] = useState<string | null>(null);
   const liveAbort = useRef<(() => void) | null>(null);
   // handoff 提交回执（真 /api/strategy/submit_candidate）。
@@ -187,12 +190,40 @@ export function AgentWorkbenchPage() {
     if (hitReport) setReportReady(true);
   }, [permMode]);
 
-  // autoplay：挂载即铺到第一道 gate（StrictMode 双挂载守卫，只跑一次）。
+  // 「看演示」入口：mock autoplay 只在 demoMode 下铺到第一道 gate（StrictMode 双挂载守卫，只跑一次）。
+  // 默认接真（liveMode=true / demoMode=false）→ 不自动放 mock 剧本（DS-2 blocker #1：不放假绿灯 mock）。
   useEffect(() => {
+    if (!demoMode) return;
     if (didInit.current) return;
     didInit.current = true;
     advance();
     // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [demoMode]);
+
+  // 进「看演示」：关 LIVE、开 demoMode、复位剧本游标后从头铺 mock。
+  const enterDemo = useCallback(() => {
+    liveAbort.current?.();
+    liveAbort.current = null;
+    setLiveMode(false);
+    setLiveErr(null);
+    setDemoMode(true);
+    // 复位游标，让 demoMode effect 的守卫能重新铺一遍（重复进出演示也稳定）。
+    didInit.current = false;
+    cursorRef.current = 0;
+    setCursor(0);
+    setBlocks([]);
+    setReached([]);
+    setActiveMs(null);
+    setUnlocked(new Set());
+    setGateStates({});
+    anchorIds.current = {};
+  }, []);
+
+  // 回「接真」：关 demoMode、开 LIVE（liveMode effect 会启动真流）。
+  const enterLive = useCallback(() => {
+    setDemoMode(false);
+    didInit.current = false;
+    setLiveMode(true);
   }, []);
 
   // splitter 拖拽。
@@ -383,15 +414,25 @@ export function AgentWorkbenchPage() {
   const send = useCallback(() => {
     const d = draft.trim();
     if (!d) return;
-    if (d === "/clear" || d === "/restart") {
-      setDraft("");
-      setSlashOpen(false);
-      restart();
+    setDraft("");
+    setSlashOpen(false);
+    if (d === "/permissions") return;
+
+    // 接真态（默认）：消息驱动真流——不落任何 mock 块（§3 不假绿灯，blocker #1）。
+    if (liveMode) {
+      if (d === "/clear" || d === "/restart") {
+        // 真流重置：清空并用首条 prompt 重起真 SSE 流。
+        startLive(AGENT_FIRST_PROMPT);
+        return;
+      }
+      // 用户真消息 → 重起真流（后端 user 事件会回显该消息，不前端伪造 ack）。
+      startLive(d);
       return;
     }
-    if (d === "/permissions") {
-      setDraft("");
-      setSlashOpen(false);
+
+    // 演示态（看演示 · mock 剧本）：保持原 mock 回放语义。
+    if (d === "/clear" || d === "/restart") {
+      restart();
       return;
     }
     setBlocks((b) => [
@@ -400,12 +441,10 @@ export function AgentWorkbenchPage() {
       {
         id: "ack-" + Date.now(),
         type: "say",
-        text: "（原型 demo：策略台脚本已跑到回测拍板 + 模拟台交接。点「↻ 重放」或进度线节点回看。）",
+        text: "（看演示 mock：策略台脚本已跑到回测拍板 + 模拟台交接。点「↻ 重放」或进度线节点回看。）",
       },
     ]);
-    setDraft("");
-    setSlashOpen(false);
-  }, [draft, restart]);
+  }, [draft, liveMode, restart, startLive]);
 
   const onDraftChange = useCallback((v: string) => {
     setDraft(v);
@@ -449,15 +488,17 @@ export function AgentWorkbenchPage() {
             ~/strategies/weekly-cn
           </span>
           <div style={{ flex: 1 }} />
-          {/* 接真开关：LIVE = 真 /api/agent/workbench/stream；mock = 剧本回放（默认）。 */}
+          {/* 默认接真（DS-2）：LIVE = 真 /api/agent/workbench/stream；「看演示」= 显式 mock 剧本回放。
+              切到演示即关 LIVE、挂 MockBadge（诚实角标）；回 LIVE 即关演示、起真流。 */}
           <button
             data-live-toggle
+            data-demo-toggle
             aria-pressed={liveMode}
-            onClick={() => setLiveMode((v) => !v)}
+            onClick={() => (liveMode ? enterDemo() : enterLive())}
             title={
               liveMode
-                ? "LIVE：真 agent 流（/api/agent/workbench/stream）"
-                : "切到 LIVE：接真后端 SSE 流"
+                ? "切到「看演示」：mock 剧本回放（全程 MockBadge，不是真流）"
+                : "回「接真」：真 agent 流（/api/agent/workbench/stream）"
             }
             style={{
               background: liveMode ? "var(--desk-accent)" : "transparent",
@@ -471,7 +512,7 @@ export function AgentWorkbenchPage() {
               cursor: "pointer",
             }}
           >
-            {liveMode ? "● LIVE" : "○ 接真"}
+            {liveMode ? "● LIVE · 接真" : "▶ 看演示（mock）"}
           </button>
           {liveMode ? (
             <span
@@ -487,21 +528,24 @@ export function AgentWorkbenchPage() {
           ) : (
             <MockBadge />
           )}
-          <button
-            onClick={restart}
-            style={{
-              background: "transparent",
-              border: "1px solid var(--desk-border)",
-              color: "var(--desk-text-muted)",
-              fontFamily: "inherit",
-              fontSize: 11,
-              padding: "5px 10px",
-              borderRadius: "var(--desk-radius-sm)",
-              cursor: "pointer",
-            }}
-          >
-            ↻ 重放
-          </button>
+          {/* 「↻ 重放」仅在演示模式有意义（重铺 mock 剧本）；接真态隐藏（真流靠对话推进）。 */}
+          {demoMode && (
+            <button
+              onClick={restart}
+              style={{
+                background: "transparent",
+                border: "1px solid var(--desk-border)",
+                color: "var(--desk-text-muted)",
+                fontFamily: "inherit",
+                fontSize: 11,
+                padding: "5px 10px",
+                borderRadius: "var(--desk-radius-sm)",
+                cursor: "pointer",
+              }}
+            >
+              ↻ 重放
+            </button>
+          )}
         </DeskTopBar>
       }
       center={

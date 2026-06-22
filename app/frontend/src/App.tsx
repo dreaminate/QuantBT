@@ -11,6 +11,7 @@ import { GlossaryDetailPage } from "./pages/community/GlossaryDetailPage";
 import { FunnelDashboardPage } from "./pages/FunnelDashboardPage";
 import { PricingPage } from "./pages/PricingPage";
 import SettingsSecurityPage from "./pages/SettingsSecurityPage";
+import LLMSettingsPage from "./pages/LLMSettingsPage";
 import { Shell } from "./components/shell/Shell";
 // DC→React 暗色台（DeskShell 全屏，绕 cc Shell）—— epic cfb0fea9
 import { StrategyConsolePage } from "./pages/StrategyConsolePage";
@@ -101,6 +102,7 @@ export default function App() {
         <Route path="/metrics/funnel" element={<FunnelDashboardPage />} />
         <Route path="/pricing" element={<PricingPage />} />
         <Route path="/settings/security" element={<SettingsSecurityPage />} />
+        <Route path="/settings/llm" element={<LLMSettingsPage />} />
         <Route path="/u/:username" element={<UserProfilePage />} />
       </Routes>
     </Shell>

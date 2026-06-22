@@ -70,7 +70,14 @@ def project_turn_events(
                 payload = json.loads(step.content)
             except Exception:  # noqa: BLE001
                 payload = {"raw": step.content}
-            yield {"event": "tool_end", "data": {"result": payload}}
+            # DS-3 贯穿：若 tool 结果里带 run_id（backtest.run 落 RUN_ROOT 的真 run_id），
+            # 提升到 tool_end 事件顶层，方便前端 onToolEnd 直取贯穿裁决/paper（不必前端再翻 result）。
+            data: dict[str, Any] = {"result": payload}
+            if isinstance(payload, dict):
+                rid = payload.get("run_id")
+                if rid:
+                    data["run_id"] = str(rid)
+            yield {"event": "tool_end", "data": data}
     # 里程碑事件：从执行过的 tool 推出（点亮进度线）。
     for step in turn.steps:
         for call in (step.tool_calls or []):
