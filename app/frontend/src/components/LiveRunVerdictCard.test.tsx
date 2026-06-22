@@ -39,7 +39,14 @@ const VERDICT_OK = {
     "证据一致（容差内且独立性已度量）。适用域：该样本期；未验证项：实盘冲击成本。",
   has_authoritative_verdict: true,
 };
-const OVERFIT_OK = { pbo: 0.18, dsr_conservative: 1.34, color: "yellow", gate_label: "证据分歧" };
+const OVERFIT_OK = {
+  pbo: 0.18,
+  dsr_conservative: 1.34,
+  // 多证据三角第三腿（GateVerdict.to_dict() 真返 [下界, 上界]）。
+  bootstrap_ci: [0.21, 1.97],
+  color: "yellow",
+  gate_label: "证据分歧",
+};
 const COST_OK = {
   derived: true,
   cost: [
@@ -84,6 +91,29 @@ describe("LiveRunVerdictCard · 切真拉端点", () => {
     // PBO/DSR 来自 overfit 端点真值。
     expect(screen.getByText("0.18")).toBeInTheDocument();
     expect(screen.getByText("1.34")).toBeInTheDocument();
+  });
+
+  it("Bootstrap 第三腿：overfit.bootstrap_ci 解析并渲染第三格（多证据三角非二元）", async () => {
+    routeHappy();
+    renderWithDesk(<LiveRunVerdictCard runId="run_x" />);
+    await waitFor(() =>
+      expect(screen.getByTestId("live-run-verdict-card")).toBeInTheDocument(),
+    );
+    // footer 三格齐：PBO / DSR / Bootstrap CI（来自后端真 bootstrap_ci）。
+    expect(screen.getByText("Bootstrap CI")).toBeInTheDocument();
+    expect(screen.getByText("[0.21, 1.97]")).toBeInTheDocument();
+  });
+
+  it("后端 bootstrap_ci 为 NaN/缺失 → 第三格 N/A（诚实不假绿灯）", async () => {
+    routeHappy({
+      "/overfit": jsonRes({ pbo: 0.18, dsr_conservative: 1.34, bootstrap_ci: ["nan", "nan"] }),
+    });
+    renderWithDesk(<LiveRunVerdictCard runId="run_x" />);
+    await waitFor(() =>
+      expect(screen.getByTestId("live-run-verdict-card")).toBeInTheDocument(),
+    );
+    expect(screen.getByText("Bootstrap CI")).toBeInTheDocument();
+    expect(screen.getByText("N/A")).toBeInTheDocument();
   });
 
   it("dataSource=live：header 不再挂 MockBadge（卡顶已接真）", async () => {

@@ -1,13 +1,14 @@
-import { describe, it, expect, beforeEach } from "vitest";
+import { describe, it, expect, beforeEach, afterEach, vi } from "vitest";
 import { readFileSync, readdirSync } from "node:fs";
 import { fileURLToPath } from "node:url";
 import { dirname, join } from "node:path";
-import { screen, fireEvent, within } from "@testing-library/react";
+import { screen, fireEvent, within, waitFor } from "@testing-library/react";
 import {
   renderWithDesk,
   assertNoForbiddenWords,
   assertNoFrozenPageImport,
 } from "../../../test/harness";
+import * as auth from "../../../lib/auth";
 import { AgentWorkbenchPage } from "./AgentWorkbenchPage";
 import { GatePanel } from "./GatePanel";
 import { CoworkArea } from "./CoworkCards";
@@ -398,6 +399,62 @@ describe("治理红线 ⑤ — handoff 止于模拟盘，不导向实盘（D-PER
     for (const banned of ["实盘下单", "直接实盘", "立即下单"]) {
       expect(src).not.toContain(banned);
     }
+  });
+});
+
+describe("DS-3 · liveRunId 贯穿裁决卡（真 run_id → LiveRunVerdictCard 非 mock · #4）", () => {
+  function jsonRes(body: unknown, ok = true, status = 200): Response {
+    return { ok, status, json: async () => body } as unknown as Response;
+  }
+  let spy: ReturnType<typeof vi.spyOn>;
+  beforeEach(() => {
+    spy = vi.spyOn(auth, "authFetch");
+    // 真 run_id 贯穿 → 裁决卡接真三端点（不写死 mock 0.18/1.34）。
+    spy.mockImplementation((url: RequestInfo) => {
+      const u = String(url);
+      if (u.includes("/overfit"))
+        return Promise.resolve(
+          jsonRes({ pbo: 0.42, dsr_conservative: 0.91, bootstrap_ci: [0.07, 1.22] }),
+        );
+      if (u.includes("/cost-sensitivity"))
+        return Promise.resolve(jsonRes({ cost: [] }));
+      if (u.includes("/verdict"))
+        return Promise.resolve(
+          jsonRes({ run_id: "run_live_z", verdict: "consistent", verdictNote: "证据一致；适用域：该样本期；未验证项：实盘冲击成本。" }),
+        );
+      return Promise.resolve(jsonRes({ metrics: {} }));
+    });
+  });
+  afterEach(() => vi.restoreAllMocks());
+
+  it("有真 liveRunId → CoworkArea 渲染 LiveRunVerdictCard（live testid），不退 mock", async () => {
+    const unlocked = new Set<CoworkKind>(["run"]);
+    renderWithDesk(
+      <CoworkArea cowork="run" unlocked={unlocked} liveRunId="run_live_z" />,
+    );
+    // 走 live 卡（接真三端点）——非写死 MOCK_AGENT_RUN。
+    await waitFor(() =>
+      expect(screen.getByTestId("live-run-verdict-card")).toBeInTheDocument(),
+    );
+    // run_id 真贯穿到 fetch（裁决/overfit/cost-sensitivity 都带该 id）。
+    const urls = (spy.mock.calls as unknown[][]).map((c) => String(c[0]));
+    expect(urls.some((u) => u.includes("/run_live_z/overfit"))).toBe(true);
+    // PBO/DSR 来自该 run（0.42 / 0.91），非写死 mock（0.18 / 1.34）。
+    expect(screen.getByText("0.42")).toBeInTheDocument();
+    expect(screen.getByText("0.91")).toBeInTheDocument();
+    // 第三腿来自该 run 的 bootstrap_ci。
+    expect(screen.getByText("[0.07, 1.22]")).toBeInTheDocument();
+  });
+
+  it("无 liveRunId → 退回 mock RunVerdictCard（恒挂 MockBadge，不假绿灯）", () => {
+    const unlocked = new Set<CoworkKind>(["run"]);
+    renderWithDesk(<CoworkArea cowork="run" unlocked={unlocked} />);
+    // 无真 run_id → 不渲染 live 卡，走 mock（MOCK 角标 + 写死 0.18/1.34）。
+    expect(screen.queryByTestId("live-run-verdict-card")).toBeNull();
+    expect(screen.getByTestId("run-verdict-card")).toBeInTheDocument();
+    expect(screen.getAllByText("MOCK 数据").length).toBeGreaterThanOrEqual(1);
+    // mock 卡同样补齐三腿（第三格 Bootstrap CI 在）。
+    expect(screen.getByText("Bootstrap CI")).toBeInTheDocument();
   });
 });
 

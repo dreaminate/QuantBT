@@ -394,6 +394,7 @@ export const MOCK_AGENT_RUN: RunVerdictData = {
   ],
   pbo: 0.18,
   dsr: 1.34,
+  bootstrapCI: [0.21, 1.97],
   verdictNote:
     "双目标在容差内、PBO 0.18 / DSR 1.34 未触发熔断。适用域：中证500 成分、周频、2019–2024；未验证项：制度变更稳健性、实盘冲击成本。建议 pessimistic 成本下纸面跟踪 4 周再决定动钱。",
   promoteState: "candidate",

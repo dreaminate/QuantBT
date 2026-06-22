@@ -75,6 +75,11 @@ export interface RunVerdictData {
   pbo: number;
   dsr: number;
   /**
+   * Bootstrap Sharpe 置信区间 [下界, 上界]（多证据三角第三腿，来自 overfit_gate.bootstrap_ci）。
+   * 健康判据：下界 > 0（区间不跨零 → 显著）。缺省/NaN → 第三格显示「N/A」（诚实，不假绿灯）。
+   */
+  bootstrapCI?: [number, number] | null;
+  /**
    * 合规裁决说明（一致/存疑/不一致 + 适用域 + 未验证项）。
    * 落地须由后端 verifier._verdict_note 供给——前端 mock 仅占位、禁绝对化措辞。
    */
@@ -458,6 +463,7 @@ export function RunVerdictCard({
               data.dsr > 0 ? "var(--desk-success)" : "var(--desk-danger)"
             }
           />
+          <BootstrapStat ci={data.bootstrapCI} />
         </div>
         <div style={{ display: "flex", alignItems: "center", gap: 10 }}>
           <div
@@ -552,6 +558,37 @@ function StatPair({
       <span style={{ color: valueColor, fontWeight: 700 }}>{value}</span>
       <span style={{ color: "var(--desk-text-faint)", fontSize: 10.5 }}>{hint}</span>
     </div>
+  );
+}
+
+/**
+ * 多证据三角第三腿：Bootstrap Sharpe CI 展示格（与 PBO/DSR 并列）。
+ * 健康判据 = 下界 > 0（区间不跨零 → 显著）；缺省/NaN → 「N/A」（诚实不假绿灯）。
+ */
+function BootstrapStat({ ci }: { ci?: [number, number] | null }) {
+  const valid =
+    Array.isArray(ci) &&
+    ci.length === 2 &&
+    Number.isFinite(ci[0]) &&
+    Number.isFinite(ci[1]);
+  if (!valid) {
+    return (
+      <StatPair
+        label="Bootstrap CI"
+        value="N/A"
+        hint="下界>0 显著"
+        valueColor="var(--desk-text-faint)"
+      />
+    );
+  }
+  const [lo, hi] = ci;
+  return (
+    <StatPair
+      label="Bootstrap CI"
+      value={`[${lo.toFixed(2)}, ${hi.toFixed(2)}]`}
+      hint="下界>0 显著"
+      valueColor={lo > 0 ? "var(--desk-success)" : "var(--desk-danger)"}
+    />
   );
 }
 
@@ -1278,6 +1315,7 @@ export const MOCK_RUN_VERDICT: RunVerdictData = {
   ],
   pbo: 0.18,
   dsr: 1.34,
+  bootstrapCI: [0.21, 1.97],
   verdictNote:
     "双目标在容差内、PBO 0.18 / DSR 1.34 未触发熔断。适用域：中证500 成分、周频、2019–2024；未验证项：制度变更稳健性、实盘冲击成本。建议 pessimistic 成本下纸面跟踪 4 周再决定动钱。",
   promoteState: "candidate",

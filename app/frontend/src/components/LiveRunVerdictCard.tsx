@@ -37,6 +37,8 @@ interface OverfitResp {
   pbo?: number | null;
   dsr_conservative?: number;
   dsr_optimistic?: number;
+  // 多证据三角第三腿：GateVerdict.to_dict() 返 [下界, 上界]（NaN→无效，前端显 N/A）。
+  bootstrap_ci?: [number, number] | number[];
 }
 interface CostResp {
   cost?: Array<{ preset: string; sharpe: number; excess: number }>;
@@ -54,6 +56,21 @@ function asVerdict(v: string): Verdict {
 
 function num(v: unknown, d = 0): number {
   return typeof v === "number" && Number.isFinite(v) ? v : d;
+}
+
+/** Bootstrap CI 解析：仅当 [下界,上界] 均为有限数才有效；否则 null（前端显 N/A，不假绿灯）。 */
+function ciOrNull(ci: unknown): [number, number] | null {
+  if (
+    Array.isArray(ci) &&
+    ci.length === 2 &&
+    typeof ci[0] === "number" &&
+    typeof ci[1] === "number" &&
+    Number.isFinite(ci[0]) &&
+    Number.isFinite(ci[1])
+  ) {
+    return [ci[0], ci[1]];
+  }
+  return null;
 }
 
 async function fetchJson<T>(url: string): Promise<T> {
@@ -106,6 +123,7 @@ function mapToData(
     cost: costCells,
     pbo: num(overfit.pbo, 0),
     dsr: num(overfit.dsr_conservative ?? overfit.dsr_optimistic, 0),
+    bootstrapCI: ciOrNull(overfit.bootstrap_ci),
     // note 一律后端供给；缺失用合规占位（不杜撰绝对化措辞）。
     verdictNote:
       verdict.verdictNote ||
