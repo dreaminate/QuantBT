@@ -181,13 +181,32 @@ def synthesize_strategy_code(
     )
 
 
+def _declared_market(code: str) -> str | None:
+    """从 LLM 生成码里抽 emit_result.metadata.market 的声明值（容忍单/双引号、空白）。
+
+    只匹配形如 `"market": "<v>"` / `'market': '<v>'` 的字面量声明（合成码 metadata 总是字面量）。
+    抽不到 → None（调用方据此判废，绝不放过无法核对 market 的输出）。
+    """
+
+    import re
+
+    m = re.search(r"""["']market["']\s*:\s*["']([A-Za-z0-9_]+)["']""", code)
+    return m.group(1) if m else None
+
+
 def _llm_code(
     llm_client: object, *, market: str, strategy_name: str, benchmark: str, lookback: int
 ) -> str | None:
-    """让 LLM 生成策略码；必须含 emit_result + 读 DATA_DIR，否则判废返 None（兜底模板）。
+    """让 LLM 生成策略码；必须含 emit_result + 读 DATA_DIR + market 标签与实读样本一致，否则判废返 None（兜底模板）。
 
     seam 设计：llm_client 须有 `complete(prompt) -> str`（QuantBT LLM 客户端契约）。任何异常 / 不合
     格式 → 返 None，调用方落模板。**绝不**把不含 emit_result 的输出当回测（防假绿灯）。
+
+    §3 防 silent mislabel（M8）：LLM 可能读 crypto 样本却把 metadata.market 标 stocks_cn → promote 出
+    market 标签与实读数据不符的 run，下游无法察觉。故强校验：
+      ① 声明的 metadata.market 必须 == 请求的 market（标签不许漂）；
+      ② 码里实读的样本路径必须是该 market 的 sample_rel（实读数据须与声明 market 对应）。
+    任一不符 → 判废兜底模板（绝不让 metadata.market 与实读数据不符的 run 通过）。
     """
 
     prompt = (
@@ -209,8 +228,16 @@ def _llm_code(
     if not isinstance(raw, str):
         return None
     code = _strip_code_fence(raw)
-    # 硬校验：必须读 DATA_DIR + 调 emit_result，否则不是真回测码（§3 防假绿灯）。
+    # 硬校验①：必须读 DATA_DIR + 调 emit_result，否则不是真回测码（§3 防假绿灯）。
     if "emit_result" not in code or "DATA_DIR" not in code:
+        return None
+    # 硬校验②（M8 防 silent mislabel）：声明 market 必须 == 请求 market；
+    # 实读样本路径必须是该 market 的 sample_rel——任一不符即判废，绝不让标签与实读数据不符的 run 通过。
+    declared = _declared_market(code)
+    if declared != market:
+        return None
+    rel = sample_rel(market)
+    if rel not in code:
         return None
     return code
 
