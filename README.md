@@ -31,16 +31,22 @@ pip install -r requirements.txt
 cd ../frontend && npm install && cd ../..
 
 # 2. （可选）填 secrets
+mkdir -p ~/.quantbt
 cp deploy/secrets.yaml.example ~/.quantbt/secrets.yaml && chmod 600 ~/.quantbt/secrets.yaml
 # 编辑 ~/.quantbt/secrets.yaml 填 tushare token / LLM key 等
 
-# 3. 起服务（前端 :5173 后端 :8000）
-python -m uvicorn --app-dir app/backend app.main:app --port 8000 &
-npm --prefix app/frontend run dev &
+# 3. 一键起服务（前端 :5173 后端 :8000）
+#    npm run dev 会占用当前终端前台跑前端（后端在后台）；不是后台命令，别等它返回。
+npm run dev          # macOS / Linux / Windows 同一条命令
 
-# 4. 浏览器打开
-open http://localhost:5173/
+# 4. 另开一个终端 / 直接在浏览器打开（服务起来后）
+open http://localhost:5173/   # Linux 用 xdg-open，Windows 用 start
 ```
+
+> **数据是 token-gated 的，诚实说明**：**加密自带样本即开即用**（仓库内置 `crypto_perp_demo`
+> 等 demo run，不配任何 key 也能直接看）。**A股需自配 `TUSHARE_TOKEN`**（拉 A股/港股/美股/
+> 指数/基金/债券数据用）——把 token 填进 `~/.quantbt/secrets.yaml` 的 `tushare.token`，或
+> `export TUSHARE_TOKEN=你的token`。没配 token 不影响加密链路与所有 demo。
 
 ## docker compose 一行命令
 

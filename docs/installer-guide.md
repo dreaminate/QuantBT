@@ -14,8 +14,10 @@ QuantBT 提供三种安装方式，按你的偏好选：
 
 ```bash
 git clone <repo> quantbt && cd quantbt
+mkdir -p ~/.quantbt
 cp deploy/secrets.yaml.example ~/.quantbt/secrets.yaml
-# 编辑 ~/.quantbt/secrets.yaml 填字段
+# 编辑 ~/.quantbt/secrets.yaml 填字段（全部可选——加密自带样本即开即用；
+# A股数据需在 tushare.token 填你自己的 TUSHARE_TOKEN）
 docker compose up -d
 # 打开 http://127.0.0.1:5173
 ```
@@ -76,8 +78,13 @@ cd ../frontend
 npm install
 cd ../..
 
-npm run dev   # 仓库根 package.json 串起来
+npm run dev   # 仓库根 package.json 串起来；跨平台分发：
+              #   macOS / Linux → app/start.sh   Windows → app/start-qb.ps1
+              # 前端在当前终端前台（:5173），后端后台（:8000）；Ctrl+C 一并收尾。
 ```
+
+> macOS / Linux 也可不经 npm 直接 `bash app/start.sh`；该脚本会自动 `mkdir -p ~/.quantbt`，
+> 全新机不会因缺目录失败。
 
 ---
 
