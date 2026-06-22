@@ -302,6 +302,10 @@ class PaperDeskService:
         幂等性（复位再跑）：每次先 reset provider 游标 + 清 venue 持仓/现金 + 清空 equity_log + 归零计数，
         再跑同一确定性窗口 → 重复 prime / 重复 submit / 重启 reseed 都产同一 N 点序列，不串行拼接、不漂。
         仅对已注入 provider 的 run 有效；空壳 run（无 provider）tick_once 返 0、净值恒空（§3 不假绿灯）。
+
+        并发安全（M4）：复位/喂 bar/写净值前先停后台调度循环（scheduler.stop() join 线程），避免
+        后台 _bar_loop/_mtm_loop 与 prime 并发改同 venue/state/equity_log → 撕裂写、equity_log 损坏、
+        bars_fed 错乱。复位前若 loop 在跑，prime 后按原态重启（用户视角：re-prime 不停掉已启动的 run）。
         """
 
         with self._lock:
@@ -312,25 +316,39 @@ class PaperDeskService:
                 return {
                     "run_id": run_id, "bars_fed": rec.scheduler.state.bars_fed,
                     "mtm_count": rec.scheduler.state.mtm_count, "fills": 0,
-                    "equity_points": len(self.equity_log(run_id)),
+                    "equity_points": rec.scheduler.state.mtm_count,
                     "simulated": False, "source": None,
                 }
-            # 幂等复位：游标归零 + venue 清态/复位现金/清空 equity_log + 计数归零 + 重新建仓引子。
-            rec.provider.reset()
-            rec.venue.reset_simulation_state(rec.initial_cash)
-            rec.scheduler.state.bars_fed = 0
-            rec.scheduler.state.mtm_count = 0
-            seed_positions(rec.venue, rec.symbols)
-            fills = 0
-            for _ in range(max(0, ticks)):
-                fills += rec.scheduler.tick_once()
-                rec.scheduler.mtm_once()
+            # M4：先停后台循环并 join，确保复位/喂 bar 期间无并发改同 venue/state/equity_log。
+            was_running = rec.scheduler.state.running
+            if was_running:
+                rec.scheduler.stop()
+            reset_ok = False
+            try:
+                # 幂等复位：游标归零 + venue 清态/复位现金/清空 equity_log + 计数归零 + 重新建仓引子。
+                rec.provider.reset()
+                rec.venue.reset_simulation_state(rec.initial_cash)
+                rec.scheduler.state.bars_fed = 0
+                rec.scheduler.state.mtm_count = 0
+                seed_positions(rec.venue, rec.symbols)
+                fills = 0
+                for _ in range(max(0, ticks)):
+                    fills += rec.scheduler.tick_once()
+                    rec.scheduler.mtm_once()
+                reset_ok = True
+            finally:
+                # 复位前在跑则按原态重启（prime 不应静默停掉用户已 start 的 run）。
+                # 仅在复位段全部成功后重启：若 reset/喂数据中途抛错（如 equity_log 写盘失败），
+                # 不把后台 loop 拉回半复位的 venue/state 上跑（异常安全：宁可保持 stopped 让异常上浮）。
+                if was_running and reset_ok:
+                    rec.scheduler.start()
             return {
                 "run_id": run_id,
                 "bars_fed": rec.scheduler.state.bars_fed,
                 "mtm_count": rec.scheduler.state.mtm_count,
                 "fills": fills,
-                "equity_points": len(self.equity_log(run_id)),
+                # perf：equity_points 直取内存 mtm_count（=净值行数），不重读 json.loads 整个 jsonl。
+                "equity_points": rec.scheduler.state.mtm_count,
                 "simulated": rec.simulated_source is not None,
                 "source": rec.simulated_source,
             }
@@ -347,14 +365,17 @@ class PaperDeskService:
             return [self._run_summary(r) for r in self._runs.values()]
 
     def start(self, run_id: str) -> dict[str, Any]:
-        rec = self.get(run_id)
-        rec.scheduler.start()
-        return self.status(run_id)
+        # 持 desk _lock：与 prime_run 串行化，杜绝「prime 复位中途被并发 start 启动后台循环」竞态（M4）。
+        with self._lock:
+            rec = self.get(run_id)
+            rec.scheduler.start()
+            return self.status(run_id)
 
     def stop(self, run_id: str) -> dict[str, Any]:
-        rec = self.get(run_id)
-        rec.scheduler.stop()
-        return self.status(run_id)
+        with self._lock:
+            rec = self.get(run_id)
+            rec.scheduler.stop()
+            return self.status(run_id)
 
     # ----- 状态 / book 派生 -----
     def status(self, run_id: str) -> dict[str, Any]:
