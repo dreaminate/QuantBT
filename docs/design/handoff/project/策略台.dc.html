@@ -1,0 +1,1249 @@
+<!DOCTYPE html>
+<html>
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<script src="./support.js"></script>
+</head>
+<body>
+<x-dc>
+<helmet>
+<link href="https://fonts.googleapis.com/css2?family=JetBrains+Mono:wght@400;500;600;700&display=swap" rel="stylesheet">
+<style>
+  * { box-sizing: border-box; }
+  html, body { margin: 0; padding: 0; height: 100%; background: #1c1b19; overflow: hidden; }
+  body { font-family: "JetBrains Mono", ui-monospace, "SF Mono", Menlo, monospace; -webkit-font-smoothing: antialiased; }
+  ::selection { background: rgba(217,119,87,0.28); }
+  *::-webkit-scrollbar { width: 9px; height: 9px; }
+  *::-webkit-scrollbar-thumb { background: #3a3733; border-radius: 6px; }
+  *::-webkit-scrollbar-track { background: transparent; }
+  a { text-decoration: none; color: inherit; }
+  input, textarea { font-family: inherit; }
+  @keyframes sbpulse { 0%,100% { opacity:1; } 50% { opacity:0.35; } }
+  @keyframes sbring { 0% { box-shadow:0 0 0 0 rgba(217,119,87,0.45);} 100% { box-shadow:0 0 0 7px rgba(217,119,87,0);} }
+  @keyframes sbdash { to { stroke-dashoffset:-16; } }
+</style>
+</helmet>
+<div style="display:flex; flex-direction:column; height:100vh; background:#1c1b19; color:#e6e1d6; font-size:13px; line-height:1.5; user-select:none; position:relative;">
+
+  <!-- ░░ TOPBAR ░░ -->
+  <div style="flex:none; display:flex; align-items:center; gap:10px; height:44px; padding:0 14px; background:#201f1c; border-bottom:1px solid #302d29; z-index:60;">
+    <span style="color:#d97757; font-weight:700;">✳</span>
+    <span style="font-weight:600;">QuantBT</span>
+    <div style="display:flex; gap:2px; margin-left:4px; background:#1a1916; border:1px solid #302d29; border-radius:8px; padding:3px;">
+      <a href="%E5%9B%A0%E5%AD%90%E5%8F%B0.dc.html" style="display:flex; align-items:center; font-size:11px; padding:3px 9px; border-radius:6px; color:#a39a8a;" style-hover="background:#2a2723; color:#e6e1d6;">因子台</a>
+      <a href="Model%E5%8F%B0.dc.html" style="display:flex; align-items:center; font-size:11px; padding:3px 9px; border-radius:6px; color:#a39a8a;" style-hover="background:#2a2723; color:#e6e1d6;">Model台</a>
+      <span style="display:flex; align-items:center; font-size:11px; padding:3px 9px; border-radius:6px; background:#d97757; color:#1c1b19; font-weight:700;">策略台</span>
+      <a href="%E6%A8%A1%E6%8B%9F%E5%8F%B0.dc.html" style="display:flex; align-items:center; font-size:11px; padding:3px 9px; border-radius:6px; color:#a39a8a;" style-hover="background:#2a2723; color:#e6e1d6;">模拟台</a>
+    </div>
+    <div style="width:1px; height:18px; background:#302d29; margin:0 2px;"></div>
+    <span style="color:#e6e1d6; font-weight:600;">strat_wk_cn_01</span>
+    <button onClick="{{ verToggle }}" style="background:#1a1916; border:1px solid #302d29; color:#a39a8a; font-family:inherit; font-size:11px; padding:4px 9px; border-radius:7px; cursor:pointer;" style-hover="border-color:#4a463f;">{{ versionLabel }} ▾</button>
+    <div style="display:flex; gap:2px; margin-left:4px; background:#1a1916; border:1px solid #302d29; border-radius:8px; padding:3px;">
+      <sc-for list="{{ runtimeBtns }}" as="r" hint-placeholder-count="3"><button onClick="{{ r.on }}" style="{{ r.style }}">{{ r.label }}</button></sc-for>
+    </div>
+    <sc-if value="{{ liveGov }}">
+      <span style="font-size:10px; color:#d9b25f; border:1px solid #5a4a2a; background:rgba(217,178,95,.12); padding:3px 9px; border-radius:20px;">🔒 Live 只读</span>
+      <button onClick="{{ fork }}" style="background:#1e261a; border:1px solid #3c5230; color:#bcd98a; font-family:inherit; font-size:11px; padding:4px 10px; border-radius:7px; cursor:pointer;" style-hover="background:#243420;">⑂ Fork 草稿</button>
+      <button onClick="{{ kill }}" style="{{ killStyle }}">{{ killLabel }}</button>
+    </sc-if>
+    <div style="flex:1;"></div>
+    <button onClick="{{ undo }}" title="撤销 ⌘Z" style="{{ undoStyle }}">↺</button>
+    <button onClick="{{ redo }}" title="重做 ⌘⇧Z" style="{{ redoStyle }}">↻</button>
+    <div style="width:1px; height:18px; background:#302d29; margin:0 4px;"></div>
+    <button onClick="{{ validate }}" style="background:#1a1916; border:1px solid {{ errBorder }}; color:{{ errColor }}; font-family:inherit; font-size:11.5px; padding:5px 11px; border-radius:7px; cursor:pointer;">{{ errLabel }}</button>
+    <button onClick="{{ runClick }}" style="background:#1e261a; border:1px solid #3c5230; color:#bcd98a; font-family:inherit; font-size:11.5px; padding:5px 12px; border-radius:7px; cursor:pointer;" style-hover="background:#243420;">{{ runLabel }}</button>
+    <button onClick="{{ openCode }}" style="background:#161f2a; border:1px solid #2c4452; color:#9bc4ea; font-family:inherit; font-size:11.5px; padding:5px 11px; border-radius:7px; cursor:pointer;" style-hover="background:#1b2735;">⟨/⟩ 编译源码</button>
+    <button onClick="{{ openPublish }}" style="background:transparent; border:1px solid #302d29; color:#a39a8a; font-size:11.5px; padding:5px 11px; border-radius:7px; cursor:pointer;" style-hover="border-color:#4a463f;">发布 ▸</button>
+    <a href="%E7%AD%96%E7%95%A5%E5%8F%B0%E8%93%9D%E6%9C%AC.dc.html" style="font-size:11px; color:#6f6a61; margin-left:2px;" style-hover="color:#cfc8ba;">蓝本↗</a>
+  </div>
+
+  <!-- version popover -->
+  <sc-if value="{{ verMenuOpen }}">
+    <div style="position:absolute; top:48px; left:196px; width:282px; background:#211f1c; border:1px solid #3a352e; border-radius:11px; box-shadow:0 16px 40px rgba(0,0,0,0.5); z-index:80; overflow:hidden;">
+      <div style="padding:9px 13px; border-bottom:1px solid #302d29; font-size:11px; color:#8f897c;">版本历史 · GraphVersion</div>
+      <sc-for list="{{ versionRows }}" as="v" hint-placeholder-count="3">
+        <div style="display:flex; align-items:center; gap:9px; padding:9px 13px; border-bottom:1px solid #262320;">
+          <span style="width:7px; height:7px; border-radius:50%; background:{{ v.dot }}; flex:none;"></span>
+          <div style="flex:1; min-width:0;"><div style="color:#cfc8ba; font-size:12px;">{{ v.label }}</div><div style="font-size:9.5px; color:#6f6a61;">{{ v.lifecycle }}</div></div>
+          <button onClick="{{ v.diff }}" style="background:#1a1916; border:1px solid #2c4452; color:#6f9bd1; font-family:inherit; font-size:10px; padding:3px 8px; border-radius:6px; cursor:pointer;">对比</button>
+          <button onClick="{{ v.rollback }}" style="background:#1a1916; border:1px solid #3a3733; color:#a39a8a; font-family:inherit; font-size:10px; padding:3px 8px; border-radius:6px; cursor:pointer;">回滚</button>
+        </div>
+      </sc-for>
+      <div style="display:flex; gap:6px; padding:10px 13px;">
+        <button onClick="{{ cloneVer }}" style="flex:1; background:#1a1916; border:1px solid #3a3733; color:#cfc8ba; font-family:inherit; font-size:11px; padding:6px; border-radius:7px; cursor:pointer;">⎘ Clone</button>
+        <button onClick="{{ branchVer }}" style="flex:1; background:#1a1916; border:1px solid #3a3733; color:#cfc8ba; font-family:inherit; font-size:11px; padding:6px; border-radius:7px; cursor:pointer;">⎇ Branch</button>
+        <span onClick="{{ verToggle }}" style="align-self:center; color:#6f6a61; cursor:pointer; padding:0 4px;">✕</span>
+      </div>
+    </div>
+  </sc-if>
+
+  <!-- ░░ BODY ░░ -->
+  <div style="flex:1; min-height:0; display:flex; flex-direction:column;">
+    <div style="flex:1; min-height:0; display:flex;">
+
+      <!-- ▒ LEFT · AGENT ▒ -->
+      <sc-if value="{{ leftCollapsed }}">
+        <div onClick="{{ leftToggle }}" style="flex:none; width:32px; border-right:1px solid #302d29; background:#1d1c19; display:flex; flex-direction:column; align-items:center; padding-top:12px; gap:8px; cursor:pointer;" style-hover="background:#211f1c;"><span style="color:#d97757;">✳</span><span style="writing-mode:vertical-rl; font-size:11px; color:#8f897c; letter-spacing:1px;">Agent ›</span></div>
+      </sc-if>
+      <sc-if value="{{ leftOpen }}">
+      <div style="flex:none; width:316px; display:flex; flex-direction:column; border-right:1px solid #302d29; background:#1b1a17;">
+        <div style="flex:none; display:flex; align-items:center; gap:8px; padding:9px 13px; border-bottom:1px solid #302d29;">
+          <span style="color:#d97757;">✳</span><span style="font-weight:600; font-size:12.5px;">Agent</span>
+          <div style="display:flex; gap:2px; margin-left:6px; background:#161512; border:1px solid #302d29; border-radius:7px; padding:2px;">
+            <sc-for list="{{ modeBtns }}" as="m" hint-placeholder-count="3"><button onClick="{{ m.on }}" style="{{ m.style }}">{{ m.label }}</button></sc-for>
+          </div>
+          <div style="flex:1;"></div>
+          <span onClick="{{ leftToggle }}" style="color:#6f6a61; cursor:pointer; font-size:13px;" style-hover="color:#cfc8ba;">‹</span>
+        </div>
+        <div style="flex:none; padding:6px 13px; border-bottom:1px solid #262320; font-size:9.5px; color:#7d7668; line-height:1.6;">{{ modeHint }}</div>
+        <div id="sb-agentscroll" style="flex:1; min-height:0; overflow-y:auto; padding:10px 13px;">
+          <div style="font-size:10px; color:#5f5b53; margin-bottom:8px; letter-spacing:0.5px;">上下文 · {{ ctxLabel }}</div>
+          <sc-for list="{{ agentBlocks }}" as="b" hint-placeholder-count="0">
+            <sc-if value="{{ b.isUser }}"><div style="display:flex; gap:8px; margin:13px 0 5px;"><span style="color:#d97757; flex:none; font-weight:700;">&gt;</span><span style="color:#cfc8ba; white-space:pre-wrap;">{{ b.text }}</span></div></sc-if>
+            <sc-if value="{{ b.isThink }}"><div style="display:flex; gap:8px; margin:9px 0; color:#8a7e6a;"><span style="color:#9b8d72;">✻</span><span style="font-style:italic; white-space:pre-wrap; font-size:12px;">{{ b.text }}</span></div></sc-if>
+            <sc-if value="{{ b.isSay }}"><div style="display:flex; gap:8px; margin:8px 0;"><span style="color:#d97757; flex:none;">●</span><span style="color:#e6e1d6; white-space:pre-wrap;">{{ b.text }}</span></div></sc-if>
+            <sc-if value="{{ b.isPatch }}">
+              <div style="margin:9px 0; border:1px solid {{ b.patchBorder }}; background:#201f1c; border-radius:9px; padding:9px 12px;">
+                <div style="display:flex; align-items:center; gap:7px; margin-bottom:5px;"><span style="color:{{ b.patchIcon2 }};">⟳</span><span style="color:#e6e1d6; font-weight:600; font-size:12px;">{{ b.text }}</span><span style="margin-left:auto; font-size:9.5px; color:#8f897c; border:1px solid #3a3733; border-radius:20px; padding:1px 7px;">{{ b.patchId }}</span></div>
+                <div style="font-size:10.5px; color:#8f897c; margin-bottom:8px;">受影响 · {{ b.affected }}</div>
+                <sc-if value="{{ b.reverted }}"><div style="font-size:11px; color:#9bbd5a;">✓ 整轮已撤销</div></sc-if>
+                <sc-if value="{{ b.notReverted }}"><button onClick="{{ b.undo }}" style="background:#2a1d1b; border:1px solid #523630; color:#d99a8e; font-family:inherit; font-size:11px; padding:5px 11px; border-radius:7px; cursor:pointer;" style-hover="border-color:#8a4d3a;">↺ 整轮撤销 Patch</button></sc-if>
+              </div>
+            </sc-if>
+          </sc-for>
+
+          <!-- ASK proposal (Ghost) card -->
+          <sc-if value="{{ hasProposal }}">
+            <div style="margin:11px 0 9px; border:1px dashed #5a4a6a; background:#211c26; border-radius:9px; padding:10px 12px;">
+              <div style="display:flex; align-items:center; gap:7px; margin-bottom:7px;"><span style="color:#b89cd8;">◇</span><span style="color:#d8c9ec; font-weight:600; font-size:12px;">{{ proposal.title }}</span><span style="margin-left:auto; font-size:9.5px; color:#8f897c; border:1px solid #4a4060; border-radius:20px; padding:1px 7px;">Ghost · {{ proposal.patchId }}</span></div>
+              <sc-for list="{{ proposal.diff }}" as="d" hint-placeholder-count="2"><div style="display:flex; gap:7px; font-size:11px; margin:2px 0;"><span style="color:{{ d.c }}; flex:none; font-weight:700;">{{ d.sign }}</span><span style="color:#bdb2c8;">{{ d.t }}</span></div></sc-for>
+              <div style="font-size:9.5px; color:#9a8db0; margin:7px 0 8px;">↑ 画布上虚线即此提议的 Ghost 预览（影响 {{ proposal.affectedCount }} 处）</div>
+              <div style="display:flex; gap:6px;"><button onClick="{{ acceptProposal }}" style="background:#2a2438; border:1px solid #6a5a8a; color:#d8c9ec; font-family:inherit; font-size:11px; padding:6px 12px; border-radius:7px; cursor:pointer;" style-hover="background:#332a45;">✓ 接受 Patch</button><button onClick="{{ rejectProposal }}" style="background:transparent; border:1px solid #3a3733; color:#8f897c; font-family:inherit; font-size:11px; padding:6px 12px; border-radius:7px; cursor:pointer;">拒绝</button></div>
+            </div>
+          </sc-if>
+        </div>
+        <div style="flex:none; border-top:1px solid #302d29; padding:10px 13px;">
+          <div style="display:flex; gap:8px; align-items:flex-start; border:1px solid {{ inputBorder }}; background:#211f1c; border-radius:10px; padding:8px 11px;">
+            <span style="color:#d97757; font-weight:700; line-height:1.6;">&gt;</span>
+            <textarea value="{{ draft }}" onInput="{{ onDraft }}" onKeyDown="{{ onKey }}" placeholder="{{ composerPh }}" rows="1" style="flex:1; resize:none; background:transparent; border:none; outline:none; color:#e6e1d6; font-size:12.5px; line-height:1.6; max-height:90px;"></textarea>
+            <button onClick="{{ send }}" style="flex:none; background:#d97757; border:none; color:#1c1b19; font-family:inherit; font-weight:700; font-size:11px; padding:5px 10px; border-radius:7px; cursor:pointer;">↵</button>
+          </div>
+          <div style="display:flex; align-items:center; gap:8px; margin-top:6px; font-size:10px; color:#6f6a61;"><span style="color:#9bbd5a;">⏺</span> sonnet-4.5 <span style="color:#3a3733;">│</span> <span style="color:{{ modeColor }};">{{ modeGlyph }} {{ agentMode }}</span> <span style="color:#3a3733;">│</span> ⎇ strat/weekly-cn</div>
+        </div>
+      </div>
+      </sc-if>
+
+      <!-- ▒ CENTER · CANVAS ▒ -->
+      <div style="flex:1; min-width:0; display:flex; flex-direction:column; background:#191815;">
+        <div style="flex:none; display:flex; align-items:center; gap:7px; padding:7px 12px; border-bottom:1px solid #302d29; background:#1d1c19;">
+          <button onClick="{{ zoomOut }}" style="{{ ctrlBtn }}">−</button>
+          <span style="font-size:11px; color:#a39a8a; min-width:38px; text-align:center;">{{ zoomPct }}</span>
+          <button onClick="{{ zoomIn }}" style="{{ ctrlBtn }}">＋</button>
+          <button onClick="{{ fit }}" style="{{ ctrlBtnW }}">适应</button>
+          <button onClick="{{ autoLayout }}" style="{{ ctrlBtnW }}">⧉ 自动布局</button>
+          <div style="width:1px; height:16px; background:#302d29; margin:0 3px;"></div>
+          <span style="font-size:10.5px; color:#6f6a61; white-space:nowrap; overflow:hidden; text-overflow:ellipsis; min-width:0;">{{ canvasHint }}</span>
+          <div style="flex:1; min-width:8px;"></div>
+          <span style="font-size:9.5px; color:#6f9bd1; border:1px solid #2c4452; background:rgba(111,155,209,.1); padding:2px 8px; border-radius:20px;">MOCK 数据</span>
+          <span style="font-size:10.5px; color:#8f897c;">{{ selCountLabel }}</span>
+        </div>
+
+        <div id="sb-graph" onPointerDown="{{ bgDown }}" style="flex:1; min-height:0; position:relative; overflow:hidden; cursor:{{ surfCursor }}; {{ gridStyle }}">
+
+          <!-- diff banner -->
+          <sc-if value="{{ diffOn }}"><div style="position:absolute; top:10px; left:50%; transform:translateX(-50%); z-index:42; display:flex; align-items:center; gap:11px; background:#1b2330; border:1px solid #2c4452; border-radius:9px; padding:6px 13px; font-size:11px; color:#a7c0d8;"><span style="color:#6f9bd1; font-weight:600;">对比 {{ diffLabel }}</span><span style="color:#9bbd5a;">+{{ diffAdded }} 新增</span><span style="color:#d9b25f;">~{{ diffChanged }} 改动</span><button onClick="{{ exitDiff }}" style="background:transparent; border:1px solid #3a4452; color:#8f9aab; font-family:inherit; font-size:10px; padding:2px 8px; border-radius:6px; cursor:pointer;">退出对比</button></div></sc-if>
+          <!-- trace banner -->
+          <sc-if value="{{ traceOn }}"><div style="position:absolute; top:10px; left:50%; transform:translateX(-50%); z-index:42; display:flex; align-items:center; gap:11px; background:#2a2317; border:1px solid #5a4a2a; border-radius:9px; padding:6px 13px; font-size:11px; color:#e0cda0;"><span style="color:#d9b25f; font-weight:600;">血缘高亮 · {{ traceLabel }}</span><span style="color:#8f897c;">沿链路上溯 {{ traceCount }} 节点</span><button onClick="{{ clearTrace }}" style="background:transparent; border:1px solid #5a4a2a; color:#bba86a; font-family:inherit; font-size:10px; padding:2px 8px; border-radius:6px; cursor:pointer;">清除</button></div></sc-if>
+
+          <sc-if value="{{ marqueeOn }}"><div style="position:absolute; left:{{ marquee.x }}px; top:{{ marquee.y }}px; width:{{ marquee.w }}px; height:{{ marquee.h }}px; border:1px dashed #6f9bd1; background:rgba(111,155,209,0.08); pointer-events:none; z-index:40;"></div></sc-if>
+
+          <div id="sb-pan" style="position:absolute; inset:0; transform:translate({{ panX }}px,{{ panY }}px) scale({{ zoom }}); transform-origin:0 0;">
+
+            <sc-for list="{{ stages }}" as="s" hint-placeholder-count="8">
+              <div style="{{ s.frameStyle }}">
+                <div style="position:absolute; top:-26px; left:0; display:flex; align-items:center; gap:8px; white-space:nowrap;">
+                  <span style="font-size:12px; color:{{ s.titleColor }}; font-weight:600;">{{ s.idx }} · {{ s.title }}</span>
+                  <span style="font-size:10px; color:#7d7668;">{{ s.compLabel }}</span>
+                  <sc-if value="{{ s.hasMissing }}"><span style="font-size:9.5px; color:#d9b25f; border:1px solid #5a4a2a; border-radius:20px; padding:0 7px;">{{ s.missingText }}</span></sc-if>
+                </div>
+              </div>
+            </sc-for>
+
+            <svg style="position:absolute; inset:0; width:100%; height:100%; pointer-events:none; overflow:visible;">
+              <defs><marker id="sbarrow" markerWidth="9" markerHeight="9" refX="7" refY="3" orient="auto"><path d="M0,0 L7,3 L0,6 Z" fill="#6a6258"></path></marker></defs>
+              <sc-for list="{{ edges }}" as="e" hint-placeholder-count="0">
+                <path d="{{ e.path }}" fill="none" stroke="{{ e.stroke }}" stroke-width="{{ e.width }}" stroke-dasharray="{{ e.dash }}" opacity="{{ e.opacity }}" marker-end="url(#sbarrow)" style="pointer-events:stroke; cursor:pointer;" onClick="{{ e.click }}"></path>
+              </sc-for>
+              <sc-for list="{{ ghostEdges }}" as="g" hint-placeholder-count="0">
+                <path d="{{ g.path }}" fill="none" stroke="#b89cd8" stroke-width="2" stroke-dasharray="6 5" opacity="0.8"></path>
+              </sc-for>
+              <sc-if value="{{ linkOn }}"><path d="{{ linkPath }}" fill="none" stroke="{{ linkColor }}" stroke-width="2" stroke-dasharray="5 4"></path></sc-if>
+            </svg>
+
+            <!-- ghost nodes -->
+            <sc-for list="{{ ghostNodes }}" as="g" hint-placeholder-count="0">
+              <div style="{{ g.wrapStyle }}">
+                <div style="border:1.5px dashed #6a5a8a; background:rgba(40,32,55,0.72); border-radius:9px; box-shadow:0 0 0 3px rgba(184,156,216,0.12);">
+                  <div style="display:flex; align-items:center; gap:6px; padding:5px 9px; border-bottom:1px dashed #4a4060;"><span style="color:#b89cd8;">◇</span><span style="font-weight:600; font-size:11.5px; color:#d8c9ec; flex:1;">{{ g.title }}</span><span style="font-size:8.5px; color:#b89cd8; border:1px solid #4a4060; border-radius:20px; padding:0 6px;">Ghost</span></div>
+                  <div style="padding:6px 9px; display:flex; flex-direction:column; gap:2px;"><sc-for list="{{ g.lines }}" as="ln" hint-placeholder-count="0"><div style="font-size:10px; color:#a99cc0;">{{ ln }}</div></sc-for></div>
+                </div>
+              </div>
+            </sc-for>
+
+            <sc-for list="{{ nodes }}" as="n" hint-placeholder-count="0">
+              <div style="{{ n.wrapStyle }}">
+                <sc-for list="{{ n.inPorts }}" as="p" hint-placeholder-count="0">
+                  <div onPointerUp="{{ p.up }}" onPointerEnter="{{ p.enter }}" onPointerLeave="{{ p.leave }}" title="{{ p.title }}" style="position:absolute; left:-7px; top:{{ p.top }}; width:14px; height:14px; border-radius:50%; background:{{ p.bg }}; border:1.5px solid {{ p.border }}; z-index:6; cursor:crosshair;"></div>
+                </sc-for>
+                <sc-for list="{{ n.outPorts }}" as="p" hint-placeholder-count="0">
+                  <div onPointerDown="{{ p.down }}" title="{{ p.title }}" style="position:absolute; right:-7px; top:{{ p.top }}; width:14px; height:14px; border-radius:50%; background:{{ p.bg }}; border:1.5px solid {{ p.border }}; z-index:6; cursor:crosshair;"></div>
+                </sc-for>
+                <div onPointerDown="{{ n.headDown }}" onClick="{{ n.select }}" style="{{ n.cardStyle }}">
+                  <div style="display:flex; align-items:center; gap:6px; padding:5px 9px; background:{{ n.headBg }}; border-bottom:1px solid {{ n.border }}; border-radius:8px 8px 0 0;">
+                    <span style="width:7px; height:7px; border-radius:2px; background:{{ n.dotColor }}; flex:none;"></span>
+                    <span style="font-weight:600; font-size:11.5px; color:#e6e1d6; flex:1; min-width:0; overflow:hidden; text-overflow:ellipsis;">{{ n.title }}</span>
+                    <sc-if value="{{ n.diffBadge }}"><span style="font-size:8.5px; color:{{ n.diffColor }}; border:1px solid {{ n.diffColor }}; border-radius:20px; padding:0 5px; flex:none;">{{ n.diffBadge }}</span></sc-if>
+                    <sc-if value="{{ n.locked }}"><span style="font-size:10px; color:#d97066;" title="不可删除/绕过">🔒</span></sc-if>
+                    <span style="width:6px; height:6px; border-radius:50%; background:{{ n.stateColor }}; flex:none; {{ n.statePulse }}" title="{{ n.stateLabel }}"></span>
+                  </div>
+                  <div style="padding:6px 9px; display:flex; flex-direction:column; gap:2px;">
+                    <sc-for list="{{ n.lines }}" as="ln" hint-placeholder-count="0"><div style="font-size:10px; color:#9a9488; white-space:nowrap; overflow:hidden; text-overflow:ellipsis;">{{ ln }}</div></sc-for>
+                    <sc-if value="{{ n.badge }}"><div style="margin-top:3px;"><span style="{{ n.badgeStyle }}">{{ n.badge }}</span></div></sc-if>
+                    <sc-if value="{{ n.openRun }}"><div onClick="{{ n.openRunClick }}" style="margin-top:4px; font-size:10px; color:#6f9bd1; cursor:pointer;" style-hover="text-decoration:underline;">↗ 打开回测详情</div></sc-if>
+                  </div>
+                </div>
+              </div>
+            </sc-for>
+          </div>
+
+          <div style="position:absolute; right:12px; bottom:12px; width:158px; height:104px; background:rgba(22,21,18,0.82); border:1px solid #302d29; border-radius:8px; overflow:hidden; z-index:30;">
+            <sc-for list="{{ miniNodes }}" as="m" hint-placeholder-count="0"><div style="{{ m.style }}"></div></sc-for>
+            <div style="{{ miniViewStyle }}"></div>
+          </div>
+          <div style="position:absolute; left:12px; bottom:12px; display:flex; gap:6px; z-index:30; flex-wrap:wrap; max-width:60%;">
+            <span style="font-size:9.5px; color:#9bbd5a; background:rgba(127,166,80,.12); border:1px solid #3c5230; padding:2px 8px; border-radius:20px;">● 兼容</span>
+            <span style="font-size:9.5px; color:#6f9bd1; background:rgba(111,155,209,.12); border:1px solid #2c4452; padding:2px 8px; border-radius:20px;">◐ 可适配</span>
+            <span style="font-size:9.5px; color:#d9b25f; background:rgba(217,178,95,.12); border:1px solid #5a4a2a; padding:2px 8px; border-radius:20px;">⚠ 需转换</span>
+            <span style="font-size:9.5px; color:#d97066; background:rgba(217,112,102,.12); border:1px solid #523630; padding:2px 8px; border-radius:20px;">✕ 不兼容</span>
+          </div>
+        </div>
+      </div>
+
+      <!-- ▒ RIGHT · INSPECTOR ▒ -->
+      <sc-if value="{{ rightCollapsed }}">
+        <div onClick="{{ rightToggle }}" style="flex:none; width:32px; border-left:1px solid #302d29; background:#1d1c19; display:flex; flex-direction:column; align-items:center; padding-top:12px; gap:8px; cursor:pointer;" style-hover="background:#211f1c;"><span style="color:#6f9bd1;">◰</span><span style="writing-mode:vertical-rl; font-size:11px; color:#8f897c; letter-spacing:1px;">‹ Inspector</span></div>
+      </sc-if>
+      <sc-if value="{{ rightOpen }}">
+      <div style="flex:none; width:340px; display:flex; flex-direction:column; border-left:1px solid #302d29; background:#1b1a17;">
+        <div style="flex:none; display:flex; align-items:center; gap:8px; padding:9px 13px; border-bottom:1px solid #302d29;">
+          <span style="color:#6f9bd1;">◰</span><span style="font-weight:600; font-size:12.5px;">{{ inspTitle }}</span>
+          <div style="flex:1;"></div>
+          <span onClick="{{ rightToggle }}" style="color:#6f6a61; cursor:pointer; font-size:13px;" style-hover="color:#cfc8ba;">›</span>
+        </div>
+
+        <sc-if value="{{ hasSel }}">
+        <div style="flex:1; min-height:0; overflow-y:auto;">
+          <div style="padding:12px 14px; border-bottom:1px solid #2a2723;">
+            <div style="display:flex; align-items:center; gap:8px;"><span style="width:9px; height:9px; border-radius:2px; background:{{ insp.catColor }};"></span><span style="font-weight:600; font-size:14px;">{{ insp.title }}</span></div>
+            <div style="margin-top:5px; display:flex; gap:8px; flex-wrap:wrap;"><span style="font-size:10px; color:#8f897c; border:1px solid #3a3733; border-radius:20px; padding:1px 8px;">{{ insp.category }}</span><span style="font-size:10px; color:{{ insp.stateColor }}; border:1px solid #3a3733; border-radius:20px; padding:1px 8px;">{{ insp.stateLabel }}</span><sc-if value="{{ insp.mock }}"><span style="font-size:10px; color:#6f9bd1; border:1px solid #2c4452; border-radius:20px; padding:1px 8px;">MOCK</span></sc-if></div>
+            <div style="margin-top:8px; color:#a39a8a; font-size:11.5px; line-height:1.6;">{{ insp.desc }}</div>
+          </div>
+          <div style="display:flex; gap:2px; padding:8px 12px 0;">
+            <sc-for list="{{ inspTabs }}" as="t" hint-placeholder-count="4"><button onClick="{{ t.on }}" style="{{ t.style }}">{{ t.label }}</button></sc-for>
+          </div>
+          <sc-if value="{{ inspParamsTab }}">
+          <div style="padding:10px 14px;">
+            <sc-if value="{{ insp.noParams }}"><div style="color:#5f5b53; font-size:11px; padding:8px 0;">此节点无可调参数。</div></sc-if>
+            <sc-for list="{{ insp.params }}" as="p" hint-placeholder-count="0">
+              <div style="display:flex; align-items:center; gap:10px; margin-bottom:8px;"><span title="{{ p.tip }}" style="display:flex; align-items:baseline; gap:5px; font-size:11px; color:#7d8aa0; min-width:108px; cursor:help;"><span>{{ p.label }}</span><sc-if value="{{ p.hasTip }}"><span style="flex:none; width:13px; height:13px; line-height:13px; text-align:center; font-size:9px; color:#16202c; background:#6f9bd1; border-radius:50%;">?</span></sc-if></span><input value="{{ p.v }}" onInput="{{ p.onInput }}" {{ p.disabled }} style="flex:1; min-width:0; background:#161512; border:1px solid #302d29; color:#cfc8ba; font-size:11.5px; padding:5px 8px; border-radius:6px; outline:none;"></div>
+            </sc-for>
+          </div>
+          </sc-if>
+          <sc-if value="{{ inspPortsTab }}">
+          <div style="padding:10px 14px;">
+            <div style="font-size:10px; color:#5f5b53; margin-bottom:6px; letter-spacing:0.5px;">输入端口</div>
+            <sc-for list="{{ insp.ins }}" as="p" hint-placeholder-count="0"><div style="background:#161512; border:1px solid #2a2723; border-left:2px solid {{ p.req }}; border-radius:7px; padding:7px 9px; margin-bottom:6px;"><div style="display:flex; gap:8px;"><span style="color:#cfc8ba; font-weight:600; font-size:11px;">{{ p.name }}</span><span style="margin-left:auto; font-size:10px; color:{{ p.connColor }};">{{ p.conn }}</span></div><div style="font-size:9.5px; color:#7d7668; margin-top:3px; line-height:1.6;">{{ p.meta }}</div></div></sc-for>
+            <div style="font-size:10px; color:#5f5b53; margin:10px 0 6px; letter-spacing:0.5px;">输出端口</div>
+            <sc-for list="{{ insp.outs }}" as="p" hint-placeholder-count="0"><div style="background:#161512; border:1px solid #2a2723; border-left:2px solid #4a4a42; border-radius:7px; padding:7px 9px; margin-bottom:6px;"><span style="color:#cfc8ba; font-weight:600; font-size:11px;">{{ p.name }}</span><div style="font-size:9.5px; color:#7d7668; margin-top:3px; line-height:1.6;">{{ p.meta }}</div></div></sc-for>
+          </div>
+          </sc-if>
+          <sc-if value="{{ inspValidTab }}">
+          <div style="padding:10px 14px;">
+            <sc-if value="{{ insp.noIssues }}"><div style="display:flex; gap:8px; color:#9bbd5a; font-size:11.5px; padding:6px 0;"><span>✓</span><span>该节点校验通过。</span></div></sc-if>
+            <sc-for list="{{ insp.issues }}" as="i" hint-placeholder-count="0"><div style="display:flex; gap:8px; background:#1d1c19; border:1px solid #302d29; border-radius:7px; padding:7px 9px; margin-bottom:6px;"><span style="color:{{ i.c }}; flex:none;">{{ i.icon }}</span><span style="color:#bdb2a8; font-size:11px; line-height:1.55;">{{ i.t }}</span></div></sc-for>
+          </div>
+          </sc-if>
+          <sc-if value="{{ inspVerTab }}">
+          <div style="padding:10px 14px;">
+            <div style="font-size:11px; color:#a39a8a; line-height:1.9;">
+              <div>节点 ID · <span style="color:#cfc8ba;">{{ insp.id }}</span></div>
+              <div>血缘 · <span style="color:#6f9bd1;">{{ insp.lineage }}</span></div>
+            </div>
+            <sc-if value="{{ insp.hasContribution }}">
+              <div style="margin-top:10px; border:1px solid #2a2723; border-radius:8px; overflow:hidden;">
+                <div style="padding:7px 11px; background:#1d1c19; font-size:10px; color:#8f897c;">回测贡献 · run_wk_cn_8f2a <span style="color:#6f9bd1;">MOCK</span></div>
+                <sc-for list="{{ insp.contribution }}" as="c" hint-placeholder-count="0"><div style="display:flex; gap:8px; padding:6px 11px; border-top:1px solid #232120; font-size:11px;"><span style="color:#7d8aa0; min-width:88px;">{{ c.k }}</span><span style="color:{{ c.color }};">{{ c.v }}</span></div></sc-for>
+              </div>
+              <button onClick="{{ insp.openRun }}" style="margin-top:10px; width:100%; background:#1a1916; border:1px solid #2c4452; color:#6f9bd1; font-family:inherit; font-size:11px; padding:7px; border-radius:7px; cursor:pointer;" style-hover="border-color:#3f6178;">↗ 在回测详情中定位该节点</button>
+            </sc-if>
+          </div>
+          </sc-if>
+        </div>
+        </sc-if>
+
+        <sc-if value="{{ noSel }}">
+        <div style="flex:1; min-height:0; overflow-y:auto; padding:14px;">
+          <div style="font-size:10px; color:#5f5b53; letter-spacing:0.5px; margin-bottom:8px;">图校验 · GraphValidationResult</div>
+          <div style="display:flex; align-items:center; gap:8px; margin-bottom:12px;"><span style="font-size:22px; color:{{ gv.color }};">{{ gv.glyph }}</span><div><div style="font-weight:600; color:{{ gv.color }};">{{ gv.headline }}</div><div style="font-size:10.5px; color:#7d7668;">{{ gv.sub }}</div></div></div>
+          <sc-for list="{{ gv.issues }}" as="i" hint-placeholder-count="0"><div onClick="{{ i.go }}" style="display:flex; gap:8px; background:#1d1c19; border:1px solid #302d29; border-radius:7px; padding:8px 10px; margin-bottom:6px; cursor:pointer;" style-hover="border-color:#4a463f;"><span style="color:{{ i.c }}; flex:none;">{{ i.icon }}</span><div style="min-width:0;"><div style="color:#cfc8ba; font-size:11px;">{{ i.t }}</div><div style="font-size:9.5px; color:#6f6a61; margin-top:2px;">{{ i.loc }}</div></div></div></sc-for>
+          <div style="margin-top:14px; padding-top:12px; border-top:1px solid #2a2723; font-size:10.5px; color:#6f6a61; line-height:1.7;">选中节点查看参数 / 端口 / 校验 / 版本血缘 + 回测贡献。<br>从输出口拖到输入口连线（实时兼容性）· Shift+拖框选 · Del 删除 · ⌘Z 撤销。</div>
+        </div>
+        </sc-if>
+      </div>
+      </sc-if>
+    </div>
+
+    <!-- ▒ BOTTOM · WORKBENCH ▒ -->
+    <sc-if value="{{ dockCollapsed }}">
+      <div onClick="{{ dockToggle }}" style="flex:none; height:30px; border-top:1px solid #302d29; background:#1d1c19; display:flex; align-items:center; gap:10px; padding:0 14px; cursor:pointer;" style-hover="background:#211f1c;"><span style="color:#6f9bd1;">▤</span><span style="font-size:11.5px; color:#a39a8a;" data-comment-anchor="a35ac7221a-span">工作台 · 输出 / 日志 / 运行历史 / 血缘溯源</span><span style="margin-left:auto; color:#6f6a61;">▴</span></div>
+    </sc-if>
+    <sc-if value="{{ dockOpen }}">
+    <div style="flex:none; height:228px; border-top:1px solid #302d29; background:#1a1916; display:flex; flex-direction:column;">
+      <div style="flex:none; display:flex; align-items:center; gap:2px; padding:6px 12px; border-bottom:1px solid #302d29; background:#1d1c19;">
+        <sc-for list="{{ dockTabs }}" as="t" hint-placeholder-count="6"><button onClick="{{ t.on }}" title="{{ t.tip }}" style="{{ t.style }}">{{ t.label }}</button></sc-for>
+        <div style="flex:1;"></div>
+        <span style="font-size:10px; color:#6f9bd1; border:1px solid #2c4452; padding:2px 7px; border-radius:20px;">MOCK</span>
+        <span onClick="{{ dockToggle }}" style="margin-left:8px; color:#6f6a61; cursor:pointer;" style-hover="color:#cfc8ba;">▾</span>
+      </div>
+      <div style="flex:1; min-height:0; overflow:auto; padding:11px 14px;">
+        <sc-if value="{{ dockEmpty }}"><div style="color:#5f5b53; font-size:11.5px; text-align:center; padding:36px 0; line-height:1.9;">{{ dockEmptyText }}</div></sc-if>
+        <sc-if value="{{ dockPreview }}">
+          <div style="font-size:11px; color:#8f897c; margin-bottom:8px;">{{ dockNodeTitle }} · 输出预览 <span style="color:#6f6a61;">（mock fixture）</span></div>
+          <div style="display:grid; grid-template-columns:{{ dockCols }}; font-size:10.5px;">
+            <sc-for list="{{ dockCells }}" as="c" hint-placeholder-count="0"><div style="{{ c.style }}">{{ c.t }}</div></sc-for>
+          </div>
+        </sc-if>
+        <sc-if value="{{ dockSchema }}">
+          <div style="font-size:11px; color:#8f897c; margin-bottom:8px;">{{ dockNodeTitle }} · 输出 Schema</div>
+          <pre style="margin:0; font-family:inherit; font-size:10.5px; color:#cbb89a; white-space:pre-wrap; line-height:1.7;">{{ dockSchemaText }}</pre>
+        </sc-if>
+        <sc-if value="{{ dockStats }}">
+          <div style="font-size:11px; color:#8f897c; margin-bottom:8px;">{{ dockNodeTitle }} · 统计</div>
+          <div style="display:flex; gap:18px; flex-wrap:wrap;"><sc-for list="{{ dockStatRows }}" as="r" hint-placeholder-count="0"><div><div style="font-size:9.5px; color:#7d7668;">{{ r.k }}</div><div style="font-size:14px; color:{{ r.color }};">{{ r.v }}</div></div></sc-for></div>
+        </sc-if>
+        <sc-if value="{{ dockLogs }}">
+          <sc-if value="{{ logsEmpty }}"><div style="color:#5f5b53; font-size:11.5px; padding:24px 0; text-align:center;">点顶部「▷ 运行回测」开始 —— 节点状态与日志在此流式输出（mock 模拟，不真跑后端）。</div></sc-if>
+          <sc-for list="{{ logLines }}" as="l" hint-placeholder-count="0"><div style="display:flex; gap:9px; font-size:11px; padding:1.5px 0;"><span style="color:#5f5b53; min-width:54px;">{{ l.t }}</span><span style="color:{{ l.c }};">{{ l.m }}</span></div></sc-for>
+        </sc-if>
+        <sc-if value="{{ dockHistory }}">
+          <div style="display:grid; grid-template-columns:1.6fr 1.3fr 0.9fr 0.8fr 0.9fr 0.7fr; font-size:10.5px;">
+            <div style="padding:5px 8px; color:#7d8aa0; border-bottom:1px solid #302d29;">run_id</div><div style="padding:5px 8px; color:#7d8aa0; border-bottom:1px solid #302d29;">时间</div><div style="padding:5px 8px; color:#7d8aa0; border-bottom:1px solid #302d29;">超额</div><div style="padding:5px 8px; color:#7d8aa0; border-bottom:1px solid #302d29;">回撤</div><div style="padding:5px 8px; color:#7d8aa0; border-bottom:1px solid #302d29;">Sharpe</div><div style="padding:5px 8px; color:#7d8aa0; border-bottom:1px solid #302d29;"></div>
+            <sc-for list="{{ runCells }}" as="c" hint-placeholder-count="0"><div style="{{ c.style }}">{{ c.t }}</div></sc-for>
+          </div>
+        </sc-if>
+        <sc-if value="{{ dockLineage }}">
+          <!-- ── 标题条：说明「血缘」到底在做什么 ── -->
+          <div style="display:flex; align-items:center; gap:10px; margin-bottom:11px;">
+            <span style="font-size:12px; font-weight:600; color:#cfc8ba; letter-spacing:0.3px;">血缘 · 数据溯源</span>
+            <span style="font-size:10.5px; color:#7d7668;">顺着箭头反查：每笔成交由哪些节点 / 信号一步步产生</span>
+            <span style="margin-left:auto; display:flex; align-items:center; gap:6px;">
+              <span style="width:6px; height:6px; border-radius:50%; background:#9bbd5a;"></span>
+              <span style="font-size:11px; color:#cfc8ba; font-variant-numeric:tabular-nums;">{{ runDetail.runId }}</span>
+              <span style="font-size:9px; color:#6f9bd1; border:1px solid #2c4452; padding:1px 6px; border-radius:20px;">策略级</span>
+            </span>
+          </div>
+
+          <!-- ── 回测概览：策略级（整条策略图，非单标的），统一卡片样式 ── -->
+          <div style="display:grid; grid-template-columns:repeat(6, 1fr); gap:8px; margin-bottom:13px;">
+            <div style="background:#1d1c19; border:1px solid #2a2723; border-radius:8px; padding:8px 10px;"><div style="font-size:9px; color:#7d7668; margin-bottom:3px;">年化超额</div><div style="font-size:15px; color:#9bbd5a; font-variant-numeric:tabular-nums;">{{ runDetail.excess }}</div></div>
+            <div style="background:#1d1c19; border:1px solid #2a2723; border-radius:8px; padding:8px 10px;"><div style="font-size:9px; color:#7d7668; margin-bottom:3px;">最大回撤</div><div style="font-size:15px; color:#d9b25f; font-variant-numeric:tabular-nums;">{{ runDetail.dd }}</div></div>
+            <div style="background:#1d1c19; border:1px solid #2a2723; border-radius:8px; padding:8px 10px;"><div style="font-size:9px; color:#7d7668; margin-bottom:3px;">Sharpe</div><div style="font-size:15px; color:#cfc8ba; font-variant-numeric:tabular-nums;">{{ runDetail.sharpe }}</div></div>
+            <div style="background:#1d1c19; border:1px solid #2a2723; border-radius:8px; padding:8px 10px;" title="PBO 过拟合概率 / DSR 收缩 Sharpe"><div style="font-size:9px; color:#7d7668; margin-bottom:3px;">PBO / DSR</div><div style="font-size:13px; color:#cfc8ba; font-variant-numeric:tabular-nums; margin-top:2px;">{{ runDetail.pbodsr }}</div></div>
+            <div style="background:#1d1c19; border:1px solid #2a2723; border-radius:8px; padding:8px 10px;" title="调仓 / 再平衡频率 = weekly（每周一次）"><div style="font-size:9px; color:#7d7668; margin-bottom:3px;">调仓频率</div><div style="font-size:13px; color:#cfc8ba; margin-top:2px;">{{ runDetail.freq }}</div></div>
+            <div style="background:#1d1c19; border:1px solid #2a2723; border-radius:8px; padding:8px 10px;"><div style="font-size:9px; color:#7d7668; margin-bottom:3px;">成交数</div><div style="font-size:15px; color:#cfc8ba; font-variant-numeric:tabular-nums;">{{ runDetail.trades }}</div></div>
+          </div>
+
+          <!-- ── 选中某笔成交时：高亮其血缘链路 ── -->
+          <sc-if value="{{ traceOn }}">
+            <div style="background:#201d16; border:1px solid #4a3f22; border-radius:9px; padding:10px 12px; margin-bottom:12px;">
+              <div style="display:flex; align-items:center; gap:10px; margin-bottom:9px;">
+                <span style="font-size:11px; color:#d9b25f; font-weight:600;">血缘链路 · {{ trace.label }}</span>
+                <span style="font-size:10.5px; color:#8f897c;">{{ trace.meta }}</span>
+                <span onClick="{{ clearTrace }}" style="margin-left:auto; font-size:10.5px; color:#8f897c; cursor:pointer;" style-hover="color:#cfc8ba;">✕ 清除高亮</span>
+              </div>
+              <div style="font-size:9.5px; color:#7d7668; margin-bottom:7px;">点任意节点 → 在画布定位（交易 ← 信号 ← 节点，逐级回溯）</div>
+              <div style="display:flex; flex-wrap:wrap; align-items:center; gap:4px;">
+                <sc-for list="{{ trace.chain }}" as="c" hint-placeholder-count="0"><div onClick="{{ c.go }}" style="display:flex; align-items:center; gap:4px; cursor:pointer;"><span style="background:#1a1714; border:1px solid {{ c.color }}; color:#cfc8ba; font-size:10.5px; padding:4px 9px; border-radius:7px;" style-hover="background:#2a2723;">{{ c.title }}</span><span style="color:#5f5b53;">{{ c.arrow }}</span></div></sc-for>
+              </div>
+              <a href="{{ trace.runHref }}" style="display:inline-block; margin-top:9px; font-size:10.5px; color:#6f9bd1; border:1px solid #2c4452; padding:5px 11px; border-radius:7px; text-decoration:none;" style-hover="border-color:#3f6178;">↗ 在回测详情中定位本笔交易</a>
+            </div>
+          </sc-if>
+
+          <!-- ── 成交明细表：统一表头 + 行卡片，点一行高亮其链路 ── -->
+          <sc-if value="{{ tradesShown }}">
+            <div style="display:flex; align-items:center; gap:8px; margin-bottom:7px;">
+              <span style="font-size:10px; color:#7d7668; letter-spacing:0.3px;">回测成交明细 — 点任意一笔高亮其产生链路</span>
+              <span style="font-size:9px; color:#6f9bd1; border:1px solid #2c4452; padding:1px 6px; border-radius:20px;">MOCK</span>
+              <a href="{{ runDetail.href }}" style="margin-left:auto; font-size:10.5px; color:#6f9bd1; text-decoration:none;" style-hover="color:#82aadb;">↗ 打开策略回测详情</a>
+            </div>
+            <div style="display:grid; grid-template-columns:64px minmax(0,1.6fr) 56px 78px 78px 56px 88px; gap:0 10px; font-size:9.5px; color:#7d7668; padding:0 11px 6px; border-bottom:1px solid #2a2723;">
+              <div>交易号</div><div>标的</div><div>方向</div><div style="text-align:right;">成交价</div><div style="text-align:right;">数量</div><div style="text-align:right;">权重</div><div style="text-align:right;">盈亏 / 收益率</div>
+            </div>
+            <sc-for list="{{ tradeRows }}" as="t" hint-placeholder-count="0">
+              <div onClick="{{ t.go }}" style="display:grid; grid-template-columns:64px minmax(0,1.6fr) 56px 78px 78px 56px 88px; gap:0 10px; align-items:center; background:{{ t.rowBg }}; border:1px solid {{ t.rowBorder }}; border-radius:8px; padding:8px 11px; margin-top:6px; cursor:pointer;" style-hover="border-color:#4a463f;">
+                <span style="font-size:11px; color:#7d7668; font-variant-numeric:tabular-nums;">{{ t.id }}</span>
+                <span style="min-width:0;"><span style="display:block; color:#cfc8ba; font-size:11.5px; overflow:hidden; text-overflow:ellipsis; white-space:nowrap;">{{ t.symbol }}</span><span style="font-size:9px; color:#6f6a61;">{{ t.when }}</span></span>
+                <span style="font-size:11px; color:{{ t.sideColor }};">{{ t.side }}</span>
+                <span style="font-size:11px; color:#9a9488; text-align:right; font-variant-numeric:tabular-nums;">{{ t.px }}</span>
+                <span style="font-size:11px; color:#9a9488; text-align:right; font-variant-numeric:tabular-nums;">{{ t.qty }}</span>
+                <span style="font-size:11px; color:#9a9488; text-align:right; font-variant-numeric:tabular-nums;">{{ t.weight }}</span>
+                <span style="text-align:right;"><span style="display:block; font-size:11.5px; color:{{ t.pnlColor }}; font-variant-numeric:tabular-nums;">{{ t.pnl }}</span><span style="font-size:9px; color:{{ t.retColor }};">{{ t.ret }}</span></span>
+              </div>
+            </sc-for>
+            <div style="margin-top:10px; font-size:9.5px; color:#6f6a61; line-height:1.7;">回测对象是整条策略图（run_id 级），上方概览即策略级结果。选某笔成交只是在画布高亮它的血缘链路，不会把回测对象变成单个标的。</div>
+          </sc-if>
+        </sc-if>
+      </div>
+    </div>
+    </sc-if>
+  </div>
+
+  <!-- ░░ PUBLISH DRAWER ░░ -->
+  <sc-if value="{{ publishOpen }}">
+    <div onClick="{{ closePublish }}" style="position:absolute; inset:0; background:rgba(0,0,0,0.5); z-index:90;"></div>
+    <div style="position:absolute; top:0; right:0; bottom:0; width:392px; background:#1b1a17; border-left:1px solid #3a352e; z-index:91; display:flex; flex-direction:column; box-shadow:-16px 0 40px rgba(0,0,0,0.4);">
+      <div style="flex:none; display:flex; align-items:center; gap:8px; padding:13px 16px; border-bottom:1px solid #302d29;"><span style="color:#d97757;">⇲</span><span style="font-weight:600;">发布 · 生命周期</span><div style="flex:1;"></div><span onClick="{{ closePublish }}" style="color:#6f6a61; cursor:pointer;" style-hover="color:#cfc8ba;">✕</span></div>
+      <div style="flex:1; min-height:0; overflow-y:auto; padding:16px;">
+        <div style="font-size:10px; color:#5f5b53; letter-spacing:0.5px; margin-bottom:10px;">StrategyLifecycle</div>
+        <div style="display:flex; flex-direction:column; gap:0; margin-bottom:18px;">
+          <sc-for list="{{ lifecycleSteps }}" as="l" hint-placeholder-count="9">
+            <div style="display:flex; align-items:center; gap:10px; padding:3px 0;"><span style="width:14px; height:14px; border-radius:50%; background:{{ l.dot }}; border:1.5px solid {{ l.ring }}; flex:none;"></span><span style="font-size:12px; color:{{ l.color }}; font-weight:{{ l.weight }};">{{ l.label }}</span><sc-if value="{{ l.current }}"><span style="font-size:9.5px; color:#d97757; border:1px solid #5a4030; border-radius:20px; padding:0 7px;">当前</span></sc-if></div>
+          </sc-for>
+        </div>
+        <div style="font-size:10px; color:#5f5b53; letter-spacing:0.5px; margin-bottom:8px;">发布检查清单</div>
+        <sc-for list="{{ checklist }}" as="c" hint-placeholder-count="4"><div style="display:flex; gap:9px; background:#1d1c19; border:1px solid #302d29; border-radius:8px; padding:8px 11px; margin-bottom:6px;"><span style="color:{{ c.color }}; flex:none;">{{ c.icon }}</span><span style="color:#bdb2a8; font-size:11.5px;">{{ c.t }}</span></div></sc-for>
+        <button onClick="{{ advance }}" style="margin-top:14px; width:100%; background:#d97757; border:none; color:#1c1b19; font-family:inherit; font-weight:700; font-size:12px; padding:9px; border-radius:8px; cursor:pointer;">{{ advanceLabel }}</button>
+        <div style="margin-top:12px; font-size:10px; color:#6f6a61; line-height:1.7;">已发布 Live 版本只读；任何编辑都从 Live Fork 新草稿（B7）。Bypass 不绕过此发布审批与 Final Risk Gate（B6/B8）。流程为 Mock，真实接 LifecycleRepository。</div>
+      </div>
+    </div>
+  </sc-if>
+
+  <!-- ░░ CODE DRAWER · Graph → Source ░░ -->
+  <sc-if value="{{ codeOpen }}">
+    <div onClick="{{ closeCode }}" style="position:absolute; inset:0; background:rgba(0,0,0,0.5); z-index:90;"></div>
+    <div style="position:absolute; top:0; right:0; bottom:0; width:608px; max-width:90vw; background:#161512; border-left:1px solid #2c4452; z-index:91; display:flex; flex-direction:column; box-shadow:-16px 0 40px rgba(0,0,0,0.45);">
+      <div style="flex:none; display:flex; align-items:center; gap:8px; padding:12px 16px; border-bottom:1px solid #2a2723; background:#1b1a17;">
+        <span style="color:#6f9bd1;">⟨/⟩</span><span style="font-weight:600;">编译 · Graph → Source</span>
+        <span style="font-size:10px; color:#6f9bd1; border:1px solid #2c4452; border-radius:20px; padding:1px 8px;">前端 codegen · 不执行</span>
+        <div style="flex:1;"></div>
+        <span onClick="{{ closeCode }}" style="color:#6f6a61; cursor:pointer; font-size:14px;" style-hover="color:#cfc8ba;">✕</span>
+      </div>
+      <div style="flex:none; display:flex; align-items:center; gap:5px; padding:9px 16px; border-bottom:1px solid #2a2723; background:#1a1916;">
+        <sc-for list="{{ pipeline }}" as="p" hint-placeholder-count="5"><span style="font-size:10px; color:{{ p.color }};">{{ p.label }}</span><span style="font-size:10px; color:#3f3b35;">{{ p.arrow }}</span></sc-for>
+      </div>
+      <sc-if value="{{ codeErr }}"><div style="flex:none; padding:7px 16px; background:#2a1d1b; border-bottom:1px solid #523630; color:#e6a08e; font-size:10.5px;">⚠ 图存在 {{ codeErrCount }} 个错误，下方源码仅供查看；编译/回测前需先修复。</div></sc-if>
+      <div style="flex:none; display:flex; align-items:center; gap:3px; padding:7px 14px; border-bottom:1px solid #2a2723;">
+        <sc-for list="{{ codeTabs }}" as="t" hint-placeholder-count="2"><button onClick="{{ t.on }}" style="{{ t.style }}">{{ t.label }}</button></sc-for>
+        <div style="flex:1;"></div>
+        <span style="font-size:10px; color:#5f5b53;">{{ codeFile }} · 只读 · 改图即改码</span>
+      </div>
+      <div style="flex:1; min-height:0; overflow:auto; padding:10px 0; background:#161512;">
+        <sc-for list="{{ codeLines }}" as="ln" hint-placeholder-count="22">
+          <div style="display:flex; padding:0 14px;"><span style="color:#3f3b35; min-width:32px; text-align:right; padding-right:14px; user-select:none; font-size:11px; line-height:1.7;">{{ ln.n }}</span><span style="white-space:pre; font-size:11.5px; line-height:1.7;" data-comment-anchor="9e5b08008c-span"><sc-for list="{{ ln.segs }}" as="s" hint-placeholder-count="0"><span style="color:{{ s.c }};">{{ s.t }}</span></sc-for></span></div>
+        </sc-for>
+      </div>
+      <div style="flex:none; padding:8px 16px; border-top:1px solid #2a2723; background:#1b1a17; font-size:9.5px; color:#6f6a61; line-height:1.6;">前端 codegen 预览（Mock）。真实编译/回测由后端按 StrategyGraph 执行（RunRepository.runGraph）：声明式节点编译为上述骨架，Python Code Node 直接内联。</div>
+    </div>
+  </sc-if>
+</div>
+</x-dc>
+<script type="text/x-dc" data-dc-script data-props="{&quot;$preview&quot;:{&quot;width&quot;:1440,&quot;height&quot;:920}}">
+/* ════════════════════════════════════════════════════════════════════════════
+   策略台（StrategyBoard）· 组件逻辑总览
+   ────────────────────────────────────────────────────────────────────────────
+   这是一个「策略图」可视化编辑器：把一条量化策略拆成 16 个节点（立题→市场/标的
+   →数据→因子→Model→信号→入场/退出/仓位→风险→执行→回测），用连线表达数据流，
+   可拖拽、连线、改参数、跑回测、看血缘、发布。所有“回测/运行”都是前端 MOCK 模拟，
+   不真跑后端。
+
+   代码分区（按出现顺序）：
+     1. state                —— 全部 UI / 编辑状态（节点、连线、选中、平移缩放、撤销栈…）
+     2. 生命周期 / 事件绑定   —— componentDidMount / WillUnmount，挂载全局指针+键盘监听
+     3. 撤销重做 + 快照        —— _clone / _snap / _pushUndo / _undo / _redo
+     4. _build()             —— 构造初始 16 节点 + 19 连线 + mock 成交/运行历史（只跑一次）
+     5. 几何                  —— 节点高度、端口锚点坐标、连线贝塞尔路径、屏幕↔世界坐标换算
+     6. 端口兼容性 _compat    —— 连线时校验「输出口数据类型/频率」能否接到「输入口」
+     7. 画布交互              —— 背景拖拽/框选、节点拖动、端口拉线、滚轮缩放、快捷键
+     8. 图校验 _validateGraph —— 必填端口未接、Final Risk Gate 等治理规则
+     9. Agent                 —— Ask（先出 Ghost 提议再接受）vs Auto/Bypass（直接改图）
+    10. 跑回测 + 日志          —— _runGraph 流式 mock 日志
+    11. 血缘 lineage          —— _setTrace 高亮某笔成交的「交易→信号→节点」产生链路
+    12. 版本 / diff / 发布     —— 版本切换、改动对比、生命周期推进
+    13. 代码生成 _genYaml/_genPy —— 把策略图反向导出成 YAML / Python 源码
+    14. renderVals()          —— 把 state 整理成模板需要的扁平数据（视图模型）
+   ════════════════════════════════════════════════════════════════════════════ */
+class Component extends DCLogic {
+  // ── state：组件的全部状态。无后端，刷新即重置 ──
+  state = {
+    nodes: {}, edges: [], sel: { nodeIds: [], edgeIds: [] },   // 节点字典 / 连线数组 / 当前选中
+    panX: 44, panY: 70, zoom: 0.72,                            // 画布平移与缩放
+    marquee: null, linking: null, linkPx: 0, linkPy: 0, hoverPort: null, // 框选 / 正在拉的连线 / 悬停端口
+    undoStack: [], redoStack: [],                             // 撤销 / 重做 快照栈
+    agentMode: "ask", runtime: "backtest",                    // Agent 模式 / 运行态(backtest 可编辑, live 只读)
+    leftOpen: true, rightOpen: true, dockOpen: false,         // 左(Agent)/右(Inspector)/底(工作台) 面板开合
+    inspTab: "params", dockTab: "preview",                    // Inspector 标签 / 工作台标签
+    draft: "", agentBlocks: [], proposal: null,               // Agent 输入框 / 对话流 / 待接受提议
+    running: false, runLog: [],                               // 是否在跑回测 / 回测日志行
+    trace: null, verMenuOpen: false, diffBase: null, publishOpen: false, killArmed: true, // 血缘高亮的成交 / 版本菜单 / diff 基线 / 发布抽屉 / kill switch
+    codeOpen: false, codeTab: "py",                           // 代码面板开合 / py|yaml
+    lifecycle: "Backtested",                                  // 生命周期阶段
+    ver: "v3 草稿",                                           // 当前版本号
+  };
+
+  // ── 生命周期：挂载时建图 + 全局指针/键盘/滚轮监听；卸载时全部解绑 ──
+  componentDidMount() {
+    this._build();
+    this._mv = (e) => this._onMove(e);
+    this._up = (e) => this._onUp(e);
+    this._kd = (e) => this._onKeyDown(e);
+    document.addEventListener("pointermove", this._mv);
+    document.addEventListener("pointerup", this._up);
+    document.addEventListener("keydown", this._kd);
+    this._surf = document.getElementById("sb-graph");
+    if (this._surf) { this._wheel = (e) => this._onWheel(e); this._surf.addEventListener("wheel", this._wheel, { passive: false }); }
+    // deep-link from 回测详情: ?trace=tx_001 / ?node=exec
+    try { const q = new URLSearchParams(location.search); const tr = q.get("trace"); const nd = q.get("node");
+      if (tr) setTimeout(() => this._setTrace(tr), 250); else if (nd) setTimeout(() => this._select(nd), 250); } catch (e) {}
+  }
+  componentWillUnmount() {
+    document.removeEventListener("pointermove", this._mv);
+    document.removeEventListener("pointerup", this._up);
+    document.removeEventListener("keydown", this._kd);
+    if (this._surf && this._wheel) this._surf.removeEventListener("wheel", this._wheel);
+    (this._runTimers || []).forEach(clearTimeout);
+  }
+
+  // ── 撤销/重做：每次破坏性编辑前 _pushUndo 存一份深拷贝快照，最多保留 60 步 ──
+  _clone(o) { return JSON.parse(JSON.stringify(o)); }
+  _pushUndo(snap) { this.setState(s => ({ undoStack: [...s.undoStack, snap].slice(-60), redoStack: [] })); }
+  _snap() { return { nodes: this._clone(this.state.nodes), edges: this._clone(this.state.edges) }; }
+
+  // ── _build()：构造初始策略图。只跑一次。
+  //   P(id,name,dt,opts)  = 端口工厂：dt 数据类型、freq 频率(D 日/W 周)、req 是否必填、role 角色。
+  //   defs[]              = 16 个节点定义（id/分类/阶段/标题/坐标/参数/输入输出端口/血缘 id）。
+  //   下方还会建 19 条连线 edges、mock 成交 _trades、mock 运行历史 _runs。
+  _build() {
+    if (this._built) return; this._built = true;
+    const P = (id, name, dt, opts = {}) => ({ id, name, dt, freq: opts.freq || "", scope: opts.scope || "", req: opts.req !== false, role: opts.role || "", schema: opts.schema || "" });
+    const N = (o) => o;  // 直通：仅为可读性给节点字面量包一层
+    const defs = [
+      N({ id: "thesis", cat: "research", stage: "s1", title: "立题 Thesis", x: 40, y: 250, w: 176, state: "valid", desc: "可证伪命题：SUE+中期动量+估值，A股周频年化超额≥15%、回撤≤20%。可证伪条件：样本外 DSR≤0 或 PBO≥0.5。",
+        params: { objective: "超额≥15% / 回撤≤20%", horizon: "weekly", benchmark: "000905.SH", stage: "exploratory" },
+        ins: [], outs: [P("thesis", "thesis", "thesis", { freq: "—" })], lines: ["超额≥15% · 回撤≤20%", "benchmark 中证500", "周频 · exploratory"], lineage: "hyp_wk_cn_01" }),
+      N({ id: "market", cat: "research", stage: "s2", title: "市场组合 Market", x: 300, y: 120, w: 178, state: "valid", desc: "市场层约束：资产类别 equity_cn、交易日历、可交易时段、币种。与投资标的池相互独立（B1）。",
+        params: { asset_class: "equity_cn", calendar: "SSE/SZSE", currency: "CNY" },
+        ins: [P("in", "thesis", "thesis", { req: false })], outs: [P("constraints", "marketConstraints", "marketConstraints", { freq: "D" })], lines: ["equity_cn · A股", "日历 SSE/SZSE · CNY"], lineage: "mkt_cn" }),
+      N({ id: "universe", cat: "research", stage: "s2", title: "投资标的池 Universe", x: 300, y: 392, w: 178, state: "valid", desc: "只定义允许交易哪些标的，不含权重（B2）。剔除 ST/上市<1y/流动性不足。",
+        params: { rule: "剔除ST · 上市>1y · ADV>2000万", count: "≈5412" },
+        ins: [P("in", "thesis", "thesis", { req: false })], outs: [P("set", "instrumentSet", "instrumentSet", { freq: "D" })], lines: ["剔除ST · 上市>1y", "ADV>¥2000万 · ≈5412只", "⚠ 不含权重"], lineage: "univ_cn_liquid" }),
+      N({ id: "domain", cat: "scope", stage: "s2", title: "Tradable Domain ∩", x: 540, y: 256, w: 168, state: "valid", desc: "TradableDomain = InvestmentUniverse ∩ MarketConstraints。可交易标的域，下游因子/信号在此域内计算。",
+        params: { op: "intersection" },
+        ins: [P("mc", "marketConstraints", "marketConstraints"), P("iu", "instrumentSet", "instrumentSet")], outs: [P("td", "tradableDomain", "tradableDomain", { freq: "D" })], lines: ["∩ 求交", "可交易域"], lineage: "domain_cn" }),
+      N({ id: "data", cat: "data", stage: "s3", title: "数据源 DataSource", x: 768, y: 120, w: 180, state: "valid", desc: "Point-in-Time 日频量价+基本面+一致预期+北向。引用列全部命中字段宇宙（41 列）。",
+        params: { sources: "official_cn_eod · consensus · north", fields: "41", pit: "true" },
+        ins: [P("scope", "tradableDomain", "tradableDomain", { req: false })], outs: [P("panel", "panel", "panel", { freq: "D", schema: "[date,symbol,ohlcv,fundamental,sue,north]" })], lines: ["日频量价+基本面", "SUE · 北向 · PIT", "字段宇宙 41 列"], lineage: "ds_cn_eod", mock: true }),
+      N({ id: "neutral", cat: "data", stage: "s3", title: "中性化 Neutralize", x: 768, y: 392, w: 180, state: "valid", desc: "因子预处理：缺失值→去极值(Winsor 1%)→标准化→行业/市值中性化。",
+        params: { winsor: "1%", standardize: "zscore", neutralize: "industry+size" },
+        ins: [P("in", "panel", "panel", { freq: "D" })], outs: [P("out", "panel", "panel", { freq: "D" })], lines: ["Winsor 1% · zscore", "行业+市值 中性化"], lineage: "tx_neutral" }),
+      N({ id: "factors", cat: "factor", stage: "s3", title: "因子集 fs_core3", x: 1004, y: 256, w: 180, state: "valid", desc: "从因子台选用 QUALIFIED+ 因子组（不在策略台造因子，B4）：surprise_sue / mom_20_120 / ep_ttm，两两|ρ|<0.35。",
+        params: { factors: "surprise_sue, mom_20_120, ep_ttm", min_state: "QUALIFIED" },
+        ins: [P("scope", "tradableDomain", "tradableDomain"), P("feat", "panel", "panel", { freq: "D" })], outs: [P("fp", "factorPanel", "factorPanel", { freq: "W", schema: "[date,symbol,sue,mom,ep]" })], lines: ["surprise_sue IC .067", "mom_20_120 · ep_ttm", "← 因子台 QUALIFIED+"], lineage: "fs_core3", badge: "← 因子台", mock: true }),
+      N({ id: "model", cat: "model", stage: "s4", title: "Model · lgbm_rank_6f", x: 1240, y: 256, w: 184, state: "valid", desc: "仅从 Model Registry 引用 model_id@version（B3，不训练）。LambdaRank，输入6特征 Schema，输出截面打分。Artifact：pinned@v2。",
+        params: { model_id: "lgbm_rank_6f", version: "v2 (staging)", task: "lambdarank", artifact: "pinned" },
+        ins: [P("feat", "factorPanel", "factorPanel", { freq: "W", schema: "6 features" })], outs: [P("score", "modelScore", "modelScore", { freq: "W", schema: "[date,symbol,score]" })], lines: ["lgbm_rank_6f @ v2", "LambdaRank · WF 8/8正", "Artifact: pinned"], lineage: "mdl_lgbm_v2", badge: "← Model台", mock: true }),
+      N({ id: "signal", cat: "signal", stage: "s5", title: "信号 Signal", x: 1480, y: 256, w: 178, state: "valid", desc: "把模型打分转为可交易信号：每周五收盘按 score 截面排序，取前 10% 为多头候选。输出标准 SignalIntent。",
+        params: { rule: "rank(score) top decile", rebalance: "weekly_fri", direction: "long" },
+        ins: [P("score", "modelScore", "modelScore", { freq: "W" })], outs: [P("intent", "signalIntent", "signalIntent", { freq: "W", schema: "SignalIntent[]" })], lines: ["截面排序 top 10%", "周五调仓 · 纯多头", "→ SignalIntent"], lineage: "sig_topdecile" }),
+      N({ id: "entry", cat: "position", stage: "s6", title: "入场 Entry", x: 1716, y: 116, w: 172, state: "valid", desc: "信号选入前10%且未停牌/未涨停；分批建仓平滑冲击成本。",
+        params: { cond: "rank<=10% & !halt & !limitUp", fill: "分批 TWAP" },
+        ins: [P("sig", "signalIntent", "signalIntent", { freq: "W" })], outs: [P("e", "entrySignal", "entrySignal", { freq: "W" })], lines: ["前10% & 未停牌", "分批建仓"], lineage: "entry_01" }),
+      N({ id: "exit", cat: "position", stage: "s6", title: "退出 Exit", x: 1716, y: 332, w: 172, state: "valid", desc: "信号跌出前30%分位 / 个股止损 -12% / 周五再平衡时换出。",
+        params: { exit: "rank>30% | stop -12% | rebalance", trailing: "off" },
+        ins: [P("sig", "signalIntent", "signalIntent", { freq: "W" })], outs: [P("x", "exitSignal", "exitSignal", { freq: "W" })], lines: ["跌出前30% / 止损-12%", "周五再平衡换出"], lineage: "exit_01" }),
+      N({ id: "optim", cat: "position", stage: "s6", title: "仓位优化 Optimizer", x: 1944, y: 224, w: 182, state: "valid", desc: "组合优化求目标权重：等风险加权，单票≤3%，行业偏离≤5%，换手≤60%/周。输出 Target Portfolio。",
+        params: { sizing: "equal_risk", max_pos: "3%", sector_dev: "5%", turnover: "60%/w" },
+        ins: [P("e", "entrySignal", "entrySignal"), P("x", "exitSignal", "exitSignal")], outs: [P("tp", "targetPortfolio", "targetPortfolio", { freq: "W", schema: "TargetPortfolioItem[]" })], lines: ["等风险 · 单票≤3%", "行业偏离≤5%", "→ TargetPortfolio"], lineage: "optim_eqrisk" }),
+      N({ id: "prisk", cat: "risk", stage: "s7", title: "组合风险 PortfolioRisk", x: 2178, y: 224, w: 180, state: "valid", desc: "敞口/集中度/VaR 校验：暴露限额、流动性下限 ¥2000万/日、VaR(95) 监控。",
+        params: { exposure: "net 100% / gross 100%", liquidity: "¥2000万/日", var95: "monitor" },
+        ins: [P("tp", "targetPortfolio", "targetPortfolio")], outs: [P("rp", "riskedPortfolio", "riskedPortfolio", { freq: "W" })], lines: ["暴露/集中度/VaR", "流动性下限校验"], lineage: "prisk_01" }),
+      N({ id: "gate", cat: "risk", stage: "s7", title: "Final Risk Gate", x: 2406, y: 224, w: 176, state: "valid", locked: true, desc: "最终风险闸门（B6 不可删除/绕过）：组合回撤熔断 20%、单日跌停不接、全局风控开关。任何到执行的路径必须穿过它。",
+        params: { dd_halt: "20%", reject: "跌停/停牌", kill_switch: "armed" },
+        ins: [P("rp", "riskedPortfolio", "riskedPortfolio")], outs: [P("ap", "approvedPortfolio", "approvedPortfolio", { freq: "W" })], lines: ["回撤熔断 20%", "🔒 不可绕过", "Kill Switch armed"], lineage: "final_gate" }),
+      N({ id: "exec", cat: "exec", stage: "s7", title: "执行 Execution", x: 2630, y: 224, w: 176, state: "valid", desc: "执行算法：分批/VWAP 下单，生成 Order Intent。Backtest 撮合 / Paper / Live 三态共用此配置。",
+        params: { algo: "VWAP 分批", slice: "5", venue: "sim" },
+        ins: [P("ap", "approvedPortfolio", "approvedPortfolio", { role: "exec" })], outs: [P("oi", "orderIntent", "orderIntent", { freq: "W" })], lines: ["VWAP 分批下单", "→ OrderIntent"], lineage: "exec_vwap" }),
+      N({ id: "bench", cat: "eval", stage: "s8", title: "基准 Benchmark", x: 2854, y: 96, w: 168, state: "valid", desc: "回测基准：中证500 全收益。",
+        params: { benchmark: "000905.SH", type: "total_return" },
+        ins: [], outs: [P("b", "benchmark", "benchmark", { freq: "D" })], lines: ["中证500", "000905.SH"], lineage: "bench_500" }),
+      N({ id: "backtest", cat: "eval", stage: "s8", title: "回测与评价 Backtest", x: 2854, y: 296, w: 184, state: "succeeded", desc: "组装回测：2019–2024 · neutral 成本。结果 超额17.3% / 回撤15.8% / PBO0.18 / DSR1.34。点开回测详情查看完整 Trace 与血缘。",
+        params: { window: "2019-01..2024-12", cost: "neutral" },
+        ins: [P("oi", "orderIntent", "orderIntent"), P("b", "benchmark", "benchmark", { req: false })], outs: [], lines: ["超额 17.3% · 回撤 15.8%", "PBO 0.18 · DSR 1.34"], lineage: "run_wk_cn_8f2a", mock: true, openRun: true }),
+    ];
+    const nodes = {}; defs.forEach(d => { nodes[d.id] = d; });
+    const E = (id, fn, fp, tn, tp, compat) => ({ id, from: { node: fn, port: fp }, to: { node: tn, port: tp }, compat });
+    const edges = [
+      E("e1", "thesis", "thesis", "market", "in", "ok"), E("e2", "thesis", "thesis", "universe", "in", "ok"),
+      E("e3", "market", "constraints", "domain", "mc", "ok"), E("e4", "universe", "set", "domain", "iu", "ok"),
+      E("e5", "domain", "td", "data", "scope", "ok"), E("e6", "domain", "td", "factors", "scope", "ok"),
+      E("e7", "data", "panel", "neutral", "in", "ok"), E("e8", "neutral", "out", "factors", "feat", "ok"),
+      E("e9", "factors", "fp", "model", "feat", "ok"), E("e10", "model", "score", "signal", "score", "ok"),
+      E("e11", "signal", "intent", "entry", "sig", "ok"), E("e12", "signal", "intent", "exit", "sig", "ok"),
+      E("e13", "entry", "e", "optim", "e", "ok"), E("e14", "exit", "x", "optim", "x", "ok"),
+      E("e15", "optim", "tp", "prisk", "tp", "ok"), E("e16", "prisk", "rp", "gate", "rp", "ok"),
+      E("e17", "gate", "ap", "exec", "ap", "ok"), E("e18", "exec", "oi", "backtest", "oi", "ok"),
+      E("e19", "bench", "b", "backtest", "b", "adapt"),
+    ];
+    // Ask proposal (ghosts) — shown by default in ask mode
+    this._varProposal = {
+      patchId: "pt_4f1a", title: "加 VaR/CVaR 风险预算 + 降换手",
+      diff: [["+", "新增 VaR/CVaR 节点（接 仓位优化 输出）", "#9bbd5a"], ["+", "连线 仓位优化 → VaR/CVaR", "#9bbd5a"], ["~", "仓位优化 turnover 60%/w → 45%/w", "#d9b25f"]],
+      ops: [
+        { op: "addNode", node: N({ id: "varcvar", cat: "risk", stage: "s7", title: "VaR/CVaR 预算", x: 1944, y: 392, w: 178, state: "idle", desc: "风险预算：限制组合 VaR(95)/CVaR(97.5) 上限，超限回缩高风险仓位。", params: { var95: "≤2.5%/日", cvar975: "≤3.5%/日" }, ins: [P("tp", "targetPortfolio", "targetPortfolio")], outs: [P("rb", "riskBudget", "riskBudget", { freq: "W" })], lines: ["VaR(95)≤2.5%/日", "CVaR(97.5)≤3.5%/日"], lineage: "risk_varcvar" }) },
+        { op: "addEdge", edge: { id: "e_var", from: { node: "optim", port: "tp" }, to: { node: "varcvar", port: "tp" }, compat: "ok" } },
+        { op: "setParam", node: "optim", k: "turnover", v: "45%/w" },
+      ],
+    };
+    const blocks = [
+      { type: "user", text: "组装 A股周频多因子策略：超额15% / 回撤≤20%，从因子台和 Model台选资产，跑回测。" },
+      { type: "think", text: "立题→市场&标的(独立)→数据→因子集(因子台)→Model(Registry引用)→信号→入场退出→仓位优化→PortfolioRisk→FinalRiskGate→执行→回测。" },
+      { type: "say", text: "已搭好完整链路（16 节点 / 19 连线），端口全兼容、Final Risk Gate 不可绕过。我还有一条改进建议 ↓（Ask 模式：先看 Ghost 预览再决定）。" },
+    ];
+    // mock fixtures for P1/P2
+    this._trades = [
+      { id: "tx_001", symbol: "300750 宁德时代", side: "买入", qty: "12,000 股", px: "¥182.40", when: "2024-11-15", weight: "2.8%", pnl: "+¥84,200", ret: "+19.2%", path: ["model", "signal", "entry", "optim", "prisk", "gate", "exec", "backtest"] },
+      { id: "tx_002", symbol: "600519 贵州茅台", side: "买入", qty: "1,800 股", px: "¥1,512.0", when: "2024-11-15", weight: "2.5%", pnl: "+¥51,600", ret: "+11.4%", path: ["model", "signal", "entry", "optim", "prisk", "gate", "exec", "backtest"] },
+      { id: "tx_003", symbol: "002594 比亚迪", side: "卖出", qty: "9,500 股", px: "¥246.10", when: "2024-12-06", weight: "—", pnl: "-¥18,300", ret: "-7.3%", path: ["model", "signal", "exit", "optim", "prisk", "gate", "exec", "backtest"] },
+    ];
+    this._runs = [
+      { id: "run_wk_cn_8f2a", when: "12-28 09:14", excess: "+17.3%", dd: "15.8%", sharpe: "1.82", status: "succeeded", cur: true },
+      { id: "run_wk_cn_7d10", when: "12-21 18:02", excess: "+15.1%", dd: "17.2%", sharpe: "1.61", status: "succeeded" },
+      { id: "run_wk_cn_6a02", when: "12-14 11:40", excess: "+9.8%", dd: "22.4%", sharpe: "1.12", status: "warning" },
+    ];
+    this._versions = [
+      { vid: "v3", label: "v3 草稿", lifecycle: "Backtested · 当前", cur: true },
+      { vid: "v2", label: "v2", lifecycle: "Reviewed" },
+      { vid: "v1", label: "v1", lifecycle: "Draft" },
+    ];
+    this._diff = { base: "v2", added: ["signal"], changed: ["model", "optim"] };
+    this._contribution = { signal: [["收益贡献", "+6.2%", "#9bbd5a"], ["信号数", "1,284", "#cfc8ba"], ["命中率", "57%", "#cfc8ba"]], model: [["收益贡献", "+8.1%", "#9bbd5a"], ["特征重要度", "sue.40 mom.37 ep.23", "#cfc8ba"]], optim: [["换手成本", "-1.8%", "#d99a8e"], ["平均持仓", "48 只", "#cfc8ba"]], exec: [["冲击成本", "-0.9%", "#d99a8e"], ["成交笔数", "3,210", "#cfc8ba"]], backtest: [["年化超额", "+17.3%", "#9bbd5a"], ["最大回撤", "15.8%", "#d9b25f"], ["Sharpe", "1.82", "#9bbd5a"]] };
+    this.setState({ nodes, edges, agentBlocks: blocks, proposal: this._varProposal });
+  }
+
+  // ── 几何：节点高度随端口/文本行数变化；端口锚点 = 节点边上的连线吸附坐标；
+  //   _path 生成两端水平切入的贝塞尔连线；_s2w 把屏幕像素换算成画布世界坐标。
+  _nodeH(n) { const ports = Math.max(n.ins.length, n.outs.length); const lines = (n.lines ? n.lines.length : 0) + (n.badge ? 1 : 0) + (n.openRun ? 1 : 0); return Math.max(28 + lines * 14 + 14, 38 + ports * 20 + 10); }
+  _anchorOut(n, j) { return { x: n.x + n.w, y: n.y + 45 + j * 20 }; }
+  _anchorIn(n, i) { return { x: n.x, y: n.y + 45 + i * 20 }; }
+  _path(a, b) { const dx = Math.max(40, Math.abs(b.x - a.x) * 0.42); return `M${a.x},${a.y} C${a.x + dx},${a.y} ${b.x - dx},${b.y} ${b.x},${b.y}`; }
+  _s2w(cx, cy) { const r = this._surf ? this._surf.getBoundingClientRect() : { left: 0, top: 0 }; return { x: (cx - r.left - this.state.panX) / this.state.zoom, y: (cy - r.top - this.state.panY) / this.state.zoom }; }
+
+  // ── 端口兼容性：拉线时判断「输出口 out」能否接到「输入口 inp」。
+  //   返回 { s, reason }：ok 完全匹配 / adapt 需重采样(日→周) / warn 可接但有风险 /
+  //   bad 不可接（如执行入口必须经 Final Risk Gate）。颜色由 _compatColor/_edgeStroke 决定。
+  _portOf(nodeId, portId, dir) { const n = this.state.nodes[nodeId]; if (!n) return null; const arr = dir === "out" ? n.outs : n.ins; return arr.find(p => p.id === portId) || null; }
+  _compat(out, inp) {
+    if (!out || !inp) return { s: "?", reason: "未知" };
+    if (inp.role === "exec" && out.dt !== "approvedPortfolio") return { s: "bad", reason: "执行入口必须经 Final Risk Gate（B6），不可绕过" };
+    if (out.dt === inp.dt) {
+      if (out.freq && inp.freq && out.freq !== inp.freq && out.freq !== "—" && inp.freq !== "—") return (out.freq === "D" && inp.freq === "W") ? { s: "adapt", reason: "日频→周频，需 Resample 聚合" } : { s: "warn", reason: "频率不一致：" + out.freq + "→" + inp.freq };
+      return { s: "ok", reason: "类型与频率一致" };
+    }
+    const ADAPT = { modelScore: ["signalIntent"], factorPanel: ["modelScore"], panel: ["factorPanel"] };
+    if ((ADAPT[out.dt] || []).includes(inp.dt)) return { s: "adapt", reason: "可经适配节点转换 " + out.dt + "→" + inp.dt };
+    const WARN = { signalIntent: ["targetPortfolio"], targetPortfolio: ["signalIntent"] };
+    if ((WARN[out.dt] || []).includes(inp.dt)) return { s: "warn", reason: "语义相近但不应直接相连" };
+    return { s: "bad", reason: "类型不兼容：" + out.dt + " → " + inp.dt };
+  }
+  _compatColor(s) { return { ok: "#9bbd5a", adapt: "#6f9bd1", warn: "#d9b25f", bad: "#d97066", "?": "#8f897c" }[s] || "#8f897c"; }
+  _edgeStroke(s, sel) { if (sel) return "#d97757"; return { ok: "#5d6f4c", adapt: "#3f6178", warn: "#8a6a2a", bad: "#8a3a30", "?": "#4a463f" }[s] || "#566052"; }
+
+  // ── 画布交互：所有指针手势统一走 this._drag = { mode, … } 状态机。
+  //   _bgDown 背景：Shift=框选 否则=平移；_nodeDown 拖节点；_portDown/_portEnter 拉连线；
+  //   _onMove 按 mode 更新；_onUp 收尾（落连线 / 提交框选 / 入撤销栈）；_onWheel 以光标为锚缩放。
+  _bgDown(e) {
+    const world = this._s2w(e.clientX, e.clientY);
+    if (e.shiftKey) { this._drag = { mode: "marquee", x0: e.clientX, y0: e.clientY }; this.setState({ marquee: { x: 0, y: 0, w: 0, h: 0 } }); this._mqStart = world; }
+    else { this._drag = { mode: "pan", x0: e.clientX, y0: e.clientY, px: this.state.panX, py: this.state.panY }; this.setState({ sel: { nodeIds: [], edgeIds: [] }, verMenuOpen: false }); }
+  }
+  _nodeDown(e, id) {
+    e.stopPropagation();
+    const sel = this.state.sel.nodeIds.includes(id) ? this.state.sel.nodeIds : [id];
+    if (!this.state.sel.nodeIds.includes(id)) this.setState({ sel: { nodeIds: [id], edgeIds: [] } });
+    if (this.state.runtime === "live") return;
+    const starts = {}; sel.forEach(nid => { const n = this.state.nodes[nid]; starts[nid] = { x: n.x, y: n.y }; });
+    this._drag = { mode: "node", x0: e.clientX, y0: e.clientY, ids: sel, starts, snap: this._snap(), moved: false };
+  }
+  _portDown(e, nodeId, portId) {
+    e.stopPropagation();
+    if (this.state.runtime === "live") return;
+    const n = this.state.nodes[nodeId]; const j = n.outs.findIndex(p => p.id === portId); const a = this._anchorOut(n, j);
+    this._drag = { mode: "link", fromNode: nodeId, fromPort: portId };
+    const w = this._s2w(e.clientX, e.clientY);
+    this.setState({ linking: { node: nodeId, port: portId, ax: a.x, ay: a.y }, linkPx: w.x, linkPy: w.y, hoverPort: null });
+  }
+  _portEnter(nodeId, portId) {
+    if (!this._drag || this._drag.mode !== "link") return;
+    const out = this._portOf(this._drag.fromNode, this._drag.fromPort, "out");
+    const inp = this._portOf(nodeId, portId, "in");
+    const c = this._compat(out, inp);
+    this.setState({ hoverPort: { node: nodeId, port: portId, s: c.s, reason: c.reason } });
+  }
+  _portLeave() { if (this._drag && this._drag.mode === "link") this.setState({ hoverPort: null }); }
+  _onMove(e) {
+    if (!this._drag) return; const d = this._drag;
+    if (d.mode === "pan") this.setState({ panX: d.px + (e.clientX - d.x0), panY: d.py + (e.clientY - d.y0) });
+    else if (d.mode === "node") {
+      const dx = (e.clientX - d.x0) / this.state.zoom, dy = (e.clientY - d.y0) / this.state.zoom;
+      if (Math.abs(e.clientX - d.x0) + Math.abs(e.clientY - d.y0) > 3) d.moved = true;
+      this.setState(s => { const nodes = { ...s.nodes }; d.ids.forEach(id => { nodes[id] = { ...nodes[id], x: d.starts[id].x + dx, y: d.starts[id].y + dy }; }); return { nodes }; });
+    }
+    else if (d.mode === "link") { const w = this._s2w(e.clientX, e.clientY); this.setState({ linkPx: w.x, linkPy: w.y }); }
+    else if (d.mode === "marquee") { const r = this._surf.getBoundingClientRect(); this.setState({ marquee: { x: Math.min(e.clientX, d.x0) - r.left, y: Math.min(e.clientY, d.y0) - r.top, w: Math.abs(e.clientX - d.x0), h: Math.abs(e.clientY - d.y0) } }); }
+  }
+  _onUp() {
+    const d = this._drag; this._drag = null; if (!d) return;
+    if (d.mode === "node") { if (d.moved) this._pushUndo(d.snap); }
+    else if (d.mode === "link") {
+      const hp = this.state.hoverPort;
+      if (hp && hp.node !== d.fromNode && hp.s !== "bad") {
+        const exists = this.state.edges.some(ed => ed.to.node === hp.node && ed.to.port === hp.port);
+        if (!exists) { this._pushUndo(this._snap()); const id = "e" + Date.now().toString(36); this.setState(s => ({ edges: [...s.edges, { id, from: { node: d.fromNode, port: d.fromPort }, to: { node: hp.node, port: hp.port }, compat: hp.s }] })); }
+      }
+      this.setState({ linking: null, hoverPort: null });
+    }
+    else if (d.mode === "marquee") {
+      const mq = this.state.marquee, r = this._surf.getBoundingClientRect();
+      if (mq && mq.w > 4 && mq.h > 4) {
+        const a = this._s2w(mq.x + r.left, mq.y + r.top), b = this._s2w(mq.x + mq.w + r.left, mq.y + mq.h + r.top);
+        const ids = Object.values(this.state.nodes).filter(n => { const cx = n.x + n.w / 2, cy = n.y + this._nodeH(n) / 2; return cx >= a.x && cx <= b.x && cy >= a.y && cy <= b.y; }).map(n => n.id);
+        this.setState({ sel: { nodeIds: ids, edgeIds: [] } });
+      }
+      this.setState({ marquee: null });
+    }
+  }
+  _onWheel(e) {
+    e.preventDefault(); const r = this._surf.getBoundingClientRect();
+    const cx = e.clientX - r.left, cy = e.clientY - r.top; const factor = e.deltaY < 0 ? 1.12 : 1 / 1.12;
+    const z0 = this.state.zoom, z1 = Math.max(0.22, Math.min(2.2, z0 * factor));
+    const wx = (cx - this.state.panX) / z0, wy = (cy - this.state.panY) / z0;
+    this.setState({ zoom: z1, panX: cx - wx * z1, panY: cy - wy * z1 });
+  }
+  _onKeyDown(e) {
+    const tag = (e.target && e.target.tagName) || ""; if (tag === "INPUT" || tag === "TEXTAREA") return;
+    const meta = e.metaKey || e.ctrlKey;
+    if (meta && e.key.toLowerCase() === "z") { e.preventDefault(); if (e.shiftKey) this._redo(); else this._undo(); }
+    else if (e.key === "Delete" || e.key === "Backspace") { e.preventDefault(); this._delSel(); }
+  }
+
+  _undo() { this.setState(s => { if (!s.undoStack.length) return {}; const prev = s.undoStack[s.undoStack.length - 1]; const cur = { nodes: this._clone(s.nodes), edges: this._clone(s.edges) }; return { nodes: prev.nodes, edges: prev.edges, undoStack: s.undoStack.slice(0, -1), redoStack: [...s.redoStack, cur], sel: { nodeIds: [], edgeIds: [] } }; }); }
+  _redo() { this.setState(s => { if (!s.redoStack.length) return {}; const nx = s.redoStack[s.redoStack.length - 1]; const cur = { nodes: this._clone(s.nodes), edges: this._clone(s.edges) }; return { nodes: nx.nodes, edges: nx.edges, redoStack: s.redoStack.slice(0, -1), undoStack: [...s.undoStack, cur] }; }); }
+  _delSel() {
+    const { nodeIds, edgeIds } = this.state.sel; if (!nodeIds.length && !edgeIds.length) return;
+    const locked = nodeIds.filter(id => this.state.nodes[id] && this.state.nodes[id].locked);
+    this._pushUndo(this._snap());
+    this.setState(s => { const nodes = { ...s.nodes }; nodeIds.forEach(id => { if (!(nodes[id] && nodes[id].locked)) delete nodes[id]; });
+      const edges = s.edges.filter(ed => !edgeIds.includes(ed.id) && nodes[ed.from.node] && nodes[ed.to.node]); return { nodes, edges, sel: { nodeIds: locked, edgeIds: [] } }; });
+  }
+  _setParam(id, k, v) { this._pushUndo(this._snap()); this.setState(s => { const n = { ...s.nodes[id] }; n.params = { ...n.params, [k]: v }; if (n.state !== "succeeded") n.state = "dirty"; return { nodes: { ...s.nodes, [id]: n } }; }); }
+
+  // ── 图校验：跑治理规则，返回 { issues:[{s,node,t}] }。
+  //   warn = 必填输入端口未接；error = 执行入口未经 Final Risk Gate（B6 不可绕过）等硬规则。
+  //   结果喂给 Inspector「校验」标签与无选中时的图校验概览。
+  _validateGraph() {
+    const issues = []; const ns = this.state.nodes; const es = this.state.edges;
+    Object.values(ns).forEach(n => { n.ins.forEach(p => { if (p.req === false) return; const has = es.some(e => e.to.node === n.id && e.to.port === p.id); if (!has) issues.push({ s: "warn", node: n.id, t: n.title + "：必填输入「" + p.name + "」未连接" }); }); });
+    const execNode = ns.exec; if (execNode) { const inEdges = es.filter(e => e.to.node === "exec"); const fromGate = inEdges.some(e => e.from.node === "gate"); if (inEdges.length && !fromGate) issues.push({ s: "error", node: "exec", t: "执行入口未经 Final Risk Gate —— 违反 B6（不可绕过）" }); }
+    es.forEach(e => { if (e.compat === "bad") issues.push({ s: "error", node: e.to.node, t: "连线类型不兼容：" + e.from.node + " → " + e.to.node }); });
+    return { ok: issues.filter(i => i.s === "error").length === 0, issues };
+  }
+
+  _select(id) { if (!this.state.nodes[id]) return; this.setState({ sel: { nodeIds: [id], edgeIds: [] }, rightOpen: true }); }
+  _selectEdge(id) { this.setState({ sel: { nodeIds: [], edgeIds: [id] } }); }
+  _fit() {
+    const ns = Object.values(this.state.nodes); if (!ns.length || !this._surf) return;
+    let minX = 1e9, minY = 1e9, maxX = -1e9, maxY = -1e9;
+    ns.forEach(n => { minX = Math.min(minX, n.x); minY = Math.min(minY, n.y); maxX = Math.max(maxX, n.x + n.w); maxY = Math.max(maxY, n.y + this._nodeH(n)); });
+    const r = this._surf.getBoundingClientRect(); const pad = 60;
+    const z = Math.min((r.width - pad * 2) / (maxX - minX), (r.height - pad * 2) / (maxY - minY), 1.4);
+    this.setState({ zoom: z, panX: pad - minX * z, panY: (r.height - (maxY - minY) * z) / 2 - minY * z });
+  }
+  _autoLayout() {
+    this._pushUndo(this._snap());
+    const order = ["s1","s2","s3","s4","s5","s6","s7","s8"]; const bandW = 236; const baseX = 40;
+    this.setState(s => { const nodes = { ...s.nodes }; const byStage = {}; Object.values(nodes).forEach(n => { (byStage[n.stage] = byStage[n.stage] || []).push(n); });
+      order.forEach((stk, bi) => { const arr = (byStage[stk] || []).sort((a, b) => a.y - b.y); arr.forEach((n, i) => { nodes[n.id] = { ...nodes[n.id], x: baseX + bi * bandW + (arr.length > 1 && i % 2 ? 30 : 0), y: 110 + i * 150 }; }); });
+      return { nodes }; });
+    setTimeout(() => this._fit(), 30);
+  }
+  _zoomBy(f) { if (!this._surf) { this.setState(s => ({ zoom: Math.max(0.22, Math.min(2.2, s.zoom * f)) })); return; } const r = this._surf.getBoundingClientRect(); const cx = r.width / 2, cy = r.height / 2; const z0 = this.state.zoom, z1 = Math.max(0.22, Math.min(2.2, z0 * f)); const wx = (cx - this.state.panX) / z0, wy = (cy - this.state.panY) / z0; this.setState({ zoom: z1, panX: cx - wx * z1, panY: cy - wy * z1 }); }
+
+  // ── Agent：两种作业模式 ──
+  //   Ask    —— 先产出 proposal（Ghost 预览），用户 _acceptProposal / _rejectProposal。
+  //   Auto/Bypass —— _applyAuto 直接改图（事务式，可在对话里 _revertPatch 撤回）。
+  _sendAgent() {
+    const d = (this.state.draft || "").trim(); if (!d) return;
+    this.setState(s => ({ agentBlocks: [...s.agentBlocks, { type: "user", text: d }], draft: "" }));
+    setTimeout(() => {
+      if (this.state.agentMode === "ask") {
+        this.setState(s => ({ proposal: this._varProposal, agentBlocks: [...s.agentBlocks, { type: "say", text: "已生成提议并在画布上以 Ghost 预览（虚线）。确认 Diff 后再接受。" }] }));
+      } else { this._applyAuto(); }
+      this._agentScroll();
+    }, 260);
+  }
+  _agentScroll() { setTimeout(() => { const el = document.getElementById("sb-agentscroll"); if (el) el.scrollTop = el.scrollHeight; }, 40); }
+  _acceptProposal() {
+    const p = this.state.proposal; if (!p) return;
+    this._pushUndo(this._snap());
+    this.setState(s => {
+      const nodes = { ...s.nodes }; let edges = [...s.edges];
+      p.ops.forEach(o => { if (o.op === "addNode") nodes[o.node.id] = this._clone(o.node); else if (o.op === "addEdge") edges = [...edges, this._clone(o.edge)]; else if (o.op === "setParam") { const n = { ...nodes[o.node] }; n.params = { ...n.params, [o.k]: o.v }; nodes[o.node] = n; } });
+      const affected = p.ops.map(o => o.op === "addNode" ? o.node.title : o.op === "setParam" ? this.state.nodes[o.node].title : o.edge.id).join(" · ");
+      return { nodes, edges, proposal: null, agentBlocks: [...s.agentBlocks, { type: "patch", patchId: p.patchId, text: "Ask · Patch 已接受应用", affected, reverted: false }] };
+    });
+    this._agentScroll();
+  }
+  _rejectProposal() { this.setState(s => ({ proposal: null, agentBlocks: [...s.agentBlocks, { type: "say", text: "已拒绝该提议，Ghost 预览清除。可继续对话调整建议。" }] })); }
+  _applyAuto() {
+    this._pushUndo(this._snap());
+    const sfx = Math.random().toString(36).slice(2, 6); const pid = "pt_" + sfx; const nid = "ddguard_" + sfx;
+    const newNode = { id: nid, cat: "risk", stage: "s7", title: "回撤护栏 DrawdownGuard", x: 2178, y: 396, w: 182, state: "idle", desc: "Auto/Bypass 自动增节点：滚动回撤超阈值时降杠杆。", params: { trigger: "rolling DD>12%", action: "降杠杆 50%" }, ins: [{ id: "rp", name: "riskedPortfolio", dt: "riskedPortfolio", freq: "W", req: true, role: "", scope: "", schema: "" }], outs: [{ id: "g", name: "guardedPortfolio", dt: "riskedPortfolio", freq: "W", req: true, role: "", scope: "", schema: "" }], lines: ["滚动回撤>12% → 降杠杆", "Auto 生成"], lineage: "auto_ddguard" };
+    const newEdge = { id: "e_" + sfx, from: { node: "prisk", port: "rp" }, to: { node: nid, port: "rp" }, compat: "ok" };
+    const mode = this.state.agentMode === "bypass" ? "Bypass" : "Auto";
+    this.setState(s => ({ nodes: { ...s.nodes, [nid]: newNode }, edges: [...s.edges, newEdge], agentBlocks: [...s.agentBlocks, { type: "patch", patchId: pid, text: mode + " · 已直接应用（事务化）", affected: newNode.title + " · " + newEdge.id, reverted: false }] }));
+  }
+  _revertPatch(patchId) { this._undo(); this.setState(s => ({ agentBlocks: s.agentBlocks.map(b => (b.type === "patch" && b.patchId === patchId) ? { ...b, reverted: true } : b) })); }
+
+  // ── 跑回测（全 MOCK，不连后端）──
+  //   _compileLog 编图前置日志；_runGraph 用一串 setTimeout 流式把节点状态/日志推进，
+  //   最后落一行成功汇总（超额/回撤/Sharpe）。_clk 取当前时分秒做日志时间戳。
+  _compileLog() {
+    const v = this._validateGraph(); const errs = v.issues.filter(i => i.s === "error").length;
+    const yN = this._genYamlLines().length; const pN = this._genPyLines().length;
+    return [
+      { t: this._clk(), c: errs ? "#d97066" : "#9bbd5a", m: "⚙ 编译 · 校验图 → " + (errs ? errs + " 错误（需先修复）" : "通过") },
+      { t: this._clk(), c: "#9bc4ea", m: "⚙ 编译 · 序列化 StrategyGraph → strategy.yaml (" + yN + " 行)" },
+      { t: this._clk(), c: "#9bc4ea", m: "⚙ 编译 · Codegen → strategy.py (" + pN + " 行) · ⟨/⟩ 编译源码 可查看" },
+      { t: this._clk(), c: "#6f9bd1", m: "▶ backtest.run · 2019-01..2024-12 · neutral 成本（mock）" },
+    ];
+  }
+  _runGraph() {
+    if (this.state.running) return;
+    (this._runTimers || []).forEach(clearTimeout); this._runTimers = [];
+    const order = ["thesis","market","universe","domain","data","neutral","factors","model","signal","entry","exit","optim","prisk","gate","exec","bench","backtest"].filter(id => this.state.nodes[id]);
+    this.setState(s => { const nodes = { ...s.nodes }; order.forEach(id => { nodes[id] = { ...nodes[id], state: "queued" }; }); return { nodes, running: true, runLog: this._compileLog(), dockOpen: true, dockTab: "logs" }; });
+    let t = 360;
+    order.forEach((id) => {
+      this._runTimers.push(setTimeout(() => { this.setState(s => ({ nodes: { ...s.nodes, [id]: { ...s.nodes[id], state: "running" } }, runLog: [...s.runLog, { t: this._clk(), c: "#d9b25f", m: "  ▶ " + s.nodes[id].title }] })); this._logScroll(); }, t));
+      t += 230;
+      this._runTimers.push(setTimeout(() => { this.setState(s => ({ nodes: { ...s.nodes, [id]: { ...s.nodes[id], state: "succeeded" } }, runLog: [...s.runLog, { t: this._clk(), c: "#9bbd5a", m: "  ✓ " + s.nodes[id].title + " ok (" + (40 + Math.floor(Math.random() * 220)) + "ms)" }] })); this._logScroll(); }, t));
+      t += 120;
+    });
+    this._runTimers.push(setTimeout(() => { this.setState(s => ({ running: false, runLog: [...s.runLog, { t: this._clk(), c: "#9bbd5a", m: "✓ 完成 · 超额 +17.3% · 回撤 15.8% · Sharpe 1.82 · PBO 0.18" }] })); this._logScroll(); }, t + 120));
+  }
+  _clk() { const d = new Date(); const p = (x) => String(x).padStart(2, "0"); return p(d.getHours()) + ":" + p(d.getMinutes()) + ":" + p(d.getSeconds()); }
+  _logScroll() {}
+
+  // ── 血缘 lineage：把某一笔成交在画布上高亮成「交易→信号→节点」的产生链路 ──
+  //   _setTrace(id) 选中一笔成交并切到底部「血缘」标签；_clearTrace 取消高亮。
+  //   注意：回测对象始终是整条策略图（run_id 级），选成交只影响高亮，不改变回测对象。
+  _setTrace(id) { const t = this._trades.find(x => x.id === id); if (!t) return; this.setState({ trace: t, dockOpen: true, dockTab: "lineage", sel: { nodeIds: [], edgeIds: [] } }); }
+  _clearTrace() { this.setState({ trace: null }); }
+
+  // ── 版本 / diff：切换版本、进入改动对比（以某版本为基线高亮 added/changed）、回滚 ──
+  _pickVersion(v) { this.setState({ ver: v.label, verMenuOpen: false }); }
+  _enterDiff() { this.setState({ diffBase: this._diff.base, verMenuOpen: false, sel: { nodeIds: [], edgeIds: [] } }); }
+  _exitDiff() { this.setState({ diffBase: null }); }
+  _rollback(v) { this.setState(s => ({ ver: v.label + " (rollback)", verMenuOpen: false, agentBlocks: [...s.agentBlocks, { type: "say", text: "已回滚到 " + v.label + "（Mock：真实接 StrategyRepository.rollback）。" }] })); }
+
+  // ── 发布 / 治理：沿生命周期推进（Draft→…→Live→Retired）；_fork 从 Live 拉新草稿 ──
+  _advance() { const order = ["Draft","Validated","Backtested","Reviewed","Approved","Paper","Live","Paused","Retired"]; this.setState(s => { const i = order.indexOf(s.lifecycle); return { lifecycle: order[Math.min(order.length - 1, i + 1)] }; }); }
+  _fork() { this.setState(s => ({ runtime: "backtest", ver: "v4 草稿 (fork)", agentBlocks: [...s.agentBlocks, { type: "say", text: "已从 Live 版本 Fork 新草稿 v4，可编辑（B7）。" }] })); }
+  _toggleKill() { this.setState(s => ({ killArmed: !s.killArmed })); }
+  _openRunDetail() { try { window.location.href = "回测详情.dc.html?from=node:" + (this.state.sel.nodeIds[0] || "backtest"); } catch (e) {} }
+
+  // ── 代码生成：把当前策略图反向编译成源码（只读预览，不执行）──
+  //   _gp 读节点参数（带默认）；_pct 把 "15%" 转 0.15；_genYamlLines / _genPyLines 逐行拼。
+  _gp(id, k, d) { const n = this.state.nodes[id]; return (n && n.params && n.params[k] != null) ? n.params[k] : d; }
+  _pct(v) { const m = String(v).match(/([\d.]+)/); return m ? (parseFloat(m[1]) / 100) : ('"' + v + '"'); }
+  _extraRisk() { return Object.values(this.state.nodes).filter(n => n.cat === "risk" && n.id !== "prisk" && n.id !== "gate"); }
+  _genYamlLines() {
+    const g = (id, k, d) => this._gp(id, k, d); const ns = this.state.nodes; const es = this.state.edges; const L = [];
+    L.push("# 由画布编译 · StrategyGraph → strategy.yaml （codegen 预览，不执行）");
+    L.push("name: strat_wk_cn_01");
+    L.push("contract: strategy-graph@0.1.0");
+    L.push("runtime: " + this.state.runtime);
+    L.push("thesis:");
+    L.push('  objective: "' + g("thesis", "objective", "") + '"');
+    L.push('  benchmark: "' + g("thesis", "benchmark", "000905.SH") + '"');
+    L.push("  horizon: " + g("thesis", "horizon", "weekly"));
+    L.push("universe:                      # B1 市场组合 ∩ 投资标的池");
+    L.push("  market: { asset_class: " + g("market", "asset_class", "equity_cn") + ", calendar: " + g("market", "calendar", "SSE/SZSE") + ", currency: " + g("market", "currency", "CNY") + " }");
+    L.push('  pool:   { rule: "' + g("universe", "rule", "") + '" }   # B2 不含权重');
+    L.push("  op: intersection");
+    L.push("data:");
+    L.push("  sources: [" + g("data", "sources", "") + "]");
+    L.push("  point_in_time: true");
+    L.push("  transforms: [winsor:" + g("neutral", "winsor", "1%") + ", " + g("neutral", "standardize", "zscore") + ", neutralize:" + g("neutral", "neutralize", "industry+size") + "]");
+    L.push("factors:                       # ← 因子台 QUALIFIED+");
+    L.push("  set: [" + g("factors", "factors", "") + "]");
+    L.push("model:                         # ← Model Registry 引用 (B3)");
+    L.push("  ref: " + g("model", "model_id", "lgbm_rank_6f"));
+    L.push("  version: " + g("model", "version", "v2"));
+    L.push("  artifact: " + g("model", "artifact", "pinned"));
+    L.push("signal:");
+    L.push('  rule: "' + g("signal", "rule", "") + '"');
+    L.push("  rebalance: " + g("signal", "rebalance", "weekly_fri"));
+    L.push("  direction: " + g("signal", "direction", "long"));
+    L.push("position:");
+    L.push('  entry: "' + g("entry", "cond", "") + '"');
+    L.push('  exit:  "' + g("exit", "exit", "") + '"');
+    L.push("  optimizer: { sizing: " + g("optim", "sizing", "equal_risk") + ", max_pos: " + g("optim", "max_pos", "3%") + ", sector_dev: " + g("optim", "sector_dev", "5%") + ", turnover: " + g("optim", "turnover", "60%/w") + " }");
+    L.push("risk:");
+    L.push("  portfolio: { exposure: " + g("prisk", "exposure", "") + ", liquidity: " + g("prisk", "liquidity", "") + " }");
+    this._extraRisk().forEach(n => { L.push("  " + n.id + ": { " + Object.entries(n.params || {}).map(([k, v]) => k + ": " + v).join(", ") + " }   # 追加风险节点"); });
+    L.push("  final_gate: { dd_halt: " + g("gate", "dd_halt", "20%") + ", bypassable: false }   # B6 不可绕过");
+    L.push("execution:");
+    L.push("  algo: " + g("exec", "algo", "VWAP 分批"));
+    L.push("backtest:");
+    L.push("  window: " + g("backtest", "window", "2019-01..2024-12"));
+    L.push("  cost: " + g("backtest", "cost", "neutral"));
+    L.push("graph: { nodes: " + Object.keys(ns).length + ", edges: " + es.length + " }   # 见 graph.json");
+    return L;
+  }
+  _genPyLines() {
+    const g = (id, k, d) => this._gp(id, k, d); const L = [];
+    const srcs = String(g("data", "sources", "")).split(" · ").map(x => '"' + x.trim() + '"').join(", ");
+    const facs = String(g("factors", "factors", "")).split(", ").map(x => '"' + x.trim() + '"').join(", ");
+    L.push("# AUTO-GENERATED from StrategyGraph — 请勿手改，改图即改码");
+    L.push("# strat_wk_cn_01 · " + this.state.ver + " · contract strategy-graph@0.1.0");
+    L.push("from quantbt import Strategy, market, data, factors, models, signals, risk, execution, optimize");
+    L.push("");
+    L.push("class WeeklyCNMultiFactor(Strategy):");
+    L.push('    name = "strat_wk_cn_01"');
+    L.push('    benchmark = "' + g("thesis", "benchmark", "000905.SH") + '"');
+    L.push('    frequency = "' + g("thesis", "horizon", "weekly") + '"');
+    L.push("");
+    L.push("    def universe(self, ctx):");
+    L.push('        mkt = market.portfolio(asset_class="' + g("market", "asset_class", "equity_cn") + '", calendar="' + g("market", "calendar", "SSE/SZSE") + '")');
+    L.push('        pool = market.universe(rule="' + g("universe", "rule", "") + '")   # 不含权重 (B2)');
+    L.push("        return mkt & pool                       # TradableDomain = Universe ∩ Market (B1)");
+    L.push("");
+    L.push("    def features(self, ctx, domain):");
+    L.push("        panel = data.source([" + srcs + "], point_in_time=True)");
+    L.push('        panel = data.neutralize(panel, winsor="' + g("neutral", "winsor", "1%") + '", standardize="' + g("neutral", "standardize", "zscore") + '", by=["industry", "size"])');
+    L.push("        return factors.set([" + facs + "], on=panel)   # ← 因子台 QUALIFIED+");
+    L.push("");
+    L.push("    def signal(self, ctx, feats):");
+    L.push('        model = models.ref("' + g("model", "model_id", "lgbm_rank_6f") + '", version="' + String(g("model", "version", "v2")).split(" ")[0] + '", artifact="' + g("model", "artifact", "pinned") + '")  # Registry (B3)');
+    L.push("        score = model.predict(feats)            # modelScore");
+    L.push("        return signals.cross_section_rank(score).top_decile().long_only()   # SignalIntent");
+    L.push("");
+    L.push("    def portfolio(self, ctx, sig):");
+    L.push('        sig = signals.entry(sig, cond="' + g("entry", "cond", "") + '")');
+    L.push('        sig = signals.exit(sig,  cond="' + g("exit", "exit", "") + '")');
+    L.push("        return optimize(sig, sizing=\"" + g("optim", "sizing", "equal_risk") + "\", max_pos=" + this._pct(g("optim", "max_pos", "3%")) + ", sector_dev=" + this._pct(g("optim", "sector_dev", "5%")) + ", turnover=" + this._pct(g("optim", "turnover", "60%/w")) + ")   # TargetPortfolio");
+    L.push("");
+    L.push("    def risk(self, ctx, tgt):");
+    L.push('        tgt = risk.portfolio(tgt, liquidity="' + g("prisk", "liquidity", "") + '")');
+    this._extraRisk().forEach(n => { L.push('        tgt = risk.apply("' + n.id + '", tgt, ' + Object.entries(n.params || {}).map(([k, v]) => k.replace(/[^a-zA-Z0-9_]/g, "_") + '="' + v + '"').join(", ") + ")"); });
+    L.push("        return risk.final_gate(tgt, dd_halt=" + this._pct(g("gate", "dd_halt", "20%")) + ")   # B6 不可绕过/删除");
+    L.push("");
+    L.push("    def execute(self, ctx, approved):");
+    L.push('        return execution.algo(approved, algo="VWAP", slice=5)   # OrderIntent');
+    L.push("");
+    L.push("# 后端执行（前端不跑）:");
+    L.push('#   run = backtest.run(WeeklyCNMultiFactor, window="' + g("backtest", "window", "2019-01..2024-12") + '", cost="' + g("backtest", "cost", "neutral") + '")');
+    return L;
+  }
+  _tokPy(line) {
+    const segs = []; let last = 0, m;
+    const re = /(#.*$)|("(?:[^"\\]|\\.)*"|'(?:[^'\\]|\\.)*')|(\b(?:class|def|return|import|from|self|None|True|False|if|else|elif|for|in|and|or|not|lambda|with|as)\b)|(\b\d+\.?\d*\b)/g;
+    while ((m = re.exec(line))) {
+      if (m.index > last) segs.push({ t: line.slice(last, m.index), c: "#cbb89a" });
+      let c = "#cbb89a"; if (m[1]) c = "#5f6a52"; else if (m[2]) c = "#9bbd5a"; else if (m[3]) c = "#c98a6f"; else if (m[4]) c = "#d9b25f";
+      segs.push({ t: m[0], c }); last = m.index + m[0].length;
+    }
+    if (last < line.length) segs.push({ t: line.slice(last), c: "#cbb89a" });
+    if (!segs.length) segs.push({ t: line.length ? line : " ", c: "#cbb89a" });
+    return segs;
+  }
+  _tokYaml(line) {
+    if (/^\s*#/.test(line)) return [{ t: line, c: "#5f6a52" }];
+    const idx = line.indexOf("#"); let code = line, cm = "";
+    if (idx > 0) { code = line.slice(0, idx); cm = line.slice(idx); }
+    const m = code.match(/^(\s*-?\s*)([\w.]+)(:)(.*)$/);
+    let segs;
+    if (m) segs = [{ t: m[1], c: "#cbb89a" }, { t: m[2], c: "#7d8aa0" }, { t: m[3], c: "#6f6a61" }, { t: m[4], c: "#cbb89a" }];
+    else segs = [{ t: code.length ? code : " ", c: "#cbb89a" }];
+    if (cm) segs.push({ t: cm, c: "#5f6a52" });
+    return segs;
+  }
+
+  // ── renderVals()：每次渲染调用，把 state 整理成模板要用的“扁平视图模型”。
+  //   这里集中了所有派生数据：节点/连线的绘制属性、Inspector 各标签内容、工作台各标签、
+  //   血缘面板、Agent 对话、发布抽屉、代码面板等。模板里 {{ … }} 取的就是这里 return 的字段。
+  renderVals() {
+    if (!this._built) this._build();
+    const st = this.state; const ns = st.nodes; const es = st.edges;
+    const CAT = { research: "#6f9bd1", scope: "#6f9bd1", data: "#c89b6f", factor: "#9bbd5a", model: "#b89cd8", signal: "#d9b25f", position: "#6fb0a0", risk: "#d97066", exec: "#d97757", eval: "#6f9bd1" };
+    const CATNAME = { research: "研究与范围", scope: "研究与范围", data: "数据与变换", factor: "因子", model: "Model", signal: "信号与决策", position: "入场/退出/仓位", risk: "风险与执行", exec: "风险与执行", eval: "回测与评价" };
+    const STATE = { idle: ["#6f6a61", "idle"], dirty: ["#d9b25f", "dirty 未保存"], validating: ["#6f9bd1", "validating"], valid: ["#9bbd5a", "valid"], queued: ["#6f9bd1", "queued"], running: ["#d97757", "running"], succeeded: ["#9bbd5a", "succeeded"], warning: ["#d9b25f", "warning"], invalid: ["#d97066", "invalid"], failed: ["#d97066", "failed"], stale: ["#8f897c", "stale"] };
+    // PARAM_META：参数键的中文名 + 悬停说明（Inspector「参数」标签用）。让 horizon=weekly 这类英文参数“看得懂”。
+    // 回答 Fatima 的问题：weekly = 调仓/再平衡频率（每周一次），不是某个标的的持有周期。
+    const PARAM_META = {
+      objective:   ["优化目标",       "策略要达成的目标，如「超额≥15% / 回撤≤20%」。"],
+      horizon:     ["调仓周期",       "策略的再平衡/调仓频率。weekly = 每周调仓一次（每周五收盘按信号换仓），daily = 每日调仓。"],
+      benchmark:   ["业绩基准",       "对比基准指数（超额收益相对它计算）。000905.SH = 中证500。"],
+      stage:       ["研究阶段",       "exploratory 探索 / confirmatory 验证。"],
+      rebalance:   ["再平衡时点",     "每个调仓周期内具体在什么时候换仓。weekly_fri = 每周五收盘再平衡（= 调仓）。"],
+      direction:   ["方向",           "long 只做多 / short 只做空 / long_short 多空。"],
+      rule:        ["信号规则",       "把模型打分转成可交易信号的规则。"],
+      asset_class: ["资产类别",       "equity_cn = A股股票。"],
+      calendar:    ["交易日历",       "撮合/调仓使用的交易所日历。"],
+      currency:    ["计价货币",       ""],
+      turnover:    ["换手率上限",     "每个调仓周期允许的最大换手，60%/w = 每周最多换手 60%。"],
+      max_pos:     ["单票上限",       "单只标的最大权重。"],
+      sector_dev:  ["行业偏离",       "相对基准的行业权重最大偏离。"],
+      window:      ["回测区间",       ""],
+    };
+    const readonly = st.runtime === "live";
+    const trace = st.trace; const tracePath = trace ? trace.path : null;
+    const diffBase = st.diffBase;
+
+    // stages
+    const STG = { s1: "立题", s2: "市场与标的", s3: "数据与因子", s4: "Model", s5: "信号", s6: "入场退出与仓位", s7: "风险与执行", s8: "回测与评价" };
+    const STGORDER = ["s1","s2","s3","s4","s5","s6","s7","s8"];
+    const gv = this._validateGraph(); const stageMissing = {};
+    gv.issues.forEach(i => { const n = ns[i.node]; if (n) (stageMissing[n.stage] = stageMissing[n.stage] || []).push(i); });
+    const stages = STGORDER.map((key, idx) => {
+      const members = Object.values(ns).filter(n => n.stage === key);
+      let minX = 1e9, minY = 1e9, maxX = -1e9, maxY = -1e9;
+      members.forEach(n => { minX = Math.min(minX, n.x); minY = Math.min(minY, n.y); maxX = Math.max(maxX, n.x + n.w); maxY = Math.max(maxY, n.y + this._nodeH(n)); });
+      if (!members.length) { minX = 0; minY = 0; maxX = 0; maxY = 0; }
+      const pad = 20; const miss = stageMissing[key] || [];
+      return { idx: String(idx + 1).padStart(2, "0"), title: STG[key], titleColor: miss.length ? "#d9b25f" : "#8f897c", compLabel: members.length + " 节点 · " + (miss.length ? "有缺口" : "完成"), hasMissing: miss.length > 0, missingText: miss.length + " 项待修复", frameStyle: `position:absolute; left:${minX - pad}px; top:${minY - pad}px; width:${maxX - minX + pad * 2}px; height:${maxY - minY + pad * 2}px; border:1px dashed ${miss.length ? "#5a4a2a" : "#34302a"}; border-radius:14px; background:rgba(255,255,255,0.012); z-index:0;` };
+    });
+
+    // nodes
+    const selSet = st.sel.nodeIds;
+    const nodes = Object.values(ns).map(n => {
+      const h = this._nodeH(n); const sel = selSet.includes(n.id); const cat = CAT[n.cat]; const stt = STATE[n.state] || STATE.idle;
+      const onPath = tracePath ? tracePath.includes(n.id) : null;
+      let diffKind = null; if (diffBase) { if (this._diff.added.includes(n.id)) diffKind = "added"; else if (this._diff.changed.includes(n.id)) diffKind = "changed"; }
+      const inPorts = n.ins.map((p, i) => { const hp = st.hoverPort; const isHover = hp && hp.node === n.id && hp.port === p.id; const bg = isHover ? this._compatColor(hp.s) : "#161512"; return { top: (38 + i * 20) + "px", bg, border: isHover ? this._compatColor(hp.s) : cat, title: p.name + " · " + p.dt + (p.freq ? " · " + p.freq : ""), up: () => {}, enter: () => this._portEnter(n.id, p.id), leave: () => this._portLeave() }; });
+      const outPorts = n.outs.map((p, j) => ({ top: (38 + j * 20) + "px", bg: cat, border: cat, title: p.name + " · " + p.dt + (p.freq ? " · " + p.freq : ""), down: (e) => this._portDown(e, n.id, p.id) }));
+      let ring = sel ? "0 0 0 3px rgba(217,119,87,0.2), 0 8px 22px rgba(0,0,0,0.42)" : "0 4px 14px rgba(0,0,0,0.32)";
+      if (!sel && onPath) ring = "0 0 0 2.5px rgba(217,178,95,0.55), 0 6px 18px rgba(0,0,0,0.4)";
+      else if (!sel && diffKind === "added") ring = "0 0 0 2.5px rgba(127,166,80,0.5)";
+      else if (!sel && diffKind === "changed") ring = "0 0 0 2.5px rgba(217,178,95,0.5)";
+      let op = 1; if (tracePath && !onPath) op = 0.3; else if (diffBase && !diffKind) op = 0.42;
+      return {
+        id: n.id, w: n.w, locked: !!n.locked, title: n.title, dotColor: cat, headBg: sel ? "#2a2723" : "#221f1c", border: sel ? "#d97757" : (onPath ? "#7a6a3a" : "#34302a"),
+        stateColor: stt[0], stateLabel: stt[1], statePulse: n.state === "running" ? "animation:sbpulse 1s ease-in-out infinite;" : "", lines: n.lines || [], badge: n.badge || "",
+        diffBadge: diffKind === "added" ? "+新增" : diffKind === "changed" ? "~改动" : "", diffColor: diffKind === "added" ? "#9bbd5a" : "#d9b25f",
+        openRun: !!n.openRun, openRunClick: (e) => { e.stopPropagation(); window.location.href = "回测详情.dc.html?from=node:backtest"; },
+        inPorts, outPorts,
+        wrapStyle: `position:absolute; left:${n.x}px; top:${n.y}px; width:${n.w}px; opacity:${op}; z-index:${sel ? 5 : 2};`,
+        cardStyle: `border:1.5px solid ${sel ? "#d97757" : (onPath ? "#7a6a3a" : "#34302a")}; background:#1d1c19; border-radius:9px; box-shadow:${ring}; cursor:${readonly ? "default" : "grab"};`,
+        badgeStyle: "font-size:9px; color:#6f9bd1; background:rgba(111,155,209,0.12); border:1px solid #2c4452; border-radius:20px; padding:1px 7px;",
+        headDown: (e) => this._nodeDown(e, n.id), select: (e) => { e.stopPropagation(); this._select(n.id); },
+      };
+    });
+
+    // edges
+    const onPathEdge = (e) => tracePath && tracePath.includes(e.from.node) && tracePath.includes(e.to.node) && Math.abs(tracePath.indexOf(e.from.node) - tracePath.indexOf(e.to.node)) === 1;
+    const edges = es.map(e => {
+      const fn = ns[e.from.node], tn = ns[e.to.node]; if (!fn || !tn) return null;
+      const j = fn.outs.findIndex(p => p.id === e.from.port); const i = tn.ins.findIndex(p => p.id === e.to.port);
+      const a = this._anchorOut(fn, j < 0 ? 0 : j), b = this._anchorIn(tn, i < 0 ? 0 : i);
+      const sel = st.sel.edgeIds.includes(e.id); const hot = onPathEdge(e);
+      return { path: this._path(a, b), stroke: hot ? "#d9b25f" : this._edgeStroke(e.compat, sel), width: hot ? 3 : (sel ? 2.6 : 1.8), dash: e.compat === "adapt" ? "6 4" : "0", opacity: tracePath ? (hot ? 1 : 0.15) : (diffBase ? 0.5 : 1), click: (ev) => { ev.stopPropagation(); this._selectEdge(e.id); } };
+    }).filter(Boolean);
+
+    // ghosts (ask proposal)
+    const proposal = st.proposal; let ghostNodes = [], ghostEdges = [], hasProposal = false, proposalVm = null;
+    if (proposal && st.agentMode === "ask") {
+      hasProposal = true; const gmap = { ...ns }; proposal.ops.forEach(o => { if (o.op === "addNode") gmap[o.node.id] = o.node; });
+      ghostNodes = proposal.ops.filter(o => o.op === "addNode").map(o => { const n = o.node; return { wrapStyle: `position:absolute; left:${n.x}px; top:${n.y}px; width:${n.w}px; z-index:4;`, title: n.title, lines: n.lines || [] }; });
+      ghostEdges = proposal.ops.filter(o => o.op === "addEdge").map(o => { const e = o.edge; const fn = gmap[e.from.node], tn = gmap[e.to.node]; if (!fn || !tn) return null; const j = fn.outs.findIndex(p => p.id === e.from.port); const i = tn.ins.findIndex(p => p.id === e.to.port); return { path: this._path(this._anchorOut(fn, j < 0 ? 0 : j), this._anchorIn(tn, i < 0 ? 0 : i)) }; }).filter(Boolean);
+      proposalVm = { title: proposal.title, patchId: proposal.patchId, affectedCount: proposal.ops.length, diff: proposal.diff.map(([sign, t, c]) => ({ sign, t, c })) };
+    }
+
+    // linking ghost
+    const linkOn = !!st.linking; let linkPath = "", linkColor = "#8f897c";
+    if (linkOn) { linkPath = this._path({ x: st.linking.ax, y: st.linking.ay }, { x: st.linkPx, y: st.linkPy }); linkColor = st.hoverPort ? this._compatColor(st.hoverPort.s) : "#8f897c"; }
+
+    // minimap
+    let mnX = 1e9, mnY = 1e9, mxX = -1e9, mxY = -1e9; Object.values(ns).forEach(n => { mnX = Math.min(mnX, n.x); mnY = Math.min(mnY, n.y); mxX = Math.max(mxX, n.x + n.w); mxY = Math.max(mxY, n.y + this._nodeH(n)); });
+    const mw = (mxX - mnX) || 1, mh = (mxY - mnY) || 1; const msc = Math.min(150 / mw, 96 / mh); const ox = (150 - mw * msc) / 2, oy = (104 - mh * msc) / 2;
+    const miniNodes = Object.values(ns).map(n => ({ style: `position:absolute; left:${ox + (n.x - mnX) * msc}px; top:${oy + (n.y - mnY) * msc}px; width:${Math.max(2, n.w * msc)}px; height:${Math.max(2, this._nodeH(n) * msc)}px; background:${CAT[n.cat]}; opacity:0.7; border-radius:1px;` }));
+    let miniViewStyle = "display:none;";
+    if (this._surf) { const r = this._surf.getBoundingClientRect(); const vx = (-st.panX / st.zoom), vy = (-st.panY / st.zoom), vw = r.width / st.zoom, vh = r.height / st.zoom; miniViewStyle = `position:absolute; left:${ox + (vx - mnX) * msc}px; top:${oy + (vy - mnY) * msc}px; width:${vw * msc}px; height:${vh * msc}px; border:1px solid #d97757; background:rgba(217,119,87,0.08); pointer-events:none;`; }
+
+    // inspector
+    const selNode = selSet.length === 1 ? ns[selSet[0]] : null;
+    const tabDef = [["params", "参数"], ["ports", "端口"], ["validate", "校验"], ["version", "版本/血缘"]];
+    const tabStyle = on => `background:${on ? "#2a2723" : "transparent"}; color:${on ? "#e6e1d6" : "#7d7668"}; border:none; font-family:inherit; font-size:11px; padding:5px 11px; border-radius:7px 7px 0 0; cursor:pointer;`;
+    const inspTabs = tabDef.map(([k, l]) => ({ label: l, on: () => this.setState({ inspTab: k }), style: tabStyle(st.inspTab === k) }));
+    let insp = null;
+    if (selNode) {
+      const connInfo = (p) => { const has = es.some(e => e.to.node === selNode.id && e.to.port === p.id); return has ? ["已连接", "#9bbd5a"] : (p.req === false ? ["可选", "#6f6a61"] : ["未连接", "#d9b25f"]); };
+      const nodeIssues = gv.issues.filter(i => i.node === selNode.id).map(i => ({ icon: i.s === "error" ? "✕" : "⚠", c: i.s === "error" ? "#d97066" : "#d9b25f", t: i.t }));
+      const contrib = this._contribution[selNode.id];
+      insp = {
+        id: selNode.id, title: selNode.title, category: CATNAME[selNode.cat], catColor: CAT[selNode.cat], stateColor: (STATE[selNode.state] || STATE.idle)[0], stateLabel: (STATE[selNode.state] || STATE.idle)[1], mock: !!selNode.mock, desc: selNode.desc, lineage: selNode.lineage,
+        noParams: Object.keys(selNode.params || {}).length === 0,
+        params: Object.entries(selNode.params || {}).map(([k, v]) => { const m = PARAM_META[k]; return { k, label: m ? m[0] : k, tip: m && m[1] ? m[1] : (m ? m[0] : k), hasTip: !!(m && m[1]), v: String(v), disabled: (readonly || selNode.locked) ? "disabled" : "", onInput: (e) => this._setParam(selNode.id, k, e.target.value) }; }),
+        ins: selNode.ins.map(p => { const [conn, connColor] = connInfo(p); return { name: p.name, conn, connColor, req: p.req === false ? "#4a4a42" : "#5a4a2a", meta: `${p.dt}${p.freq ? " · " + p.freq : ""}${p.schema ? " · " + p.schema : ""} · ${p.req === false ? "optional" : "required"}` }; }),
+        outs: selNode.outs.map(p => ({ name: p.name, meta: `${p.dt}${p.freq ? " · " + p.freq : ""}${p.schema ? " · " + p.schema : ""}` })),
+        noIssues: nodeIssues.length === 0, issues: nodeIssues,
+        hasContribution: !!contrib, contribution: (contrib || []).map(([k, v, color]) => ({ k, v, color })), openRun: () => this._openRunDetail(),
+      };
+    }
+
+    // dock
+    const dockTabDef = [["preview", "输出预览", ""], ["schema", "Schema", ""], ["stats", "统计", ""], ["logs", "日志", ""], ["history", "运行历史", ""], ["lineage", "血缘溯源", "血缘 = 数据溯源链路：顺着箭头反查这次回测结果是由哪些节点、信号一步步推导出来的。点左侧任意一笔成交，画布会高亮「交易 → 信号 → 节点」的完整来源路径。"]];
+    const dockTabStyle = on => `background:${on ? "#2a2723" : "transparent"}; color:${on ? "#e6e1d6" : "#7d7668"}; border:none; font-family:inherit; font-size:11px; padding:5px 11px; border-radius:7px; cursor:pointer;`;
+    const dockTabs = dockTabDef.map(([k, l, tip]) => ({ label: l, tip: tip || l, on: () => this.setState({ dockTab: k }), style: dockTabStyle(st.dockTab === k) }));
+    const PREVIEW = {
+      factors: { cols: ["date", "symbol", "sue", "mom", "ep"], rows: [["2024-12-27", "600519", "1.82", "0.41", "-0.22"], ["2024-12-27", "000858", "0.94", "0.63", "0.10"], ["2024-12-27", "300750", "1.31", "-0.18", "0.47"]] },
+      model: { cols: ["date", "symbol", "score", "rank"], rows: [["2024-12-27", "600519", "0.842", "12"], ["2024-12-27", "300750", "0.911", "3"], ["2024-12-27", "000858", "0.655", "48"]] },
+      signal: { cols: ["symbol", "direction", "strength", "validUntil"], rows: [["300750", "long", "0.91", "2025-01-03"], ["600519", "long", "0.84", "2025-01-03"], ["002594", "long", "0.79", "2025-01-03"]] },
+      backtest: { cols: ["metric", "value"], rows: [["annExcess", "17.3%"], ["maxDD", "15.8%"], ["sharpe", "1.82"], ["PBO", "0.18"], ["DSR", "1.34"]] },
+    };
+    const dn = selNode;
+    let dockEmpty = false, dockPreview = false, dockSchema = false, dockStats = false, dockLogs = false, dockHistory = false, dockLineage = false;
+    let dockEmptyText = "", dockNodeTitle = "", dockCols = "", dockCells = [], dockSchemaText = "", dockStatRows = [];
+    if (st.dockTab === "preview" || st.dockTab === "schema") {
+      if (!dn) { dockEmpty = true; dockEmptyText = "选中一个节点查看其输出预览 / Schema。\n（mock fixture 驱动，真实接 RunRepository.previewIO）"; }
+      else if (st.dockTab === "preview") { const pv = PREVIEW[dn.id]; if (pv) { dockPreview = true; dockNodeTitle = dn.title; dockCols = pv.cols.map(() => "1fr").join(" "); pv.cols.forEach(c => dockCells.push({ t: c, style: "padding:5px 8px; color:#7d8aa0; border-bottom:1px solid #302d29; background:#1d1c19;" })); pv.rows.forEach(row => row.forEach(c => dockCells.push({ t: c, style: "padding:5px 8px; color:#cfc8ba; border-bottom:1px solid #232120;" }))); } else { dockEmpty = true; dockEmptyText = dn.title + "：配置/范围节点，无表格输出。查看 Schema 标签了解端口契约。"; } }
+      else { dockSchema = true; dockNodeTitle = dn.title; dockSchemaText = "outputs:\n" + (dn.outs.length ? dn.outs.map(p => "  " + p.name + ": " + p.dt + (p.freq ? " @" + p.freq : "") + (p.schema ? "\n    schema: " + p.schema : "")).join("\n") : "  (终端节点，无输出)") + "\ninputs:\n" + (dn.ins.length ? dn.ins.map(p => "  " + p.name + ": " + p.dt + (p.req === false ? " (optional)" : " (required)")).join("\n") : "  (源节点，无输入)"); }
+    } else if (st.dockTab === "stats") {
+      dockStats = true; dockNodeTitle = dn ? dn.title : "图整体";
+      dockStatRows = dn && dn.mock ? [{ k: "覆盖标的", v: "5,412", color: "#cfc8ba" }, { k: "缺失率", v: "0.4%", color: "#9bbd5a" }, { k: "时间跨度", v: "2019–2024", color: "#cfc8ba" }, { k: "行数", v: "6.8M", color: "#cfc8ba" }] : [{ k: "节点", v: String(Object.keys(ns).length), color: "#cfc8ba" }, { k: "连线", v: String(es.length), color: "#cfc8ba" }, { k: "错误", v: String(gv.issues.filter(i => i.s === "error").length), color: "#9bbd5a" }, { k: "警告", v: String(gv.issues.filter(i => i.s === "warn").length), color: "#d9b25f" }];
+    } else if (st.dockTab === "logs") { dockLogs = true; }
+    else if (st.dockTab === "history") { dockHistory = true; }
+    else if (st.dockTab === "lineage") { dockLineage = true; }
+
+    // logs
+    const logLines = st.runLog.map(l => ({ t: l.t, c: l.c, m: l.m })); const logsEmpty = logLines.length === 0;
+    // history
+    const runCells = []; this._runs.forEach(r => {
+      const base = "padding:5px 8px; border-bottom:1px solid #232120; font-size:10.5px;";
+      runCells.push({ t: r.id + (r.cur ? " ●" : ""), style: base + "color:" + (r.cur ? "#d97757" : "#cfc8ba") + ";" });
+      runCells.push({ t: r.when, style: base + "color:#9a9488;" });
+      runCells.push({ t: r.excess, style: base + "color:#9bbd5a;" });
+      runCells.push({ t: r.dd, style: base + "color:" + (parseFloat(r.dd) > 20 ? "#d9b25f" : "#9a9488") + ";" });
+      runCells.push({ t: r.sharpe, style: base + "color:#cfc8ba;" });
+      runCells.push({ t: r.status === "warning" ? "⚠" : "✓", style: base + "color:" + (r.status === "warning" ? "#d9b25f" : "#9bbd5a") + ";" });
+    });
+    // 血缘（lineage）面板数据 ──────────────────────────────────────────
+    // traceOn：是否正高亮某一笔交易的链路；tradesShown：血缘标签下、未选交易时展示成交列表。
+    const traceOn = !!trace; const tradesShown = st.dockTab === "lineage";
+    let traceVm = null;
+    if (trace) { traceVm = { label: "交易 " + trace.id + " · " + trace.symbol, meta: trace.side + " · " + trace.qty + " · " + trace.pnl, runHref: "回测详情.dc.html?trace=" + trace.id + "&from=node:exec",
+      chain: trace.path.map((id, k) => ({ title: ns[id] ? ns[id].title.split(" ")[0] : id, color: ns[id] ? CAT[ns[id].cat] : "#4a463f", arrow: k < trace.path.length - 1 ? "›" : "", go: () => this._select(id) })) }; }
+    // 每一行成交：点击 → _setTrace 高亮其「交易→信号→节点」产生链路。selected 标记当前高亮行。
+    const tradeRows = this._trades.map(t => ({ id: t.id, symbol: t.symbol, side: t.side, sideColor: t.side === "买入" ? "#9bbd5a" : "#d99a8e", qty: t.qty, px: t.px, when: t.when, weight: t.weight, ret: t.ret, retColor: t.ret.startsWith("+") ? "#9bbd5a" : "#d99a8e", pnl: t.pnl, pnlColor: t.pnl.startsWith("+") ? "#9bbd5a" : "#d99a8e",
+      selected: !!(trace && trace.id === t.id), rowBg: (trace && trace.id === t.id) ? "#231f17" : "#1d1c19", rowBorder: (trace && trace.id === t.id) ? "#7a6a3a" : "#302d29", go: () => this._setTrace(t.id) }));
+    const tradeCount = this._trades.length;
+
+    // agent blocks
+    const agentBlocks = st.agentBlocks.map(b => ({
+      isUser: b.type === "user", isThink: b.type === "think", isSay: b.type === "say", isPatch: b.type === "patch",
+      text: b.text || "", patchId: b.patchId || "", affected: b.affected || "", reverted: !!b.reverted, notReverted: b.type === "patch" && !b.reverted,
+      patchBorder: b.reverted ? "#3a3733" : "#4a463f", patchIcon2: b.reverted ? "#6f6a61" : "#9bbd5a",
+      undo: () => this._revertPatch(b.patchId),
+    }));
+
+    const rtDef = [["backtest", "Backtest"], ["paper", "Paper"], ["live", "Live"]];
+    const runtimeBtns = rtDef.map(([k, l]) => ({ label: l, on: () => this.setState({ runtime: k, sel: { nodeIds: [], edgeIds: [] } }), style: `background:${st.runtime === k ? (k === "live" ? "#d97066" : "#6f9bd1") : "transparent"}; color:${st.runtime === k ? "#16202c" : "#a39a8a"}; border:none; font-family:inherit; font-weight:${st.runtime === k ? "700" : "400"}; font-size:11px; padding:4px 11px; border-radius:6px; cursor:pointer;` }));
+    const modeDef = [["ask", "Ask"], ["auto", "Auto"], ["bypass", "Bypass"]];
+    const modeBtns = modeDef.map(([k, l]) => ({ label: l, on: () => this.setState({ agentMode: k }), style: `background:${st.agentMode === k ? "#d97757" : "transparent"}; color:${st.agentMode === k ? "#1c1b19" : "#8f897c"}; border:none; font-family:inherit; font-weight:${st.agentMode === k ? "700" : "400"}; font-size:10px; padding:3px 8px; border-radius:5px; cursor:pointer;` }));
+    const modeHint = st.agentMode === "ask" ? "Ask · 先显示 Ghost Flow + Diff，你确认后才应用" : st.agentMode === "auto" ? "Auto · 在授权范围内直接改草稿（事务化 · 整轮可撤销）" : "Bypass · 不逐项询问、可跨节点改草稿（仍不绕过 Final Gate / 发布审批）";
+
+    const errCount = gv.issues.filter(i => i.s === "error").length; const warnCount = gv.issues.filter(i => i.s === "warn").length;
+    const ctrlBtn = "background:#1a1916; border:1px solid #302d29; color:#cfc8ba; font-family:inherit; font-size:13px; width:26px; height:26px; border-radius:6px; cursor:pointer; line-height:1;";
+    const ctrlBtnW = "background:#1a1916; border:1px solid #302d29; color:#a39a8a; font-family:inherit; font-size:10.5px; padding:0 9px; height:26px; border-radius:6px; cursor:pointer;";
+
+    // versions
+    const versionRows = this._versions.map(v => ({ label: v.label, lifecycle: v.lifecycle, dot: v.cur ? "#d97757" : "#5d6f4c", diff: () => this._enterDiff(), rollback: () => this._rollback(v) }));
+    // lifecycle
+    const LORDER = ["Draft","Validated","Backtested","Reviewed","Approved","Paper","Live","Paused","Retired"];
+    const curI = LORDER.indexOf(st.lifecycle);
+    const lifecycleSteps = LORDER.map((l, i) => ({ label: l, current: i === curI, dot: i < curI ? "#5d7a3a" : i === curI ? "#d97757" : "#262320", ring: i <= curI ? (i === curI ? "#d97757" : "#5d7a3a") : "#3a3733", color: i === curI ? "#e6e1d6" : i < curI ? "#9a9488" : "#5f5b53", weight: i === curI ? "700" : "400" }));
+    const checklist = [
+      { icon: "✓", color: "#9bbd5a", t: "图校验通过（类型/连接/Final Gate）" },
+      { icon: "✓", color: "#9bbd5a", t: "回测达标 · 超额 17.3% ≥ 15% · 回撤 15.8% ≤ 20%" },
+      { icon: curI >= 3 ? "✓" : "○", color: curI >= 3 ? "#9bbd5a" : "#6f6a61", t: "风控审查（PBO 0.18 / DSR 1.34，非过拟合）" },
+      { icon: curI >= 4 ? "✓" : "○", color: curI >= 4 ? "#9bbd5a" : "#6f6a61", t: "Reviewer 签署" },
+    ];
+    const advanceLabel = curI >= LORDER.indexOf("Live") ? "已上线（Live 只读）" : "推进到 " + LORDER[Math.min(LORDER.length - 1, curI + 1)] + " →";
+    // code drawer (Graph → source)
+    let codeLines = [], codeFile = "strategy.py";
+    if (st.codeOpen) { const raw = st.codeTab === "yaml" ? this._genYamlLines() : this._genPyLines(); const tok = st.codeTab === "yaml" ? (l) => this._tokYaml(l) : (l) => this._tokPy(l); codeLines = raw.map((t, i) => ({ n: i + 1, segs: tok(t) })); codeFile = st.codeTab === "yaml" ? "strategy.yaml" : "strategy.py"; }
+    const codeTabDef = [["py", "strategy.py"], ["yaml", "strategy.yaml"]];
+    const codeTabs = codeTabDef.map(([k, l]) => ({ label: l, on: () => this.setState({ codeTab: k }), style: `background:${st.codeTab === k ? "#22303f" : "transparent"}; color:${st.codeTab === k ? "#9bc4ea" : "#7d7668"}; border:1px solid ${st.codeTab === k ? "#2c4452" : "transparent"}; font-family:inherit; font-size:11px; padding:5px 11px; border-radius:7px; cursor:pointer;` }));
+    const pipeline = [{ label: "图 Graph", color: "#9bbd5a" }, { label: "校验 " + (errCount ? "✕" : "✓"), color: errCount ? "#d97066" : "#9bbd5a" }, { label: "序列化 StrategyGraph", color: "#cfc8ba" }, { label: "Codegen", color: "#9bc4ea" }, { label: "回测引擎 (后端)", color: "#6f6a61" }].map((p, i, arr) => ({ label: p.label, color: p.color, arrow: i < arr.length - 1 ? "→" : "" }));
+
+    return {
+      versionLabel: st.ver, verToggle: () => this.setState(s => ({ verMenuOpen: !s.verMenuOpen })), verMenuOpen: st.verMenuOpen, versionRows, cloneVer: () => this._rollback({ label: "v3 clone" }), branchVer: () => this._rollback({ label: "v3 branch" }),
+      readonly, liveGov: readonly, fork: () => this._fork(), kill: () => this._toggleKill(), killArmed: st.killArmed,
+      killLabel: st.killArmed ? "● Kill Switch: ARMED" : "○ Kill Switch: OFF", killStyle: `background:${st.killArmed ? "#2a1d1b" : "#1a1916"}; border:1px solid ${st.killArmed ? "#8a4d3a" : "#3a3733"}; color:${st.killArmed ? "#e6a08e" : "#8f897c"}; font-family:inherit; font-size:11px; padding:4px 10px; border-radius:7px; cursor:pointer;`,
+      runtimeBtns,
+      undo: () => this._undo(), redo: () => this._redo(),
+      undoStyle: `background:#1a1916; border:1px solid #302d29; color:${st.undoStack.length ? "#cfc8ba" : "#4a463f"}; font-family:inherit; font-size:14px; width:28px; height:28px; border-radius:7px; cursor:${st.undoStack.length ? "pointer" : "default"};`,
+      redoStyle: `background:#1a1916; border:1px solid #302d29; color:${st.redoStack.length ? "#cfc8ba" : "#4a463f"}; font-family:inherit; font-size:14px; width:28px; height:28px; border-radius:7px; cursor:${st.redoStack.length ? "pointer" : "default"};`,
+      validate: () => this.setState({ sel: { nodeIds: [], edgeIds: [] }, rightOpen: true }),
+      errLabel: errCount ? "✕ " + errCount + " 错误" + (warnCount ? " · " + warnCount + " 警告" : "") : (warnCount ? "⚠ " + warnCount + " 警告" : "✓ 校验通过"),
+      errColor: errCount ? "#d97066" : (warnCount ? "#d9b25f" : "#9bbd5a"), errBorder: errCount ? "#523630" : (warnCount ? "#5a4a2a" : "#3c5230"),
+      runLabel: st.running ? "⏸ 运行中…" : "▷ 运行回测", runClick: () => this._runGraph(),
+      openPublish: () => this.setState({ publishOpen: true }),
+      // left
+      leftOpen: st.leftOpen, leftCollapsed: !st.leftOpen, leftToggle: () => this.setState(s => ({ leftOpen: !s.leftOpen })),
+      ctxLabel: Object.keys(ns).length + " 节点 / " + es.length + " 连线 · runtime=" + st.runtime, agentBlocks, modeHint,
+      modeBtns, agentMode: st.agentMode, modeColor: st.agentMode === "ask" ? "#9bbd5a" : st.agentMode === "auto" ? "#d9b25f" : "#d97066", modeGlyph: st.agentMode === "ask" ? "⏸" : "◐",
+      hasProposal, proposal: proposalVm || {}, acceptProposal: () => this._acceptProposal(), rejectProposal: () => this._rejectProposal(),
+      composerPh: st.agentMode === "ask" ? "让 Agent 改图（Ask：先预览）…" : "让 Agent 改图（" + st.agentMode + "：直接应用）…",
+      draft: st.draft, onDraft: (e) => this.setState({ draft: e.target.value }), onKey: (e) => { if (e.key === "Enter" && !e.shiftKey) { e.preventDefault(); this._sendAgent(); } }, send: () => this._sendAgent(), inputBorder: st.draft ? "#4a463f" : "#302d29",
+      // canvas
+      zoomPct: Math.round(st.zoom * 100) + "%", zoomIn: () => this._zoomBy(1.15), zoomOut: () => this._zoomBy(1 / 1.15), fit: () => this._fit(), autoLayout: () => this._autoLayout(),
+      ctrlBtn, ctrlBtnW, canvasHint: "拖空白平移 · 滚轮缩放 · Shift框选 · 拖端口连线 · Del 删除 · ⌘Z",
+      surfCursor: st.linking ? "crosshair" : "default", gridStyle: `background-color:#191815; background-image:radial-gradient(#2a2723 1px, transparent 1px); background-size:${22 * st.zoom}px ${22 * st.zoom}px; background-position:${st.panX}px ${st.panY}px;`,
+      bgDown: (e) => this._bgDown(e), panX: st.panX, panY: st.panY, zoom: st.zoom,
+      marqueeOn: !!st.marquee, marquee: st.marquee || { x: 0, y: 0, w: 0, h: 0 },
+      diffOn: !!diffBase, diffLabel: "v3 ↔ " + (diffBase || ""), diffAdded: this._diff.added.length, diffChanged: this._diff.changed.length, exitDiff: () => this._exitDiff(),
+      traceOn, traceLabel: trace ? (trace.id + " · " + trace.symbol) : "", traceCount: trace ? trace.path.length : 0, clearTrace: () => this._clearTrace(),
+      stages, nodes, edges, ghostNodes, ghostEdges, linkOn, linkPath, linkColor, miniNodes, miniViewStyle,
+      selCountLabel: selSet.length > 1 ? selSet.length + " 选中" : (selSet.length === 1 && ns[selSet[0]] ? ns[selSet[0]].title : ""),
+      // right
+      rightOpen: st.rightOpen, rightCollapsed: !st.rightOpen, rightToggle: () => this.setState(s => ({ rightOpen: !s.rightOpen })),
+      inspTitle: selNode ? "Inspector" : "Inspector · 图校验", hasSel: !!selNode, noSel: !selNode, insp: insp || {}, inspTabs,
+      inspParamsTab: st.inspTab === "params", inspPortsTab: st.inspTab === "ports", inspValidTab: st.inspTab === "validate", inspVerTab: st.inspTab === "version",
+      gv: { color: errCount ? "#d97066" : (warnCount ? "#d9b25f" : "#9bbd5a"), glyph: errCount ? "✕" : (warnCount ? "⚠" : "✓"), headline: errCount ? errCount + " 个错误" : (warnCount ? warnCount + " 个警告" : "校验通过"), sub: errCount ? "存在阻断性问题，需修复" : (warnCount ? "有非阻断提示" : "类型/连接/Final Gate 全部满足"), issues: gv.issues.map(i => ({ icon: i.s === "error" ? "✕" : "⚠", c: i.s === "error" ? "#d97066" : "#d9b25f", t: i.t, loc: "节点 " + i.node, go: () => this._select(i.node) })) },
+      // dock
+      dockOpen: st.dockOpen, dockCollapsed: !st.dockOpen, dockToggle: () => this.setState(s => ({ dockOpen: !s.dockOpen })), dockTabs,
+      dockEmpty, dockEmptyText, dockPreview, dockSchema, dockStats, dockLogs, dockHistory, dockLineage, dockNodeTitle, dockCols, dockCells, dockSchemaText, dockStatRows,
+      logLines, logsEmpty, runCells, tradesShown, tradeRows, tradeCount, trace: traceVm || {},
+      runDetail: { runId: "run_wk_cn_8f2a", excess: "+17.3%", dd: "15.8%", sharpe: "1.82", pbodsr: "0.18 / 1.34", freq: "周频 weekly", window: "2019-01 ~ 2024-12", trades: tradeCount + " 笔", href: "%E5%9B%9E%E6%B5%8B%E8%AF%A6%E6%83%85.dc.html?from=strategy" },
+      // publish
+      publishOpen: st.publishOpen, closePublish: () => this.setState({ publishOpen: false }), lifecycleSteps, checklist, advance: () => this._advance(), advanceLabel,
+      // code drawer
+      openCode: () => this.setState({ codeOpen: true }), closeCode: () => this.setState({ codeOpen: false }), codeOpen: st.codeOpen, codeTab: st.codeTab, codeTabs, codeLines, codeFile, pipeline, codeErr: errCount > 0, codeErrCount: errCount,
+    };
+  }
+}
+</script>
+</body>
+</html>

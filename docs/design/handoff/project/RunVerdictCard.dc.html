@@ -1,0 +1,230 @@
+<!DOCTYPE html>
+<html>
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<script src="./support.js"></script>
+</head>
+<body>
+<x-dc>
+<div style="background:#1d1c19; border:1px solid #34302a; border-radius:11px; overflow:hidden; font-family:'JetBrains Mono',ui-monospace,monospace; color:#e6e1d6;">
+
+  <div style="display:flex; align-items:center; gap:10px; padding:11px 15px; background:#221f1c; border-bottom:1px solid #302d29;">
+    <span style="color:#d97757;">◳</span>
+    <span style="font-weight:600;">回测详情 · {{ runId }}</span>
+    <sc-if value="{{ drawing }}"><span style="font-size:10px; color:#d9b25f;">⟳ 生成中 {{ drawPct }}</span></sc-if>
+    <span style="margin-left:auto; font-size:11px; font-weight:600; color:{{ verdictColor }}; background:{{ verdictBg }}; padding:3px 11px; border-radius:20px;">{{ verdict }}</span>
+  </div>
+
+  <div style="display:flex; flex-wrap:wrap; padding:13px 15px 9px; gap:0;">
+    <div style="flex:1; min-width:88px;"><div style="color:#7d7668; font-size:11px;">年化超额</div><div style="color:#9bbd5a; font-size:21px; font-weight:700;">{{ annExcess }}</div><div style="color:#5f5b53; font-size:10.5px;">目标 ≥15%</div></div>
+    <div style="flex:1; min-width:88px;"><div style="color:#7d7668; font-size:11px;">最大回撤</div><div style="color:#9bbd5a; font-size:21px; font-weight:700;">{{ maxDD }}</div><div style="color:#5f5b53; font-size:10.5px;">约束 ≤20%</div></div>
+    <div style="flex:1; min-width:88px;"><div style="color:#7d7668; font-size:11px;">Sharpe</div><div style="color:#e6e1d6; font-size:21px; font-weight:700;">{{ sharpe }}</div><div style="color:#5f5b53; font-size:10.5px;">IR {{ ir }}</div></div>
+    <div style="flex:1; min-width:88px;"><div style="color:#7d7668; font-size:11px;">周胜率</div><div style="color:#e6e1d6; font-size:21px; font-weight:700;">{{ winWeeks }}</div><div style="color:#5f5b53; font-size:10.5px;">换手 {{ turnover }}/周</div></div>
+  </div>
+
+  <div style="padding:4px 15px 10px;">
+    <div style="display:flex; gap:14px; align-items:center; margin-bottom:6px; font-size:11px;">
+      <span style="display:inline-flex; align-items:center; gap:5px; color:#9a9488;"><span style="width:14px; height:2px; background:#d97757; display:inline-block;"></span>策略净值</span>
+      <span style="display:inline-flex; align-items:center; gap:5px; color:#9a9488;"><span style="width:14px; height:2px; background:#5f5b53; display:inline-block;"></span>中证500</span>
+      <a href="回测详情.dc.html" target="_blank" style="margin-left:auto; font-size:11px; color:#6f9bd1; text-decoration:none; cursor:pointer;" style-hover="text-decoration:underline;">完整回测详情页 ↗</a>
+      <span onClick="{{ openDetail }}" style="font-size:11px; color:#8f897c; cursor:pointer; margin-left:12px;" style-hover="text-decoration:underline;">卡内预览</span>
+    </div>
+    <svg viewBox="0 0 {{ chartW }} {{ chartH }}" preserveAspectRatio="none" style="width:100%; height:118px; display:block;">
+      <defs><linearGradient id="rvgrad" x1="0" y1="0" x2="0" y2="1"><stop offset="0%" stop-color="#d97757" stop-opacity="0.22"></stop><stop offset="100%" stop-color="#d97757" stop-opacity="0"></stop></linearGradient></defs>
+      <path d="{{ areaPath }}" fill="url(#rvgrad)"></path>
+      <path d="{{ benchPath }}" fill="none" stroke="#5f5b53" stroke-width="1.4" stroke-dasharray="3 3"></path>
+      <path d="{{ eqPath }}" fill="none" stroke="#d97757" stroke-width="2"></path>
+    </svg>
+    <div style="display:flex; justify-content:space-between; color:#5f5b53; font-size:10px; margin-top:2px;"><span>2019-01</span><span>2024-12 · 312 周</span></div>
+  </div>
+
+  <div style="padding:4px 15px 12px;">
+    <div style="color:#7d7668; font-size:11px; margin-bottom:6px;">成本敏感性 · Sharpe / 年化超额</div>
+    <div style="display:flex; gap:8px;">
+      <sc-for list="{{ costCells }}" as="c" hint-placeholder-count="3"><div style="flex:1; background:#221f1c; border:1px solid {{ c.border }}; border-radius:8px; padding:8px 10px;"><div style="color:{{ c.labelColor }}; font-size:11px; margin-bottom:3px;">{{ c.preset }}</div><div style="color:#e6e1d6; font-weight:700; font-size:16px;">{{ c.sharpe }}</div><div style="color:#9a9488; font-size:11px;">超额 {{ c.excess }}</div></div></sc-for>
+    </div>
+  </div>
+
+  <div style="padding:11px 15px; background:#1a1916; border-top:1px solid #302d29;">
+    <div style="display:flex; gap:16px; margin-bottom:10px;">
+      <div style="display:flex; align-items:baseline; gap:7px;"><span style="color:#7d7668; font-size:11px;">PBO</span><span style="color:{{ pboColor }}; font-weight:700;">{{ pbo }}</span><span style="color:#5f5b53; font-size:10.5px;">&lt;0.5 健康</span></div>
+      <div style="display:flex; align-items:baseline; gap:7px;"><span style="color:#7d7668; font-size:11px;">DSR</span><span style="color:{{ dsrColor }}; font-weight:700;">{{ dsr }}</span><span style="color:#5f5b53; font-size:10.5px;">&gt;0 显著</span></div>
+    </div>
+    <div style="display:flex; align-items:center; gap:10px;">
+      <div style="flex:1; color:#a39a8a; font-size:12px; line-height:1.55;">{{ verdictNote }}</div>
+      <button onClick="{{ onPromote }}" style="flex:none; background:{{ promoteBg }}; border:1px solid {{ promoteBorder }}; color:{{ promoteColor }}; font-family:inherit; font-weight:700; font-size:12px; padding:8px 15px; border-radius:8px; cursor:pointer;" style-hover="{{ promoteHover }}">{{ promoteLabel }}</button>
+    </div>
+  </div>
+
+  <!-- FULL DETAIL MODAL -->
+  <sc-if value="{{ detailOpen }}">
+    <div onClick="{{ closeDetail }}" style="position:fixed; inset:0; background:rgba(8,8,7,0.74); z-index:200; display:flex; align-items:center; justify-content:center; padding:24px;">
+      <div onClick="{{ stop }}" style="width:880px; max-width:100%; max-height:92vh; overflow-y:auto; background:#1a1916; border:1px solid #3a352e; border-radius:14px; box-shadow:0 30px 70px rgba(0,0,0,0.6);">
+        <div style="position:sticky; top:0; z-index:5; display:flex; align-items:center; gap:10px; padding:13px 18px; background:#221f1c; border-bottom:1px solid #302d29;">
+          <span style="color:#d97757;">◳</span><span style="font-weight:700; font-size:15px;">回测详情 · {{ runId }}</span>
+          <span style="font-size:11px; color:#7d7668;">2019-01 → 2024-12 · 312 周 · 中证500 · neutral 成本</span>
+          <span style="margin-left:auto; font-size:11px; font-weight:600; color:{{ verdictColor }}; background:{{ verdictBg }}; padding:3px 11px; border-radius:20px;">{{ verdict }}</span>
+          <a href="回测详情.dc.html" target="_blank" style="display:inline-flex; align-items:center; gap:5px; text-decoration:none; background:#d97757; border:1px solid #d97757; color:#1c1b19; font-family:inherit; font-weight:700; font-size:11px; padding:4px 11px; border-radius:7px; cursor:pointer;" style-hover="background:#e08862;">↗ 打开完整页面</a>
+          <button onClick="{{ closeDetail }}" style="background:transparent; border:1px solid #3a352e; color:#8f897c; font-family:inherit; font-size:11px; padding:4px 11px; border-radius:7px; cursor:pointer;" style-hover="color:#cfc8ba;">✕ 关闭</button>
+        </div>
+
+        <div style="padding:16px 18px; display:flex; flex-direction:column; gap:16px;">
+          <!-- metrics grid -->
+          <div style="display:grid; grid-template-columns:repeat(4,1fr); gap:10px;">
+            <sc-for list="{{ metrics }}" as="m" hint-placeholder-count="12"><div style="background:#1d1c19; border:1px solid #302d29; border-radius:9px; padding:9px 12px;"><div style="color:#7d7668; font-size:10.5px;">{{ m.k }}</div><div style="color:{{ m.color }}; font-size:17px; font-weight:700;">{{ m.v }}</div></div></sc-for>
+          </div>
+
+          <!-- equity + drawdown -->
+          <div style="background:#1d1c19; border:1px solid #302d29; border-radius:10px; padding:12px 14px;">
+            <div style="font-size:11.5px; color:#cfc8ba; font-weight:600; margin-bottom:8px;">净值曲线 · 相对回撤</div>
+            <svg viewBox="0 0 800 200" preserveAspectRatio="none" style="width:100%; height:190px; display:block;">
+              <defs><linearGradient id="rvgrad2" x1="0" y1="0" x2="0" y2="1"><stop offset="0%" stop-color="#d97757" stop-opacity="0.18"></stop><stop offset="100%" stop-color="#d97757" stop-opacity="0"></stop></linearGradient></defs>
+              <path d="{{ d_area }}" fill="url(#rvgrad2)"></path>
+              <path d="{{ d_bench }}" fill="none" stroke="#5f5b53" stroke-width="1.3" stroke-dasharray="3 3"></path>
+              <path d="{{ d_eq }}" fill="none" stroke="#d97757" stroke-width="2"></path>
+              <path d="{{ d_dd }}" fill="rgba(217,112,102,0.16)" stroke="#d97066" stroke-width="1"></path>
+            </svg>
+            <div style="display:flex; justify-content:space-between; color:#5f5b53; font-size:10px;"><span>策略净值 / 基准（虚） / 回撤（下方红）</span><span>最大回撤 {{ maxDD }}</span></div>
+          </div>
+
+          <!-- monthly returns heatmap -->
+          <div style="background:#1d1c19; border:1px solid #302d29; border-radius:10px; padding:12px 14px;">
+            <div style="font-size:11.5px; color:#cfc8ba; font-weight:600; margin-bottom:9px;">月度超额收益热力图</div>
+            <div style="display:flex; gap:4px; margin-bottom:4px;"><span style="width:34px;"></span><sc-for list="{{ months }}" as="mo" hint-placeholder-count="12"><span style="flex:1; text-align:center; font-size:8.5px; color:#6f6a61;">{{ mo }}</span></sc-for></div>
+            <sc-for list="{{ heat }}" as="row" hint-placeholder-count="6">
+              <div style="display:flex; gap:4px; margin-bottom:4px; align-items:center;"><span style="width:34px; font-size:9px; color:#7d7668;">{{ row.year }}</span><sc-for list="{{ row.cells }}" as="cell" hint-placeholder-count="12"><span style="flex:1; height:18px; border-radius:3px; background:{{ cell.bg }}; display:flex; align-items:center; justify-content:center; font-size:8px; color:{{ cell.fg }};">{{ cell.t }}</span></sc-for></div>
+            </sc-for>
+          </div>
+
+          <div style="display:flex; gap:14px;">
+            <!-- trade stats -->
+            <div style="flex:1; background:#1d1c19; border:1px solid #302d29; border-radius:10px; padding:12px 14px;">
+              <div style="font-size:11.5px; color:#cfc8ba; font-weight:600; margin-bottom:9px;">交易统计</div>
+              <sc-for list="{{ tradeStats }}" as="t" hint-placeholder-count="6"><div style="display:flex; justify-content:space-between; padding:4px 0; border-bottom:1px solid #2a2723; font-size:11.5px;"><span style="color:#7d7668;">{{ t.k }}</span><span style="color:#cfc8ba;">{{ t.v }}</span></div></sc-for>
+            </div>
+            <!-- overfit -->
+            <div style="flex:1; background:#1d1c19; border:1px solid #302d29; border-radius:10px; padding:12px 14px;">
+              <div style="font-size:11.5px; color:#cfc8ba; font-weight:600; margin-bottom:9px;">过拟合体检</div>
+              <sc-for list="{{ overfit }}" as="o" hint-placeholder-count="4"><div style="display:flex; justify-content:space-between; padding:4px 0; border-bottom:1px solid #2a2723; font-size:11.5px;"><span style="color:#7d7668;">{{ o.k }}</span><span style="color:{{ o.color }}; font-weight:600;">{{ o.v }}</span></div></sc-for>
+            </div>
+          </div>
+
+          <!-- cost breakdown (editable) -->
+          <div style="background:#1d1c19; border:1px solid #302d29; border-radius:10px; padding:12px 14px;">
+            <div style="display:flex; align-items:center; gap:8px; margin-bottom:9px;"><span style="font-size:11.5px; color:#cfc8ba; font-weight:600;">成本设置 · 手续费 / 滑点（bp，可调）</span><span style="margin-left:auto; font-size:11px; color:#d9b25f;">单边合计 {{ costTotal }} bp</span></div>
+            <div style="display:flex; gap:10px; flex-wrap:wrap;">
+              <sc-for list="{{ costRows }}" as="c" hint-placeholder-count="4"><div style="flex:1; min-width:120px;"><div style="font-size:10px; color:#7d7668; margin-bottom:3px;">{{ c.k }}</div><div style="display:flex; align-items:center; gap:5px;"><input value="{{ c.v }}" onInput="{{ c.onInput }}" type="number" style="flex:1; width:100%; background:#14130f; border:1px solid #3a352e; color:#e6e1d6; font-size:12px; padding:5px 8px; border-radius:6px; outline:none; font-family:inherit;" style-focus="border-color:#d97757;" /><span style="font-size:10px; color:#6f6a61;">bp</span></div></div></sc-for>
+            </div>
+            <div style="margin-top:8px; font-size:10px; color:#5f5b53; line-height:1.5;">A股双边：买入扣佣金+滑点+冲击；卖出再加印花税 5bp。合计含 ½ 印花税计单边。调整后回测净值与 Sharpe 随成本变化（neutral 预设为基准）。</div>
+          </div>
+
+          <!-- top holdings -->
+          <div style="background:#1d1c19; border:1px solid #302d29; border-radius:10px; overflow:hidden;">
+            <div style="padding:9px 14px; font-size:11.5px; color:#cfc8ba; font-weight:600; border-bottom:1px solid #302d29;">期末持仓 · top 8</div>
+            <div style="display:flex; padding:6px 14px; background:#221f1c; font-size:10px; color:#7d7668;"><span style="flex:1.4;">名称</span><span style="flex:1;">代码</span><span style="flex:0.8; text-align:right;">权重</span><span style="flex:0.8; text-align:right;">区间收益</span><span style="flex:1; text-align:right;">行业</span></div>
+            <sc-for list="{{ holdings }}" as="h" hint-placeholder-count="8"><div style="display:flex; padding:6px 14px; border-top:1px solid #2a2723; font-size:11px;"><span style="flex:1.4; color:#cfc8ba;">{{ h.name }}</span><span style="flex:1; color:#7d7668;">{{ h.code }}</span><span style="flex:0.8; text-align:right; color:#9a9488;">{{ h.w }}</span><span style="flex:0.8; text-align:right; color:{{ h.color }};">{{ h.ret }}</span><span style="flex:1; text-align:right; color:#7d7668;">{{ h.ind }}</span></div></sc-for>
+          </div>
+
+          <div style="font-size:10.5px; color:#5f5b53; line-height:1.6; text-align:center;">完整回测详情（与 quantbt 回测详情页一致）：净值/回撤、月度热力、交易统计、过拟合体检、持仓。{{ verdictNote }}</div>
+        </div>
+      </div>
+    </div>
+  </sc-if>
+</div>
+</x-dc>
+<script type="text/x-dc" data-dc-script data-props="{&quot;$preview&quot;:{&quot;width&quot;:430,&quot;height&quot;:420},&quot;run&quot;:{&quot;editor&quot;:null,&quot;tsType&quot;:&quot;any&quot;}}">
+class Component extends DCLogic {
+  state = { promoted: false, detailOpen: false, drawP: 0, cost: { commission: 2.5, slippage: 5, stamp: 5, impact: 3 } };
+  _setCost(k, v) { const n = parseFloat(v); this.setState(s => ({ cost: { ...s.cost, [k]: isNaN(n) ? 0 : n } })); }
+  componentDidMount() {
+    this._t = setInterval(() => { this.setState(s => { const p = Math.min(1, s.drawP + 0.06); if (p >= 1) clearInterval(this._t); return { drawP: p }; }); }, 28);
+  }
+  componentWillUnmount() { if (this._t) clearInterval(this._t); }
+
+  _path(arr, W, H, pad, lo, span) { const x = i => pad + (i / (arr.length - 1)) * (W - 2 * pad); const y = v => H - pad - ((v - lo) / span) * (H - 2 * pad); return arr.map((v, i) => (i ? "L" : "M") + x(i).toFixed(1) + " " + y(v).toFixed(1)).join(" "); }
+  _seed(i) { return ((Math.sin(i * 12.9898) * 43758.5453) % 1 + 1) % 1; }
+
+  renderVals() {
+    const run = this.props.run || {};
+    const eqFull = run.equity || [1, 1.1, 1.6];
+    const benchFull = run.bench || [1, 1.05, 1.18];
+    const dp = this.state.drawP;
+    const n = Math.max(2, Math.round(eqFull.length * dp));
+    const eq = eqFull.slice(0, n), bench = benchFull.slice(0, n);
+    const W = 600, H = 150, pad = 6;
+    const all = eqFull.concat(benchFull); const lo = Math.min(...all), hi = Math.max(...all) || 1; const span = (hi - lo) || 1;
+    const eqPath = this._path(eq, W, H, pad, lo, span);
+    const x0 = pad, xn = i => pad + (i / (eqFull.length - 1)) * (W - 2 * pad);
+    const area = eqPath + " L" + xn(n - 1).toFixed(1) + " " + (H - pad) + " L" + x0.toFixed(1) + " " + (H - pad) + " Z";
+    const pct = (v) => (v * 100).toFixed(1) + "%";
+    const cost = (run.cost || []).map(c => ({ preset: c.preset, sharpe: c.sharpe.toFixed(2), excess: pct(c.excess), border: c.preset === "neutral" ? "#4a433a" : "#302d29", labelColor: c.preset === "pessimistic" ? "#d9b25f" : c.preset === "optimistic" ? "#9bbd5a" : "#cfc8ba" }));
+    const promoted = this.state.promoted;
+
+    // ---- full detail derived data ----
+    const DW = 800, DH = 200, dpad = 8;
+    const dEq = this._path(eqFull, DW, DH, dpad, lo, span);
+    const dBench = this._path(benchFull, DW, DH, dpad, lo, span);
+    const dArea = dEq + " L" + (DW - dpad) + " " + (DH - dpad) + " L" + dpad + " " + (DH - dpad) + " Z";
+    // drawdown series (relative to running peak), drawn in lower band
+    let peak = -1e9; const dd = eqFull.map(v => { peak = Math.max(peak, v); return (v - peak) / peak; });
+    const ddLo = Math.min(...dd), ddSpan = (0 - ddLo) || 1;
+    const ddY = v => DH - 4 - ((0 - v) / ddSpan) * 46; // bottom 46px band
+    const dDD = "M" + dpad + " " + (DH - 4) + " " + dd.map((v, i) => "L" + (dpad + (i / (dd.length - 1)) * (DW - 2 * dpad)).toFixed(1) + " " + ddY(v).toFixed(1)).join(" ") + " L" + (DW - dpad) + " " + (DH - 4) + " Z";
+
+    const metrics = [
+      { k: "年化收益", v: "24.6%", color: "#9bbd5a" }, { k: "年化超额", v: pct(run.annExcess ?? 0.173), color: "#9bbd5a" },
+      { k: "年化波动", v: "13.5%", color: "#cfc8ba" }, { k: "Sharpe", v: (run.sharpe ?? 1.82).toFixed(2), color: "#e6e1d6" },
+      { k: "Sortino", v: "2.54", color: "#cfc8ba" }, { k: "IR", v: (run.ir ?? 1.41).toFixed(2), color: "#cfc8ba" },
+      { k: "最大回撤", v: pct(run.maxDD ?? 0.158), color: "#d99a8e" }, { k: "Calmar", v: "1.56", color: "#cfc8ba" },
+      { k: "周胜率", v: pct(run.winWeeks ?? 0.61), color: "#cfc8ba" }, { k: "周换手", v: pct(run.turnover ?? 0.42), color: "#cfc8ba" },
+      { k: "平均持仓", v: "52 只", color: "#cfc8ba" }, { k: "盈亏比", v: "1.38", color: "#cfc8ba" },
+    ];
+    const months = ["1","2","3","4","5","6","7","8","9","10","11","12"];
+    const heat = [2019, 2020, 2021, 2022, 2023, 2024].map((year, yi) => ({ year: year, cells: months.map((m, mi) => {
+      const r = (this._seed(yi * 13 + mi * 7) - 0.42) * 9; const v = r;
+      const a = Math.min(0.85, Math.abs(v) / 6 + 0.12);
+      const bg = v >= 0 ? "rgba(127,166,80," + a.toFixed(2) + ")" : "rgba(217,112,102," + a.toFixed(2) + ")";
+      return { t: (v >= 0 ? "+" : "") + v.toFixed(1), bg, fg: Math.abs(v) > 3 ? "#e6e1d6" : "#9a9488" };
+    }) }));
+    const tradeStats = [
+      { k: "总交易笔数", v: "8,624" }, { k: "平均持有", v: "3.2 周" }, { k: "周胜率", v: pct(run.winWeeks ?? 0.61) },
+      { k: "盈亏比", v: "1.38" }, { k: "单边成本", v: "neutral · ~18bp" }, { k: "年化换手", v: "21.8x" },
+    ];
+    const overfit = [
+      { k: "PBO (CSCV)", v: (run.pbo ?? 0.18).toFixed(2) + " < 0.5", color: "#9bbd5a" },
+      { k: "Deflated Sharpe", v: (run.dsr ?? 1.34).toFixed(2) + " · p<0.01", color: "#9bbd5a" },
+      { k: "honest-N", v: "N_eff = 42", color: "#cfc8ba" },
+      { k: "样本外占比", v: "2024 全年留出", color: "#9bbd5a" },
+    ];
+    const holdings = [
+      ["紫金矿业", "601899", "2.8%", 14.2, "有色"], ["比亚迪", "002594", "2.6%", -6.1, "汽车"], ["立讯精密", "002475", "2.4%", 9.3, "电子"], ["隆基绿能", "601012", "2.2%", 21.4, "电新"],
+      ["万华化学", "600309", "2.1%", -3.2, "化工"], ["药明康德", "603259", "2.0%", 7.8, "医药"], ["宁德时代", "300750", "1.9%", 12.1, "电新"], ["招商银行", "600036", "1.8%", 4.5, "银行"],
+    ].map(([name, code, w, ret, ind]) => ({ name, code, w, ind, ret: (ret >= 0 ? "+" : "") + ret + "%", color: ret >= 0 ? "#9bbd5a" : "#d97066" }));
+
+    return {
+      runId: run.run_id || "run", chartW: W, chartH: H,
+      drawing: dp < 1, drawPct: Math.round(dp * 100) + "%",
+      eqPath, benchPath: this._path(bench, W, H, pad, lo, span), areaPath: area,
+      sharpe: (run.sharpe ?? 0).toFixed(2), ir: (run.ir ?? 0).toFixed(2),
+      annExcess: pct(run.annExcess ?? 0), maxDD: pct(run.maxDD ?? 0), winWeeks: pct(run.winWeeks ?? 0), turnover: pct(run.turnover ?? 0),
+      verdict: "晋级候选", verdictColor: "#9bbd5a", verdictBg: "rgba(127,166,80,0.15)",
+      costCells: cost,
+      pbo: (run.pbo ?? 0).toFixed(2), pboColor: (run.pbo ?? 1) < 0.5 ? "#9bbd5a" : "#d97066",
+      dsr: (run.dsr ?? 0).toFixed(2), dsrColor: (run.dsr ?? 0) > 0 ? "#9bbd5a" : "#d97066",
+      verdictNote: "双目标达标，PBO 0.18 / DSR 1.34 排除过拟合。建议 pessimistic 成本下纸面跟踪 4 周再决定动钱。",
+      promoteLabel: promoted ? "✓ 已登记对比分析" : "登记为晋级候选 →",
+      promoteBg: promoted ? "rgba(127,166,80,0.14)" : "#d97757", promoteBorder: promoted ? "#3c5230" : "#d97757", promoteColor: promoted ? "#9bbd5a" : "#1c1b19", promoteHover: promoted ? "" : "background:#e08862;",
+      onPromote: () => this.setState({ promoted: true }),
+      openDetail: () => this.setState({ detailOpen: true }), closeDetail: () => this.setState({ detailOpen: false }), stop: (e) => { if (e && e.stopPropagation) e.stopPropagation(); },
+      detailOpen: this.state.detailOpen,
+      d_eq: dEq, d_bench: dBench, d_area: dArea, d_dd: dDD,
+      metrics, months, heat, tradeStats, overfit, holdings,
+      costRows: [["手续费 佣金", "commission"], ["滑点", "slippage"], ["印花税(卖)", "stamp"], ["冲击成本", "impact"]].map(([k, key]) => ({ k, v: this.state.cost[key], onInput: (e) => this._setCost(key, e.target.value) })),
+      costTotal: (this.state.cost.commission + this.state.cost.slippage + this.state.cost.stamp / 2 + this.state.cost.impact).toFixed(1),
+    };
+  }
+}
+</script>
+</body>
+</html>

@@ -437,6 +437,10 @@ export function StrategyConsolePage() {
     ]);
   }
   function revertPatch(id: string): void {
+    // undo() 是 LIFO 栈，只能精确撤销最近一次变更：只对「栈顶未撤销 patch」生效，
+    // 否则会误伤该 patch 之后的无关编辑（撤错）。
+    const lastPatchId = [...blocks].reverse().find((b) => b.type === "patch" && !b.reverted)?.id;
+    if (id !== lastPatchId) return;
     undo();
     setBlocks((prev) => prev.map((b) => (b.id === id ? { ...b, reverted: true } : b)));
   }
@@ -590,11 +594,15 @@ export function StrategyConsolePage() {
       </div>
       <div style={modeHintStyle} data-mode-hint>{modeHint[agentMode]}</div>
       <AgentChat
-        blocks={blocks.map((b) =>
-          b.type === "patch" && !b.reverted
-            ? { ...b, onRevert: () => revertPatch(b.id) }
-            : b,
-        )}
+        blocks={(() => {
+          // 只在「栈顶未撤销 patch」上挂 revert 入口（undo 为 LIFO，只能撤最近一次，避免撤错）。
+          const lastPatchId = [...blocks].reverse().find((b) => b.type === "patch" && !b.reverted)?.id;
+          return blocks.map((b) =>
+            b.type === "patch" && !b.reverted && b.id === lastPatchId
+              ? { ...b, onRevert: () => revertPatch(b.id) }
+              : b,
+          );
+        })()}
         contextLabel={
           <span style={{ display: "inline-flex", alignItems: "center", gap: 6 }}>
             上下文 · 18.4k / 200k <MockBadge label="MOCK 对话" />

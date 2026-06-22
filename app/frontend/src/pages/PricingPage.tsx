@@ -85,7 +85,7 @@ const TIERS: Tier[] = [
       "Fernet AES keyring 加密落盘",
       "Mainnet 二次确认 + 5 级 live ladder",
       "Kill switch + 异常断连保护",
-      "IDE 高级 AI 辅助 + 真 LLM 月 100 次",
+      "IDE 代码助手 · 真实模型调用，每月 100 次",
       "私域 copy-trade follower beta (waitlist)",
     ],
     anchor: "年付是 BigQuant 旗舰 ¥5499 的 27%；月付是聚宽 SVIP ¥378 的 39%",

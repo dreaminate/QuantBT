@@ -41,7 +41,7 @@ export function StrategyWorkshopPage() {
             <span className="cc-prompt">$</span>strategy-workshop
           </h1>
           <p className="cc-page-subtitle">
-            自然语言 → StrategyGoal Pydantic schema (M1)。三档 cost_model + A股/加密一致性硬约束自动校验。
+            一句话需求 → StrategyGoal（Pydantic schema · M1）。关键词规则提取 · 三档 cost_model · A股/加密一致性硬约束自动校验。
           </p>
         </div>
       </div>

@@ -62,6 +62,8 @@ const SORTS = [
 
 export function CopyTradePage() {
   const me = getStoredUser();
+  // 稳定身份代理：getStoredUser() 每次 render 返回新对象，直接进依赖数组会无限重拉。
+  const userId = me?.user_id ?? null;
   const [asset, setAsset] = useState("");
   const [sortBy, setSortBy] = useState("followers");
   const [inviteOnly, setInviteOnly] = useState<string>(""); // "" / "public" / "invite"
@@ -84,7 +86,7 @@ export function CopyTradePage() {
       authFetch("/api/copy_trade/me/master").then((r) => r.json()).then(setMyMaster).catch(() => setMyMaster(null));
       authFetch("/api/copy_trade/me/subscriptions").then((r) => r.json()).then(setMySubs).catch(() => setMySubs([]));
     }
-  }, [asset, sortBy, inviteOnly, me]);
+  }, [asset, sortBy, inviteOnly, userId]);
   useEffect(reload, [reload]);
 
   return (

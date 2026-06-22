@@ -110,7 +110,7 @@ export function StrategyTemplatesPage() {
           <li>Fork 后会自动在你 IDE 名下创建一份副本，原模板不变。</li>
           <li>沙箱 wallclock ≤ 30s，模板代码已优化在限制内跑完。</li>
           <li>跑完后看 risk preview chip 判断可信度，PBO/DSR 不达标先别 promote。</li>
-          <li>有问题去 /chat 问 Mode 2 教练，绑你的 active_run 上下文。</li>
+          <li>有问题去 /chat 打开 Mode 2 对话台，会自动绑定你的 active_run 上下文。</li>
         </ul>
       </div>
     </>

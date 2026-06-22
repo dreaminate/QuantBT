@@ -7,14 +7,32 @@ export default function App() {
       <header className="jq-topbar">
         <div className="jq-topbar-inner">
           <a className="jq-logo" href="/runs/demo">
-            <span className="jq-logo-icon">Q1</span>
-            <span className="jq-logo-text">1Backtest</span>
+            <span className="jq-logo-icon">QB</span>
+            <span className="jq-logo-text">QuantBT</span>
           </a>
           <nav className="jq-nav" aria-label="Primary">
+            <a className="jq-nav-item" href="/runs/demo">
+              数据
+            </a>
+            <a className="jq-nav-item" href="/runs/demo">
+              因子
+            </a>
+            <a className="jq-nav-item" href="/runs/demo">
+              模型
+            </a>
+            <a className="jq-nav-item" href="/runs/demo">
+              策略
+            </a>
             <a className="jq-nav-item active" href="/runs/demo">
-              回测详情
+              回测
+            </a>
+            <a className="jq-nav-item" href="/runs/demo">
+              研究
             </a>
           </nav>
+          <a className="jq-lineage-btn" href="/runs/demo">
+            ← 策略台 · 血缘定位
+          </a>
         </div>
       </header>
       <nav className="jq-secondary-bar" aria-label="Secondary">

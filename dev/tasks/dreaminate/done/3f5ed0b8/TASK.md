@@ -1,7 +1,7 @@
 ---
 uuid: 3f5ed0b803be4ffea95e92aec8f33ac5
 title: agent 客户端窗口 epic(仿 Claude Code)——权限模式切换 + 工具可视化 + 审批弹窗
-status: todo
+status: done
 owner: dreaminate
 assigned_by: dreaminate
 review_status: 1
@@ -50,3 +50,11 @@ depends_on: [edc1e32623674b1f870b264119db2421]
 
 ## 验收一句话 [必填]
 种"窗口绕治理门 / 默认诱导直接实盘 / 治理弱点被折叠藏起" → 必抓;窗口行为与权限三态+治理正交一致;拆子卡后逐项进实现。
+
+## 完成记录（2026-06-20 · epic 拆分，leader 领）
+epic 方向 + 3 形态已决，拆为 4 张可实装子卡并分配 dreaminate（leader 领）：
+- **T-040 `82120b9c`** 前端窗口核心（Web：对话流 + 工具可视化 + 权限模式切换）· 依赖 T-027
+- **T-041 `3d95e0f6`** 弹窗 + 教学文案（整合 T-028/T-032/T-034 前端残余）· 依赖 T-040
+- **T-042 `bc21c7c1`** Tauri 桌面挂载（一套组件两处挂载）· 依赖 T-040
+- **T-043 `3bb62d7d`** 无副作用工具接真引擎（agent 一句话真跑回测，T-027 残余，P1）· 依赖 T-027
+epic 本卡工作（规划 + 形态拍板 + 拆子卡）完成；实装由 4 子卡承接。

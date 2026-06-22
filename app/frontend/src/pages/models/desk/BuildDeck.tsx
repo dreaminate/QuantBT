@@ -78,7 +78,7 @@ export function BuildDeck(props: BuildDeckProps) {
         onToggle={props.onToggleChat}
         side="left"
         width={312}
-        label="构建助手"
+        label="构建面板"
       >
         <div
           style={{
@@ -91,7 +91,7 @@ export function BuildDeck(props: BuildDeckProps) {
           }}
         >
           <span style={{ color: "var(--desk-accent)" }}>✦</span>
-          <span style={{ fontSize: 12, color: "var(--desk-text-soft)" }}>构建助手</span>
+          <span style={{ fontSize: 12, color: "var(--desk-text-soft)" }}>构建面板</span>
           <span style={{ marginLeft: "auto" }}>
             <MockBadge />
           </span>
@@ -106,7 +106,7 @@ export function BuildDeck(props: BuildDeckProps) {
               model="claude（mock）"
               permissionMode="ask"
               branch="fullstack"
-              placeholder="> 让助手改图 / 刷新代码…"
+              placeholder="> 描述要对图做的修改 / 刷新代码…"
             />
           }
         />

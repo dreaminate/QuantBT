@@ -4,4 +4,4 @@
 
 | uuid8 | 标题 | status | area | 优先级 | 依赖(uuid8) |
 |---|---|---|---|---|---|
-| 3f5ed0b8 | agent 客户端窗口 epic(仿 Claude Code)——权限模式切换 + 工具可视化 + 审批弹窗 | todo | frontend-epic | P2 | edc1e326 |
+| _（名下无 active 卡）_ | | | | | |

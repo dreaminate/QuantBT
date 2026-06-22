@@ -66,8 +66,13 @@ export function CommunityFeedPage() {
   const toggleLike = async (post: PostItem) => {
     if (!me) { alert("请先登录"); return; }
     const method = post.liked_by_me ? "DELETE" : "POST";
-    await authFetch(`/api/community/posts/${post.post_id}/like`, { method });
-    reload();
+    try {
+      const res = await authFetch(`/api/community/posts/${post.post_id}/like`, { method });
+      if (!res.ok) return; // 失败保持原状，不刷新（下次 reload 自纠），不抛未捕获异常
+      reload();
+    } catch {
+      /* 网络失败：忽略本次点赞操作 */
+    }
   };
 
   return (

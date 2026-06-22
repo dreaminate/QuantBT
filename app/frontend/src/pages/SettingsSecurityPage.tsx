@@ -137,32 +137,42 @@ export function SettingsSecurityPage() {
 
   async function enable2FA() {
     setEnrolling(true);
-    const r = await authFetch("/api/security/mainnet/2fa/enable", { method: "POST" });
-    if (!r.ok) {
-      setErr(`2FA enable 失败: ${r.status}`);
+    try {
+      const r = await authFetch("/api/security/mainnet/2fa/enable", { method: "POST" });
+      if (!r.ok) {
+        setErr(`2FA enable 失败: ${r.status}`);
+        setEnrolling(false);
+        return;
+      }
+      const j = await r.json();
+      setEnrollSecret(j.secret);
+      setEnrollUri(j.otpauth_uri);
+    } catch (e) {
+      // 网络失败也要复位 enrolling，否则二维码区永久卡在加载态。
+      setErr(`2FA enable 失败: ${String(e)}`);
       setEnrolling(false);
-      return;
     }
-    const j = await r.json();
-    setEnrollSecret(j.secret);
-    setEnrollUri(j.otpauth_uri);
   }
 
   async function verify2FA() {
-    const r = await authFetch("/api/security/mainnet/2fa/verify", {
-      method: "POST",
-      body: JSON.stringify({ code: verifyCode }),
-    });
-    const j = await r.json();
-    if (r.ok && j.valid) {
-      setVerifyMsg("✓ 2FA 验证通过，已激活");
-      setEnrolling(false);
-      setEnrollSecret(null);
-      setEnrollUri(null);
-      setVerifyCode("");
-      await refresh();
-    } else {
-      setVerifyMsg(`✗ 验证失败 (code 错误或过期): ${j.detail || ""}`);
+    try {
+      const r = await authFetch("/api/security/mainnet/2fa/verify", {
+        method: "POST",
+        body: JSON.stringify({ code: verifyCode }),
+      });
+      const j = await r.json().catch(() => ({}));
+      if (r.ok && j.valid) {
+        setVerifyMsg("✓ 2FA 验证通过，已激活");
+        setEnrolling(false);
+        setEnrollSecret(null);
+        setEnrollUri(null);
+        setVerifyCode("");
+        await refresh();
+      } else {
+        setVerifyMsg(`✗ 验证失败 (code 错误或过期): ${j.detail || ""}`);
+      }
+    } catch (e) {
+      setVerifyMsg(`✗ 验证失败: ${String(e)}`);
     }
   }
 

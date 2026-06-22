@@ -57,26 +57,45 @@ export function BinanceTradingPage() {
   };
 
   const store = async () => {
-    const res = await fetch("/api/security/keystore", {
-      method: "POST",
-      headers: { "content-type": "application/json" },
-      body: JSON.stringify({ name, api_key: apiKey, api_secret: apiSecret }),
-    });
-    const json = await res.json();
-    setOk(`✓ 写入 keystore (backend=${json.backend})`);
-    setApiKey("");
-    setApiSecret("");
-    refresh();
+    // 真钱凭据写入：HTTP 失败绝不能假绿灯（对齐同文件 confirmMainnet/confirmKill 的 res.ok 守卫）。
+    try {
+      const res = await fetch("/api/security/keystore", {
+        method: "POST",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify({ name, api_key: apiKey, api_secret: apiSecret }),
+      });
+      const json = await res.json().catch(() => ({}));
+      if (!res.ok) {
+        setErr(`✗ 写入 keystore 失败（HTTP ${res.status}）：${json.detail || ""}`);
+        return;
+      }
+      setOk(`✓ 写入 keystore (backend=${json.backend})`);
+      setApiKey("");
+      setApiSecret("");
+      refresh();
+    } catch (e) {
+      setErr(`✗ 写入 keystore 失败：${String(e)}`);
+    }
   };
 
   const switchToTestnet = async () => {
-    await fetch("/api/security/network", {
-      method: "POST",
-      headers: { "content-type": "application/json" },
-      body: JSON.stringify({ binance_network: "testnet" }),
-    });
-    refresh();
-    setOk("✓ 已切回 testnet");
+    // 切回 testnet 失败必须如实报错：否则用户以为已安全离开 mainnet 真钱模式。
+    try {
+      const res = await fetch("/api/security/network", {
+        method: "POST",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify({ binance_network: "testnet" }),
+      });
+      const json = await res.json().catch(() => ({}));
+      if (!res.ok) {
+        setErr(`✗ 切回 testnet 失败（HTTP ${res.status}）：${json.detail || ""}`);
+        return;
+      }
+      refresh();
+      setOk("✓ 已切回 testnet");
+    } catch (e) {
+      setErr(`✗ 切回 testnet 失败：${String(e)}`);
+    }
   };
 
   const requestMainnet = () => {

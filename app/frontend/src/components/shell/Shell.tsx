@@ -375,7 +375,9 @@ function areaOf(pathname: string): string {
   )
     return "community";
   if (WORKSHOP_PREFIXES.some((p) => pathname === p || pathname.startsWith(p + "/"))) return "workshop";
-  return "home";
+  // /pricing、/settings/*、/metrics/* 等不属于三大导航区的页：返回独立 area，
+  // 否则会被兜底高亮成 Home（这些页本就没有对应顶栏 tab）。
+  return "other";
 }
 
 export default Shell;

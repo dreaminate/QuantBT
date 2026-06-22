@@ -781,7 +781,7 @@ function AssistPanel({
     { id: "diag", type: "say", text: ASSISTANT_DIAGNOSIS },
   ];
   return (
-    <CollapsiblePanel open={open} onToggle={onToggle} side="right" width={296} label="训练助手">
+    <CollapsiblePanel open={open} onToggle={onToggle} side="right" width={296} label="训练面板">
       <div
         style={{
           flex: "none",
@@ -793,7 +793,7 @@ function AssistPanel({
         }}
       >
         <span style={{ color: "var(--desk-accent)" }}>✦</span>
-        <span style={{ fontSize: 12, color: "var(--desk-text-soft)" }}>训练助手</span>
+        <span style={{ fontSize: 12, color: "var(--desk-text-soft)" }}>训练面板</span>
         <span style={{ marginLeft: "auto" }}>
           <MockBadge />
         </span>
@@ -809,7 +809,7 @@ function AssistPanel({
               model="claude（mock）"
               permissionMode="ask"
               branch="fullstack"
-              placeholder="> 问训练助手…"
+              placeholder="> 输入训练相关问题…"
             />
           }
           header={

@@ -1,9 +1,13 @@
 import { useState } from "react";
-import { Link, useNavigate } from "react-router-dom";
+import { Link, useNavigate, useSearchParams } from "react-router-dom";
 import { login, register } from "../../lib/auth";
 
 export function LoginPage({ mode = "login" }: { mode?: "login" | "register" }) {
   const nav = useNavigate();
+  const [params] = useSearchParams();
+  // 登录后回跳 ?next=（如从定价页升级而来）；只允许站内绝对路径，防开放重定向。
+  const next = params.get("next");
+  const safeNext = next && next.startsWith("/") && !next.startsWith("//") ? next : "/community";
   const [username, setUsername] = useState("");
   const [password, setPassword] = useState("");
   const [displayName, setDisplayName] = useState("");
@@ -20,7 +24,7 @@ export function LoginPage({ mode = "login" }: { mode?: "login" | "register" }) {
       } else {
         await register(username, password, displayName);
       }
-      nav("/community");
+      nav(safeNext);
     } catch (e) {
       setErr(String(e));
     } finally {

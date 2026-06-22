@@ -25,7 +25,7 @@ export function ExperimentTrackingPage() {
   useEffect(() => {
     fetch("/api/experiments")
       .then((r) => r.json())
-      .then(setExperiments)
+      .then((d) => setExperiments(Array.isArray(d) ? d : []))
       .catch((e) => setErr(String(e)));
   }, []);
 
@@ -36,7 +36,7 @@ export function ExperimentTrackingPage() {
     }
     fetch(`/api/experiments/${selectedExp}/runs`)
       .then((r) => r.json())
-      .then(setRuns)
+      .then((d) => setRuns(Array.isArray(d) ? d : []))
       .catch((e) => setErr(String(e)));
   }, [selectedExp]);
 

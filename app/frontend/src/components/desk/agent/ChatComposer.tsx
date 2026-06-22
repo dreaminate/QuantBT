@@ -56,6 +56,9 @@ export function ChatComposer(props: ChatComposerProps) {
   const hasContent = draft.trim().length > 0;
 
   function handleKey(e: KeyboardEvent<HTMLTextAreaElement>): void {
+    // 中文/日文输入法合成期间按 Enter 是「确认候选词」，不能当作发送，
+    // 否则会把半截拼音/未完成短语发出去（中文产品主路径必须守住）。
+    if (e.nativeEvent.isComposing || e.keyCode === 229) return;
     if (e.key === "Enter" && !e.shiftKey) {
       e.preventDefault();
       if (canSend && hasContent) onSend();

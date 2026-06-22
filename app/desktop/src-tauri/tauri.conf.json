@@ -6,13 +6,13 @@
   "build": {
     "frontendDist": "../../frontend/dist",
     "devUrl": "http://localhost:5173",
-    "beforeDevCommand": "cd ../../frontend && npm run dev",
-    "beforeBuildCommand": "cd ../../frontend && npm run build"
+    "beforeDevCommand": "cd ../frontend && npm run dev",
+    "beforeBuildCommand": "cd ../frontend && npm run build"
   },
   "app": {
     "windows": [
       {
-        "title": "QuantBT · 量化研究 + 实盘工坊",
+        "title": "QuantBT · Agent 工作台",
         "label": "main",
         "width": 1440,
         "height": 900,
@@ -23,7 +23,7 @@
         "decorations": true,
         "backgroundColor": "#0d1117",
         "titleBarStyle": "Visible",
-        "url": "index.html"
+        "url": "index.html?view=agent-workbench"
       }
     ],
     "security": {

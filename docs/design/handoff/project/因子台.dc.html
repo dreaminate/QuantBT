@@ -1,0 +1,851 @@
+<!DOCTYPE html>
+<html>
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<script src="./support.js"></script>
+</head>
+<body>
+<x-dc>
+<helmet>
+<link href="https://fonts.googleapis.com/css2?family=JetBrains+Mono:wght@400;500;600;700&display=swap" rel="stylesheet">
+<style>
+  * { box-sizing: border-box; }
+  html, body { margin: 0; padding: 0; height: 100%; background: #1c1b19; }
+  body { font-family: "JetBrains Mono", ui-monospace, "SF Mono", Menlo, monospace; -webkit-font-smoothing: antialiased; }
+  ::selection { background: rgba(169,143,212,0.30); }
+  *::-webkit-scrollbar { width: 9px; height: 9px; }
+  *::-webkit-scrollbar-thumb { background: #3a3733; border-radius: 6px; }
+  *::-webkit-scrollbar-track { background: transparent; }
+  a { text-decoration: none; }
+  input, textarea { font-family: inherit; }
+  @keyframes ffpulse { 0%,100% { opacity: 1; } 50% { opacity: 0.35; } }
+  @keyframes ffring { 0% { box-shadow: 0 0 0 0 rgba(169,143,212,0.5); } 100% { box-shadow: 0 0 0 7px rgba(169,143,212,0); } }
+</style>
+</helmet>
+<div style="display:flex; flex-direction:column; height:100vh; background:#1c1b19; color:#e6e1d6; font-size:13.5px; line-height:1.5;">
+
+  <!-- ░░ TITLE BAR + 台 SWITCHER ░░ -->
+  <div style="flex:none; display:flex; align-items:center; gap:12px; height:42px; padding:0 14px; background:#201f1c; border-bottom:1px solid #302d29;">
+    <div style="display:flex; gap:7px; align-items:center; padding-right:2px;">
+      <span style="width:11px; height:11px; border-radius:50%; background:#3a3733;"></span>
+      <span style="width:11px; height:11px; border-radius:50%; background:#3a3733;"></span>
+      <span style="width:11px; height:11px; border-radius:50%; background:#3a3733;"></span>
+    </div>
+    <span style="color:#d97757; font-weight:700;">✳</span>
+    <span style="font-weight:600;">QuantBT</span>
+    <div style="display:flex; gap:2px; margin-left:8px; background:#1a1916; border:1px solid #302d29; border-radius:8px; padding:3px;">
+      <span style="display:flex; align-items:center; font-size:11.5px; padding:4px 11px; border-radius:6px; background:#a98fd4; color:#1c1726; font-weight:700;">因子台</span>
+      <a href="Model%E5%8F%B0.dc.html" style="display:flex; align-items:center; font-size:11.5px; padding:4px 11px; border-radius:6px; color:#a39a8a;" style-hover="background:#2a2723; color:#e6e1d6;">Model台</a>
+      <a href="%E7%AD%96%E7%95%A5%E5%8F%B0.dc.html" style="display:flex; align-items:center; font-size:11.5px; padding:4px 11px; border-radius:6px; color:#a39a8a;" style-hover="background:#2a2723; color:#e6e1d6;">策略台</a>
+      <a href="%E6%A8%A1%E6%8B%9F%E5%8F%B0.dc.html" style="display:flex; align-items:center; font-size:11.5px; padding:4px 11px; border-radius:6px; color:#a39a8a;" style-hover="background:#2a2723; color:#e6e1d6;">模拟台</a>
+    </div>
+    <div style="flex:1;"></div>
+    <div style="display:flex; gap:2px; background:#1a1916; border:1px solid #302d29; border-radius:7px; padding:2px;">
+      <sc-for list="{{ mktBtns }}" as="m" hint-placeholder-count="2"><button onClick="{{ m.on }}" style="{{ m.style }}">{{ m.label }}</button></sc-for>
+    </div>
+    <span style="color:#5f5b53; font-size:11px;">{{ poolLabel }}</span>
+  </div>
+
+  <!-- ░░ SUB-TAB BAR ░░ -->
+  <div style="flex:none; display:flex; align-items:center; gap:4px; padding:8px 16px; background:#1a1916; border-bottom:1px solid #302d29;">
+    <button onClick="{{ goLib }}" style="{{ tabLib }}">▤ 因子库</button>
+    <button onClick="{{ goCorr }}" style="{{ tabCorr }}">⊞ 相关性</button>
+    <button onClick="{{ goEval }}" style="{{ tabEval }}">⚖ 评测台</button>
+    <button onClick="{{ goBuild }}" style="{{ tabBuild }}">⌨ 构建台</button>
+    <button onClick="{{ goResearch }}" style="{{ tabResearch }}">⚗ 研究台</button>
+    <div style="flex:1;"></div>
+    <span style="font-size:11px; color:#6f6a61;">{{ subHint }}</span>
+    <span style="font-size:9.5px; color:#a98fd4; border:1px solid #4a4060; background:rgba(169,143,212,.1); padding:2px 8px; border-radius:20px; margin-left:8px;">MOCK 数据</span>
+  </div>
+
+  <!-- ░░ BODY ░░ -->
+  <div style="flex:1; min-height:0; display:flex;">
+
+    <!-- ▒▒ LIBRARY VIEW ▒▒ -->
+    <sc-if value="{{ viewLib }}">
+      <!-- factor list (collapsible) -->
+      <sc-if value="{{ listCollapsed }}">
+        <div onClick="{{ listToggle }}" style="flex:none; width:34px; border-right:1px solid #302d29; background:#1d1c19; display:flex; flex-direction:column; align-items:center; padding-top:12px; gap:8px; cursor:pointer;" style-hover="background:#211f1c;"><span style="color:#7d7668;">▤</span><span style="writing-mode:vertical-rl; font-size:11px; color:#8f897c; letter-spacing:1px;">因子库 ›</span></div>
+      </sc-if>
+      <sc-if value="{{ listOpen }}">
+      <div style="flex:none; width:312px; border-right:1px solid #302d29; display:flex; flex-direction:column;">
+        <div style="flex:none; padding:9px 13px; border-bottom:1px solid #2a2723; display:flex; align-items:center; gap:8px;"><span style="color:#7d7668; font-size:11px;">因子库</span><span style="margin-left:auto; font-size:11px; color:#6f6a61;">{{ factorCountLabel }}</span><span onClick="{{ listToggle }}" style="margin-left:6px; font-size:13px; color:#6f6a61; cursor:pointer;" style-hover="color:#cfc8ba;">‹</span></div>
+        <div style="flex:none; display:flex; flex-wrap:wrap; gap:4px; padding:8px 11px; border-bottom:1px solid #262320;">
+          <sc-for list="{{ lifeFilters }}" as="f" hint-placeholder-count="7"><span onClick="{{ f.on }}" style="{{ f.style }}">{{ f.label }} {{ f.count }}</span></sc-for>
+        </div>
+        <div style="flex:1; min-height:0; overflow-y:auto; padding:8px;">
+          <sc-for list="{{ factorList }}" as="f" hint-placeholder-count="8">
+            <div onClick="{{ f.select }}" style="{{ f.cardStyle }}">
+              <div style="display:flex; align-items:center; gap:7px;">
+                <span style="{{ f.dot }}"></span>
+                <span style="font-weight:600; color:#e6e1d6; font-size:12px; white-space:nowrap; overflow:hidden; text-overflow:ellipsis;">{{ f.id }}</span>
+                <span style="margin-left:auto; flex:none; font-size:9px; font-weight:600; color:{{ f.stateColor }}; background:{{ f.stateBg }}; padding:1px 6px; border-radius:9px;">{{ f.state }}</span>
+              </div>
+              <div style="font-size:10px; color:#8a8174; margin-top:4px; white-space:nowrap; overflow:hidden; text-overflow:ellipsis;">{{ f.formula }}</div>
+              <div style="display:flex; align-items:center; gap:8px; margin-top:5px; font-size:10px;"><span style="color:#6f6a61;">{{ f.fam }}</span><span style="margin-left:auto; color:{{ f.icColor }};">IC {{ f.ic }}</span><span style="color:#7d7668;">IR {{ f.ir }}</span></div>
+            </div>
+          </sc-for>
+        </div>
+      </div>
+      </sc-if>
+
+      <!-- factor detail -->
+      <div style="flex:1; min-width:0; overflow-y:auto; padding:18px 22px; background:#191815;">
+        <div style="max-width:820px;">
+          <!-- header -->
+          <div style="display:flex; align-items:flex-start; gap:12px; margin-bottom:6px;">
+            <div>
+              <div style="display:flex; align-items:center; gap:10px; flex-wrap:wrap;"><span style="font-size:17px; font-weight:700;">{{ d_id }}</span><span style="font-size:10.5px; color:#6f6a61;">v{{ d_version }}</span><span style="font-size:10.5px; font-weight:600; color:{{ d_famColor }}; background:{{ d_famBg }}; padding:3px 9px; border-radius:12px;">{{ d_fam }}</span></div>
+              <div style="margin-top:5px; font-size:12px; color:#9bb3c9; background:#1b2330; border:1px solid #2c4452; border-radius:7px; padding:6px 11px; display:inline-block;">{{ d_formula }}</div>
+            </div>
+            <div style="margin-left:auto; text-align:right;"><div style="font-size:11px; font-weight:700; color:{{ d_stateColor }};">{{ d_state }}</div><div style="font-size:10.5px; color:#6f6a61; margin-top:3px;">{{ d_created }}</div></div>
+          </div>
+          <div style="font-size:12px; color:#9a9488; margin-bottom:16px;">{{ d_desc }}</div>
+
+          <!-- 五态机生命周期 -->
+          <div style="background:#1d1c19; border:1px solid #302d29; border-radius:10px; padding:14px 16px; margin-bottom:14px;">
+            <div style="display:flex; align-items:center; gap:8px; font-size:11.5px; color:#cfc8ba; font-weight:600; margin-bottom:14px;"><span style="color:#a98fd4;">◷</span>因子五态机 · M11 生命周期<span style="margin-left:auto; font-size:10.5px; color:#6f6a61;">阈值参数化 · 每次评估写 event_log</span></div>
+            <div style="display:flex; align-items:stretch; gap:0;">
+              <sc-for list="{{ lifeStates }}" as="s" hint-placeholder-count="6">
+                <div style="flex:1; display:flex; flex-direction:column; align-items:center; position:relative;">
+                  <div style="{{ s.nodeStyle }}">{{ s.glyph }}</div>
+                  <div style="font-size:10.5px; color:{{ s.labelColor }}; font-weight:{{ s.weight }}; margin-top:7px;">{{ s.label }}</div>
+                  <div style="font-size:9px; color:#6f6a61; margin-top:2px; text-align:center; min-height:24px; line-height:1.4;">{{ s.sub }}</div>
+                  <sc-if value="{{ s.hasArrow }}"><div style="position:absolute; top:14px; right:-1px; width:calc(100% - 8px); height:1px; transform:translateX(50%);"><div style="height:1px; background:{{ s.arrowColor }};"></div><div style="position:absolute; top:-7px; left:50%; transform:translateX(-50%); font-size:8px; color:#7d7668; white-space:nowrap; background:#1d1c19; padding:0 4px;">{{ s.thresh }}</div></div></sc-if>
+                </div>
+              </sc-for>
+            </div>
+          </div>
+
+          <!-- 硬指标 -->
+          <div style="display:grid; grid-template-columns:repeat(4,1fr); gap:10px; margin-bottom:14px;">
+            <sc-for list="{{ d_metrics }}" as="m" hint-placeholder-count="4">
+              <div style="background:#1d1c19; border:1px solid #302d29; border-radius:9px; padding:11px 13px;">
+                <div style="font-size:10.5px; color:#7d7668;">{{ m.label }}</div>
+                <div style="font-size:19px; font-weight:700; color:{{ m.color }}; margin-top:3px;">{{ m.value }}</div>
+                <div style="font-size:9.5px; color:#6f6a61; margin-top:2px;">{{ m.note }}</div>
+              </div>
+            </sc-for>
+          </div>
+
+          <!-- IC 时序 + 衰减 -->
+          <div style="display:flex; gap:14px; margin-bottom:14px;">
+            <div style="flex:1.4; background:#1d1c19; border:1px solid #302d29; border-radius:10px; padding:12px 14px;">
+              <div style="display:flex; align-items:center; gap:9px; margin-bottom:8px;"><span style="font-size:11.5px; color:#cfc8ba; font-weight:600;">日度 IC 序列</span><span style="font-size:10px; color:#8f897c;">{{ d_icWindow }}</span><span style="margin-left:auto; font-size:10.5px; color:{{ d_icColor }}; font-weight:700;">μ {{ d_ic }}</span></div>
+              <svg viewBox="0 0 320 110" preserveAspectRatio="none" style="width:100%; height:96px; display:block;">
+                <line x1="0" y1="55" x2="320" y2="55" stroke="#3a3733" stroke-width="1" stroke-dasharray="2 3"></line>
+                <path d="{{ d_icBars }}" stroke="{{ d_icColor }}" stroke-width="2.4" opacity="0.85"></path>
+                <path d="{{ d_icMa }}" fill="none" stroke="#e6e1d6" stroke-width="1.4"></path>
+              </svg>
+              <div style="display:flex; justify-content:space-between; font-size:9px; color:#6f6a61; margin-top:2px;"><span>{{ d_icStart }}</span><span style="color:#cfc8ba;">— 20日均线</span><span>今日</span></div>
+            </div>
+            <div style="flex:1; background:#1d1c19; border:1px solid #302d29; border-radius:10px; padding:12px 14px;">
+              <div style="display:flex; align-items:center; gap:9px; margin-bottom:8px;"><span style="font-size:11.5px; color:#cfc8ba; font-weight:600;">IC 衰减曲线</span><span style="margin-left:auto; font-size:10px; color:#8f897c;">峰值 @{{ d_peakH }}日</span></div>
+              <svg viewBox="0 0 220 110" preserveAspectRatio="none" style="width:100%; height:96px; display:block;">
+                <line x1="0" y1="55" x2="220" y2="55" stroke="#3a3733" stroke-width="1" stroke-dasharray="2 3"></line>
+                <path d="{{ d_decayArea }}" fill="rgba(169,143,212,0.12)"></path>
+                <path d="{{ d_decayPath }}" fill="none" stroke="#a98fd4" stroke-width="2"></path>
+                <sc-for list="{{ d_decayDots }}" as="p" hint-placeholder-count="5"><circle cx="{{ p.x }}" cy="{{ p.y }}" r="2.6" fill="#a98fd4"></circle></sc-for>
+              </svg>
+              <div style="display:flex; justify-content:space-between; font-size:9px; color:#6f6a61; margin-top:2px;"><sc-for list="{{ d_decayLabels }}" as="l" hint-placeholder-count="5"><span>{{ l }}</span></sc-for></div>
+            </div>
+          </div>
+
+          <!-- 动机 + event log -->
+          <div style="display:flex; gap:14px;">
+            <div style="flex:1.2; background:#1d1c19; border:1px solid #302d29; border-radius:10px; padding:13px 15px;">
+              <div style="display:flex; align-items:center; gap:8px; font-size:11.5px; color:#cfc8ba; font-weight:600; margin-bottom:10px;"><span style="color:#a98fd4;">✎</span>因子动机 · 想抓什么 alpha</div>
+              <div style="background:#211c26; border-left:3px solid #a98fd4; border-radius:7px; padding:9px 12px; color:#d6cdbb; font-size:12px; line-height:1.65;">{{ d_why }}</div>
+              <div style="display:grid; grid-template-columns:repeat(2,1fr); gap:8px 16px; margin-top:11px;">
+                <div><div style="color:#7d7668; font-size:10px; margin-bottom:2px;">算子链</div><div style="color:#9fcfe0; font-size:11px;">{{ d_ops }}</div></div>
+                <div><div style="color:#7d7668; font-size:10px; margin-bottom:2px;">截面 / 时序</div><div style="color:#cfc8ba; font-size:11px;">{{ d_kind }}</div></div>
+                <div><div style="color:#7d7668; font-size:10px; margin-bottom:2px;">换手代理</div><div style="color:#cfc8ba; font-size:11px;">{{ d_turnover }}</div></div>
+                <div><div style="color:#7d7668; font-size:10px; margin-bottom:2px;">前视检查</div><div style="color:#9bbd5a; font-size:11px;">✓ 无穿越</div></div>
+              </div>
+            </div>
+            <div style="flex:1; background:#1d1c19; border:1px solid #302d29; border-radius:10px; padding:13px 15px;">
+              <div style="display:flex; align-items:center; gap:8px; font-size:11.5px; color:#cfc8ba; font-weight:600; margin-bottom:11px;"><span style="color:#a98fd4;">≣</span>lifecycle_event_log</div>
+              <div style="display:flex; flex-direction:column; gap:0;">
+                <sc-for list="{{ d_events }}" as="e" hint-placeholder-count="3">
+                  <div style="display:flex; gap:10px; padding-bottom:11px;">
+                    <div style="flex:none; display:flex; flex-direction:column; align-items:center;"><span style="width:9px; height:9px; border-radius:50%; background:{{ e.color }}; flex:none;"></span><sc-if value="{{ e.line }}"><span style="width:1px; flex:1; background:#34302a; margin-top:3px;"></span></sc-if></div>
+                    <div style="flex:1; min-width:0; padding-bottom:2px;"><div style="font-size:11.5px; color:#cfc8ba;"><span style="color:#8f897c;">{{ e.from }}</span> → <span style="color:{{ e.color }}; font-weight:600;">{{ e.to }}</span></div><div style="font-size:10px; color:#7d7668; margin-top:2px; line-height:1.5;">{{ e.reason }}</div><div style="font-size:9px; color:#5f5b53; margin-top:2px;">{{ e.when }}</div></div>
+                  </div>
+                </sc-for>
+              </div>
+            </div>
+          </div>
+
+        </div>
+      </div>
+    </sc-if>
+
+    <!-- ▒▒ CORRELATION VIEW ▒▒ -->
+    <sc-if value="{{ viewCorr }}">
+      <div style="flex:1; min-width:0; overflow-y:auto; padding:20px 24px; background:#191815;">
+        <div style="max-width:1000px;">
+          <div style="font-size:12px; color:#7d7668; margin-bottom:4px;">因子相关矩阵 · 拥挤度与去冗余 · Spearman rank-corr，{{ corrWindow }}</div>
+          <div style="font-size:11px; color:#6f6a61; margin-bottom:16px;">高相关 = 重复定价同一风险，组合里只该留一个。点单元格看配对详情；右侧给去冗余建议。</div>
+          <div style="display:flex; gap:18px; align-items:flex-start;">
+            <!-- matrix -->
+            <div style="flex:none;">
+              <div style="display:inline-flex; flex-direction:column;">
+                <!-- col headers -->
+                <div style="display:flex;">
+                  <div style="width:104px; flex:none;"></div>
+                  <sc-for list="{{ corrCols }}" as="c" hint-placeholder-count="8"><div style="width:38px; flex:none; font-size:9px; color:#8f897c; text-align:center; white-space:nowrap; transform:rotate(-45deg); transform-origin:center; height:30px; overflow:visible;">{{ c }}</div></sc-for>
+                </div>
+                <sc-for list="{{ corrRows }}" as="r" hint-placeholder-count="8">
+                  <div style="display:flex; align-items:center;">
+                    <div style="width:104px; flex:none; font-size:10px; color:#a39a8a; text-align:right; padding-right:8px; white-space:nowrap; overflow:hidden; text-overflow:ellipsis;">{{ r.label }}</div>
+                    <sc-for list="{{ r.cells }}" as="x" hint-placeholder-count="8"><div onClick="{{ x.on }}" title="{{ x.title }}" style="{{ x.style }}">{{ x.txt }}</div></sc-for>
+                  </div>
+                </sc-for>
+              </div>
+              <div style="display:flex; align-items:center; gap:9px; margin-top:14px; font-size:9.5px; color:#7d7668;">
+                <span>−1</span><div style="width:140px; height:9px; border-radius:3px; background:linear-gradient(90deg,#6f9bd1,#2a2723 48%,#2a2723 52%,#d97066);"></div><span>+1</span>
+                <span style="margin-left:12px; color:#d97066;">■ |ρ|&gt;0.7 冗余</span>
+              </div>
+            </div>
+            <!-- redundancy / crowding -->
+            <div style="flex:1; min-width:260px; display:flex; flex-direction:column; gap:12px;">
+              <sc-if value="{{ pairOpen }}">
+                <div style="background:#1d1c19; border:1px solid #4a4060; border-radius:10px; padding:12px 14px;">
+                  <div style="display:flex; align-items:center; gap:8px; margin-bottom:8px;"><span style="color:#a98fd4;">⊞</span><span style="font-size:11.5px; color:#cfc8ba; font-weight:600;">配对详情</span><span onClick="{{ pairClose }}" style="margin-left:auto; font-size:11px; color:#6f6a61; cursor:pointer;">✕</span></div>
+                  <div style="font-size:11px; color:#cfc8ba; line-height:1.7;">{{ pairA }}<br><span style="color:#6f6a61;">vs</span><br>{{ pairB }}</div>
+                  <div style="display:flex; align-items:baseline; gap:8px; margin:10px 0;"><span style="font-size:24px; font-weight:700; color:{{ pairColor }};">{{ pairRho }}</span><span style="font-size:10.5px; color:#8f897c;">rank-corr</span></div>
+                  <div style="font-size:10.5px; color:{{ pairColor }}; line-height:1.6;">{{ pairVerdict }}</div>
+                </div>
+              </sc-if>
+              <div style="background:#1d1c19; border:1px solid #302d29; border-radius:10px; padding:12px 14px;">
+                <div style="font-size:11.5px; color:#cfc8ba; font-weight:600; margin-bottom:10px;">冗余簇 · 建议每簇保留 1 个</div>
+                <div style="display:flex; flex-direction:column; gap:10px;">
+                  <sc-for list="{{ clusters }}" as="c" hint-placeholder-count="3">
+                    <div style="background:#211f1c; border:1px solid #34302a; border-radius:8px; padding:9px 11px;">
+                      <div style="display:flex; align-items:center; gap:7px; margin-bottom:6px;"><span style="font-size:10px; color:#d97066;">|ρ|≈{{ c.rho }}</span><span style="margin-left:auto; font-size:9.5px; color:#9bbd5a; border:1px solid #3c5230; border-radius:9px; padding:1px 7px;">留 {{ c.keep }}</span></div>
+                      <sc-for list="{{ c.members }}" as="m" hint-placeholder-count="2"><div style="display:flex; align-items:center; gap:6px; font-size:10.5px; padding:2px 0;"><span style="color:{{ m.color }};">{{ m.mark }}</span><span style="color:{{ m.txtColor }};">{{ m.id }}</span><span style="margin-left:auto; color:#6f6a61;">IR {{ m.ir }}</span></div></sc-for>
+                    </div>
+                  </sc-for>
+                </div>
+              </div>
+              <div style="background:#1d1c19; border:1px solid #302d29; border-radius:10px; padding:12px 14px;">
+                <div style="font-size:11.5px; color:#cfc8ba; font-weight:600; margin-bottom:9px;">组合拥挤度</div>
+                <div style="display:flex; flex-direction:column; gap:9px;">
+                  <sc-for list="{{ crowdRows }}" as="c" hint-placeholder-count="3"><div><div style="display:flex; justify-content:space-between; font-size:10.5px; color:#8f897c; margin-bottom:3px;"><span>{{ c.k }}</span><span style="color:{{ c.color }};">{{ c.v }}</span></div><div style="height:6px; background:#2a2723; border-radius:3px; overflow:hidden;"><div style="height:100%; width:{{ c.pct }}; background:{{ c.color }};"></div></div></div></sc-for>
+                </div>
+              </div>
+            </div>
+          </div>
+        </div>
+      </div>
+    </sc-if>
+
+    <!-- ▒▒ EVAL VIEW ▒▒ -->
+    <sc-if value="{{ viewEval }}">
+      <div style="flex:1; min-width:0; overflow-y:auto; padding:18px 22px; background:#191815;">
+        <div style="max-width:920px;">
+          <div style="display:flex; align-items:center; gap:12px; margin-bottom:16px;">
+            <span style="font-size:16px; font-weight:700;">{{ d_id }}</span>
+            <span style="font-size:11px; color:#6f6a61;">{{ d_formula }}</span>
+            <div style="margin-left:auto; display:flex; gap:2px; background:#1a1916; border:1px solid #302d29; border-radius:7px; padding:2px;">
+              <sc-for list="{{ horizonBtns }}" as="h" hint-placeholder-count="5"><button onClick="{{ h.on }}" style="{{ h.style }}">{{ h.label }}</button></sc-for>
+            </div>
+          </div>
+
+          <!-- hard metric strip -->
+          <div style="display:grid; grid-template-columns:repeat(5,1fr); gap:10px; margin-bottom:14px;">
+            <sc-for list="{{ ev_metrics }}" as="m" hint-placeholder-count="5">
+              <div style="background:#1d1c19; border:1px solid #302d29; border-radius:9px; padding:10px 12px;">
+                <div style="font-size:10px; color:#7d7668;">{{ m.label }}</div>
+                <div style="font-size:17px; font-weight:700; color:{{ m.color }}; margin-top:3px;">{{ m.value }}</div>
+              </div>
+            </sc-for>
+          </div>
+
+          <!-- layered backtest -->
+          <div style="background:#1d1c19; border:1px solid #302d29; border-radius:10px; padding:13px 16px; margin-bottom:14px;">
+            <div style="display:flex; align-items:center; gap:9px; margin-bottom:10px;"><span style="font-size:12px; color:#cfc8ba; font-weight:600;">分层回测 · 五分位累计净值</span><span style="font-size:10px; color:#8f897c;">按因子值排序分 5 组 · 等权 · {{ d_layerWindow }}</span><span style="margin-left:auto; font-size:11px; color:{{ ev_monoColor }}; font-weight:600;">{{ ev_mono }}</span></div>
+            <div style="display:flex; gap:16px;">
+              <svg viewBox="0 0 460 200" preserveAspectRatio="none" style="flex:1; height:200px; display:block;">
+                <line x1="0" y1="100" x2="460" y2="100" stroke="#302d29" stroke-width="1"></line>
+                <sc-for list="{{ ev_layers }}" as="l" hint-placeholder-count="5"><path d="{{ l.path }}" fill="none" stroke="{{ l.color }}" stroke-width="{{ l.width }}"></path></sc-for>
+              </svg>
+              <div style="flex:none; width:150px; display:flex; flex-direction:column; gap:6px; justify-content:center;">
+                <sc-for list="{{ ev_layerLegend }}" as="l" hint-placeholder-count="5"><div style="display:flex; align-items:center; gap:7px; font-size:10.5px;"><span style="width:12px; height:3px; background:{{ l.color }}; flex:none;"></span><span style="color:#a39a8a; white-space:nowrap;">{{ l.name }}</span><span style="margin-left:auto; color:{{ l.retColor }}; font-weight:600;">{{ l.ret }}</span></div></sc-for>
+                <div style="margin-top:6px; padding-top:8px; border-top:1px solid #2a2723; display:flex; justify-content:space-between; font-size:10.5px;"><span style="color:#8f897c;">多空 Q5−Q1</span><span style="color:#9bbd5a; font-weight:700;">{{ ev_spread }}</span></div>
+              </div>
+            </div>
+          </div>
+
+          <!-- IC series + decay table -->
+          <div style="display:flex; gap:14px;">
+            <div style="flex:1.3; background:#1d1c19; border:1px solid #302d29; border-radius:10px; padding:12px 14px;">
+              <div style="display:flex; align-items:center; gap:9px; margin-bottom:8px;"><span style="font-size:11.5px; color:#cfc8ba; font-weight:600;">IC 序列 · 累计</span><span style="margin-left:auto; font-size:10.5px; color:#8f897c;">命中率 {{ ev_hit }}</span></div>
+              <svg viewBox="0 0 320 120" preserveAspectRatio="none" style="width:100%; height:104px; display:block;">
+                <line x1="0" y1="60" x2="320" y2="60" stroke="#3a3733" stroke-width="1" stroke-dasharray="2 3"></line>
+                <path d="{{ d_icBars }}" stroke="{{ d_icColor }}" stroke-width="2" opacity="0.8"></path>
+                <path d="{{ ev_cumIcPath }}" fill="none" stroke="#a98fd4" stroke-width="1.8"></path>
+              </svg>
+              <div style="font-size:9px; color:#6f6a61; margin-top:3px;">柱 = 日度 IC · 紫线 = 累计 IC</div>
+            </div>
+            <div style="flex:1; background:#1d1c19; border:1px solid #302d29; border-radius:10px; padding:12px 14px;">
+              <div style="font-size:11.5px; color:#cfc8ba; font-weight:600; margin-bottom:9px;">IC 衰减表 · horizon</div>
+              <div style="display:flex; flex-direction:column; gap:0;">
+                <div style="display:flex; font-size:10px; color:#6f6a61; padding-bottom:5px; border-bottom:1px solid #2a2723;"><span style="flex:1;">horizon</span><span style="flex:1; text-align:right;">IC</span><span style="flex:1; text-align:right;">Rank-IC</span><span style="flex:1; text-align:right;">IR</span></div>
+                <sc-for list="{{ ev_decayTable }}" as="r" hint-placeholder-count="5"><div style="display:flex; font-size:11px; padding:6px 0; border-bottom:1px solid #221f1c;"><span style="flex:1; color:{{ r.sel }};">{{ r.h }}</span><span style="flex:1; text-align:right; color:{{ r.icColor }};">{{ r.ic }}</span><span style="flex:1; text-align:right; color:#a39a8a;">{{ r.rankIc }}</span><span style="flex:1; text-align:right; color:#a39a8a;">{{ r.ir }}</span></div></sc-for>
+              </div>
+            </div>
+          </div>
+
+        </div>
+      </div>
+    </sc-if>
+
+    <!-- ▒▒ BUILD VIEW (构建台 · DSL + Claude Code) ▒▒ -->
+    <sc-if value="{{ viewBuild }}">
+      <!-- LEFT · agent chat -->
+      <div style="flex:none; width:330px; border-right:1px solid #302d29; display:flex; flex-direction:column; background:#1a1916;">
+        <div style="flex:none; display:flex; align-items:center; gap:8px; padding:9px 13px; border-bottom:1px solid #302d29;"><span style="color:#a98fd4;">✳</span><span style="font-weight:600; font-size:12.5px;">因子 Agent</span><span style="margin-left:auto; font-size:9.5px; color:#8f897c;">Claude Code · DSL 即代码</span></div>
+        <div style="flex:1; min-height:0; overflow-y:auto; padding:11px 13px;">
+          <sc-for list="{{ bdChat }}" as="c" hint-placeholder-count="0">
+            <sc-if value="{{ c.isUser }}"><div style="display:flex; gap:8px; margin:11px 0 4px;"><span style="color:#a98fd4; flex:none; font-weight:700;">&gt;</span><span style="color:#cfc8ba; white-space:pre-wrap;">{{ c.text }}</span></div></sc-if>
+            <sc-if value="{{ c.isThink }}"><div style="display:flex; gap:8px; margin:8px 0; color:#8a7e6a;"><span style="color:#9b8d72;">✻</span><span style="font-style:italic; white-space:pre-wrap; font-size:12px;">{{ c.text }}</span></div></sc-if>
+            <sc-if value="{{ c.isSay }}"><div style="display:flex; gap:8px; margin:7px 0;"><span style="color:#a98fd4; flex:none;">●</span><span style="color:#e6e1d6; white-space:pre-wrap;">{{ c.text }}</span></div></sc-if>
+            <sc-if value="{{ c.isPatch }}"><div style="margin:8px 0; border:1px solid #4a4060; background:#211c26; border-radius:9px; padding:9px 12px;"><div style="display:flex; align-items:center; gap:7px; margin-bottom:5px;"><span style="color:#a98fd4;">⟳</span><span style="color:#e6e1d6; font-weight:600; font-size:12px;">{{ c.text }}</span></div><div style="font-size:11px; color:#bdb2c8; font-family:inherit; white-space:pre-wrap;">{{ c.code }}</div></div></sc-if>
+          </sc-for>
+        </div>
+        <div style="flex:none; border-top:1px solid #302d29; padding:10px 13px;">
+          <div style="display:flex; flex-wrap:wrap; gap:5px; margin-bottom:8px;"><sc-for list="{{ bdChips }}" as="c" hint-placeholder-count="3"><span onClick="{{ c.on }}" style="font-size:10px; color:#bca8d8; border:1px solid #4a4060; background:#211c26; border-radius:14px; padding:3px 9px; cursor:pointer;">{{ c.label }}</span></sc-for></div>
+          <div style="display:flex; gap:8px; align-items:flex-start; border:1px solid #4a4060; background:#211f1c; border-radius:10px; padding:8px 11px;"><span style="color:#a98fd4; font-weight:700; line-height:1.6;">&gt;</span><textarea value="{{ bdDraft }}" onInput="{{ bdOnDraft }}" onKeyDown="{{ bdOnKey }}" placeholder="描述想抓的 alpha，或直接写表达式…" rows="1" style="flex:1; resize:none; background:transparent; border:none; outline:none; color:#e6e1d6; font-size:12.5px; line-height:1.6; max-height:80px;"></textarea><button onClick="{{ bdSend }}" style="flex:none; background:#a98fd4; border:none; color:#1c1726; font-family:inherit; font-weight:700; font-size:11px; padding:5px 10px; border-radius:7px; cursor:pointer;">↵</button></div>
+        </div>
+      </div>
+
+      <!-- CENTER · DSL editor + AST -->
+      <div style="flex:1; min-width:0; display:flex; flex-direction:column; background:#191815;">
+        <div style="flex:none; display:flex; align-items:center; gap:9px; padding:9px 16px; border-bottom:1px solid #302d29; background:#1d1c19;">
+          <span style="color:#a98fd4;">⌨</span><span style="font-size:12px; color:#cfc8ba; font-weight:600;">表达式编辑器</span><span style="font-size:10px; color:#6f6a61;">factor_factory.expression · polars 编译</span>
+          <div style="flex:1;"></div>
+          <span style="font-size:10.5px; color:{{ bdValidColor }};">{{ bdValid }}</span>
+        </div>
+        <div style="flex:1; min-height:0; overflow-y:auto; padding:18px 22px;">
+          <div style="max-width:760px;">
+            <!-- formula box -->
+            <div style="background:#1b2330; border:1px solid #2c4452; border-radius:10px; padding:14px 16px; margin-bottom:14px;">
+              <div style="font-size:10px; color:#6f8aa0; margin-bottom:7px;">factor_id · {{ bdFactorId }}</div>
+              <div style="font-size:16px; color:#cfe2f0; line-height:1.6; font-weight:500;">{{ bdExpr }}</div>
+            </div>
+
+            <!-- operator palette -->
+            <div style="margin-bottom:14px;">
+              <div style="font-size:11px; color:#7d7668; margin-bottom:8px;">算子库 · 点击插入（{{ bdOpCount }} 个）</div>
+              <sc-for list="{{ bdOpGroups }}" as="g" hint-placeholder-count="3">
+                <div style="margin-bottom:9px;">
+                  <div style="font-size:9.5px; color:#6f6a61; margin-bottom:5px;">{{ g.group }}</div>
+                  <div style="display:flex; flex-wrap:wrap; gap:5px;">
+                    <sc-for list="{{ g.ops }}" as="o" hint-placeholder-count="6"><span onClick="{{ o.on }}" title="{{ o.sig }}" style="font-size:10.5px; color:#9bb3c9; background:#1b2330; border:1px solid #2c4452; border-radius:7px; padding:4px 9px; cursor:pointer;" style-hover="background:#22303f; color:#cfe2f0;">{{ o.name }}</span></sc-for>
+                  </div>
+                </div>
+              </sc-for>
+            </div>
+
+            <!-- AST tree -->
+            <div style="background:#1d1c19; border:1px solid #302d29; border-radius:10px; padding:13px 15px; margin-bottom:14px;">
+              <div style="font-size:11.5px; color:#cfc8ba; font-weight:600; margin-bottom:10px;">AST · 解析树</div>
+              <div style="font-family:inherit; font-size:11.5px; line-height:1.85;">
+                <sc-for list="{{ bdAst }}" as="n" hint-placeholder-count="4"><div style="display:flex; gap:0; color:{{ n.color }};"><span style="color:#5f5b53; white-space:pre;">{{ n.indent }}</span><span>{{ n.txt }}</span></div></sc-for>
+              </div>
+            </div>
+
+            <!-- live IC preview -->
+            <div style="display:flex; gap:12px;">
+              <div style="flex:1; background:#1d1c19; border:1px solid #302d29; border-radius:10px; padding:12px 14px;">
+                <div style="display:flex; align-items:center; gap:8px; margin-bottom:8px;"><span style="font-size:11px; color:#cfc8ba; font-weight:600;">即时 IC 预览</span><span style="margin-left:auto; font-size:9.5px; color:#9bbd5a;">样本内 · 60日</span></div>
+                <svg viewBox="0 0 300 70" preserveAspectRatio="none" style="width:100%; height:58px; display:block;"><line x1="0" y1="35" x2="300" y2="35" stroke="#3a3733" stroke-width="1" stroke-dasharray="2 3"></line><path d="{{ bdPreviewBars }}" stroke="#a98fd4" stroke-width="2"></path></svg>
+                <div style="display:flex; gap:14px; margin-top:8px; font-size:11px;"><span style="color:#8f897c;">IC <span style="color:#a98fd4; font-weight:700;">{{ bdPreviewIc }}</span></span><span style="color:#8f897c;">IR <span style="color:#cfc8ba;">{{ bdPreviewIr }}</span></span></div>
+              </div>
+              <div style="flex:none; width:230px; display:flex; flex-direction:column; gap:8px;">
+                <sc-for list="{{ bdLints }}" as="l" hint-placeholder-count="3"><div style="display:flex; gap:8px; font-size:10.5px; background:#1d1c19; border:1px solid #302d29; border-radius:8px; padding:7px 10px;"><span style="color:{{ l.color }};">{{ l.icon }}</span><span style="color:#a39a8a; line-height:1.45;">{{ l.t }}</span></div></sc-for>
+                <button onClick="{{ bdGate }}" style="background:#241f2e; border:1px solid #6a5a8a; color:#c9b8e0; font-family:inherit; font-size:11.5px; padding:9px; border-radius:8px; cursor:pointer; margin-top:2px;" style-hover="background:#2c2438;">⊕ 注册到因子库</button>
+              </div>
+            </div>
+          </div>
+        </div>
+      </div>
+
+      <!-- gate modal -->
+      <sc-if value="{{ bdGateOpen }}">
+        <div style="position:absolute; inset:0; background:rgba(10,9,8,0.6); display:flex; align-items:center; justify-content:center; z-index:90;" onClick="{{ bdGateNo }}">
+          <div style="width:440px; background:#1d1c19; border:1px solid #4a4060; border-radius:12px; overflow:hidden;">
+            <div style="padding:12px 16px; background:#211c26; border-bottom:1px solid #34302a; display:flex; align-items:center; gap:9px;"><span style="color:#a98fd4;">⊕</span><span style="font-weight:700;">注册因子 · 进入五态机</span></div>
+            <div style="padding:14px 16px;">
+              <div style="font-size:12px; color:#cfc8ba; margin-bottom:11px; line-height:1.6;">把 <span style="color:#a98fd4;">{{ bdFactorId }}</span> 写入 registry，初始状态 <span style="color:#8f897c; font-weight:600;">NEW</span>。表达式编译通过、无前视、无重名才可注册。</div>
+              <div style="display:flex; flex-direction:column; gap:6px; margin-bottom:13px;"><sc-for list="{{ bdGateChecks }}" as="c" hint-placeholder-count="3"><div style="display:flex; gap:9px; font-size:11.5px;"><span style="color:{{ c.color }};">{{ c.icon }}</span><span style="color:#a39a8a;">{{ c.t }}</span></div></sc-for></div>
+              <div style="display:flex; gap:9px;"><button onClick="{{ bdGateYes }}" style="background:#a98fd4; border:none; color:#1c1726; font-family:inherit; font-weight:700; font-size:12px; padding:9px 16px; border-radius:8px; cursor:pointer;">✓ 注册</button><button onClick="{{ bdGateNo }}" style="background:transparent; border:1px solid #4a433a; color:#8f897c; font-family:inherit; font-size:12px; padding:9px 15px; border-radius:8px; cursor:pointer;">取消</button></div>
+            </div>
+          </div>
+        </div>
+      </sc-if>
+    </sc-if>
+
+    <!-- ▒▒ RESEARCH VIEW (研究台 · alpha audit) ▒▒ -->
+    <sc-if value="{{ viewResearch }}">
+      <!-- LEFT · research chat -->
+      <div style="flex:none; width:336px; border-right:1px solid #302d29; display:flex; flex-direction:column; background:#1a1916;">
+        <div style="flex:none; display:flex; align-items:center; gap:8px; padding:9px 13px; border-bottom:1px solid #302d29;"><span style="color:#a98fd4;">⚗</span><span style="font-weight:600; font-size:12.5px;">学术审查</span><span style="margin-left:auto; font-size:9.5px; color:#8f897c;">academic audit</span></div>
+        <div style="flex:1; min-height:0; overflow-y:auto; padding:11px 13px;">
+          <sc-for list="{{ rsChat }}" as="c" hint-placeholder-count="0">
+            <sc-if value="{{ c.isUser }}"><div style="display:flex; gap:8px; margin:11px 0 4px;"><span style="color:#a98fd4; flex:none; font-weight:700;">&gt;</span><span style="color:#cfc8ba; white-space:pre-wrap;">{{ c.text }}</span></div></sc-if>
+            <sc-if value="{{ c.isSay }}"><div style="display:flex; gap:8px; margin:7px 0;"><span style="color:#a98fd4; flex:none;">●</span><span style="color:#e6e1d6; white-space:pre-wrap;">{{ c.text }}</span></div></sc-if>
+          </sc-for>
+        </div>
+        <div style="flex:none; border-top:1px solid #302d29; padding:10px 13px;">
+          <div style="display:flex; gap:8px; align-items:flex-start; border:1px solid #4a4060; background:#211f1c; border-radius:10px; padding:8px 11px;"><span style="color:#a98fd4; font-weight:700; line-height:1.6;">&gt;</span><textarea value="{{ rsDraft }}" onInput="{{ rsOnDraft }}" onKeyDown="{{ rsOnKey }}" placeholder="质询这个因子是否真 alpha…" rows="1" style="flex:1; resize:none; background:transparent; border:none; outline:none; color:#e6e1d6; font-size:12.5px; line-height:1.6; max-height:80px;"></textarea><button onClick="{{ rsSend }}" style="flex:none; background:#a98fd4; border:none; color:#1c1726; font-family:inherit; font-weight:700; font-size:11px; padding:5px 10px; border-radius:7px; cursor:pointer;">↵</button></div>
+        </div>
+      </div>
+
+      <!-- RIGHT · audit report -->
+      <div style="flex:1; min-width:0; overflow-y:auto; padding:18px 24px; background:#191815;">
+        <div style="max-width:780px;">
+          <div style="display:flex; align-items:center; gap:12px; margin-bottom:6px;"><span style="font-size:16px; font-weight:700;">{{ d_id }}</span><span style="font-size:11px; color:#6f6a61;">alpha 真伪审查</span><span style="margin-left:auto; font-size:11px; font-weight:700; color:{{ rsVerdictColor }}; background:{{ rsVerdictBg }}; border:1px solid {{ rsVerdictBorder }}; padding:4px 12px; border-radius:20px;">{{ rsVerdict }}</span></div>
+          <div style="font-size:11.5px; color:#9a9488; margin-bottom:16px; line-height:1.6;">{{ rsSummary }}</div>
+
+          <!-- audit checks -->
+          <div style="display:flex; flex-direction:column; gap:9px; margin-bottom:16px;">
+            <sc-for list="{{ rsChecks }}" as="c" hint-placeholder-count="5">
+              <div style="background:#1d1c19; border:1px solid {{ c.border }}; border-radius:10px; padding:11px 14px;">
+                <div style="display:flex; align-items:center; gap:9px;"><span style="font-size:14px; color:{{ c.color }};">{{ c.icon }}</span><span style="font-size:12px; color:#e6e1d6; font-weight:600;">{{ c.title }}</span><span style="margin-left:auto; font-size:10.5px; color:{{ c.color }}; font-weight:600;">{{ c.stat }}</span></div>
+                <div style="font-size:10.5px; color:#8f897c; margin-top:6px; line-height:1.6;">{{ c.detail }}</div>
+              </div>
+            </sc-for>
+          </div>
+
+          <!-- papers -->
+          <div style="font-size:11px; color:#7d7668; margin-bottom:9px;">相关文献 · 因子方法论</div>
+          <div style="display:flex; flex-direction:column; gap:9px;">
+            <sc-for list="{{ rsPapers }}" as="p" hint-placeholder-count="3">
+              <div style="background:#1d1c19; border:1px solid #302d29; border-radius:10px; padding:11px 14px;">
+                <div style="display:flex; align-items:center; gap:9px; margin-bottom:5px;"><span style="font-size:12px; color:#cfe2f0; font-weight:600;">{{ p.title }}</span><span style="font-size:9.5px; color:#8f897c;">{{ p.venue }}</span><span style="margin-left:auto; font-size:9.5px; color:#6f8aa0;">{{ p.ref }}</span></div>
+                <div style="font-size:10.5px; color:#9a9488; line-height:1.6;">{{ p.gist }}</div>
+                <div style="font-size:10px; color:#a98fd4; margin-top:5px;">借鉴 · {{ p.transfer }}</div>
+              </div>
+            </sc-for>
+          </div>
+        </div>
+      </div>
+    </sc-if>
+
+  </div>
+</div>
+</x-dc>
+<script type="text/x-dc" data-dc-script data-props="{&quot;$preview&quot;:{&quot;width&quot;:1280,&quot;height&quot;:880}}">
+class Component extends DCLogic {
+  state = {
+    view: "library", market: "equity_cn",
+    selFactor: "alpha_vol_adj_mom_20d", listOpen: true, lifeFilter: "ALL",
+    corrPair: null,
+    evalHorizon: 5,
+    bdExpr: "ts_zscore(amount, 20)", bdFactorId: "alpha_amount_z_20", bdDraft: "", bdGateOpen: false,
+    bdChat: [
+      { role: "user", text: "想要一个能抓「放量突破」的因子，价量配合的那种" },
+      { role: "think", text: "放量突破 = 价格创新高 + 成交量放大。可以用 close 相对 N 日高点的位置 × 量比。先给一个干净的截面版本。" },
+      { role: "say", text: "建议表达式：rank(close / ts_max(close, 20)) × rank(volume / ts_mean(volume, 20))。我已填到编辑器，截面 rank 让两个量纲对齐，量比用 20 日均量。" },
+      { role: "patch", text: "已写入编辑器", code: "rank(close/ts_max(close,20))\n  × rank(volume/ts_mean(volume,20))" }
+    ],
+    rsDraft: "",
+    rsChat: [
+      { role: "user", text: "alpha_vol_adj_mom_20d 这个波动调整动量，IC 0.06 是不是 p-hacking 出来的？" },
+      { role: "say", text: "做了多重检验校正后仍显著（见右侧）。它本质是 Sharpe 风格因子，有经济学先验支撑——不是纯数据挖掘。但 60 日动量在 A 股有反转风险，建议看 OBSERVATION 期的实盘衰减。" }
+    ]
+  };
+
+  _nz(i) { const x = Math.sin(i * 12.9898 + 7.13) * 43758.5453; return x - Math.floor(x); }
+
+  _stateMeta(s) {
+    const m = {
+      NEW:         ["#8f897c", "rgba(143,137,124,0.14)"],
+      QUALIFIED:   ["#6f9bd1", "rgba(111,155,209,0.14)"],
+      PROBATION:   ["#d9b25f", "rgba(217,178,95,0.14)"],
+      OBSERVATION: ["#9bbd5a", "rgba(155,189,90,0.14)"],
+      WARNING:     ["#e0a050", "rgba(224,160,80,0.14)"],
+      RETIRED:     ["#d97066", "rgba(217,112,102,0.14)"]
+    };
+    return m[s] || m.NEW;
+  }
+  _famMeta(f) {
+    const m = {
+      "动量": ["#d97757", "rgba(217,119,87,0.14)"],
+      "反转": ["#6f9bd1", "rgba(111,155,209,0.14)"],
+      "波动": ["#d9b25f", "rgba(217,178,95,0.14)"],
+      "量价": ["#9bbd5a", "rgba(155,189,90,0.14)"],
+      "形态": ["#b89cd8", "rgba(184,156,216,0.14)"]
+    };
+    return m[f] || ["#8f897c", "rgba(143,137,124,0.14)"];
+  }
+
+  _build() {
+    if (this._factors) return;
+    // [id, formula, desc, fam, state, quality, why]
+    const seed = [
+      ["alpha_vol_adj_mom_20d", "ts_pct_change(close,20) / ts_std(ts_pct_change(close,1),20)", "波动调整 1 月动量（夏普风格）", "动量", "OBSERVATION", 0.93, "纯动量在高波动股上失真。除以已实现波动 → 单位风险的动量，等价于截面 Sharpe 排序。机构里这是最稳的一档趋势因子。"],
+      ["alpha_mom_xs_20d", "rank(ts_pct_change(close,20))", "1 月动量截面排名", "动量", "OBSERVATION", 0.80, "把 20 日收益做截面 rank，去掉绝对幅度只留相对强弱。A 股周频里中期动量比短期更干净。"],
+      ["alpha_xs_winsor_mom20", "cs_winsorize(ts_pct_change(close,20))", "1 月动量截面截尾", "动量", "PROBATION", 0.64, "动量尾部常被妖股污染。截尾后 IC 更稳，IR 提升明显——牺牲一点峰值换稳定。"],
+      ["alpha_reversal_5d", "neg(ts_pct_change(close,5))", "1 周反转", "反转", "PROBATION", 0.66, "短周期 A 股散户主导，超跌反弹强。取 5 日收益的负向作短反转。"],
+      ["alpha_price_volume_corr_20d", "ts_corr(close,volume,20)", "20 日价量相关性（Alpha#6 近亲）", "量价", "PROBATION", 0.60, "价涨量增=健康趋势，价涨量缩=背离。20 日滚动相关刻画这种价量配合。"],
+      ["alpha_xs_demean_log_volume", "cs_demean(log(volume + 1))", "成交量对数截面去均值（Alpha#2 近亲）", "量价", "QUALIFIED", 0.55, "对数压缩量纲，截面去均值得到相对活跃度。流动性溢价的代理。"],
+      ["alpha_reversal_residual_20d", "neg(ts_zscore(close,20))", "20 日 z-score 反转（高于均值看空）", "反转", "QUALIFIED", 0.52, "价格偏离 20 日均值越多越可能回归。z-score 标准化后取负。"],
+      ["alpha_ema_cross", "ts_ema(close,5) - ts_ema(close,20)", "EMA 5-20 金叉", "动量", "QUALIFIED", 0.50, "经典双均线，EMA 比 SMA 更跟手。差值正=短期强于长期。"],
+      ["alpha_vol_ratio", "ts_std(ts_pct_change(close,1),5) / ts_std(ts_pct_change(close,1),60)", "短/长期波动率比", "波动", "QUALIFIED", 0.48, "短波/长波 > 1 表示波动放大，常先于趋势转折。低波异象的时序版。"],
+      ["alpha_sma_dev_20d", "(close - ts_mean(close,20)) / ts_mean(close,20)", "20 日均线偏离", "反转", "NEW", 0.40, "价格相对均线的百分比偏离，均值回归的朴素代理。刚入库待观察。"],
+      ["alpha_skew_returns_60d", "ts_skew(ts_pct_change(close,1),60)", "60 日收益偏度", "波动", "NEW", 0.35, "右偏（彩票偏好）股票长期跑输。偏度因子捕捉这种行为定价。"],
+      ["alpha_close_in_range_5d", "(close - ts_min(low,5)) / (ts_max(high,5) - ts_min(low,5))", "Stochastic K 形式", "形态", "NEW", 0.30, "收盘在 5 日高低区间的相对位置，超买超卖形态。"],
+      ["alpha_vol_to_avg_20d", "volume / ts_mean(volume,20)", "量比", "量价", "WARNING", 0.27, "曾经有效的量比因子，近 30 日 IC 衰减过半——拥挤后失效，进 WARNING。"],
+      ["alpha_mom_1d", "ts_pct_change(close,1)", "1 日动量", "动量", "WARNING", 0.22, "日频动量噪声大、换手高，扣费后所剩无几。仅作组合微调，不单用。"],
+      ["alpha_drawdown_60d", "ts_min(close,60) / ts_max(close,60)", "60 日最大回撤近似", "波动", "RETIRED", 0.12, "回撤代理与已有低波因子高度共线，且 IR 长期为负。已退役。"],
+      ["alpha_volume_growth_5d", "ts_pct_change(volume,5)", "成交量 5 日变化", "量价", "RETIRED", 0.10, "量变化方向不稳定，多空两侧都无显著超额。退役保留作对照。"]
+    ];
+    const order = ["OBSERVATION", "WARNING", "PROBATION", "QUALIFIED", "NEW", "RETIRED"];
+    this._factors = seed.map((s, i) => {
+      const [id, formula, desc, fam, state, q, why] = s;
+      // IC synthesis
+      const base = q * 0.075 - 0.012;
+      const decaying = (state === "WARNING");
+      const dead = (state === "RETIRED");
+      const icMean = dead ? (this._nz(i) - 0.55) * 0.02 : base;
+      const icIr = dead ? -0.1 - this._nz(i + 3) * 0.2 : q * 1.7;
+      const rankIc = icMean * 1.06;
+      const sampleT = icIr * 3.1;
+      // daily IC series (60)
+      const series = [];
+      for (let k = 0; k < 60; k++) {
+        let mu = icMean;
+        if (decaying) mu = icMean * (1 - 0.7 * (k / 59));
+        series.push(mu + (this._nz(i * 31 + k) - 0.5) * 0.05);
+      }
+      // decay across horizons [1,3,5,10,20]
+      const hs = [1, 3, 5, 10, 20];
+      const peak = dead ? 1 : (i % 2 === 0 ? 5 : 3);
+      const decay = hs.map(h => {
+        const dist = Math.abs(h - peak);
+        let v = icMean * Math.exp(-dist / (decaying ? 5 : 9)) * (h <= peak ? (0.6 + 0.4 * h / peak) : 1);
+        if (dead) v = (this._nz(i + h) - 0.55) * 0.018;
+        return { h, ic: v };
+      });
+      // layered 5 buckets cumulative
+      const layers = [];
+      for (let b = 0; b < 5; b++) {
+        const arr = []; let cum = 1;
+        const tilt = dead ? (this._nz(i + b) - 0.5) * 0.0008 : (b - 2) * (icMean * 0.06);
+        for (let t = 0; t < 40; t++) { cum *= (1 + tilt + (this._nz(i * 17 + b * 7 + t) - 0.5) * 0.012); arr.push(cum); }
+        layers.push(arr);
+      }
+      return { id, formula, desc, fam, state, q, why, icMean, icIr, rankIc, sampleT, series, decay, layers };
+    });
+    // events per factor (lifecycle path up to current state)
+    this._eventsFor = (f) => {
+      const path = ["NEW", "QUALIFIED", "PROBATION", "OBSERVATION", "WARNING", "RETIRED"];
+      const idx = path.indexOf(f.state);
+      const reasons = {
+        QUALIFIED: "|IC|>0.03 且 IR>0.5 且 t>3 — 自动入选",
+        PROBATION: "连续 3 月 IC 不为负 — 进试用",
+        OBSERVATION: "模拟实盘 1 月年化 > 基准 — 进观察",
+        WARNING: "30 日 IC 衰减 >50% — 触发预警",
+        RETIRED: "连续 2 周 WARNING 未修复 — 退役"
+      };
+      const days = ["2026-05-27", "2026-05-29", "2026-06-05", "2026-06-12", "2026-06-18", "2026-06-20"];
+      const out = [];
+      for (let k = idx; k >= 1; k--) {
+        const [c] = this._stateMeta(path[k]);
+        out.push({ from: path[k - 1], to: path[k], reason: reasons[path[k]], when: days[k] + " · 自动迁移", color: c, line: k > 1 });
+      }
+      if (idx === 0) { const [c] = this._stateMeta("NEW"); out.push({ from: "—", to: "NEW", reason: "表达式注册入库 · 初始态", when: days[0], color: c, line: false }); }
+      return out;
+    };
+  }
+
+  _svgBars(series, w, h, mid) {
+    const n = series.length, max = Math.max(0.08, ...series.map(v => Math.abs(v)));
+    let d = "";
+    for (let i = 0; i < n; i++) {
+      const x = (i / (n - 1)) * w;
+      const y = mid - (series[i] / max) * (h * 0.42);
+      d += "M" + x.toFixed(1) + " " + mid + " L" + x.toFixed(1) + " " + y.toFixed(1) + " ";
+    }
+    return d;
+  }
+  _svgLine(arr, w, h, lo, hi, pad) {
+    pad = pad || 0; const n = arr.length, span = (hi - lo) || 1;
+    return arr.map((v, i) => (i ? "L" : "M") + ((i / (n - 1)) * w).toFixed(1) + " " + (h - pad - ((v - lo) / span) * (h - 2 * pad)).toFixed(1)).join(" ");
+  }
+
+  renderVals() {
+    if (!this._factors) this._build();
+    const st = this.state, view = st.view;
+    const tabStyle = on => "background:" + (on ? "#241f2e" : "transparent") + "; color:" + (on ? "#cdbce8" : "#7d7668") + "; border:" + (on ? "1px solid #4a4060" : "1px solid transparent") + "; font-family:inherit; font-size:12px; padding:6px 13px; border-radius:7px; cursor:pointer;";
+    const sel = this._factors.find(f => f.id === st.selFactor) || this._factors[0];
+
+    // ---- market switch ----
+    const mkt = st.market;
+    const mktBtns = [["equity_cn", "A股"], ["crypto", "加密"]].map(([k, lbl]) => ({
+      label: lbl, on: () => this.setState({ market: k }),
+      style: "font-size:10.5px; padding:3px 11px; border-radius:6px; cursor:pointer; border:none; font-family:inherit; " + (mkt === k ? "background:#a98fd4; color:#1c1726; font-weight:700;" : "background:transparent; color:#8f897c;")
+    }));
+    const poolLabel = mkt === "equity_cn" ? "中证全 A · 4870 标的 · 周频" : "USDT 永续 · 312 标的 · 日频";
+
+    // ---- lifecycle filter ----
+    const states = ["ALL", "NEW", "QUALIFIED", "PROBATION", "OBSERVATION", "WARNING", "RETIRED"];
+    const counts = {}; this._factors.forEach(f => counts[f.state] = (counts[f.state] || 0) + 1);
+    const lifeFilters = states.map(s => {
+      const on = st.lifeFilter === s;
+      const [c] = s === "ALL" ? ["#cfc8ba"] : this._stateMeta(s);
+      return { label: s === "ALL" ? "全部" : s, count: s === "ALL" ? this._factors.length : (counts[s] || 0),
+        on: () => this.setState({ lifeFilter: s }),
+        style: "font-size:9.5px; padding:2px 8px; border-radius:11px; cursor:pointer; border:1px solid " + (on ? c : "#34302a") + "; color:" + (on ? c : "#7d7668") + "; background:" + (on ? "rgba(255,255,255,0.03)" : "transparent") + ";" };
+    });
+
+    // ---- factor list ----
+    const filtered = this._factors.filter(f => st.lifeFilter === "ALL" || f.state === st.lifeFilter);
+    const factorList = filtered.map(f => {
+      const [sc, sbg] = this._stateMeta(f.state); const on = f.id === sel.id;
+      return { id: f.id, formula: f.formula, fam: f.fam, state: f.state, stateColor: sc, stateBg: sbg,
+        ic: f.icMean.toFixed(3), ir: f.icIr.toFixed(2), icColor: f.icMean >= 0.02 ? "#9bbd5a" : (f.icMean <= 0 ? "#d97066" : "#a39a8a"),
+        dot: "width:7px; height:7px; border-radius:50%; flex:none; background:" + sc + (f.state === "OBSERVATION" ? "; animation:ffpulse 2s ease-in-out infinite;" : "") + ";",
+        select: () => this.setState({ selFactor: f.id }),
+        cardStyle: "padding:9px 11px; border-radius:9px; margin-bottom:6px; cursor:pointer; border:1px solid " + (on ? "#5a4a6a" : "#262320") + "; background:" + (on ? "#211c26" : "#1d1c19") + ";" };
+    });
+
+    // ---- detail ----
+    const [dsc, dsbg] = this._stateMeta(sel.state); const [dfc, dfb] = this._famMeta(sel.fam);
+    const path = ["NEW", "QUALIFIED", "PROBATION", "OBSERVATION", "WARNING", "RETIRED"];
+    const curIdx = path.indexOf(sel.state);
+    const glyphs = { NEW: "○", QUALIFIED: "✓", PROBATION: "◐", OBSERVATION: "◉", WARNING: "!", RETIRED: "×" };
+    const subs = { NEW: "刚注册", QUALIFIED: "IC达标", PROBATION: "试用中", OBSERVATION: "模拟观察", WARNING: "IC衰减", RETIRED: "已退役" };
+    const threshTxt = ["IC>.03·IR>.5", "3月IC≥0", "实盘>基准", "衰减>50%", "2周未修复"];
+    const lifeStates = path.map((p, i) => {
+      const [c] = this._stateMeta(p);
+      const active = i === curIdx, passed = i < curIdx;
+      const reached = i <= curIdx;
+      return { label: p, sub: subs[p], glyph: glyphs[p],
+        nodeStyle: "width:30px; height:30px; border-radius:50%; display:flex; align-items:center; justify-content:center; font-size:13px; font-weight:700; " +
+          (active ? ("background:" + c + "; color:#1c1b19; box-shadow:0 0 0 4px " + c + "33;") : passed ? ("background:transparent; color:" + c + "; border:2px solid " + c + ";") : "background:#211f1c; color:#5f5b53; border:2px solid #34302a;"),
+        labelColor: reached ? c : "#6f6a61", weight: active ? 700 : 500,
+        hasArrow: i < 5, arrowColor: i < curIdx ? c : "#34302a", thresh: threshTxt[i] };
+    });
+
+    const d_metrics = [
+      { label: "IC 均值", value: sel.icMean.toFixed(3), color: sel.icMean >= 0.02 ? "#9bbd5a" : (sel.icMean <= 0 ? "#d97066" : "#cfc8ba"), note: "5日 horizon" },
+      { label: "Rank-IC", value: sel.rankIc.toFixed(3), color: sel.rankIc >= 0.02 ? "#9bbd5a" : "#cfc8ba", note: "Spearman" },
+      { label: "IC-IR", value: sel.icIr.toFixed(2), color: sel.icIr >= 0.5 ? "#9bbd5a" : (sel.icIr <= 0 ? "#d97066" : "#d9b25f"), note: "μ/σ 稳定性" },
+      { label: "sample t", value: sel.sampleT.toFixed(1), color: Math.abs(sel.sampleT) >= 3 ? "#9bbd5a" : "#d9b25f", note: "显著性" }
+    ];
+    // IC series viz
+    const icBars = this._svgBars(sel.series, 320, 110, 55);
+    const ma = sel.series.map((_, i) => { const s = Math.max(0, i - 19); const win = sel.series.slice(s, i + 1); return win.reduce((a, b) => a + b, 0) / win.length; });
+    const maMax = Math.max(0.08, ...ma.map(v => Math.abs(v)));
+    const icMa = ma.map((v, i) => (i ? "L" : "M") + ((i / 59) * 320).toFixed(1) + " " + (55 - (v / maMax) * 46).toFixed(1)).join(" ");
+    // decay
+    const dmax = Math.max(0.02, ...sel.decay.map(d => Math.abs(d.ic)));
+    const decayPts = sel.decay.map((d, i) => ({ x: 12 + (i / 4) * 196, y: 55 - (d.ic / dmax) * 42 }));
+    const decayPath = decayPts.map((p, i) => (i ? "L" : "M") + p.x.toFixed(1) + " " + p.y.toFixed(1)).join(" ");
+    const decayArea = decayPath + " L208 55 L12 55 Z";
+    const peakH = sel.decay.reduce((a, b) => Math.abs(b.ic) > Math.abs(a.ic) ? b : a).h;
+
+    // ---- correlation matrix ----
+    const cm = this._factors.slice(0, 9);
+    const corrShort = id => id.replace("alpha_", "").slice(0, 12);
+    const corrVal = (a, b) => {
+      if (a.id === b.id) return 1;
+      let r = (a.fam === b.fam) ? 0.55 + this._nz(a.id.length + b.id.length) * 0.4 : (this._nz(a.id.length * 3 + b.id.length) - 0.5) * 0.7;
+      if ((a.icMean > 0) !== (b.icMean > 0)) r = -Math.abs(r) * 0.8;
+      return Math.max(-0.95, Math.min(0.95, r));
+    };
+    const corrCols = cm.map(f => corrShort(f.id));
+    const corrColor = v => {
+      if (v >= 0.999) return "#3a3733";
+      const t = Math.abs(v);
+      if (v > 0) return "rgba(217,112,102," + (0.12 + t * 0.7).toFixed(2) + ")";
+      return "rgba(111,155,209," + (0.12 + t * 0.7).toFixed(2) + ")";
+    };
+    const corrRows = cm.map((a, ri) => ({
+      label: corrShort(a.id),
+      cells: cm.map((b, ci) => {
+        const v = ri === ci ? 1 : corrVal(a, b);
+        const red = Math.abs(v) > 0.7 && ri !== ci;
+        return { txt: ri === ci ? "·" : v.toFixed(1).replace("0.", ".").replace("-0.", "-."), title: corrShort(a.id) + " × " + corrShort(b.id) + " = " + v.toFixed(2),
+          on: () => this.setState({ corrPair: [a.id, b.id, v] }),
+          style: "width:38px; height:30px; flex:none; display:flex; align-items:center; justify-content:center; font-size:9px; cursor:pointer; color:" + (ri === ci ? "#5f5b53" : (Math.abs(v) > 0.5 ? "#e6e1d6" : "#9a9488")) + "; background:" + corrColor(v) + "; border:1px solid " + (red ? "#6a3a36" : "#1c1b19") + ";" };
+      })
+    }));
+    const pair = st.corrPair;
+    let pairOpen = false, pairA = "", pairB = "", pairRho = "", pairColor = "#cfc8ba", pairVerdict = "";
+    if (pair) {
+      pairOpen = true; pairA = corrShort(pair[0]); pairB = corrShort(pair[1]); pairRho = pair[2].toFixed(2);
+      const ab = Math.abs(pair[2]);
+      pairColor = ab > 0.7 ? "#d97066" : ab > 0.4 ? "#d9b25f" : "#9bbd5a";
+      pairVerdict = ab > 0.7 ? "高度冗余 — 二者定价同一风险，组合里只保留 IR 更高的一个。" : ab > 0.4 ? "中度相关 — 可共存但需控制合计权重，避免风格暴露过载。" : "低相关 — 提供独立信息，适合一起进组合分散风险。";
+    }
+    const clusters = [
+      { rho: "0.82", keep: "alpha_vol_adj_mom_20d", members: [
+        { id: "alpha_vol_adj_mom_20d", ir: "1.58", mark: "★", color: "#9bbd5a", txtColor: "#cfc8ba" },
+        { id: "alpha_mom_xs_20d", ir: "1.36", mark: "→", color: "#6f6a61", txtColor: "#8f897c" }] },
+      { rho: "0.74", keep: "alpha_reversal_5d", members: [
+        { id: "alpha_reversal_5d", ir: "1.12", mark: "★", color: "#9bbd5a", txtColor: "#cfc8ba" },
+        { id: "alpha_reversal_residual_20d", ir: "0.88", mark: "→", color: "#6f6a61", txtColor: "#8f897c" }] },
+      { rho: "0.71", keep: "alpha_xs_demean_log_volume", members: [
+        { id: "alpha_xs_demean_log_volume", ir: "0.93", mark: "★", color: "#9bbd5a", txtColor: "#cfc8ba" },
+        { id: "alpha_vol_to_avg_20d", ir: "0.46", mark: "→", color: "#6f6a61", txtColor: "#8f897c" }] }
+    ];
+    const crowdRows = [
+      { k: "平均 |ρ|（已选 9 因子）", v: "0.38", pct: "38%", color: "#d9b25f" },
+      { k: "有效独立维度", v: "5.2 / 9", pct: "58%", color: "#9bbd5a" },
+      { k: "最大簇占比", v: "动量 3 个", pct: "33%", color: "#d97757" }
+    ];
+
+    // ---- eval ----
+    const hs = [1, 3, 5, 10, 20];
+    const horizonBtns = hs.map(h => ({ label: h + "d", on: () => this.setState({ evalHorizon: h }),
+      style: "font-size:10px; padding:3px 9px; border-radius:6px; cursor:pointer; border:none; font-family:inherit; " + (st.evalHorizon === h ? "background:#a98fd4; color:#1c1726; font-weight:700;" : "background:transparent; color:#8f897c;") }));
+    const selH = sel.decay.find(d => d.h === st.evalHorizon) || sel.decay[2];
+    const ev_metrics = [
+      { label: "IC@" + st.evalHorizon + "d", value: selH.ic.toFixed(3), color: selH.ic >= 0.02 ? "#9bbd5a" : (selH.ic <= 0 ? "#d97066" : "#cfc8ba") },
+      { label: "Rank-IC", value: (selH.ic * 1.06).toFixed(3), color: "#cfc8ba" },
+      { label: "IC-IR", value: sel.icIr.toFixed(2), color: sel.icIr >= 0.5 ? "#9bbd5a" : "#d9b25f" },
+      { label: "胜率", value: (50 + sel.icIr * 6).toFixed(0) + "%", color: "#cfc8ba" },
+      { label: "样本期", value: "504", color: "#a39a8a" }
+    ];
+    // layered viz
+    const layerColors = ["#6f9bd1", "#7d9bb5", "#a39a8a", "#cd9f6a", "#9bbd5a"];
+    const layerNames = ["Q1 低", "Q2", "Q3", "Q4", "Q5 高"];
+    const allL = sel.layers.flat(); const lo = Math.min(...allL), hi = Math.max(...allL);
+    const ev_layers = sel.layers.map((arr, b) => ({ path: this._svgLine(arr, 460, 200, lo, hi, 8), color: layerColors[b], width: (b === 0 || b === 4) ? 2.2 : 1.4 }));
+    const ev_layerLegend = sel.layers.map((arr, b) => { const r = (arr[arr.length - 1] - 1) * 100; return { color: layerColors[b], name: layerNames[b], ret: (r >= 0 ? "+" : "") + r.toFixed(1) + "%", retColor: r >= 0 ? "#9bbd5a" : "#d97066" }; });
+    const spread = ((sel.layers[4][39] - sel.layers[0][39]) * 100);
+    const ev_spread = (spread >= 0 ? "+" : "") + spread.toFixed(1) + "%";
+    const mono = spread > 3 ? "单调性好 ✓" : spread > 0 ? "弱单调 △" : "无单调性 ✕";
+    const ev_monoColor = spread > 3 ? "#9bbd5a" : spread > 0 ? "#d9b25f" : "#d97066";
+    // cum IC
+    let cum = 0; const cumArr = sel.series.map(v => (cum += v));
+    const ev_cumIcPath = this._svgLine(cumArr, 320, 120, Math.min(0, ...cumArr), Math.max(0.1, ...cumArr), 8);
+    const ev_hit = (50 + sel.icIr * 6).toFixed(0) + "%";
+    const ev_decayTable = sel.decay.map(d => ({ h: d.h + " 日", ic: d.ic.toFixed(3), rankIc: (d.ic * 1.06).toFixed(3), ir: (d.ic / 0.04).toFixed(2),
+      sel: d.h === st.evalHorizon ? "#a98fd4" : "#a39a8a", icColor: d.ic >= 0.02 ? "#9bbd5a" : (d.ic <= 0 ? "#d97066" : "#cfc8ba") }));
+
+    // ---- build / DSL ----
+    const opGroups = [
+      { group: "时序算子 ts_*", ops: [["ts_mean", "ts_mean(x, n)"], ["ts_std", "ts_std(x, n)"], ["ts_zscore", "ts_zscore(x, n)"], ["ts_pct_change", "ts_pct_change(x, n)"], ["ts_corr", "ts_corr(x, y, n)"], ["ts_max", "ts_max(x, n)"], ["ts_min", "ts_min(x, n)"], ["ts_ema", "ts_ema(x, n)"], ["ts_decay_linear", "ts_decay_linear(x, n)"], ["ts_skew", "ts_skew(x, n)"]] },
+      { group: "截面算子 cs_*", ops: [["rank", "rank(x)"], ["zscore", "zscore(x)"], ["cs_demean", "cs_demean(x)"], ["cs_winsorize", "cs_winsorize(x)"]] },
+      { group: "逐元素", ops: [["log", "log(x)"], ["neg", "neg(x)"], ["abs", "abs(x)"], ["sign", "sign(x)"]] },
+      { group: "字段", ops: [["close", "字段 · 收盘"], ["open", "字段 · 开盘"], ["high", "字段 · 最高"], ["low", "字段 · 最低"], ["volume", "字段 · 成交量"], ["amount", "字段 · 成交额"]] }
+    ];
+    const insert = tok => this.setState(s => ({ bdExpr: (s.bdExpr ? s.bdExpr + (/[a-z0-9_]$/.test(s.bdExpr) ? " " : "") : "") + tok }));
+    const bdOpGroups = opGroups.map(g => ({ group: g.group, ops: g.ops.map(([n, sig]) => ({ name: n, sig, on: () => insert(n) })) }));
+    const bdOpCount = opGroups.reduce((a, g) => a + g.ops.length, 0);
+    // naive AST
+    const buildAst = (expr) => {
+      const lines = []; let depth = 0; let cur = "";
+      const push = () => { if (cur.trim()) lines.push({ d: depth, t: cur.trim() }); cur = ""; };
+      for (const ch of expr) {
+        if (ch === "(") { cur += "("; push(); depth++; }
+        else if (ch === ")") { push(); depth = Math.max(0, depth - 1); }
+        else if (ch === ",") { push(); }
+        else cur += ch;
+      }
+      push();
+      return lines;
+    };
+    const astRaw = buildAst(st.bdExpr);
+    const bdAst = (astRaw.length ? astRaw : [{ d: 0, t: st.bdExpr }]).map(l => {
+      const isOp = /^[a-z_]+\(?$/.test(l.t) || /[a-z]+_/.test(l.t);
+      const isField = /^(close|open|high|low|volume|amount)$/.test(l.t.replace(/[()]/g, ""));
+      const isNum = /^\d/.test(l.t);
+      return { indent: "  ".repeat(l.d) + (l.d ? "└ " : ""), txt: l.t, color: isField ? "#9bbd5a" : isNum ? "#d9b25f" : "#cfe2f0" };
+    });
+    const previewSeed = (st.bdExpr.length * 7) % 13;
+    const previewSeries = []; for (let k = 0; k < 30; k++) previewSeries.push(0.03 + (this._nz(previewSeed * 5 + k) - 0.5) * 0.06);
+    const bdPreviewBars = this._svgBars(previewSeries, 300, 70, 35);
+    const bdValid = st.bdExpr.split("(").length === st.bdExpr.split(")").length ? "✓ 括号配平 · 编译通过" : "✕ 括号未配平";
+    const bdValidColor = st.bdExpr.split("(").length === st.bdExpr.split(")").length ? "#9bbd5a" : "#d97066";
+    const bdLints = [
+      { icon: "✓", color: "#9bbd5a", t: "无前视：仅用 ts_* 历史窗口与当期字段" },
+      { icon: "✓", color: "#9bbd5a", t: "量纲：截面 rank/zscore 已对齐" },
+      { icon: "△", color: "#d9b25f", t: "换手提示：含 1 日窗口，预计周换手偏高" }
+    ];
+    const bdChips = [["加一层截面 rank", "把外层套一个 rank() 做截面中性"], ["降换手", "把短窗口换成 20 日，降低换手"], ["IC 衰减检查", "跑 1/3/5/10/20 日衰减曲线"]].map(([label, q]) => ({ label, on: () => this._bdAsk(q) }));
+    const bdGateChecks = [
+      { icon: bdValidColor === "#9bbd5a" ? "✓" : "✕", color: bdValidColor, t: "表达式编译通过（polars 计算图）" },
+      { icon: "✓", color: "#9bbd5a", t: "前视检查通过 · 无标签穿越" },
+      { icon: "✓", color: "#9bbd5a", t: "registry 无重名 · 版本 v1" }
+    ];
+
+    // ---- research ----
+    const rsChat = st.rsChat.map(c => ({ isUser: c.role === "user", isSay: c.role === "say", text: c.text }));
+    const auditPass = sel.icIr > 0.5 && Math.abs(sel.sampleT) > 3;
+    const rsVerdict = sel.state === "RETIRED" ? "未通过" : auditPass ? "真 alpha" : "存疑";
+    const [rvc, rvb] = sel.state === "RETIRED" ? ["#d97066", "rgba(217,112,102,0.12)"] : auditPass ? ["#9bbd5a", "rgba(155,189,90,0.12)"] : ["#d9b25f", "rgba(217,178,95,0.12)"];
+    const rsVerdictBorder = sel.state === "RETIRED" ? "#6a3a36" : auditPass ? "#3c5230" : "#5a4a2a";
+    const rsSummary = sel.state === "RETIRED"
+      ? "退役因子：多重检验后不显著，且与现有因子高度共线。保留作对照样本，不进组合。"
+      : auditPass
+        ? "经多重检验校正后 IC 仍显著，且有经济学先验支撑——判定为真实 alpha。需在 OBSERVATION 期持续监控实盘衰减。"
+        : "样本内显著但 t 值偏弱，存在数据挖掘风险。建议样本外再观察一个季度，或加经济学约束。";
+    const rsChecks = [
+      { title: "多重检验校正（Bonferroni / BHY）", icon: auditPass ? "✓" : "△", color: auditPass ? "#9bbd5a" : "#d9b25f", stat: auditPass ? "通过" : "边际", border: auditPass ? "#34302a" : "#5a4a2a", detail: "在 " + this._factors.length + " 个候选因子中检验，校正后 p < 0.05 才算数。本因子 deflated Sharpe " + (auditPass ? "为正" : "接近 0") + "。" },
+      { title: "数据窥探 / p-hacking", icon: "✓", color: "#9bbd5a", stat: "干净", border: "#34302a", detail: "表达式来自固定算子库 + 经济学动机，非暴力搜索产物；参数（窗口）未做样本内调优。" },
+      { title: "IC 显著性 t 检验", icon: Math.abs(sel.sampleT) > 3 ? "✓" : "△", color: Math.abs(sel.sampleT) > 3 ? "#9bbd5a" : "#d9b25f", stat: "t=" + sel.sampleT.toFixed(1), border: "#34302a", detail: "Newey-West 调整自相关后 |t| " + (Math.abs(sel.sampleT) > 3 ? "> 3，稳健显著" : "< 3，证据不足") + "。" },
+      { title: "IC 衰减 / 半衰期", icon: sel.state === "WARNING" ? "✕" : "✓", color: sel.state === "WARNING" ? "#d97066" : "#9bbd5a", stat: sel.state === "WARNING" ? "快速衰减" : "缓和", border: sel.state === "WARNING" ? "#6a3a36" : "#34302a", detail: "峰值 IC 在 " + peakH + " 日，" + (sel.state === "WARNING" ? "近 30 日衰减 >50%，疑似拥挤失效。" : "衰减半衰期足够长，可承载周频调仓。") },
+      { title: "经济学先验", icon: "✓", color: "#9bbd5a", stat: sel.fam, border: "#34302a", detail: "归属「" + sel.fam + "」族，有公认的行为金融 / 风险补偿解释，非纯统计巧合。" }
+    ];
+    const rsPapers = [
+      { title: "Does the Stock Market Overreact?", venue: "JF 1985", ref: "De Bondt & Thaler", gist: "反转效应的奠基：长期输家组合跑赢赢家组合，行为定价证据。", transfer: "反转族因子的理论根" },
+      { title: "Returns to Buying Winners and Selling Losers", venue: "JF 1993", ref: "Jegadeesh & Titman", gist: "动量异象：3-12 月形成期的相对强弱可预测未来收益。", transfer: "动量族因子先验" },
+      { title: "…and the Cross-Section of Expected Returns", venue: "RFS 2016", ref: "Harvey, Liu & Zhu", gist: "因子动物园警示：多重检验下大多数已发表因子站不住脚，需更高 t 门槛。", transfer: "本台多重检验门槛" }
+    ];
+
+    return {
+      // shell
+      mktBtns, poolLabel,
+      goLib: () => this.setState({ view: "library" }), goCorr: () => this.setState({ view: "corr" }), goEval: () => this.setState({ view: "eval" }), goBuild: () => this.setState({ view: "build" }), goResearch: () => this.setState({ view: "research" }),
+      tabLib: tabStyle(view === "library"), tabCorr: tabStyle(view === "corr"), tabEval: tabStyle(view === "eval"), tabBuild: tabStyle(view === "build"), tabResearch: tabStyle(view === "research"),
+      viewLib: view === "library", viewCorr: view === "corr", viewEval: view === "eval", viewBuild: view === "build", viewResearch: view === "research",
+      subHint: view === "library" ? "五态机生命周期 · 点因子看详情" : view === "corr" ? "拥挤度 · 去冗余" : view === "eval" ? "IC / 分层回测 · 硬指标" : view === "build" ? "表达式 DSL · 即代码" : "alpha 真伪 · 学术审查",
+      // library
+      listOpen: st.listOpen, listCollapsed: !st.listOpen, listToggle: () => this.setState(s => ({ listOpen: !s.listOpen })),
+      factorCountLabel: this._factors.length + " 因子", lifeFilters, factorList,
+      d_id: sel.id, d_version: 1, d_fam: sel.fam, d_famColor: dfc, d_famBg: dfb, d_formula: sel.formula, d_desc: sel.desc,
+      d_state: sel.state, d_stateColor: dsc, d_created: "2026-05-27 入库",
+      lifeStates, d_metrics,
+      d_icBars: icBars, d_icMa: icMa, d_ic: sel.icMean.toFixed(3), d_icColor: sel.icMean >= 0.02 ? "#9bbd5a" : (sel.icMean <= 0 ? "#d97066" : "#a39a8a"),
+      d_icWindow: "近 60 交易日", d_icStart: "−60d",
+      d_decayPath: decayPath, d_decayArea: decayArea, d_decayDots: decayPts, d_decayLabels: ["1d", "3d", "5d", "10d", "20d"], d_peakH: peakH,
+      d_why: sel.why, d_ops: sel.formula.match(/[a-z_]+(?=\()/g) ? Array.from(new Set(sel.formula.match(/[a-z_]+(?=\()/g))).slice(0, 4).join(" · ") : "—",
+      d_kind: /rank|zscore|cs_|demean|winsor/.test(sel.formula) ? "截面 + 时序" : "纯时序", d_turnover: sel.fam === "动量" ? "中（周频）" : sel.fam === "反转" ? "高" : "低",
+      d_events: this._eventsFor(sel),
+      // corr
+      corrWindow: mkt === "equity_cn" ? "504 交易日" : "365 日", corrCols, corrRows,
+      pairOpen, pairA, pairB, pairRho, pairColor, pairVerdict, pairClose: () => this.setState({ corrPair: null }),
+      clusters, crowdRows,
+      // eval
+      horizonBtns, ev_metrics, ev_layers, ev_layerLegend, ev_spread, ev_mono: mono, ev_monoColor, ev_cumIcPath, ev_hit, ev_decayTable, d_layerWindow: "504 交易日 · 周度调仓",
+      // build
+      bdChat: st.bdChat.map(c => ({ isUser: c.role === "user", isThink: c.role === "think", isSay: c.role === "say", isPatch: c.role === "patch", text: c.text, code: c.code })),
+      bdDraft: st.bdDraft, bdExpr: st.bdExpr, bdFactorId: st.bdFactorId, bdOpGroups, bdOpCount, bdAst,
+      bdOnDraft: (e) => this.setState({ bdDraft: e.target.value }),
+      bdOnKey: (e) => { if (e.key === "Enter" && !e.shiftKey) { e.preventDefault(); this._bdAsk(st.bdDraft); } },
+      bdSend: () => this._bdAsk(st.bdDraft), bdChips,
+      bdPreviewBars, bdPreviewIc: (0.03 + (this._nz(previewSeed) - 0.5) * 0.03).toFixed(3), bdPreviewIr: (0.7 + this._nz(previewSeed + 1) * 0.8).toFixed(2),
+      bdValid, bdValidColor, bdLints,
+      bdGate: () => this.setState({ bdGateOpen: true }), bdGateOpen: st.bdGateOpen, bdGateNo: () => this.setState({ bdGateOpen: false }), bdGateYes: () => this._bdRegister(), bdGateChecks,
+      // research
+      rsChat, rsDraft: st.rsDraft, rsOnDraft: (e) => this.setState({ rsDraft: e.target.value }),
+      rsOnKey: (e) => { if (e.key === "Enter" && !e.shiftKey) { e.preventDefault(); this._rsAsk(st.rsDraft); } }, rsSend: () => this._rsAsk(st.rsDraft),
+      rsVerdict, rsVerdictColor: rvc, rsVerdictBg: rvb, rsVerdictBorder, rsSummary, rsChecks, rsPapers
+    };
+  }
+
+  _bdAsk(t) { t = (t || "").trim(); if (!t) return; this.setState(s => ({ bdChat: s.bdChat.concat([{ role: "user", text: t }, { role: "say", text: "收到。已据此调整表达式并刷新即时 IC 预览。" }]), bdDraft: "" })); }
+  _bdRegister() { this.setState({ bdGateOpen: false, bdChat: this.state.bdChat.concat([{ role: "say", text: "✓ 已注册到因子库，初始状态 NEW，等待 IC 评估自动迁移。" }]) }); }
+  _rsAsk(t) { t = (t || "").trim(); if (!t) return; this.setState(s => ({ rsChat: s.rsChat.concat([{ role: "user", text: t }, { role: "say", text: "见右侧审查表：多重检验门槛已按 Harvey-Liu-Zhu 提到的更高 t 标准设置。" }]), rsDraft: "" })); }
+}
+</script>
+</body>
+</html>

@@ -1,0 +1,485 @@
+<!DOCTYPE html>
+<html>
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<script src="./support.js"></script>
+</head>
+<body>
+<x-dc>
+<helmet>
+<link href="https://fonts.googleapis.com/css2?family=JetBrains+Mono:wght@400;500;600;700&display=swap" rel="stylesheet">
+<style>
+  * { box-sizing: border-box; }
+  html, body { margin: 0; padding: 0; height: 100%; background: #1c1b19; }
+  body { font-family: "JetBrains Mono", ui-monospace, "SF Mono", Menlo, monospace; -webkit-font-smoothing: antialiased; }
+  ::selection { background: rgba(155,189,90,0.28); }
+  *::-webkit-scrollbar { width: 9px; height: 9px; }
+  *::-webkit-scrollbar-thumb { background: #3a3733; border-radius: 6px; }
+  *::-webkit-scrollbar-track { background: transparent; }
+  a { text-decoration: none; }
+  input, textarea { font-family: inherit; }
+  @keyframes ppulse { 0%,100% { opacity: 1; } 50% { opacity: 0.35; } }
+  @keyframes pring { 0% { box-shadow: 0 0 0 0 rgba(155,189,90,0.5); } 100% { box-shadow: 0 0 0 7px rgba(155,189,90,0); } }
+  @keyframes pblink { 0%,100% { opacity: 1; } 50% { opacity: 0.4; } }
+</style>
+</helmet>
+<div style="display:flex; flex-direction:column; height:100vh; background:#1c1b19; color:#e6e1d6; font-size:13.5px; line-height:1.5;">
+
+  <!-- ░░ TITLE BAR + 台 SWITCHER ░░ -->
+  <div style="flex:none; display:flex; align-items:center; gap:12px; height:42px; padding:0 14px; background:#201f1c; border-bottom:1px solid #302d29;">
+    <div style="display:flex; gap:7px; align-items:center; padding-right:2px;">
+      <span style="width:11px; height:11px; border-radius:50%; background:#3a3733;"></span>
+      <span style="width:11px; height:11px; border-radius:50%; background:#3a3733;"></span>
+      <span style="width:11px; height:11px; border-radius:50%; background:#3a3733;"></span>
+    </div>
+    <span style="color:#d97757; font-weight:700;">✳</span>
+    <span style="font-weight:600;">QuantBT</span>
+    <div style="display:flex; gap:2px; margin-left:8px; background:#1a1916; border:1px solid #302d29; border-radius:8px; padding:3px;">
+      <a href="%E5%9B%A0%E5%AD%90%E5%8F%B0.dc.html" style="display:flex; align-items:center; font-size:11.5px; padding:4px 11px; border-radius:6px; color:#a39a8a;" style-hover="background:#2a2723; color:#e6e1d6;">因子台</a>
+      <a href="Model%E5%8F%B0.dc.html" style="display:flex; align-items:center; font-size:11.5px; padding:4px 11px; border-radius:6px; color:#a39a8a;" style-hover="background:#2a2723; color:#e6e1d6;">Model台</a>
+      <a href="%E7%AD%96%E7%95%A5%E5%8F%B0.dc.html" style="display:flex; align-items:center; font-size:11.5px; padding:4px 11px; border-radius:6px; color:#a39a8a;" style-hover="background:#2a2723; color:#e6e1d6;">策略台</a>
+      <span style="display:flex; align-items:center; font-size:11.5px; padding:4px 11px; border-radius:6px; background:#9bbd5a; color:#16200f; font-weight:700;">模拟台</span>
+    </div>
+    <div style="flex:1;"></div>
+    <div style="display:flex; gap:2px; background:#1a1916; border:1px solid #302d29; border-radius:7px; padding:2px;">
+      <sc-for list="{{ mktBtns }}" as="m" hint-placeholder-count="2"><button onClick="{{ m.on }}" style="{{ m.style }}">{{ m.label }}</button></sc-for>
+    </div>
+    <span style="color:#5f5b53; font-size:11px;">{{ clockLabel }}</span>
+  </div>
+
+  <!-- ░░ SUB-TAB BAR ░░ -->
+  <div style="flex:none; display:flex; align-items:center; gap:4px; padding:8px 16px; background:#1a1916; border-bottom:1px solid #302d29;">
+    <button onClick="{{ goRun }}" style="{{ tabRun }}">▦ 运行盘</button>
+    <button onClick="{{ goBook }}" style="{{ tabBook }}">⊞ 持仓与成交</button>
+    <button onClick="{{ goRisk }}" style="{{ tabRisk }}">⛨ 风险门</button>
+    <button onClick="{{ goReview }}" style="{{ tabReview }}">↺ 复盘归因</button>
+    <button onClick="{{ goPromo }}" style="{{ tabPromo }}">⤴ 晋升通道</button>
+    <div style="flex:1;"></div>
+    <span style="font-size:11px; color:#6f6a61;">{{ subHint }}</span>
+    <span style="font-size:9.5px; color:#9bbd5a; border:1px solid #3c5230; background:rgba(155,189,90,.1); padding:2px 8px; border-radius:20px; margin-left:8px;">MOCK 数据</span>
+  </div>
+
+  <!-- ░░ BODY ░░ -->
+  <div style="flex:1; min-height:0; display:flex;">
+
+    <!-- run list (collapsible) -->
+    <sc-if value="{{ listCollapsed }}">
+      <div onClick="{{ listToggle }}" style="flex:none; width:34px; border-right:1px solid #302d29; background:#1d1c19; display:flex; flex-direction:column; align-items:center; padding-top:12px; gap:8px; cursor:pointer;" style-hover="background:#211f1c;"><span style="color:#7d7668;">▦</span><span style="writing-mode:vertical-rl; font-size:11px; color:#8f897c; letter-spacing:1px;">模拟盘 ›</span></div>
+    </sc-if>
+    <sc-if value="{{ listOpen }}">
+    <div style="flex:none; width:288px; border-right:1px solid #302d29; display:flex; flex-direction:column;">
+      <div style="flex:none; padding:9px 13px; border-bottom:1px solid #2a2723; display:flex; align-items:center; gap:8px;"><span style="color:#7d7668; font-size:11px;">模拟盘</span><span style="margin-left:auto; font-size:11px; color:#6f6a61;">{{ runCountLabel }}</span><span onClick="{{ listToggle }}" style="margin-left:6px; font-size:13px; color:#6f6a61; cursor:pointer;" style-hover="color:#cfc8ba;">‹</span></div>
+      <div style="flex:1; min-height:0; overflow-y:auto; padding:8px;">
+        <sc-for list="{{ runList }}" as="r" hint-placeholder-count="3">
+          <div onClick="{{ r.select }}" style="{{ r.cardStyle }}">
+            <div style="display:flex; align-items:center; gap:8px;"><span style="{{ r.dot }}"></span><span style="font-weight:600; color:#e6e1d6; font-size:12px; white-space:nowrap; overflow:hidden; text-overflow:ellipsis;">{{ r.name }}</span><span style="margin-left:auto; flex:none; font-size:9px; color:{{ r.statColor }};">{{ r.stat }}</span></div>
+            <div style="display:flex; align-items:center; gap:8px; margin-top:6px; font-size:10.5px;"><span style="color:#6f6a61;">{{ r.market }}</span><span style="color:#6f6a61;">· 第 {{ r.days }} 周</span><span style="margin-left:auto; color:{{ r.pnlColor }}; font-weight:600;">{{ r.total }}</span></div>
+          </div>
+        </sc-for>
+      </div>
+      <div style="flex:none; border-top:1px solid #2a2723; padding:9px 13px; font-size:10px; color:#6f6a61; line-height:1.6;">A股止于 paper · 唯一硬墙在交易所侧远程信任域</div>
+    </div>
+    </sc-if>
+
+    <!-- ▒▒ MAIN ▒▒ -->
+    <div style="flex:1; min-width:0; overflow-y:auto; background:#191815;">
+
+      <!-- ░ RUN VIEW ░ -->
+      <sc-if value="{{ viewRun }}">
+        <div style="padding:18px 22px; max-width:880px;">
+          <!-- header -->
+          <div style="display:flex; align-items:center; gap:11px; margin-bottom:14px;">
+            <span style="width:9px; height:9px; border-radius:50%; background:{{ r_statDot }}; box-shadow:0 0 0 3px {{ r_statRing }}; animation:ppulse 2s ease-in-out infinite;"></span>
+            <span style="font-size:17px; font-weight:700;">{{ r_name }}</span>
+            <span style="font-size:11px; color:#6f6a61;">{{ r_origin }}</span>
+            <span style="margin-left:auto; font-size:11px; color:{{ r_statColor }}; background:{{ r_statBg }}; padding:3px 11px; border-radius:20px;">{{ r_statText }}</span>
+          </div>
+
+          <!-- live metrics -->
+          <div style="display:grid; grid-template-columns:repeat(4,1fr); gap:11px; margin-bottom:14px;">
+            <sc-for list="{{ r_metrics }}" as="m" hint-placeholder-count="4">
+              <div style="background:#1d1c19; border:1px solid #302d29; border-radius:10px; padding:11px 14px;">
+                <div style="font-size:10.5px; color:#7d7668;">{{ m.label }}</div>
+                <div style="font-size:21px; font-weight:700; color:{{ m.color }}; margin-top:3px;">{{ m.value }}</div>
+                <div style="font-size:9.5px; color:#6f6a61; margin-top:2px;">{{ m.note }}</div>
+              </div>
+            </sc-for>
+          </div>
+
+          <!-- equity chart -->
+          <div style="background:#1d1c19; border:1px solid #302d29; border-radius:10px; padding:13px 16px; margin-bottom:14px;">
+            <div style="display:flex; align-items:center; gap:9px; margin-bottom:9px;"><span style="font-size:12px; color:#cfc8ba; font-weight:600;">净值曲线 · equity log</span><span style="font-size:10px; color:#8f897c;">mark_to_market 每收盘写一笔</span><span style="margin-left:auto; font-size:10.5px; color:#9bbd5a;">vs {{ r_bench }}</span></div>
+            <svg viewBox="0 0 720 200" preserveAspectRatio="none" style="width:100%; height:180px; display:block;">
+              <line x1="{{ r_splitX }}" y1="8" x2="{{ r_splitX }}" y2="192" stroke="#4a433a" stroke-width="1" stroke-dasharray="3 3"></line>
+              <path d="{{ r_benchPath }}" fill="none" stroke="#5f5b53" stroke-width="1.2" stroke-dasharray="3 3"></path>
+              <path d="{{ r_histPath }}" fill="none" stroke="#6f6a61" stroke-width="1.6"></path>
+              <path d="{{ r_paperArea }}" fill="rgba(155,189,90,0.10)"></path>
+              <path d="{{ r_paperPath }}" fill="none" stroke="#9bbd5a" stroke-width="2.2"></path>
+            </svg>
+            <div style="display:flex; justify-content:space-between; font-size:9.5px; color:#6f6a61; margin-top:3px;"><span>← 回测段（样本外延伸）</span><span style="color:#4a433a;">▏ 模拟盘上线</span><span style="color:#9bbd5a;">实盘段 →</span></div>
+          </div>
+
+          <!-- scheduler + positions -->
+          <div style="display:flex; gap:14px;">
+            <div style="flex:1.1; background:#1d1c19; border:1px solid #302d29; border-radius:10px; padding:13px 15px;">
+              <div style="display:flex; align-items:center; gap:8px; font-size:11.5px; color:#cfc8ba; font-weight:600; margin-bottom:11px;"><span style="color:#9bbd5a;">⟳</span>调度器 · PaperScheduler<span style="margin-left:auto; font-size:9.5px; color:#9bbd5a; display:flex; align-items:center; gap:4px;"><span style="width:6px; height:6px; border-radius:50%; background:#9bbd5a; animation:pblink 1.4s infinite;"></span>{{ r_schedState }}</span></div>
+              <div style="display:flex; flex-direction:column; gap:0;">
+                <sc-for list="{{ r_sched }}" as="s" hint-placeholder-count="6"><div style="display:flex; justify-content:space-between; padding:6px 0; border-bottom:1px solid #221f1c; font-size:11px;"><span style="color:#7d7668;">{{ s.k }}</span><span style="color:{{ s.color }};">{{ s.v }}</span></div></sc-for>
+              </div>
+            </div>
+            <div style="flex:1; background:#1d1c19; border:1px solid #302d29; border-radius:10px; padding:13px 15px;">
+              <div style="display:flex; align-items:center; gap:8px; font-size:11.5px; color:#cfc8ba; font-weight:600; margin-bottom:10px;">持仓速览<span style="margin-left:auto; font-size:10px; color:#6f6a61;">top {{ r_posCount }}</span></div>
+              <sc-for list="{{ r_posPreview }}" as="p" hint-placeholder-count="5"><div style="display:flex; align-items:center; padding:5px 0; border-bottom:1px solid #221f1c;"><span style="flex:1.6; color:#cfc8ba; font-size:11.5px; white-space:nowrap; overflow:hidden; text-overflow:ellipsis;">{{ p.name }}</span><span style="flex:0.8; text-align:right; color:#8f897c; font-size:11px;">{{ p.w }}</span><span style="flex:0.9; text-align:right; color:{{ p.pnlColor }}; font-size:11px; font-weight:600;">{{ p.pnl }}</span></div></sc-for>
+            </div>
+          </div>
+        </div>
+      </sc-if>
+
+      <!-- ░ BOOK VIEW ░ -->
+      <sc-if value="{{ viewBook }}">
+        <div style="padding:18px 22px; max-width:900px;">
+          <!-- balance strip -->
+          <div style="display:grid; grid-template-columns:repeat(4,1fr); gap:11px; margin-bottom:16px;">
+            <sc-for list="{{ bk_balance }}" as="b" hint-placeholder-count="4"><div style="background:#1d1c19; border:1px solid #302d29; border-radius:10px; padding:11px 14px;"><div style="font-size:10.5px; color:#7d7668;">{{ b.label }}</div><div style="font-size:17px; font-weight:700; color:{{ b.color }}; margin-top:3px;">{{ b.value }}</div></div></sc-for>
+          </div>
+
+          <!-- positions table -->
+          <div style="background:#1d1c19; border:1px solid #302d29; border-radius:10px; overflow:hidden; margin-bottom:16px;">
+            <div style="display:flex; align-items:center; gap:8px; padding:11px 15px; background:#211f1c; border-bottom:1px solid #302d29;"><span style="font-size:12px; color:#cfc8ba; font-weight:600;">当前持仓</span><span style="margin-left:auto; font-size:10px; color:#6f6a61;">{{ bk_posCount }} 票 · 等权多头 · 已 MTM</span></div>
+            <div style="display:flex; padding:8px 15px; font-size:10px; color:#6f6a61; border-bottom:1px solid #262320;"><span style="flex:1.8;">标的</span><span style="flex:1; text-align:right;">权重</span><span style="flex:1; text-align:right;">数量</span><span style="flex:1.1; text-align:right;">成本</span><span style="flex:1.1; text-align:right;">现价</span><span style="flex:1; text-align:right;">浮盈</span></div>
+            <sc-for list="{{ bk_positions }}" as="p" hint-placeholder-count="6"><div style="display:flex; align-items:center; padding:8px 15px; border-bottom:1px solid #221f1c; font-size:11.5px;"><div style="flex:1.8; display:flex; flex-direction:column;"><span style="color:#cfc8ba;">{{ p.name }}</span><span style="color:#6f6a61; font-size:9.5px;">{{ p.sym }}</span></div><span style="flex:1; text-align:right; color:#9a9488;">{{ p.w }}</span><span style="flex:1; text-align:right; color:#9a9488;">{{ p.qty }}</span><span style="flex:1.1; text-align:right; color:#8f897c;">{{ p.entry }}</span><span style="flex:1.1; text-align:right; color:#cfc8ba;">{{ p.mark }}</span><span style="flex:1; text-align:right; color:{{ p.pnlColor }}; font-weight:600;">{{ p.pnl }}</span></div></sc-for>
+          </div>
+
+          <!-- fills -->
+          <div style="background:#1d1c19; border:1px solid #302d29; border-radius:10px; overflow:hidden;">
+            <div style="display:flex; align-items:center; gap:8px; padding:11px 15px; background:#211f1c; border-bottom:1px solid #302d29;"><span style="font-size:12px; color:#cfc8ba; font-weight:600;">成交回报 · fills</span><span style="margin-left:auto; font-size:10px; color:#6f6a61;">feed_bar 撮合 · 含滑点+手续费</span></div>
+            <div style="display:flex; padding:8px 15px; font-size:10px; color:#6f6a61; border-bottom:1px solid #262320;"><span style="flex:1.3;">时间</span><span style="flex:1.6;">标的</span><span style="flex:0.7;">方向</span><span style="flex:1; text-align:right;">数量</span><span style="flex:1; text-align:right;">成交价</span><span style="flex:1; text-align:right;">费用</span></div>
+            <sc-for list="{{ bk_fills }}" as="f" hint-placeholder-count="6"><div style="display:flex; align-items:center; padding:7px 15px; border-bottom:1px solid #221f1c; font-size:11px;"><span style="flex:1.3; color:#7d7668;">{{ f.time }}</span><span style="flex:1.6; color:#cfc8ba;">{{ f.sym }}</span><span style="flex:0.7; color:{{ f.sideColor }}; font-weight:600;">{{ f.side }}</span><span style="flex:1; text-align:right; color:#9a9488;">{{ f.qty }}</span><span style="flex:1; text-align:right; color:#9a9488;">{{ f.price }}</span><span style="flex:1; text-align:right; color:#7d7668;">{{ f.fee }}</span></div></sc-for>
+          </div>
+        </div>
+      </sc-if>
+
+      <!-- ░ RISK VIEW ░ -->
+      <sc-if value="{{ viewRisk }}">
+        <div style="padding:18px 22px; max-width:840px;">
+          <div style="display:flex; align-items:center; gap:10px; margin-bottom:6px;"><span style="color:#9bbd5a; font-size:15px;">⛨</span><span style="font-size:16px; font-weight:700;">风险门 · 会话外不可改</span><span style="margin-left:auto; font-size:11px; color:{{ rk_statColor }}; background:{{ rk_statBg }}; border:1px solid {{ rk_statBorder }}; padding:4px 12px; border-radius:20px;">{{ rk_status }}</span></div>
+          <div style="font-size:11px; color:#8f897c; margin-bottom:16px; line-height:1.6;">门限在策略发布时冻结，Agent 在会话中<span style="color:#d99a8e;">永不可改</span>。本地门仅为防篡改证据（非防篡改）——A股的唯一硬墙在交易所侧远程信任域。</div>
+
+          <!-- gate grid -->
+          <div style="display:grid; grid-template-columns:repeat(2,1fr); gap:11px; margin-bottom:16px;">
+            <sc-for list="{{ rk_gates }}" as="g" hint-placeholder-count="6">
+              <div style="background:#1d1c19; border:1px solid {{ g.border }}; border-radius:10px; padding:12px 14px;">
+                <div style="display:flex; align-items:center; gap:8px; margin-bottom:8px;"><span style="font-size:11px; color:#cfc8ba; font-weight:600;">{{ g.k }}</span><span style="margin-left:auto; font-size:10px; color:{{ g.lockColor }};">{{ g.lock }}</span></div>
+                <div style="display:flex; align-items:baseline; gap:8px;"><span style="font-size:18px; font-weight:700; color:{{ g.color }};">{{ g.cur }}</span><span style="font-size:10px; color:#6f6a61;">/ 限 {{ g.limit }}</span></div>
+                <div style="height:5px; background:#2a2723; border-radius:3px; overflow:hidden; margin-top:8px;"><div style="height:100%; width:{{ g.pct }}; background:{{ g.color }};"></div></div>
+              </div>
+            </sc-for>
+          </div>
+
+          <!-- violation log -->
+          <div style="background:#1d1c19; border:1px solid #302d29; border-radius:10px; padding:13px 15px;">
+            <div style="display:flex; align-items:center; gap:8px; font-size:11.5px; color:#cfc8ba; font-weight:600; margin-bottom:11px;"><span style="color:#9bbd5a;">≣</span>违规日志 · 防篡改证据链<span style="margin-left:auto; font-size:10px; color:#6f6a61;">append-only · 哈希链</span></div>
+            <div style="display:flex; flex-direction:column; gap:0;">
+              <sc-for list="{{ rk_log }}" as="l" hint-placeholder-count="3">
+                <div style="display:flex; gap:11px; padding-bottom:11px;">
+                  <div style="flex:none; display:flex; flex-direction:column; align-items:center;"><span style="width:9px; height:9px; border-radius:50%; background:{{ l.color }};"></span><sc-if value="{{ l.line }}"><span style="width:1px; flex:1; background:#34302a; margin-top:3px;"></span></sc-if></div>
+                  <div style="flex:1; min-width:0; padding-bottom:2px;"><div style="font-size:11.5px; color:{{ l.titleColor }};">{{ l.title }}</div><div style="font-size:10px; color:#7d7668; margin-top:2px; line-height:1.5;">{{ l.detail }}</div><div style="font-size:9px; color:#5f5b53; margin-top:2px;">{{ l.when }} · {{ l.hash }}</div></div>
+                </div>
+              </sc-for>
+            </div>
+          </div>
+        </div>
+      </sc-if>
+
+      <!-- ░ REVIEW VIEW ░ -->
+      <sc-if value="{{ viewReview }}">
+        <div style="padding:18px 22px; max-width:900px;">
+          <div style="font-size:12px; color:#7d7668; margin-bottom:14px;">复盘归因 · 回测预期 vs 模拟实盘 · 实盘衰减与超额拆解</div>
+
+          <!-- expected vs realized -->
+          <div style="background:#1d1c19; border:1px solid #302d29; border-radius:10px; padding:13px 16px; margin-bottom:14px;">
+            <div style="font-size:12px; color:#cfc8ba; font-weight:600; margin-bottom:11px;">回测预期 → 模拟实盘</div>
+            <div style="display:flex; flex-direction:column; gap:0;">
+              <div style="display:flex; padding:7px 0; font-size:10px; color:#6f6a61; border-bottom:1px solid #2a2723;"><span style="flex:1.4;">指标</span><span style="flex:1; text-align:right;">回测段</span><span style="flex:1; text-align:right;">模拟段</span><span style="flex:1; text-align:right;">实盘衰减</span></div>
+              <sc-for list="{{ rv_rows }}" as="r" hint-placeholder-count="5"><div style="display:flex; padding:9px 0; border-bottom:1px solid #221f1c; font-size:12px;"><span style="flex:1.4; color:#a39a8a;">{{ r.k }}</span><span style="flex:1; text-align:right; color:#8f897c;">{{ r.bt }}</span><span style="flex:1; text-align:right; color:#cfc8ba; font-weight:600;">{{ r.paper }}</span><span style="flex:1; text-align:right; color:{{ r.decayColor }};">{{ r.decay }}</span></div></sc-for>
+            </div>
+            <div style="margin-top:11px; font-size:10.5px; color:#8f897c; line-height:1.6; background:#211f1c; border-left:3px solid #d9b25f; border-radius:6px; padding:8px 11px;">{{ rv_note }}</div>
+          </div>
+
+          <!-- factor attribution -->
+          <div style="background:#1d1c19; border:1px solid #302d29; border-radius:10px; padding:13px 16px; margin-bottom:14px;">
+            <div style="display:flex; align-items:center; gap:8px; font-size:12px; color:#cfc8ba; font-weight:600; margin-bottom:12px;">超额因子归因<span style="margin-left:auto; font-size:10px; color:#6f6a61;">vs {{ r_bench }} · 累计 {{ rv_excess }}</span></div>
+            <div style="display:flex; flex-direction:column; gap:10px;">
+              <sc-for list="{{ rv_attr }}" as="a" hint-placeholder-count="5">
+                <div style="display:flex; align-items:center; gap:11px;">
+                  <span style="width:120px; flex:none; font-size:11px; color:#a39a8a;">{{ a.name }}</span>
+                  <div style="flex:1; height:18px; background:#211f1c; border-radius:4px; position:relative; overflow:hidden;"><div style="position:absolute; left:{{ a.left }}; width:{{ a.width }}; top:0; bottom:0; background:{{ a.color }}; border-radius:3px;"></div><div style="position:absolute; left:50%; top:0; bottom:0; width:1px; background:#4a433a;"></div></div>
+                  <span style="width:54px; flex:none; text-align:right; font-size:11px; color:{{ a.color }}; font-weight:600;">{{ a.val }}</span>
+                </div>
+              </sc-for>
+            </div>
+            <div style="display:flex; justify-content:space-between; font-size:9px; color:#6f6a61; margin-top:9px; padding-left:131px;"><span>−贡献</span><span>0</span><span>+贡献</span></div>
+          </div>
+
+          <!-- cost drag -->
+          <div style="display:grid; grid-template-columns:repeat(3,1fr); gap:11px;">
+            <sc-for list="{{ rv_cost }}" as="c" hint-placeholder-count="3"><div style="background:#1d1c19; border:1px solid #302d29; border-radius:10px; padding:11px 14px;"><div style="font-size:10.5px; color:#7d7668;">{{ c.label }}</div><div style="font-size:17px; font-weight:700; color:{{ c.color }}; margin-top:3px;">{{ c.value }}</div><div style="font-size:9.5px; color:#6f6a61; margin-top:2px;">{{ c.note }}</div></div></sc-for>
+          </div>
+        </div>
+      </sc-if>
+
+      <!-- ░ PROMOTION VIEW ░ -->
+      <sc-if value="{{ viewPromo }}">
+        <div style="padding:18px 22px; max-width:860px;">
+          <div style="font-size:12px; color:#7d7668; margin-bottom:4px;">晋升通道 · 模拟实盘是因子/策略上真钱前的最后一道闸</div>
+          <div style="font-size:11px; color:#6f6a61; margin-bottom:16px;">与因子台五态机联动：<span style="color:#d9b25f;">PROBATION</span> → 模拟实盘 1 月年化 &gt; 基准 → <span style="color:#9bbd5a;">OBSERVATION</span>。Agent 永不自动晋级，须人工审批 + 验证背书（INV-5）。</div>
+
+          <!-- pipeline -->
+          <div style="background:#1d1c19; border:1px solid #302d29; border-radius:10px; padding:16px; margin-bottom:14px;">
+            <div style="display:flex; align-items:stretch; gap:0;">
+              <sc-for list="{{ pm_stages }}" as="s" hint-placeholder-count="4">
+                <div style="flex:1; display:flex; flex-direction:column; align-items:center; position:relative;">
+                  <div style="{{ s.nodeStyle }}">{{ s.glyph }}</div>
+                  <div style="font-size:11px; color:{{ s.labelColor }}; font-weight:{{ s.weight }}; margin-top:8px;">{{ s.label }}</div>
+                  <div style="font-size:9px; color:#6f6a61; margin-top:3px; text-align:center; line-height:1.4; min-height:26px;">{{ s.sub }}</div>
+                  <sc-if value="{{ s.hasArrow }}"><div style="position:absolute; top:16px; right:-1px; width:calc(100% - 8px); height:1px; transform:translateX(50%); background:{{ s.arrowColor }};"></div></sc-if>
+                </div>
+              </sc-for>
+            </div>
+          </div>
+
+          <!-- gate check -->
+          <div style="background:#1d1c19; border:1px solid {{ pm_gateBorder }}; border-radius:10px; overflow:hidden; margin-bottom:14px;">
+            <div style="padding:12px 15px; background:#1c2018; border-bottom:1px solid #3c5230; display:flex; align-items:center; gap:9px;"><span style="color:#9bbd5a;">⤴</span><span style="font-weight:700;">晋级判定 · {{ r_name }}</span><span style="margin-left:auto; font-size:10px; color:{{ pm_eligColor }}; border:1px solid {{ pm_eligBorder }}; padding:2px 10px; border-radius:20px;">{{ pm_elig }}</span></div>
+            <div style="padding:13px 15px;">
+              <div style="display:flex; flex-direction:column; gap:8px; margin-bottom:13px;">
+                <sc-for list="{{ pm_checks }}" as="c" hint-placeholder-count="4"><div style="display:flex; align-items:center; gap:9px; font-size:12px;"><span style="color:{{ c.color }}; font-size:13px;">{{ c.icon }}</span><span style="color:#a39a8a; flex:1;">{{ c.t }}</span><span style="color:{{ c.color }}; font-size:11px;">{{ c.v }}</span></div></sc-for>
+              </div>
+              <div style="display:flex; gap:9px; align-items:center;">
+                <button onClick="{{ pm_approve }}" style="{{ pm_approveStyle }}">{{ pm_approveLabel }}</button>
+                <span style="font-size:10px; color:#6f6a61;">{{ pm_approveHint }}</span>
+              </div>
+            </div>
+          </div>
+
+          <!-- factor lifecycle linkage -->
+          <div style="background:#1d1c19; border:1px solid #302d29; border-radius:10px; padding:13px 15px;">
+            <div style="display:flex; align-items:center; gap:8px; font-size:11.5px; color:#cfc8ba; font-weight:600; margin-bottom:11px;">本策略因子 · 生命周期联动<a href="%E5%9B%A0%E5%AD%90%E5%8F%B0.dc.html" style="margin-left:auto; font-size:10px; color:#a98fd4;" style-hover="text-decoration:underline;">去因子台 ↗</a></div>
+            <div style="display:flex; flex-direction:column; gap:0;">
+              <sc-for list="{{ pm_factors }}" as="f" hint-placeholder-count="4"><div style="display:flex; align-items:center; gap:10px; padding:7px 0; border-bottom:1px solid #221f1c;"><span style="width:7px; height:7px; border-radius:50%; flex:none; background:{{ f.color }};"></span><span style="flex:1.6; color:#cfc8ba; font-size:11.5px;">{{ f.id }}</span><span style="flex:1; font-size:10px; color:{{ f.color }};">{{ f.state }}</span><span style="flex:1; text-align:right; font-size:10.5px; color:#8f897c;">权重 {{ f.w }}</span><span style="flex:0.9; text-align:right; font-size:10.5px; color:{{ f.contribColor }};">{{ f.contrib }}</span></div></sc-for>
+            </div>
+          </div>
+        </div>
+      </sc-if>
+
+    </div>
+  </div>
+</div>
+</x-dc>
+<script type="text/x-dc" data-dc-script data-props="{&quot;$preview&quot;:{&quot;width&quot;:1280,&quot;height&quot;:880}}">
+class Component extends DCLogic {
+  state = { view: "run", market: "equity_cn", selRun: "weekly_cn_multifactor", listOpen: true, promoted: false };
+
+  _nz(i) { const x = Math.sin(i * 12.9898 + 3.7) * 43758.5453; return x - Math.floor(x); }
+  _svgLine(arr, w, h, lo, hi, pad, x0, x1) {
+    pad = pad || 0; x0 = x0 || 0; x1 = x1 == null ? w : x1; const n = arr.length, span = (hi - lo) || 1;
+    return arr.map((v, i) => (i ? "L" : "M") + (x0 + (i / (n - 1)) * (x1 - x0)).toFixed(1) + " " + (h - pad - ((v - lo) / span) * (h - 2 * pad)).toFixed(1)).join(" ");
+  }
+
+  _build() {
+    if (this._runs) return;
+    this._runs = [
+      { id: "weekly_cn_multifactor", name: "weekly_cn_multifactor", origin: "策略台 · strat_wk_cn_01", market: "equity_cn", status: "running", days: 4,
+        bench: "中证500", total: 0.041, today: 0.006, excess: 0.018, q: 0.8 },
+      { id: "crypto_perp_mom", name: "crypto_perp_mom", origin: "策略台 · strat_crypto_02", market: "crypto", status: "running", days: 6,
+        bench: "BTC", total: 0.083, today: -0.012, excess: 0.031, q: 0.7 },
+      { id: "dividend_lowvol_cn", name: "dividend_lowvol_cn", origin: "策略台 · strat_div_03", market: "equity_cn", status: "paused", days: 2,
+        bench: "中证红利", total: 0.012, today: 0.000, excess: -0.004, q: 0.45 }
+    ];
+  }
+
+  renderVals() {
+    this._build();
+    const st = this.state, view = st.view;
+    const tabStyle = on => "background:" + (on ? "#1f2618" : "transparent") + "; color:" + (on ? "#bcd99a" : "#7d7668") + "; border:" + (on ? "1px solid #3c5230" : "1px solid transparent") + "; font-family:inherit; font-size:12px; padding:6px 13px; border-radius:7px; cursor:pointer;";
+    const run = this._runs.find(r => r.id === st.selRun) || this._runs[0];
+    const mkt = st.market;
+
+    // market switch
+    const mktBtns = [["equity_cn", "A股"], ["crypto", "加密"]].map(([k, lbl]) => ({ label: lbl, on: () => this.setState({ market: k }),
+      style: "font-size:10.5px; padding:3px 11px; border-radius:6px; cursor:pointer; border:none; font-family:inherit; " + (mkt === k ? "background:#9bbd5a; color:#16200f; font-weight:700;" : "background:transparent; color:#8f897c;") }));
+    const clockLabel = mkt === "equity_cn" ? "下一收盘 MTM · 16:00 CST · T−2h14m" : "下一收盘 MTM · 24:00 UTC · T−5h41m";
+
+    // run list
+    const statMeta = s => s === "running" ? ["#9bbd5a", "运行中", "rgba(155,189,90,0.14)", "rgba(155,189,90,0.18)"] : s === "paused" ? ["#d9b25f", "已暂停", "rgba(217,178,95,0.14)", "rgba(217,178,95,0.18)"] : ["#8f897c", "停止", "rgba(143,137,124,0.14)", "rgba(143,137,124,0.18)"];
+    const runList = this._runs.map(r => {
+      const [c, txt] = statMeta(r.status); const on = r.id === run.id;
+      return { name: r.name, market: r.market === "equity_cn" ? "A股" : "加密", days: r.days, stat: txt, statColor: c,
+        total: (r.total >= 0 ? "+" : "") + (r.total * 100).toFixed(1) + "%", pnlColor: r.total >= 0 ? "#9bbd5a" : "#d97066",
+        dot: "width:7px; height:7px; border-radius:50%; flex:none; background:" + c + (r.status === "running" ? "; animation:ppulse 2s ease-in-out infinite;" : "") + ";",
+        select: () => this.setState({ selRun: r.id }),
+        cardStyle: "padding:9px 11px; border-radius:9px; margin-bottom:6px; cursor:pointer; border:1px solid " + (on ? "#3c5230" : "#262320") + "; background:" + (on ? "#1c2018" : "#1d1c19") + ";" };
+    });
+
+    // ===== RUN =====
+    const [rc, rtxt, rbg, rring] = statMeta(run.status);
+    const r_metrics = [
+      { label: "今日盈亏", value: (run.today >= 0 ? "+" : "") + (run.today * 100).toFixed(2) + "%", color: run.today > 0 ? "#9bbd5a" : run.today < 0 ? "#d97066" : "#cfc8ba", note: "MTM 截至上一收盘" },
+      { label: "累计收益", value: (run.total >= 0 ? "+" : "") + (run.total * 100).toFixed(1) + "%", color: run.total >= 0 ? "#9bbd5a" : "#d97066", note: "模拟上线以来" },
+      { label: "超额 vs " + run.bench, value: (run.excess >= 0 ? "+" : "") + (run.excess * 100).toFixed(1) + "%", color: run.excess >= 0 ? "#9bbd5a" : "#d97066", note: "alpha 部分" },
+      { label: "年化 / 夏普", value: (run.total / run.days * 52 * 100).toFixed(0) + "% · " + (1.1 + run.q).toFixed(2), color: "#cfc8ba", note: "模拟段估计" }
+    ];
+    // equity curves
+    const hist = []; let hv = 1; for (let i = 0; i < 30; i++) { hv *= (1 + 0.004 + (this._nz(i + run.days) - 0.5) * 0.014); hist.push(hv); }
+    const paper = [hist[hist.length - 1]]; let pv = paper[0];
+    const ppd = run.days * 5;
+    for (let i = 0; i < ppd; i++) { pv *= (1 + (run.total / ppd) + (this._nz(i * 3 + 9) - 0.5) * 0.011); paper.push(pv); }
+    const bench = []; let bv = 1; const allN = 30 + ppd; for (let i = 0; i < allN; i++) { bv *= (1 + 0.0025 + (this._nz(i + 50) - 0.5) * 0.012); bench.push(bv); }
+    const all = hist.concat(paper, bench); const lo = Math.min(...all), hi = Math.max(...all);
+    const splitX = (30 / (allN - 1)) * 720;
+    const r_histPath = this._svgLine(hist, 720, 200, lo, hi, 8, 0, splitX);
+    const r_paperPath = this._svgLine(paper, 720, 200, lo, hi, 8, splitX, 720);
+    const r_paperArea = r_paperPath + " L720 192 L" + splitX.toFixed(1) + " 192 Z";
+    const r_benchPath = this._svgLine(bench, 720, 200, lo, hi, 8, 0, 720);
+    // scheduler
+    const lastBar = mkt === "equity_cn" ? "15:00:02 CST" : "13:24:08 UTC";
+    const r_sched = [
+      { k: "running", v: run.status === "running" ? "True" : "False", color: run.status === "running" ? "#9bbd5a" : "#d9b25f" },
+      { k: "bar_interval", v: "60.0s", color: "#cfc8ba" },
+      { k: "bars_fed", v: String(run.days * 5 * 240 + 117), color: "#cfc8ba" },
+      { k: "mtm_count", v: String(run.days * 5), color: "#cfc8ba" },
+      { k: "last_bar_at", v: lastBar, color: "#9a9488" },
+      { k: "last_mtm_at", v: mkt === "equity_cn" ? "08:30 UTC" : "00:00 UTC", color: "#9a9488" },
+      { k: "last_error", v: "None", color: "#9bbd5a" }
+    ];
+    const posSeed = [["贵州茅台", "600519", 0.018], ["宁德时代", "300750", -0.009], ["招商银行", "600036", 0.024], ["比亚迪", "002594", 0.031], ["隆基绿能", "601012", -0.014], ["美的集团", "000333", 0.012]];
+    const cryptoPos = [["BTCUSDT", "perp", 0.022], ["ETHUSDT", "perp", -0.018], ["SOLUSDT", "perp", 0.045], ["BNBUSDT", "perp", 0.008], ["AVAXUSDT", "perp", -0.011], ["LINKUSDT", "perp", 0.027]];
+    const posBase = mkt === "crypto" ? cryptoPos : posSeed;
+    const r_posPreview = posBase.slice(0, 5).map((p, i) => ({ name: p[0], w: (10 + i * 1.5).toFixed(0) + "%", pnl: (p[2] >= 0 ? "+" : "") + (p[2] * 100).toFixed(1) + "%", pnlColor: p[2] >= 0 ? "#9bbd5a" : "#d97066" }));
+
+    // ===== BOOK =====
+    const bk_balance = [
+      { label: "总权益", value: mkt === "crypto" ? "$108,300" : "¥1,041,200", color: "#cfc8ba" },
+      { label: "可用现金", value: mkt === "crypto" ? "$12,840" : "¥98,600", color: "#9a9488" },
+      { label: "持仓市值", value: mkt === "crypto" ? "$95,460" : "¥942,600", color: "#9a9488" },
+      { label: "冻结(挂单)", value: mkt === "crypto" ? "$0" : "¥0", color: "#9bbd5a" }
+    ];
+    const bk_positions = posBase.map((p, i) => {
+      const entry = mkt === "crypto" ? (100 + i * 37).toFixed(1) : (20 + i * 31).toFixed(2);
+      const mark = (parseFloat(entry) * (1 + p[2])).toFixed(mkt === "crypto" ? 1 : 2);
+      return { name: p[0], sym: p[1], w: (10 + i * 1.5).toFixed(1) + "%", qty: mkt === "crypto" ? (this._nz(i) * 3 + 0.4).toFixed(2) : (this._nz(i) * 800 + 200 | 0) + "", entry, mark, pnl: (p[2] >= 0 ? "+" : "") + (p[2] * 100).toFixed(1) + "%", pnlColor: p[2] >= 0 ? "#9bbd5a" : "#d97066" };
+    });
+    const sides = ["买", "卖"];
+    const bk_fills = [];
+    for (let i = 0; i < 7; i++) {
+      const p = posBase[i % posBase.length]; const side = this._nz(i * 5) > 0.45 ? "买" : "卖";
+      bk_fills.push({ time: "周一 14:5" + (i % 9) + ":0" + (i % 6), sym: p[0] + " · " + p[1], side, sideColor: side === "买" ? "#9bbd5a" : "#d97066",
+        qty: mkt === "crypto" ? (this._nz(i + 2) * 2 + 0.2).toFixed(2) : (this._nz(i) * 400 + 100 | 0) + "",
+        price: mkt === "crypto" ? (100 + i * 23).toFixed(1) : (20 + i * 17).toFixed(2), fee: mkt === "crypto" ? "$" + (this._nz(i) * 3 + 0.4).toFixed(2) : "¥" + (this._nz(i) * 8 + 1.2).toFixed(1) });
+    }
+
+    // ===== RISK =====
+    const gateDefs = [
+      { k: "单笔名义上限", cur: "8.4%", limit: "10%", pct: "84%", color: "#d9b25f", lock: "", lockColor: "#6f6a61" },
+      { k: "杠杆", cur: "1.0×", limit: "1.0×", pct: "100%", color: "#9bbd5a", lock: "🔒 冻结", lockColor: "#d9b25f" },
+      { k: "周换手", cur: "42%", limit: "60%", pct: "70%", color: "#9bbd5a", lock: "", lockColor: "#6f6a61" },
+      { k: "回撤熔断", cur: "−6.1%", limit: "−20%", pct: "31%", color: "#9bbd5a", lock: "🔒 冻结", lockColor: "#d9b25f" },
+      { k: "单行业暴露", cur: "23%", limit: "30%", pct: "77%", color: "#9bbd5a", lock: "", lockColor: "#6f6a61" },
+      { k: "单票上限", cur: "9.6%", limit: "10%", pct: "96%", color: "#d97066", lock: "", lockColor: "#6f6a61" }
+    ];
+    const rk_gates = gateDefs.map(g => ({ ...g, border: g.color === "#d97066" ? "#5a3a36" : "#302d29" }));
+    const rk_log = [
+      { title: "单票上限触线预警", titleColor: "#d9b25f", detail: "比亚迪权重升至 9.6%，逼近 10% 硬限。下一调仓自动降配至 8.5%。", when: "周二 09:31", hash: "0x7af3…21bc", color: "#d9b25f", line: true },
+      { title: "回撤熔断 · 未触发", titleColor: "#9bbd5a", detail: "盘中最大回撤 −6.1%，距 −20% 熔断线安全。", when: "周一 14:55", hash: "0x3c1d…88a0", color: "#9bbd5a", line: true },
+      { title: "门限冻结快照", titleColor: "#9a9488", detail: "策略发布时写入门限哈希，会话内任何改动请求被拒绝并记录。", when: "上线 · D0", hash: "0x0091…ff42", color: "#6f6a61", line: false }
+    ];
+
+    // ===== REVIEW =====
+    const rv_rows = [
+      { k: "年化收益", bt: "+22.4%", paper: "+18.9%", decay: "−16%", decayColor: "#d9b25f" },
+      { k: "夏普", bt: "1.84", paper: "1.52", decay: "−17%", decayColor: "#d9b25f" },
+      { k: "最大回撤", bt: "−11.2%", paper: "−6.1%", decay: "好于预期", decayColor: "#9bbd5a" },
+      { k: "IC 命中率", bt: "57%", paper: "54%", decay: "−3pt", decayColor: "#d9b25f" },
+      { k: "周换手", bt: "38%", paper: "42%", decay: "+4pt", decayColor: "#d97066" }
+    ];
+    const rv_note = "实盘衰减 ~16%，落在「样本外打 7-8 折」的健康区间。衰减主因：真实滑点高于回测假设 + 涨跌停无法成交。换手略升需关注，是触发器在波动期更频繁调仓所致。";
+    const attrSeed = [["动量 · vol_adj_mom", 0.62], ["反转 · reversal_5d", 0.28], ["量价 · pv_corr", 0.15], ["波动 · vol_ratio", -0.12], ["成本拖累", -0.31]];
+    const amax = Math.max(...attrSeed.map(a => Math.abs(a[1])));
+    const rv_attr = attrSeed.map(a => {
+      const frac = a[1] / amax * 0.5; const pos = a[1] >= 0;
+      return { name: a[0], val: (a[1] >= 0 ? "+" : "") + (a[1] * 100).toFixed(1) + "%", color: pos ? "#9bbd5a" : "#d97066",
+        left: pos ? "50%" : (50 + frac * 100) + "%", width: (Math.abs(frac) * 100) + "%" };
+    });
+    const rv_excess = "+" + (run.excess * 100).toFixed(1) + "%";
+    const rv_cost = [
+      { label: "滑点拖累", value: "−0.21%", color: "#d97066", note: "vs 回测假设 −0.10%" },
+      { label: "手续费", value: "−0.08%", color: "#d97066", note: "双边 万2.5" },
+      { label: "未成交损失", value: "−0.05%", color: "#d9b25f", note: "涨跌停 / 流动性" }
+    ];
+
+    // ===== PROMOTION =====
+    const stages = [
+      { label: "QUALIFIED", sub: "因子达标", glyph: "✓", reached: true },
+      { label: "PROBATION", sub: "试用入池", glyph: "◐", reached: true },
+      { label: "模拟实盘", sub: "1月 > 基准", glyph: "▦", reached: true, current: !st.promoted },
+      { label: "OBSERVATION", sub: "进观察期", glyph: "◉", reached: st.promoted, current: st.promoted }
+    ];
+    const pm_stages = stages.map((s, i) => ({ label: s.label, sub: s.sub, glyph: s.glyph,
+      nodeStyle: "width:34px; height:34px; border-radius:50%; display:flex; align-items:center; justify-content:center; font-size:14px; font-weight:700; " +
+        (s.current ? "background:#9bbd5a; color:#16200f; box-shadow:0 0 0 4px rgba(155,189,90,0.2);" : s.reached ? "background:transparent; color:#9bbd5a; border:2px solid #9bbd5a;" : "background:#211f1c; color:#5f5b53; border:2px solid #34302a;"),
+      labelColor: s.reached || s.current ? "#9bbd5a" : "#6f6a61", weight: s.current ? 700 : 500,
+      hasArrow: i < 3, arrowColor: s.reached && stages[i + 1] && (stages[i + 1].reached || stages[i + 1].current) ? "#9bbd5a" : "#34302a" }));
+    const daysIn = run.days * 7; const eligible = daysIn >= 28 && run.excess > 0;
+    const pm_elig = st.promoted ? "已晋级 OBSERVATION" : eligible ? "满足晋级条件" : "观察中 · " + daysIn + "/28 天";
+    const pm_eligColor = st.promoted ? "#9bbd5a" : eligible ? "#9bbd5a" : "#d9b25f";
+    const pm_eligBorder = st.promoted || eligible ? "#3c5230" : "#5a4a2a";
+    const pm_checks = [
+      { t: "模拟运行满 1 个月（≥28 天）", v: daysIn + " / 28 天", icon: daysIn >= 28 ? "✓" : "○", color: daysIn >= 28 ? "#9bbd5a" : "#d9b25f" },
+      { t: "模拟段年化 > 基准", v: (run.excess > 0 ? "超额 +" : "") + (run.excess * 100).toFixed(1) + "%", icon: run.excess > 0 ? "✓" : "✕", color: run.excess > 0 ? "#9bbd5a" : "#d97066" },
+      { t: "风险门 0 违规", v: "全绿", icon: "✓", color: "#9bbd5a" },
+      { t: "实盘衰减 < 30%", v: "−16%", icon: "✓", color: "#9bbd5a" }
+    ];
+    const canPromote = eligible && !st.promoted;
+    const pm_approve = () => { if (canPromote) this.setState({ promoted: true }); };
+    const pm_approveStyle = st.promoted
+      ? "background:transparent; border:1px solid #3c5230; color:#9bbd5a; font-family:inherit; font-size:12px; padding:9px 16px; border-radius:8px; cursor:default;"
+      : canPromote
+        ? "background:#9bbd5a; border:none; color:#16200f; font-family:inherit; font-weight:700; font-size:12px; padding:9px 16px; border-radius:8px; cursor:pointer;"
+        : "background:#2a2723; border:1px solid #3a3733; color:#6f6a61; font-family:inherit; font-size:12px; padding:9px 16px; border-radius:8px; cursor:not-allowed;";
+    const pm_approveLabel = st.promoted ? "✓ 已晋级 · 同步因子台" : "⤴ 人工审批晋级";
+    const pm_approveHint = st.promoted ? "因子台对应因子已迁入 OBSERVATION" : "Agent 永不自动 · 须人工 + 验证背书（INV-5）";
+    const pmFactors = [
+      { id: "alpha_vol_adj_mom_20d", state: st.promoted ? "OBSERVATION" : "PROBATION", w: "32%", contrib: "+0.62%", color: st.promoted ? "#9bbd5a" : "#d9b25f", contribColor: "#9bbd5a" },
+      { id: "alpha_reversal_5d", state: "PROBATION", w: "24%", contrib: "+0.28%", color: "#d9b25f", contribColor: "#9bbd5a" },
+      { id: "alpha_xs_demean_log_volume", state: "QUALIFIED", w: "21%", contrib: "+0.15%", color: "#6f9bd1", contribColor: "#9bbd5a" },
+      { id: "alpha_vol_ratio", state: "QUALIFIED", w: "23%", contrib: "−0.12%", color: "#6f9bd1", contribColor: "#d97066" }
+    ];
+
+    return {
+      mktBtns, clockLabel,
+      goRun: () => this.setState({ view: "run" }), goBook: () => this.setState({ view: "book" }), goRisk: () => this.setState({ view: "risk" }), goReview: () => this.setState({ view: "review" }), goPromo: () => this.setState({ view: "promo" }),
+      tabRun: tabStyle(view === "run"), tabBook: tabStyle(view === "book"), tabRisk: tabStyle(view === "risk"), tabReview: tabStyle(view === "review"), tabPromo: tabStyle(view === "promo"),
+      viewRun: view === "run", viewBook: view === "book", viewRisk: view === "risk", viewReview: view === "review", viewPromo: view === "promo",
+      subHint: view === "run" ? "实时净值 · 调度器状态" : view === "book" ? "持仓 / 成交 / 余额" : view === "risk" ? "会话外不可改的硬墙" : view === "review" ? "实盘衰减 · 超额拆解" : "PROBATION → 模拟1月 → OBSERVATION",
+      listOpen: st.listOpen, listCollapsed: !st.listOpen, listToggle: () => this.setState(s => ({ listOpen: !s.listOpen })),
+      runCountLabel: this._runs.length + " 个 · 2 跑", runList,
+      // run
+      r_name: run.name, r_origin: run.origin, r_bench: run.bench, r_statDot: rc, r_statRing: rring, r_statColor: rc, r_statBg: rbg, r_statText: rtxt,
+      r_metrics, r_histPath, r_paperPath, r_paperArea, r_benchPath, r_splitX: splitX, r_sched, r_schedState: run.status === "running" ? "活跃" : "暂停",
+      r_posPreview, r_posCount: posBase.length,
+      // book
+      bk_balance, bk_positions, bk_posCount: posBase.length, bk_fills,
+      // risk
+      rk_gates, rk_status: "全绿 · 1 预警", rk_statColor: "#9bbd5a", rk_statBg: "rgba(155,189,90,0.12)", rk_statBorder: "#3c5230", rk_log,
+      // review
+      rv_rows, rv_note, rv_attr, rv_excess, rv_cost,
+      // promo
+      pm_stages, pm_gateBorder: "#3c5230", pm_elig, pm_eligColor, pm_eligBorder, pm_checks,
+      pm_approve, pm_approveStyle, pm_approveLabel, pm_approveHint, pm_factors: pmFactors
+    };
+  }
+}
+</script>
+</body>
+</html>

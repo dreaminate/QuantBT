@@ -108,7 +108,7 @@ export function GlossaryInfoButton({ slug, ariaLabel }: Props) {
             <div style={{ opacity: 0.7 }}>
               <div style={{ fontWeight: 600, marginBottom: 4 }}>{slug}</div>
               <div style={{ fontStyle: "italic", color: "var(--cc-dim, #888)" }}>
-                该词条还未生成。30 条 baseline 完整到位后可见（v0.8.4 待 GPT Pro 补完）。
+                该词条暂未收录，内容完善中。
               </div>
             </div>
           )}

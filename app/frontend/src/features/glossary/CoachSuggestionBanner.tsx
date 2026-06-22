@@ -91,7 +91,7 @@ export function CoachSuggestionBanner({ runId }: Props) {
               className="cc-btn cc-btn--accent cc-btn--sm"
               onClick={() => trackEvent("risk_metric_expanded", { from: "coach_banner", run_id: runId })}
             >
-              💬 让 Mode 2 教练帮你诊断 →
+              💬 用 Mode 2 对话台分析此 run →
             </Link>
           </div>
         </div>

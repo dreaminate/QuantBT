@@ -1,0 +1,118 @@
+<!DOCTYPE html>
+<html>
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<script src="./support.js"></script>
+</head>
+<body>
+<x-dc>
+<div style="background:#1d1c19; border:1px solid #34302a; border-radius:11px; overflow:hidden; font-family:'JetBrains Mono',ui-monospace,monospace; color:#e6e1d6;">
+
+  <!-- header -->
+  <div style="display:flex; align-items:center; gap:9px; padding:11px 15px; background:#221f1c; border-bottom:1px solid #302d29;">
+    <span style="width:8px; height:8px; border-radius:50%; background:#7fa650; box-shadow:0 0 0 3px rgba(127,166,80,0.18); animation:ccpulse 2s ease-in-out infinite;"></span>
+    <span style="font-weight:600;">模拟盘 · {{ strategy }}</span>
+    <span style="margin-left:auto; font-size:11px; color:#9bbd5a; background:rgba(127,166,80,0.14); padding:3px 10px; border-radius:20px;">运行中 · 第 {{ days }} 周</span>
+  </div>
+
+  <!-- live metrics -->
+  <div style="display:flex; padding:13px 15px 9px; gap:0;">
+    <div style="flex:1;">
+      <div style="color:#7d7668; font-size:11px;">今日盈亏</div>
+      <div style="color:{{ pnlColor }}; font-size:20px; font-weight:700;">{{ pnlToday }}</div>
+    </div>
+    <div style="flex:1;">
+      <div style="color:#7d7668; font-size:11px;">累计收益</div>
+      <div style="color:#e6e1d6; font-size:20px; font-weight:700;">{{ totalReturn }}</div>
+    </div>
+    <div style="flex:1;">
+      <div style="color:#7d7668; font-size:11px;">超额(vs 500)</div>
+      <div style="color:#9bbd5a; font-size:20px; font-weight:700;">{{ excess }}</div>
+    </div>
+  </div>
+
+  <!-- nav chart (backtest tail dimmed + paper live) -->
+  <div style="padding:2px 15px 10px;">
+    <svg viewBox="0 0 {{ chartW }} {{ chartH }}" preserveAspectRatio="none" style="width:100%; height:88px; display:block;">
+      <line x1="{{ splitX }}" y1="6" x2="{{ splitX }}" y2="{{ splitYbot }}" stroke="#4a433a" stroke-width="1" stroke-dasharray="2 3"></line>
+      <path d="{{ histPath }}" fill="none" stroke="#5f5b53" stroke-width="1.5"></path>
+      <path d="{{ paperPath }}" fill="none" stroke="#d97757" stroke-width="2"></path>
+    </svg>
+    <div style="display:flex; justify-content:space-between; color:#5f5b53; font-size:10px; margin-top:2px;"><span>← 回测段</span><span style="color:#d97757;">模拟盘上线 →</span></div>
+  </div>
+
+  <!-- positions -->
+  <div style="padding:2px 15px 10px;">
+    <div style="color:#7d7668; font-size:11px; margin-bottom:6px;">当前持仓 · top {{ posCount }}</div>
+    <div style="display:flex; flex-direction:column; gap:0;">
+      <sc-for list="{{ positions }}" as="p" hint-placeholder-count="4">
+        <div style="display:flex; align-items:center; padding:5px 0; border-bottom:1px solid #2a2723;">
+          <span style="flex:1.4; color:#cfc8ba;">{{ p.name }}</span>
+          <span style="flex:1; color:#7d7668; font-size:12px;">{{ p.sym }}</span>
+          <span style="flex:0.8; text-align:right; color:#9a9488;">{{ p.w }}</span>
+          <span style="flex:0.9; text-align:right; color:{{ p.pnlColor }};">{{ p.pnl }}</span>
+        </div>
+      </sc-for>
+    </div>
+  </div>
+
+  <!-- risk gate -->
+  <div style="padding:11px 15px; background:#1a1916; border-top:1px solid #302d29;">
+    <div style="display:flex; align-items:center; gap:8px; margin-bottom:9px;">
+      <span style="color:#7fa650;">⛨</span><span style="color:#cfc8ba; font-weight:600; font-size:12.5px;">风险门 · 会话外不可改</span>
+      <span style="margin-left:auto; font-size:11px; color:#9bbd5a;">{{ gateStatus }}</span>
+    </div>
+    <div style="display:flex; flex-wrap:wrap; gap:7px;">
+      <sc-for list="{{ risks }}" as="r" hint-placeholder-count="4">
+        <div style="flex:1 1 44%; display:flex; justify-content:space-between; gap:8px; background:#211f1c; border:1px solid #302d29; border-radius:7px; padding:6px 10px;">
+          <span style="color:#7d7668; font-size:11.5px;">{{ r.k }}</span>
+          <span style="color:{{ r.color }}; font-size:11.5px; font-weight:600;">{{ r.v }} {{ r.lock }}</span>
+        </div>
+      </sc-for>
+    </div>
+    <div style="margin-top:9px; font-size:11px; color:#6f6a61; line-height:1.55;">A股止于 paper — 唯一硬墙在交易所侧远程信任域;本地门仅为防篡改证据,非防篡改。</div>
+  </div>
+</div>
+</x-dc>
+<script type="text/x-dc" data-dc-script data-props="{&quot;$preview&quot;:{&quot;width&quot;:430,&quot;height&quot;:520},&quot;board&quot;:{&quot;editor&quot;:null,&quot;tsType&quot;:&quot;any&quot;}}">
+class Component extends DCLogic {
+  renderVals() {
+    const b = this.props.board || {};
+    const hist = b.hist || [1, 1.2, 1.45, 1.62];
+    const paper = b.paper || [1.62, 1.64, 1.63, 1.66, 1.69];
+    const W = 600, H = 110, pad = 6;
+    const all = hist.concat(paper);
+    const lo = Math.min(...all), hi = Math.max(...all), span = (hi - lo) || 1;
+    const n = hist.length + paper.length - 1;
+    const xi = i => pad + (i / n) * (W - 2 * pad);
+    const y = v => H - pad - ((v - lo) / span) * (H - 2 * pad);
+    const histPath = hist.map((v, i) => (i ? "L" : "M") + xi(i).toFixed(1) + " " + y(v).toFixed(1)).join(" ");
+    const paperPath = paper.map((v, i) => (i ? "L" : "M") + xi(hist.length - 1 + i).toFixed(1) + " " + y(v).toFixed(1)).join(" ");
+    const splitX = xi(hist.length - 1).toFixed(1);
+
+    const pos = (b.positions || []).map(p => ({ name: p.name, sym: p.sym, w: p.w,
+      pnl: (p.pnl >= 0 ? "+" : "") + p.pnl + "%", pnlColor: p.pnl >= 0 ? "#9bbd5a" : "#d97066" }));
+    const risk = b.risk || {};
+    const risks = [
+      { k: "单笔名义上限", v: risk.maxNotional || "—", color: "#cfc8ba", lock: "" },
+      { k: "杠杆", v: (risk.leverage ?? 1) + ".0×", color: "#d9b25f", lock: "🔒" },
+      { k: "换手上限", v: risk.turnover || "60%/周", color: "#cfc8ba", lock: "" },
+      { k: "回撤熔断", v: risk.ddHalt || "20%", color: "#cfc8ba", lock: "" },
+    ];
+    const tr = b.totalReturn ?? 0.041;
+    return {
+      strategy: b.strategy || "weekly_cn_multifactor", days: b.days ?? 1,
+      pnlToday: ((b.pnlToday ?? 0.006) >= 0 ? "+" : "") + ((b.pnlToday ?? 0.006) * 100).toFixed(2) + "%",
+      pnlColor: (b.pnlToday ?? 0.006) >= 0 ? "#9bbd5a" : "#d97066",
+      totalReturn: (tr >= 0 ? "+" : "") + (tr * 100).toFixed(1) + "%",
+      excess: "+" + ((b.excess ?? 0.018) * 100).toFixed(1) + "%",
+      chartW: W, chartH: H, histPath, paperPath, splitX, splitYbot: H - pad,
+      positions: pos, posCount: pos.length,
+      risks, gateStatus: "全绿 · 0 违规",
+    };
+  }
+}
+</script>
+</body>
+</html>

@@ -483,7 +483,7 @@ export function RunsPage({ onCompare }: { onCompare?: (ids: string[]) => void } 
                 <td>{run.strategy_script_name ?? T.common.missing}</td>
                 <td
                   style={{
-                    color: Number(run.returns ?? run.overall.total_return ?? 0) >= 0 ? "var(--danger)" : "var(--success)",
+                    color: Number(run.returns ?? run.overall.total_return ?? 0) >= 0 ? "var(--success)" : "var(--danger)",
                     fontWeight: 600,
                   }}
                 >
@@ -491,7 +491,7 @@ export function RunsPage({ onCompare }: { onCompare?: (ids: string[]) => void } 
                 </td>
                 <td
                   style={{
-                    color: Number(run.annualized_return ?? run.overall.annualized_return ?? 0) >= 0 ? "var(--danger)" : "var(--success)",
+                    color: Number(run.annualized_return ?? run.overall.annualized_return ?? 0) >= 0 ? "var(--success)" : "var(--danger)",
                     fontWeight: 600,
                   }}
                 >

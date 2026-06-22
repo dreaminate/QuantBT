@@ -1,0 +1,904 @@
+<!DOCTYPE html>
+<html>
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<script src="./support.js"></script>
+</head>
+<body>
+<x-dc>
+<helmet>
+<script src="https://cdn.jsdelivr.net/npm/echarts@5.5.0/dist/echarts.min.js"></script>
+<style>
+  #jq-rd { font-family:"Microsoft YaHei","PingFang SC","Helvetica Neue",Arial,sans-serif; color:#333; background:#f0f2f5; height:100vh; display:flex; flex-direction:column; font-size:14px; box-sizing:border-box; }
+  #jq-rd *, #jq-rd *::before, #jq-rd *::after { box-sizing:border-box; }
+  #jq-rd .jq-topbar { background:#1a2b4a; height:46px; display:flex; align-items:center; padding:0 18px; gap:24px; flex-shrink:0; }
+  #jq-rd .jq-logo { display:flex; align-items:center; gap:8px; color:#fff; }
+  #jq-rd .jq-logo-icon { width:26px; height:26px; border-radius:6px; background:#4a7cf7; color:#fff; font-size:12px; font-weight:700; display:inline-flex; align-items:center; justify-content:center; }
+  #jq-rd .jq-logo-text { font-size:17px; font-weight:700; letter-spacing:-0.02em; }
+  #jq-rd .jq-nav { display:flex; align-items:center; height:100%; }
+  #jq-rd .jq-nav-item { display:flex; align-items:center; height:100%; padding:0 16px; color:rgba(255,255,255,0.78); font-size:13.5px; border-bottom:2px solid transparent; cursor:pointer; }
+  #jq-rd .jq-nav-item.active { color:#fff; border-bottom-color:#fff; font-weight:600; }
+  #jq-rd .jq-rd-body { flex:1; min-height:0; display:flex; flex-direction:column; padding:10px 14px; }
+
+  #jq-rd .jq-run-detail-shell { display:flex; flex-direction:column; width:100%; min-width:0; flex:1; min-height:0; }
+  #jq-rd .jq-run-detail-statusbar { min-height:30px; background:#eef1f4; border:1px solid #d7dbe2; display:flex; align-items:center; justify-content:space-between; gap:10px; padding:0 10px; font-size:11.5px; }
+  #jq-rd .jq-run-detail-status-left, #jq-rd .jq-run-detail-status-right { display:flex; align-items:center; gap:14px; min-width:0; }
+  #jq-rd .jq-run-detail-status-left strong { color:#233b73; font-weight:600; font-size:12.5px; }
+  #jq-rd .jq-status-text { text-transform:capitalize; }
+  #jq-rd .jq-status-text.completed { color:#2f6fdd; }
+  #jq-rd .jq-status-text.failed { color:#d34f4f; }
+  #jq-rd .jq-run-detail-status-right a { color:#2f6fdd; font-size:12px; cursor:pointer; text-decoration:none; }
+  #jq-rd .jq-run-detail-status-right a:hover { text-decoration:underline; }
+  #jq-rd .jq-run-detail-main { display:flex; flex-direction:row; align-items:stretch; margin-top:8px; flex:1; min-width:0; min-height:0; width:100%; }
+  #jq-rd .jq-run-detail-sidebar { flex:0 0 158px; width:158px; border:1px solid #d7dbe2; border-right:0; background:#eef1f4; padding:6px 0; overflow:auto; }
+  #jq-rd .jq-run-detail-navgroup + .jq-run-detail-navgroup { margin-top:8px; }
+  #jq-rd .jq-run-detail-navtitle { padding:0 10px 4px; color:#7b8794; font-size:11px; }
+  #jq-rd .jq-run-detail-navitem { width:100%; border:0; background:transparent; display:flex; align-items:center; gap:6px; text-align:left; padding:5px 10px 5px 12px; font-size:12px; color:#5c6675; cursor:pointer; }
+  #jq-rd .jq-run-detail-navitem:hover { color:#2f6fdd; }
+  #jq-rd .jq-run-detail-navitem.active { background:#fff; color:#2f6fdd; box-shadow:inset 2px 0 0 #2f6fdd; font-weight:500; }
+  #jq-rd .jq-run-detail-content { flex:1; min-width:0; min-height:0; border:1px solid #d7dbe2; background:#fff; padding:6px 8px; display:flex; flex-direction:column; overflow:hidden; }
+  #jq-rd .jq-scroll { overflow:auto; flex:1; min-height:0; }
+
+  #jq-rd .jq-run-panel-section { display:flex; flex-direction:column; gap:6px; flex:1; min-height:0; }
+  #jq-rd .jq-run-section-head { min-height:24px; display:flex; align-items:center; justify-content:space-between; gap:8px; border-bottom:1px solid #e7ebf0; padding-bottom:4px; flex-shrink:0; }
+  #jq-rd .jq-run-section-head strong { font-size:12.5px; font-weight:600; color:#344257; }
+
+  #jq-rd .jq-run-overview-jq-page { gap:4px; padding:2px 0 4px; flex:1; min-height:0; overflow:hidden; display:flex; flex-direction:column; }
+  #jq-rd .jq-run-overview-page-head { display:flex; align-items:center; flex-shrink:0; padding:2px 8px 6px; border-bottom:1px solid #e8e8e8; }
+  #jq-rd .jq-run-overview-page-title { margin:0; font-size:15px; font-weight:600; color:#333; }
+  #jq-rd .jq-run-overview-summary-board { padding:0 6px; border-bottom:1px solid #e8e8e8; padding-bottom:4px; margin-bottom:2px; flex-shrink:0; }
+  #jq-rd .jq-run-overview-metrics-board { padding:2px 0 4px; }
+  #jq-rd .jq-run-overview-metrics-jq { display:flex; flex-direction:column; gap:6px; }
+  #jq-rd .jq-run-overview-metrics-row { display:grid; grid-template-columns:repeat(11,minmax(0,1fr)); gap:4px 2px; align-items:start; }
+  #jq-rd .jq-run-overview-metric-block { padding:2px 4px; text-align:center; min-width:0; }
+  #jq-rd .jq-run-overview-metric-block--col2 { grid-column:span 2; }
+  #jq-rd .jq-run-overview-metric-block span { display:block; font-size:11px; color:#888; margin-bottom:2px; line-height:1.2; white-space:nowrap; overflow:hidden; text-overflow:ellipsis; }
+  #jq-rd .jq-run-overview-metric-block strong { display:block; font-size:14px; font-weight:600; color:#222; line-height:1.25; white-space:nowrap; overflow:hidden; text-overflow:ellipsis; }
+  #jq-rd .jq-run-overview-metric-block--col2 strong { white-space:normal; word-break:break-all; }
+  #jq-rd .jq-run-overview-metric-block strong.positive { color:#d34f4f; }
+  #jq-rd .jq-run-overview-metric-block strong.negative { color:#2e8b57; }
+
+  #jq-rd .jq-run-overview-chart-toolbar--jq { display:flex; align-items:center; justify-content:space-between; gap:8px; flex-wrap:wrap; padding:2px 4px; min-height:22px; flex-shrink:0; font-size:12px; color:#333; }
+  #jq-rd .jq-run-overview-presets--jq { display:flex; align-items:center; flex-wrap:wrap; gap:2px 4px; }
+  #jq-rd .jq-run-zoom-prefix { font-size:12px; color:#666; user-select:none; }
+  #jq-rd .jq-run-tb-link { background:none; border:none; padding:0 5px; font-size:12px; color:#1a5fb4; cursor:pointer; }
+  #jq-rd .jq-run-tb-link:hover { text-decoration:underline; }
+  #jq-rd .jq-run-overview-toolbar-center--jq { display:flex; align-items:center; flex-wrap:wrap; gap:6px 10px; justify-content:center; flex:1 1 auto; min-width:0; }
+  #jq-rd .jq-run-tb-legend { display:inline-flex; align-items:center; gap:4px; padding:0; border:0; background:transparent; font-size:12px; color:#333; cursor:pointer; }
+  #jq-rd .jq-run-tb-legend.off { color:#b0b0b0; }
+  #jq-rd .jq-run-tb-swatch { display:inline-block; width:10px; height:10px; flex-shrink:0; }
+  #jq-rd .jq-run-tb-radio, #jq-rd .jq-run-tb-check { display:inline-flex; align-items:center; gap:3px; margin:0; font-size:12px; color:#333; cursor:pointer; user-select:none; }
+  #jq-rd .jq-run-overview-date-toolbar--jq { display:flex; align-items:center; gap:6px; flex-shrink:0; }
+  #jq-rd .jq-run-overview-time-label { font-size:12px; color:#666; user-select:none; }
+  #jq-rd .jq-run-overview-date-input { height:26px; padding:2px 8px; border:1px solid #d0d0d0; border-radius:2px; background:#fff; font-size:12px; color:#111; }
+  #jq-rd .jq-run-overview-date-sep { color:#999; }
+  #jq-rd .jq-run-overview-chart-panel--jq { width:100%; border:1px solid #d8d8d8; background:#fff; flex:1; min-height:0; display:flex; flex-direction:column; }
+  #jq-rd .jq-ov-chart { width:100%; flex:1; min-height:560px; }
+
+  #jq-rd .jq-table-shell { border:1px solid #dcdfe4; background:#fff; }
+  #jq-rd .jq-legacy-table { width:100%; border-collapse:collapse; font-size:12px; }
+  #jq-rd .jq-legacy-table thead th { height:30px; background:#f3f4f6; color:#5f6977; font-weight:500; padding:0 8px; text-align:left; border-bottom:1px solid #e0e4ea; white-space:nowrap; }
+  #jq-rd .jq-legacy-table tbody td { height:33px; padding:0 8px; border-bottom:1px solid #eef1f4; color:#333; white-space:nowrap; }
+  #jq-rd .jq-legacy-table tbody tr:hover { background:#fafbfc; }
+  #jq-rd .jq-legacy-table .positive { color:#d34f4f; }
+  #jq-rd .jq-legacy-table .negative { color:#2e8b57; }
+  #jq-rd .jq-num-cell { text-align:right; font-variant-numeric:tabular-nums; }
+  #jq-rd .jq-day-title { font-weight:600; font-size:12px; padding:8px 2px 3px; color:#344257; }
+  #jq-rd .jq-day-block + .jq-day-block { margin-top:6px; }
+
+  #jq-rd .jq-panel-toolbar { display:flex; align-items:center; justify-content:space-between; gap:12px; padding:4px 2px 8px; flex-wrap:wrap; }
+  #jq-rd .jq-col-toggles { display:flex; flex-wrap:wrap; gap:8px 14px; font-size:12px; color:#333; }
+  #jq-rd .jq-col-toggle { display:inline-flex; align-items:center; gap:4px; cursor:pointer; user-select:none; }
+  #jq-rd .jq-tab-button { height:24px; padding:0 12px; border:1px solid #cfd5dd; background:#fff; color:#55606d; font-size:12px; border-radius:2px; cursor:pointer; }
+  #jq-rd .jq-tab-button.active { background:#eef4ff; color:#2f6fdd; border-color:#b9c6df; }
+
+  #jq-rd .jq-run-log-tabs { display:flex; border:1px solid #d7dbe2; border-bottom:0; background:#f7f8fa; flex-shrink:0; }
+  #jq-rd .jq-run-log-tab { min-width:64px; height:26px; border:0; border-right:1px solid #d7dbe2; background:transparent; color:#55606d; font-size:12px; cursor:pointer; }
+  #jq-rd .jq-run-log-tab.active { background:#fff; color:#2f6fdd; }
+  #jq-rd .jq-run-log-console { background:#060606; color:#e5e7eb; flex:1; min-height:0; padding:10px; font-family:Consolas,Menlo,Monaco,monospace; font-size:12px; line-height:1.65; overflow:auto; }
+  #jq-rd .jq-run-log-line { display:grid; grid-template-columns:160px 64px 1fr; gap:12px; white-space:pre-wrap; }
+  #jq-rd .jq-log-lv-INFO { color:#7fd1b9; }
+  #jq-rd .jq-log-lv-WARN { color:#e6c06a; }
+  #jq-rd .jq-log-lv-ERROR { color:#e88; }
+
+  #jq-rd .jq-run-code-head { min-height:28px; display:flex; align-items:center; padding:0 8px; border:1px solid #d7dbe2; border-bottom:0; background:#f7f8fa; font-size:12px; color:#55606d; flex-shrink:0; }
+  #jq-rd .jq-run-code-block { margin:0; flex:1; min-height:0; border:1px solid #d7dbe2; background:#111827; color:#e5e7eb; padding:12px; overflow:auto; font-size:12.5px; line-height:1.65; font-family:Consolas,Menlo,Monaco,monospace; white-space:pre; }
+
+  #jq-rd .jq-run-performance-grid { display:grid; grid-template-columns:1fr 1fr; gap:12px; }
+  #jq-rd .jq-run-performance-card { border:1px solid #d7dbe2; background:#fff; }
+  #jq-rd .jq-run-performance-card h4 { margin:0; padding:8px 10px; border-bottom:1px solid #e8ebef; font-size:12px; font-weight:600; }
+  #jq-rd .jq-run-attribution-summary { display:grid; grid-template-columns:repeat(4,minmax(0,1fr)); gap:8px; margin-bottom:8px; }
+  #jq-rd .jq-run-attribution-summary-item { border:1px solid #e6e9ee; background:#fafbfd; padding:8px; font-size:12px; }
+  #jq-rd .jq-run-attribution-summary-item span { display:block; color:#6b7280; margin-bottom:4px; }
+  #jq-rd .jq-metric-head { display:flex; align-items:baseline; gap:10px; padding:2px 2px 6px; }
+  #jq-rd .jq-metric-head h3 { margin:0; font-size:14px; font-weight:600; color:#344257; }
+  #jq-rd .jq-metric-head .big { font-size:18px; font-weight:700; }
+  #jq-rd .jq-mt-chart { width:100%; height:300px; border:1px solid #d7dbe2; background:#fff; flex-shrink:0; }
+  #jq-rd .jq-report-md { padding:6px 14px; overflow:auto; flex:1; min-height:0; font-size:13.5px; line-height:1.75; color:#2d3748; }
+  #jq-rd .jq-report-md h1 { font-size:20px; margin:10px 0 6px; }
+  #jq-rd .jq-report-md h2 { font-size:16px; margin:18px 0 6px; border-bottom:1px solid #eef1f4; padding-bottom:4px; }
+  #jq-rd .jq-report-md p, #jq-rd .jq-report-md li { margin:4px 0; }
+  #jq-rd .jq-report-md code { background:#f3f4f6; padding:1px 5px; border-radius:3px; font-family:Consolas,monospace; font-size:12.5px; }
+</style>
+</helmet>
+<div id="jq-rd">
+  <div class="jq-topbar">
+    <div class="jq-logo"><span class="jq-logo-icon">QB</span><span class="jq-logo-text">QuantBT</span></div>
+    <div class="jq-nav">
+      <div class="jq-nav-item">数据</div>
+      <div class="jq-nav-item">因子</div>
+      <div class="jq-nav-item">模型</div>
+      <div class="jq-nav-item">策略</div>
+      <div class="jq-nav-item active">回测</div>
+      <div class="jq-nav-item">研究</div>
+    </div>
+    <a href="%E7%AD%96%E7%95%A5%E5%8F%B0.dc.html?trace=tx_001&from=node:exec" style="margin-left:auto; display:flex; align-items:center; gap:6px; color:#cde0ff; font-size:12.5px; text-decoration:none; border:1px solid rgba(255,255,255,0.25); padding:4px 11px; border-radius:7px;" title="回策略台并定位产生该交易的节点链">← 策略台 · 血缘定位</a>
+  </div>
+
+  <div class="jq-rd-body">
+    <div class="jq-run-detail-shell">
+      <div class="jq-run-detail-statusbar">
+        <div class="jq-run-detail-status-left">
+          <strong>{{ recordName }}</strong>
+          <span class="jq-status-text completed">{{ status }}</span>
+          <span>基准: {{ benchmark }}</span>
+          <span>频率: {{ frequency }}</span>
+          <span>区间: {{ analysisRange }}</span>
+          <span>开始: {{ startedAt }}</span>
+        </div>
+        <div class="jq-run-detail-status-right">
+          <a>净值</a><a>交易</a><a>指标</a><a>报告</a>
+        </div>
+      </div>
+
+      <div class="jq-run-detail-main">
+        <aside class="jq-run-detail-sidebar">
+          <sc-for list="{{ navGroups }}" as="g" hint-placeholder-count="2">
+            <div class="jq-run-detail-navgroup">
+              <div class="jq-run-detail-navtitle">{{ g.title }}</div>
+              <sc-for list="{{ g.items }}" as="it" hint-placeholder-count="8">
+                <button class="{{ it.cls }}" onClick="{{ it.onClick }}">{{ it.label }}</button>
+              </sc-for>
+            </div>
+          </sc-for>
+        </aside>
+
+        <main class="jq-run-detail-content">
+
+          <sc-if value="{{ isOverview }}" hint-placeholder-val="{{ true }}">
+            <section class="jq-run-panel-section jq-run-overview-jq-page">
+              <header class="jq-run-overview-page-head"><h2 class="jq-run-overview-page-title">收益概述</h2></header>
+              <div class="jq-run-overview-summary-board">
+                <div class="jq-run-overview-metrics-board">
+                  <div class="jq-run-overview-metrics-jq">
+                    <div class="jq-run-overview-metrics-row">
+                      <sc-for list="{{ metricsRow1 }}" as="m" hint-placeholder-count="11">
+                        <div class="jq-run-overview-metric-block"><span>{{ m.label }}</span><strong class="{{ m.tone }}">{{ m.display }}</strong></div>
+                      </sc-for>
+                    </div>
+                    <div class="jq-run-overview-metrics-row">
+                      <sc-for list="{{ metricsRow2 }}" as="m" hint-placeholder-count="10">
+                        <div class="{{ m.blockCls }}"><span>{{ m.label }}</span><strong class="{{ m.tone }}">{{ m.display }}</strong></div>
+                      </sc-for>
+                    </div>
+                  </div>
+                </div>
+              </div>
+
+              <div class="jq-run-overview-chart-toolbar--jq">
+                <div class="jq-run-overview-presets--jq">
+                  <span class="jq-run-zoom-prefix">缩放：</span>
+                  <button class="jq-run-tb-link" onClick="{{ preset1m }}">1个月</button>
+                  <button class="jq-run-tb-link" onClick="{{ preset3m }}">3个月</button>
+                  <button class="jq-run-tb-link" onClick="{{ preset1y }}">1年</button>
+                  <button class="jq-run-tb-link" onClick="{{ presetAll }}">全部</button>
+                </div>
+                <div class="jq-run-overview-toolbar-center--jq">
+                  <button class="{{ legS }}" onClick="{{ toggleStrategy }}"><i class="jq-run-tb-swatch" style="background:#4C78A8"></i>策略收益</button>
+                  <button class="{{ legE }}" onClick="{{ toggleExcess }}"><i class="jq-run-tb-swatch" style="background:#F28E2B"></i>超额收益</button>
+                  <button class="{{ legB }}" onClick="{{ toggleBenchmark }}"><i class="jq-run-tb-swatch" style="background:#E45756"></i>{{ benchmark }}</button>
+                  <label class="jq-run-tb-radio"><input type="radio" checked="{{ isLinear }}" onChange="{{ setLinear }}"/>普通轴</label>
+                  <label class="jq-run-tb-radio"><input type="radio" checked="{{ isLogAxis }}" onChange="{{ setLog }}"/>对数轴</label>
+                </div>
+                <div class="jq-run-overview-date-toolbar--jq">
+                  <span class="jq-run-overview-time-label">时间：</span>
+                  <input type="date" class="jq-run-overview-date-input" value="{{ rangeStart }}" min="{{ dateMin }}" max="{{ dateMax }}" onChange="{{ onStartDate }}"/>
+                  <span class="jq-run-overview-date-sep">-</span>
+                  <input type="date" class="jq-run-overview-date-input" value="{{ rangeEnd }}" min="{{ dateMin }}" max="{{ dateMax }}" onChange="{{ onEndDate }}"/>
+                </div>
+              </div>
+
+              <div class="jq-run-overview-chart-panel--jq">
+                <div id="ovc" class="jq-ov-chart" ref="{{ ovcRef }}"></div>
+              </div>
+            </section>
+          </sc-if>
+
+          <sc-if value="{{ isTrades }}" hint-placeholder-val="{{ false }}">
+            <section class="jq-run-panel-section">
+              <div class="jq-run-section-head"><strong>交易详情</strong></div>
+              <div class="jq-panel-toolbar">
+                <div class="jq-col-toggles">
+                  <span style="color:#7b8794;">列：日期 · 委托时间 · 标的 · 方向 · 数量 · 成交价 · 成交额 · 已实现盈亏 · 手续费</span>
+                </div>
+                <div style="display:flex; gap:6px;">
+                  <button class="{{ tradeGroupCls }}" onClick="{{ toggleTradeGroup }}">按日分组</button>
+                  <button class="jq-tab-button" onClick="{{ toggleTradeOrder }}">{{ tradeOrderLabel }}</button>
+                </div>
+              </div>
+              <div class="jq-scroll">
+                <sc-for list="{{ tradeDays }}" as="d" hint-placeholder-count="4">
+                  <div class="jq-day-block">
+                    <div class="jq-day-title">{{ d.date }}</div>
+                    <div class="jq-table-shell">
+                      <table class="jq-legacy-table">
+                        <thead><tr><th>委托时间</th><th>标的</th><th>名称</th><th>方向</th><th class="jq-num-cell">数量</th><th class="jq-num-cell">成交价</th><th class="jq-num-cell">成交额</th><th class="jq-num-cell">已实现盈亏</th><th class="jq-num-cell">手续费</th></tr></thead>
+                        <tbody>
+                          <sc-for list="{{ d.rows }}" as="r" hint-placeholder-count="5">
+                            <tr><td>{{ r.time }}</td><td>{{ r.symbol }}</td><td>{{ r.name }}</td><td><strong class="{{ r.sideCls }}">{{ r.side }}</strong></td><td class="jq-num-cell">{{ r.qty }}</td><td class="jq-num-cell">{{ r.price }}</td><td class="jq-num-cell">{{ r.turnover }}</td><td class="jq-num-cell {{ r.pnlCls }}">{{ r.pnl }}</td><td class="jq-num-cell">{{ r.fee }}</td></tr>
+                          </sc-for>
+                        </tbody>
+                      </table>
+                    </div>
+                  </div>
+                </sc-for>
+              </div>
+            </section>
+          </sc-if>
+
+          <sc-if value="{{ isPositions }}" hint-placeholder-val="{{ false }}">
+            <section class="jq-run-panel-section">
+              <div class="jq-run-section-head"><strong>每日持仓&收益</strong></div>
+              <div class="jq-scroll">
+                <sc-for list="{{ positionDays }}" as="d" hint-placeholder-count="3">
+                  <div class="jq-day-block">
+                    <div class="jq-day-title">{{ d.date }} · 持仓 {{ d.count }} · 市值 {{ d.mv }}</div>
+                    <div class="jq-table-shell">
+                      <table class="jq-legacy-table">
+                        <thead><tr><th>标的</th><th>名称</th><th class="jq-num-cell">持仓数量</th><th class="jq-num-cell">收盘价</th><th class="jq-num-cell">市值</th><th class="jq-num-cell">浮动盈亏</th><th class="jq-num-cell">权重</th></tr></thead>
+                        <tbody>
+                          <sc-for list="{{ d.rows }}" as="r" hint-placeholder-count="6">
+                            <tr><td>{{ r.symbol }}</td><td>{{ r.name }}</td><td class="jq-num-cell">{{ r.qty }}</td><td class="jq-num-cell">{{ r.close }}</td><td class="jq-num-cell">{{ r.mv }}</td><td class="jq-num-cell {{ r.pnlCls }}">{{ r.pnl }}</td><td class="jq-num-cell">{{ r.weight }}</td></tr>
+                          </sc-for>
+                        </tbody>
+                      </table>
+                    </div>
+                  </div>
+                </sc-for>
+              </div>
+            </section>
+          </sc-if>
+
+          <sc-if value="{{ isLog }}" hint-placeholder-val="{{ false }}">
+            <section class="jq-run-panel-section">
+              <div class="jq-run-section-head"><strong>日志输出</strong></div>
+              <div class="jq-run-log-tabs">
+                <button class="{{ logTabLogsCls }}" onClick="{{ setLogTabLogs }}">日志</button>
+                <button class="{{ logTabErrCls }}" onClick="{{ setLogTabErr }}">错误</button>
+              </div>
+              <div class="jq-run-log-console">
+                <sc-for list="{{ logLines }}" as="l" hint-placeholder-count="12">
+                  <div class="jq-run-log-line"><span>{{ l.ts }}</span><span class="{{ l.lvCls }}">{{ l.level }}</span><span>{{ l.message }}</span></div>
+                </sc-for>
+              </div>
+            </section>
+          </sc-if>
+
+          <sc-if value="{{ isPerf }}" hint-placeholder-val="{{ false }}">
+            <section class="jq-run-panel-section">
+              <div class="jq-run-section-head"><strong>性能分析</strong></div>
+              <div class="jq-scroll">
+                <div class="jq-run-performance-grid">
+                  <div class="jq-run-performance-card">
+                    <h4>产物概况</h4>
+                    <table class="jq-legacy-table">
+                      <thead><tr><th>artifact</th><th>状态</th><th class="jq-num-cell">大小</th><th class="jq-num-cell">行数</th></tr></thead>
+                      <tbody>
+                        <sc-for list="{{ artifactRows }}" as="a" hint-placeholder-count="5">
+                          <tr><td>{{ a.name }}</td><td>{{ a.state }}</td><td class="jq-num-cell">{{ a.size }}</td><td class="jq-num-cell">{{ a.rows }}</td></tr>
+                        </sc-for>
+                      </tbody>
+                    </table>
+                  </div>
+                  <div class="jq-run-performance-card">
+                    <h4>命名输出</h4>
+                    <table class="jq-legacy-table">
+                      <thead><tr><th>output_name</th><th>dataset</th><th>version</th><th class="jq-num-cell">row_count</th></tr></thead>
+                      <tbody>
+                        <sc-for list="{{ outputRows }}" as="o" hint-placeholder-count="3">
+                          <tr><td>{{ o.name }}</td><td>{{ o.dataset }}</td><td>{{ o.version }}</td><td class="jq-num-cell">{{ o.rows }}</td></tr>
+                        </sc-for>
+                      </tbody>
+                    </table>
+                  </div>
+                </div>
+              </div>
+            </section>
+          </sc-if>
+
+          <sc-if value="{{ isCode }}" hint-placeholder-val="{{ false }}">
+            <section class="jq-run-panel-section">
+              <div class="jq-run-section-head"><strong>策略代码</strong></div>
+              <div class="jq-run-code-head"><span>{{ strategyFile }}</span></div>
+              <pre class="jq-run-code-block">{{ strategyCode }}</pre>
+            </section>
+          </sc-if>
+
+          <sc-if value="{{ isReport }}" hint-placeholder-val="{{ false }}">
+            <section class="jq-run-panel-section">
+              <div class="jq-run-section-head"><strong>Markdown 报告</strong></div>
+              <div class="jq-run-code-head"><span>report.md</span></div>
+              <div class="jq-report-md jq-scroll">{{ reportEl }}</div>
+            </section>
+          </sc-if>
+
+          <sc-if value="{{ isAttribution }}" hint-placeholder-val="{{ false }}">
+            <section class="jq-run-panel-section">
+              <div class="jq-run-section-head"><strong>归因</strong></div>
+              <div class="jq-scroll">
+                <div class="jq-run-attribution-summary">
+                  <sc-for list="{{ attrSummary }}" as="s" hint-placeholder-count="4">
+                    <div class="jq-run-attribution-summary-item"><span>{{ s.label }}</span><strong>{{ s.value }}</strong></div>
+                  </sc-for>
+                </div>
+                <div class="jq-table-shell">
+                  <table class="jq-legacy-table">
+                    <thead><tr><th>因子</th><th class="jq-num-cell">暴露</th><th class="jq-num-cell">因子收益</th><th class="jq-num-cell">贡献(bps)</th><th class="jq-num-cell">占比</th></tr></thead>
+                    <tbody>
+                      <sc-for list="{{ attrRows }}" as="r" hint-placeholder-count="6">
+                        <tr><td>{{ r.factor }}</td><td class="jq-num-cell">{{ r.exposure }}</td><td class="jq-num-cell {{ r.retCls }}">{{ r.ret }}</td><td class="jq-num-cell {{ r.contribCls }}">{{ r.contrib }}</td><td class="jq-num-cell">{{ r.share }}</td></tr>
+                      </sc-for>
+                    </tbody>
+                  </table>
+                </div>
+              </div>
+            </section>
+          </sc-if>
+
+          <sc-if value="{{ isMetric }}" hint-placeholder-val="{{ false }}">
+            <section class="jq-run-panel-section">
+              <div class="jq-metric-head"><h3>{{ metricTitle }}</h3><span class="big" style="color:{{ metricColor }};">{{ metricLatest }}</span><span style="color:#888; font-size:12px;">{{ metricSubtitle }}</span></div>
+              <div id="mtc" class="jq-mt-chart" ref="{{ mtcRef }}"></div>
+              <div class="jq-scroll" style="margin-top:6px;">
+                <div class="jq-table-shell">
+                  <table class="jq-legacy-table">
+                    <thead><tr><th>日期</th><th class="jq-num-cell">{{ metricTitle }}</th></tr></thead>
+                    <tbody>
+                      <sc-for list="{{ metricTableRows }}" as="r" hint-placeholder-count="12">
+                        <tr><td>{{ r.date }}</td><td class="jq-num-cell {{ r.cls }}">{{ r.value }}</td></tr>
+                      </sc-for>
+                    </tbody>
+                  </table>
+                </div>
+              </div>
+            </section>
+          </sc-if>
+
+        </main>
+      </div>
+    </div>
+  </div>
+</div>
+</x-dc>
+<script type="text/x-dc" data-dc-script data-props="{&quot;benchmark&quot;:{&quot;editor&quot;:&quot;text&quot;,&quot;default&quot;:&quot;中证500&quot;,&quot;tsType&quot;:&quot;string&quot;}}">
+class Component extends DCLogic {
+  state = {
+    tab: "overview", logTab: "logs",
+    yMode: "linear", showStrategy: true, showExcess: true, showBenchmark: true,
+    rangeStart: "", rangeEnd: "",
+    tradeGroup: true, tradeOrder: "desc",
+  };
+
+  componentDidMount() {
+    this._gen();
+    this.setState({ rangeStart: this._d.dates[0], rangeEnd: this._d.dates[this._d.dates.length - 1] });
+    this._onResize = () => { if (this._ov) this._ov.resize(); if (this._mt) this._mt.resize(); };
+    window.addEventListener("resize", this._onResize);
+  }
+  componentWillUnmount() {
+    window.removeEventListener("resize", this._onResize);
+    if (this._ov) { this._ov.dispose(); this._ov = null; }
+    if (this._mt) { this._mt.dispose(); this._mt = null; }
+  }
+  // Re-render chart content when view toggles / metric changes on an ALREADY-mounted node.
+  // prevState isn't reliably passed by the runtime, so track the relevant signatures ourselves.
+  componentDidUpdate() {
+    const tab = this.state.tab;
+    if (tab.startsWith("metric_") && this._mt && tab !== this._prevMetricTab) {
+      this._mt.setOption(this._metricOption(), true); this._mt.resize();
+    }
+    this._prevMetricTab = tab;
+    if (tab === "overview" && this._ov) {
+      const sig = [this.state.yMode, this.state.showStrategy, this.state.showExcess, this.state.showBenchmark].join("|");
+      if (sig !== this._prevViewSig) this._ov.setOption(this._ovOption(), true);
+      this._prevViewSig = sig;
+    }
+  }
+
+  _waitEcharts(cb) { if (window.echarts) { cb(); return; } let n = 0; const p = () => { if (window.echarts) cb(); else if (n++ < 200) setTimeout(p, 50); }; p(); }
+
+  _ensureRefs() {
+    if (this._ovRef) return;
+    this._ovRef = (el) => {
+      if (el) { this._ovEl = el; this._initOv(); }
+      else { if (this._ov) { this._ov.dispose(); this._ov = null; } this._ovEl = null; }
+    };
+    this._mtRef = (el) => {
+      if (el) { this._mtEl = el; this._initMt(); }
+      else { if (this._mt) { this._mt.dispose(); this._mt = null; } this._mtEl = null; }
+    };
+  }
+  _initOv() {
+    if (!this._ovEl || !this._d) return;
+    if (!window.echarts) { this._waitEcharts(() => this._initOv()); return; }
+    if (this._ov && this._ov.getDom() !== this._ovEl) { this._ov.dispose(); this._ov = null; }
+    if (!this._ov) { this._ov = window.echarts.init(this._ovEl); this._ov.on("datazoom", () => this._onZoom()); }
+    this._ov.setOption(this._ovOption(), true); this._ov.resize();
+  }
+  _initMt() {
+    if (!this._mtEl || !this._d) return;
+    if (!window.echarts) { this._waitEcharts(() => this._initMt()); return; }
+    if (this._mt && this._mt.getDom() !== this._mtEl) { this._mt.dispose(); this._mt = null; }
+    if (!this._mt) this._mt = window.echarts.init(this._mtEl);
+    this._mt.setOption(this._metricOption(), true); this._mt.resize();
+  }
+
+  // ---------- formatting ----------
+  _pct(v) { return (v == null || isNaN(v)) ? "—" : (v * 100).toFixed(2) + "%"; }
+  _num(v, d = 3) { return (v == null || isNaN(v)) ? "—" : Number(v).toFixed(d); }
+  _money(v) { if (v == null || !isFinite(v)) return "—"; const t = Math.abs(v).toLocaleString("zh-CN", { minimumFractionDigits: 2, maximumFractionDigits: 2 }); return (v < 0 ? "-" : "") + t; }
+
+  // ---------- data generation ----------
+  _gen() {
+    if (this._d) return;
+    const rng = (() => { let a = 20240620 >>> 0; return () => { a |= 0; a = (a + 0x6D2B79F5) | 0; let t = Math.imul(a ^ (a >>> 15), 1 | a); t = (t + Math.imul(t ^ (t >>> 7), 61 | t)) ^ t; return ((t ^ (t >>> 14)) >>> 0) / 4294967296; }; })();
+    const g = () => { let u = 0, v = 0; while (u === 0) u = rng(); while (v === 0) v = rng(); return Math.sqrt(-2 * Math.log(u)) * Math.cos(2 * Math.PI * v); };
+
+    const dates = []; let cur = Date.UTC(2019, 0, 2); const end = Date.UTC(2024, 11, 31);
+    for (let t = cur; t <= end; t += 86400000) { const wd = new Date(t).getUTCDay(); if (wd >= 1 && wd <= 5) dates.push(new Date(t).toISOString().slice(0, 10)); }
+    const n = dates.length;
+    const book = 1e7, beta = 0.95;
+    // pre-draw noise and DEMEAN it, so total drift is deterministic (a single seed path
+    // otherwise adds ±0.5 to cumulative log-return over ~1565 samples).
+    const nb = [], ns = []; for (let i = 0; i < n; i++) { nb.push(g()); ns.push(g()); }
+    const demean = a => { const m = a.reduce((x, y) => x + y, 0) / a.length; for (let i = 0; i < a.length; i++) a[i] -= m; };
+    demean(nb); demean(ns);
+    const rs = [], rb = [], navS = [], navB = [], buy = [], sell = [], isFri = [];
+    let s = 1, b = 1;
+    for (let i = 0; i < n; i++) {
+      let eb = 0.00034 + 0.0102 * nb[i];
+      // mild regime: 2022 drawdown then recovery
+      const yr = +dates[i].slice(0, 4);
+      if (yr === 2022) eb -= 0.0005;
+      const es = 0.00030 + beta * eb + 0.0058 * ns[i];
+      rb.push(eb); rs.push(es); s *= 1 + es; b *= 1 + eb; navS.push(s); navB.push(b);
+      const fri = new Date(dates[i] + "T00:00:00Z").getUTCDay() === 5; isFri.push(fri);
+      if (fri) { const tn = 0.08 + 0.20 * rng(); buy.push(book * b * tn * (0.9 + 0.2 * rng())); sell.push(book * b * tn * (0.9 + 0.2 * rng())); }
+      else { buy.push(rng() < 0.12 ? book * 0.008 * rng() : 0); sell.push(rng() < 0.12 ? book * 0.008 * rng() : 0); }
+    }
+
+    // overview rows
+    const rows = dates.map((date, i) => {
+      const sr = navS[i] - 1, br = navB[i] - 1;
+      return { date, strategyReturn: sr, benchmarkReturn: br, excessReturn: (1 + sr) / (1 + br) - 1, dailyStrategyReturn: rs[i], navS: navS[i], navB: navB[i], dailyBuy: buy[i] || null, dailySell: sell[i] || null };
+    });
+
+    // stats
+    const mean = a => a.reduce((x, y) => x + y, 0) / a.length;
+    const std = a => { const m = mean(a); return Math.sqrt(a.reduce((x, y) => x + (y - m) * (y - m), 0) / a.length); };
+    const cov = (a, c) => { const ma = mean(a), mc = mean(c); let s2 = 0; for (let i = 0; i < a.length; i++) s2 += (a[i] - ma) * (c[i] - mc); return s2 / a.length; };
+    const dn = a => { const neg = a.filter(x => x < 0); return neg.length ? Math.sqrt(neg.reduce((x, y) => x + y * y, 0) / a.length) : 1e-9; };
+    const A = 252;
+    const betaV = cov(rs, rb) / (std(rb) * std(rb));
+    const alphaV = (mean(rs) - betaV * mean(rb)) * A;
+    const sharpe = mean(rs) / std(rs) * Math.sqrt(A);
+    const sortino = mean(rs) / dn(rs) * Math.sqrt(A);
+    const vol = std(rs) * Math.sqrt(A), bvol = std(rb) * Math.sqrt(A);
+    const re = rows.map((r, i) => i === 0 ? 0 : (navS[i] / navB[i]) / (navS[i - 1] / navB[i - 1]) - 1);
+    const exSharpe = mean(re) / std(re) * Math.sqrt(A);
+    const ir = mean(rs.map((x, i) => x - rb[i])) / std(rs.map((x, i) => x - rb[i])) * Math.sqrt(A);
+    // drawdown of strategy
+    let peak = navS[0], dd = 0, ddS = dates[0], ddE = dates[0], curPeakDate = dates[0];
+    for (let i = 0; i < n; i++) { if (navS[i] > peak) { peak = navS[i]; curPeakDate = dates[i]; } const d = navS[i] / peak - 1; if (d < dd) { dd = d; ddS = curPeakDate; ddE = dates[i]; } }
+    // excess drawdown
+    const navE = navS.map((v, i) => v / navB[i]); let pe = navE[0], edd = 0;
+    for (let i = 0; i < n; i++) { if (navE[i] > pe) pe = navE[i]; const d = navE[i] / pe - 1; if (d < edd) edd = d; }
+
+    // weekly returns (Fridays)
+    const friIdx = []; for (let i = 0; i < n; i++) if (isFri[i]) friIdx.push(i);
+    const weekly = []; for (let k = 1; k < friIdx.length; k++) weekly.push(navS[friIdx[k]] / navS[friIdx[k - 1]] - 1);
+    const wWin = weekly.filter(x => x > 0), wLoss = weekly.filter(x => x < 0);
+    const winRate = wWin.length / weekly.length;
+    const avgWin = wWin.length ? mean(wWin) : 0, avgLoss = wLoss.length ? mean(wLoss) : -1e-9;
+    const plRatio = Math.abs(avgWin / avgLoss);
+    const dailyWin = rs.filter(x => x > 0).length / n;
+
+    const jq = {
+      strategy_return: navS[n - 1] - 1,
+      strategy_annual_return: Math.pow(navS[n - 1], A / n) - 1,
+      excess_return: navS[n - 1] / navB[n - 1] - 1,
+      benchmark_return: navB[n - 1] - 1,
+      alpha: alphaV, beta: betaV, sharpe_ratio: sharpe, win_rate: winRate,
+      profit_loss_ratio: plRatio, max_drawdown: dd, sortino_ratio: sortino,
+      avg_daily_excess_return: mean(re), excess_max_drawdown: edd, excess_sharpe_ratio: exSharpe,
+      daily_win_rate: dailyWin, profit_count: wWin.length, loss_count: wLoss.length,
+      information_ratio: ir, strategy_volatility: vol, benchmark_volatility: bvol,
+      max_drawdown_period: [ddS, ddE],
+    };
+
+    // rolling metric series (window 60)
+    const W = 60;
+    const roll = fn => { const out = new Array(n).fill(null); for (let i = W; i < n; i++) out[i] = fn(i - W, i); return out; };
+    const slc = (a, lo, hi) => a.slice(lo, hi);
+    const series = {
+      strategy_return: navS.map(v => v - 1),
+      benchmark_return: navB.map(v => v - 1),
+      alpha: roll((lo, hi) => { const xs = slc(rs, lo, hi), xb = slc(rb, lo, hi); const bb = cov(xb, xs) / (std(xb) * std(xb) || 1e-9); return (mean(xs) - bb * mean(xb)) * A; }),
+      beta: roll((lo, hi) => { const xs = slc(rs, lo, hi), xb = slc(rb, lo, hi); return cov(xb, xs) / (std(xb) * std(xb) || 1e-9); }),
+      sharpe: roll((lo, hi) => { const xs = slc(rs, lo, hi); return mean(xs) / (std(xs) || 1e-9) * Math.sqrt(A); }),
+      sortino: roll((lo, hi) => { const xs = slc(rs, lo, hi); return mean(xs) / (dn(xs) || 1e-9) * Math.sqrt(A); }),
+      information_ratio: roll((lo, hi) => { const e = slc(rs, lo, hi).map((x, i) => x - slc(rb, lo, hi)[i]); return mean(e) / (std(e) || 1e-9) * Math.sqrt(A); }),
+      volatility: roll((lo, hi) => std(slc(rs, lo, hi)) * Math.sqrt(A)),
+      benchmark_volatility: roll((lo, hi) => std(slc(rb, lo, hi)) * Math.sqrt(A)),
+      max_drawdown: (() => { const out = []; let pk = navS[0]; for (let i = 0; i < n; i++) { if (navS[i] > pk) pk = navS[i]; out.push(navS[i] / pk - 1); } return out; })(),
+    };
+
+    // names universe
+    const SYM = [["600519.XSHG", "贵州茅台", 1680], ["000858.XSHE", "五粮液", 158], ["600036.XSHG", "招商银行", 36], ["000333.XSHE", "美的集团", 58], ["600276.XSHG", "恒瑞医药", 47], ["002475.XSHE", "立讯精密", 32], ["300750.XSHE", "宁德时代", 210], ["600887.XSHG", "伊利股份", 28], ["601012.XSHG", "隆基绿能", 24], ["000725.XSHE", "京东方A", 4.3], ["002594.XSHE", "比亚迪", 245], ["600030.XSHG", "中信证券", 21], ["000651.XSHE", "格力电器", 38], ["601318.XSHG", "中国平安", 46]];
+    const pick = (i) => SYM[i % SYM.length];
+
+    // trades: last 6 fridays
+    const lastFri = friIdx.slice(-6).reverse();
+    const trades = lastFri.map(fi => {
+      const date = dates[fi]; const cnt = 4 + Math.floor(rng() * 3);
+      const rws = [];
+      for (let j = 0; j < cnt; j++) {
+        const sm = pick(fi + j * 3); const buying = rng() > 0.45;
+        const qty = (1 + Math.floor(rng() * 12)) * 100;
+        const price = +(sm[2] * (0.9 + 0.2 * rng())).toFixed(2);
+        const to = qty * price; const pnl = buying ? null : +((rng() - 0.42) * to * 0.06).toFixed(2);
+        const hh = 9 + Math.floor(rng() * 6), mm = Math.floor(rng() * 60);
+        rws.push({ time: ("0" + hh).slice(-2) + ":" + ("0" + mm).slice(-2) + ":00", symbol: sm[0], name: sm[1], side: buying ? "买入" : "卖出", sideCls: buying ? "positive" : "negative", qty: qty.toLocaleString("zh-CN") + "股", price: price.toFixed(2), turnover: this._money(to), pnl: pnl == null ? "—" : this._money(pnl), pnlCls: pnl == null ? "" : (pnl >= 0 ? "positive" : "negative"), fee: this._money(to * 0.0008) });
+      }
+      rws.sort((a, c) => a.time.localeCompare(c.time));
+      return { date, rows: rws };
+    });
+
+    // positions: last 3 days
+    const posDays = [n - 1, n - 2, n - 3].map(di => {
+      const date = dates[di]; const cnt = 8;
+      let totMv = 0; const rws = [];
+      for (let j = 0; j < cnt; j++) {
+        const sm = pick(di + j); const qty = (3 + Math.floor(rng() * 18)) * 100;
+        const close = +(sm[2] * (0.9 + 0.2 * rng())).toFixed(2); const mv = qty * close; totMv += mv;
+        const pnl = +((rng() - 0.4) * mv * 0.1).toFixed(2);
+        rws.push({ symbol: sm[0], name: sm[1], qty: qty.toLocaleString("zh-CN") + "股", close: close.toFixed(2), mv: this._money(mv), _mv: mv, pnl: this._money(pnl), pnlCls: pnl >= 0 ? "positive" : "negative" });
+      }
+      rws.forEach(r => r.weight = ((r._mv / totMv) * 0.95 * 100).toFixed(2) + "%");
+      return { date, count: cnt, mv: this._money(totMv), rows: rws };
+    });
+
+    // logs
+    const logs = [
+      ["INFO", "BacktestEngine 初始化：strategy=weekly_cn_multifactor benchmark=000905.XSHG"],
+      ["INFO", "数据加载：equity_cn 行情 2019-01-02 → 2024-12-31，" + n + " 个交易日"],
+      ["INFO", "因子集 factor_set=fs_cn_3f qualified=[surprise_sue, mom_20_120, ep_ttm]"],
+      ["INFO", "模型 model_id=lgbm_rank_6f@v2 stage=staging 已加载（只引用不重训）"],
+      ["INFO", "调仓频率=周频(周五收盘) 持仓上限=50 单票上限=3%"],
+      ["INFO", "风控：组合回撤熔断=20% 单日跌停不接 流动性下限=2000万/日"],
+      ["WARN", "2022-04-26 组合回撤触及 -15.8%，逼近熔断阈值，降杠杆至 0.85"],
+      ["INFO", "2022-05-09 回撤修复至 -9.2%，恢复目标杠杆 1.0"],
+      ["WARN", "2023-08-18 标的 300750.XSHE 停牌，持仓冻结，权重顺延下周"],
+      ["INFO", "成交统计：累计成交 " + (friIdx.length * 5) + " 笔，平均周换手 18.4%"],
+      ["INFO", "回测完成：annual=" + (jq.strategy_annual_return * 100).toFixed(1) + "% sharpe=" + jq.sharpe_ratio.toFixed(2) + " maxDD=" + (jq.max_drawdown * 100).toFixed(1) + "%"],
+      ["INFO", "产物写入 data/artifacts/experiments/run_wk_cn_8f2a/"],
+      ["ERROR", "attribution.csv 因子暴露缺失 2 个交易日（停牌），已用前值填充"],
+      ["INFO", "jq_overview_metrics 计算完成，详情页可用"],
+    ];
+    const logLines = logs.map((l, i) => { const day = dates[Math.floor(i / logs.length * (n - 1))]; return { ts: day + " " + ("0" + (9 + i % 8)).slice(-2) + ":" + ("0" + (i * 7 % 60)).slice(-2) + ":12", level: l[0], lvCls: "jq-log-lv-" + l[0], message: l[1] }; });
+
+    this._d = { dates, navS, navB, rs, rb, buy, sell, rows, jq, series, trades, posDays, logLines, n };
+  }
+
+  // ---------- chart options ----------
+  _ovOption() {
+    const d = this._d, rows = d.rows; const st = this.state;
+    const cats = rows.map(r => r.date);
+    const grid = "#EAEAEA";
+    const mainH = 300, dailyH = 120, tradeH = 120, gap = 8, top0 = 6;
+    const top1 = top0 + mainH + gap, top2 = top1 + dailyH + gap;
+    const axisLabel = { color: "#6b7280", fontSize: 11 };
+    const ymain = st.yMode === "log"
+      ? { type: "log", position: "right", splitLine: { lineStyle: { color: grid } }, axisLine: { show: false }, axisLabel: { ...axisLabel, formatter: v => this._pct(v - 1) } }
+      : { type: "value", position: "right", scale: true, splitLine: { lineStyle: { color: grid } }, axisLine: { show: false }, axisLabel: { ...axisLabel, formatter: v => this._pct(v) } };
+    const yval = (r, k) => { const v = k === "s" ? r.strategyReturn : k === "e" ? r.excessReturn : r.benchmarkReturn; if (v == null) return null; return st.yMode === "log" ? (1 + v > 0 ? 1 + v : null) : v; };
+    // buy/sell axis bound (p98)
+    const av = []; rows.forEach(r => { if (r.dailyBuy) av.push(Math.abs(r.dailyBuy)); if (r.dailySell) av.push(Math.abs(r.dailySell)); });
+    av.sort((a, b) => a - b); const p98 = av.length ? av[Math.min(av.length - 1, Math.floor((av.length - 1) * 0.98))] : 1; const bound = p98 * 1.125;
+    const bench = this.props.benchmark || "中证500";
+
+    return {
+      animation: false, legend: { show: false },
+      tooltip: { trigger: "axis", axisPointer: { type: "cross", link: [{ xAxisIndex: [0, 1, 2] }], crossStyle: { color: "#999", width: 1, type: "dashed" } }, backgroundColor: "#fff", borderColor: "#d0d0d0", borderWidth: 1, textStyle: { color: "#333", fontSize: 12 },
+        formatter: (ps) => { if (!Array.isArray(ps) || !ps.length) return ""; const idx = ps[0].dataIndex; const r = rows[idx]; if (!r) return ""; return ['<div style="font-weight:600;margin-bottom:4px">' + r.date + '</div>', '策略收益：' + this._pct(r.strategyReturn), '超额收益：' + this._pct(r.excessReturn), bench + '：' + this._pct(r.benchmarkReturn), '每日盈亏：' + this._pct(r.dailyStrategyReturn), '买入：' + (r.dailyBuy ? this._money(r.dailyBuy) : '—'), '卖出：' + (r.dailySell ? this._money(r.dailySell) : '—')].join('<br/>'); } },
+      grid: [{ top: top0, left: 8, right: 56, height: mainH }, { top: top1, left: 8, right: 56, height: dailyH }, { top: top2, left: 8, right: 56, height: tradeH }],
+      xAxis: [
+        { type: "category", gridIndex: 0, data: cats, boundaryGap: false, axisLine: { lineStyle: { color: grid } }, axisTick: { show: false }, axisLabel: { show: false } },
+        { type: "category", gridIndex: 1, data: cats, boundaryGap: true, axisLine: { lineStyle: { color: grid } }, axisTick: { show: false }, axisLabel: { show: false } },
+        { type: "category", gridIndex: 2, data: cats, boundaryGap: true, axisLine: { lineStyle: { color: grid } }, axisTick: { show: false }, axisLabel: { ...axisLabel, formatter: v => v.length >= 10 ? v.slice(2) : v } },
+      ],
+      yAxis: [
+        { ...ymain, gridIndex: 0 },
+        { type: "value", gridIndex: 1, position: "right", scale: true, splitLine: { lineStyle: { color: grid } }, axisLine: { show: false }, axisLabel: { ...axisLabel, formatter: v => this._pct(v) }, min: v => Math.min(v.min, 0), max: v => Math.max(v.max, 0) },
+        { type: "value", gridIndex: 2, position: "right", splitLine: { lineStyle: { color: grid } }, axisLine: { show: false }, axisLabel: { ...axisLabel, formatter: v => { const a = Math.abs(v); return a >= 1e6 ? (v / 1e6).toFixed(1) + "M" : a >= 1e3 ? (v / 1e3).toFixed(0) + "K" : v.toFixed(0); } }, min: -bound, max: bound },
+      ],
+      dataZoom: [
+        { type: "inside", xAxisIndex: [0, 1, 2], filterMode: "none", zoomOnMouseWheel: true, moveOnMouseWheel: false, moveOnMouseMove: true },
+        { type: "slider", xAxisIndex: [0, 1, 2], filterMode: "none", bottom: 4, height: 22, borderColor: "#d5dbe3", backgroundColor: "#f5f5f5", fillerColor: "rgba(76,120,168,0.22)", handleStyle: { color: "#fff", borderColor: "#9aa5b1" } },
+      ],
+      series: [
+        { name: "策略收益", type: "line", xAxisIndex: 0, yAxisIndex: 0, showSymbol: false, lineStyle: { color: "#4C78A8", width: st.showStrategy ? 2 : 0, opacity: st.showStrategy ? 1 : 0 }, areaStyle: st.showStrategy ? { color: "rgba(76,120,168,0.15)" } : { opacity: 0 }, markLine: st.showStrategy ? { silent: true, symbol: "none", label: { show: false }, lineStyle: { color: "#000", width: 1.2 }, data: [{ yAxis: st.yMode === "log" ? 1 : 0 }] } : undefined, data: rows.map(r => yval(r, "s")) },
+        { name: "超额收益", type: "line", xAxisIndex: 0, yAxisIndex: 0, showSymbol: false, lineStyle: { color: "#F28E2B", width: st.showExcess ? 2 : 0, opacity: st.showExcess ? 1 : 0 }, data: rows.map(r => yval(r, "e")) },
+        { name: bench, type: "line", xAxisIndex: 0, yAxisIndex: 0, showSymbol: false, lineStyle: { color: "#E45756", width: st.showBenchmark ? 2 : 0, opacity: st.showBenchmark ? 1 : 0 }, data: rows.map(r => yval(r, "b")) },
+        { name: "每日盈亏", type: "bar", xAxisIndex: 1, yAxisIndex: 1, barWidth: "55%", markLine: { silent: true, symbol: "none", label: { show: false }, lineStyle: { color: "#333", width: 1 }, data: [{ yAxis: 0 }] }, data: rows.map(r => { const v = r.dailyStrategyReturn; return v == null ? null : { value: v, itemStyle: { color: v >= 0 ? "#54A24B" : "#B279A2" } }; }) },
+        { name: "买入", type: "bar", xAxisIndex: 2, yAxisIndex: 2, barWidth: "38%", z: 2, data: rows.map(r => ({ value: r.dailyBuy ?? null, itemStyle: { color: "#4C78A8" } })) },
+        { name: "卖出", type: "bar", xAxisIndex: 2, yAxisIndex: 2, barWidth: "38%", z: 2, data: rows.map(r => ({ value: r.dailySell ? -Math.abs(r.dailySell) : null, itemStyle: { color: "#F58518" } })) },
+      ],
+    };
+  }
+
+  _metricCfg() {
+    const M = {
+      metric_strategy_return: { key: "strategy_return", title: "策略收益", color: "#2f6fdd", fmt: "pct" },
+      metric_benchmark_return: { key: "benchmark_return", title: "基准收益", color: "#d34f4f", fmt: "pct" },
+      metric_alpha: { key: "alpha", title: "阿尔法", color: "#7e5ab6", fmt: "pct" },
+      metric_beta: { key: "beta", title: "贝塔", color: "#2e8b57", fmt: "num" },
+      metric_sharpe: { key: "sharpe", title: "夏普比率", color: "#21618c", fmt: "num" },
+      metric_sortino: { key: "sortino", title: "索提诺比率", color: "#d68910", fmt: "num" },
+      metric_ir: { key: "information_ratio", title: "信息比率", color: "#5b6c7d", fmt: "num" },
+      metric_volatility: { key: "volatility", title: "波动率", color: "#6c3483", fmt: "pct" },
+      metric_bm_volatility: { key: "benchmark_volatility", title: "基准波动率", color: "#7b7d7d", fmt: "pct" },
+      metric_max_drawdown: { key: "max_drawdown", title: "最大回撤", color: "#b42318", fmt: "pct" },
+    };
+    return M[this.state.tab];
+  }
+
+  _metricOption() {
+    const cfg = this._metricCfg(); if (!cfg) return {};
+    const d = this._d; const data = d.series[cfg.key];
+    const fmt = v => cfg.fmt === "pct" ? this._pct(v) : this._num(v);
+    return {
+      animation: false,
+      tooltip: { trigger: "axis", valueFormatter: v => typeof v === "number" ? fmt(v) : "—" },
+      grid: { top: 16, left: 10, right: 20, bottom: 28, containLabel: true },
+      xAxis: { type: "category", data: d.dates, boundaryGap: false, axisLabel: { color: "#6b7280", fontSize: 11, formatter: v => v.slice(2, 7) } },
+      yAxis: { type: "value", scale: true, axisLabel: { color: "#6b7280", fontSize: 11, formatter: v => fmt(v) }, splitLine: { lineStyle: { color: "#EEE" } } },
+      dataZoom: [{ type: "inside" }, { type: "slider", height: 18, bottom: 4 }],
+      series: [{ type: "line", smooth: true, showSymbol: false, data, lineStyle: { color: cfg.color }, itemStyle: { color: cfg.color }, areaStyle: { opacity: 0.08, color: cfg.color } }],
+    };
+  }
+
+  // ---------- imperative draw ----------
+
+
+  _onZoom() {
+    if (!this._ov) return; const opt = this._ov.getOption(); const dz = (opt.dataZoom || [])[0]; if (!dz) return;
+    const cats = this._d.dates; const maxIdx = cats.length - 1;
+    let s, e;
+    if (dz.startValue != null && typeof dz.startValue === "number") { s = cats[Math.max(0, Math.floor(dz.startValue))]; e = cats[Math.min(maxIdx, Math.ceil(dz.endValue))]; }
+    else if (dz.start != null) { s = cats[Math.floor(dz.start / 100 * maxIdx)]; e = cats[Math.ceil(dz.end / 100 * maxIdx)]; }
+    if (s && e && (s !== this.state.rangeStart || e !== this.state.rangeEnd)) this.setState({ rangeStart: s, rangeEnd: e });
+  }
+  _applyZoom(sDate, eDate) {
+    const cats = this._d.dates; if (!cats.includes(sDate)) sDate = cats[0]; if (!cats.includes(eDate)) eDate = cats[cats.length - 1];
+    if (sDate > eDate) { const t = sDate; sDate = eDate; eDate = t; }
+    this.setState({ rangeStart: sDate, rangeEnd: eDate });
+    if (this._ov) this._ov.dispatchAction({ type: "dataZoom", startValue: sDate, endValue: eDate });
+  }
+  _preset(kind) {
+    const cats = this._d.dates; const last = cats[cats.length - 1]; const endD = new Date(last + "T12:00:00Z");
+    if (kind === "all") { this._applyZoom(cats[0], last); return; }
+    if (kind === "1m") endD.setUTCMonth(endD.getUTCMonth() - 1);
+    else if (kind === "3m") endD.setUTCMonth(endD.getUTCMonth() - 3);
+    else endD.setUTCFullYear(endD.getUTCFullYear() - 1);
+    let s = endD.toISOString().slice(0, 10); if (s < cats[0]) s = cats[0];
+    // snap to nearest existing date >= s
+    s = cats.find(c => c >= s) || cats[0];
+    this._applyZoom(s, last);
+  }
+
+  // ---------- view model ----------
+  _toneFor(key, raw) {
+    if (raw == null || isNaN(raw)) return "";
+    if (key === "beta" || key === "profit_loss_ratio") return "";
+    if (key === "max_drawdown" || key === "excess_max_drawdown") return raw < 0 ? "negative" : "";
+    return raw > 0 ? "positive" : raw < 0 ? "negative" : "";
+  }
+  _fmtMetric(key, fmt, raw) {
+    if (key === "max_drawdown_period") return Array.isArray(raw) ? raw[0] + " ~ " + raw[1] : "—";
+    if (fmt === "pct") return this._pct(raw);
+    if (key === "profit_count" || key === "loss_count") return this._num(raw, 0);
+    return this._num(raw);
+  }
+
+  renderVals() {
+    const st = this.state; const d = this._d;
+    const bench = this.props.benchmark || "中证500";
+    const tab = st.tab;
+    this._ensureRefs();
+
+    const navDef = [
+      { title: "功能视图", items: [["overview", "收益概述"], ["trade_detail", "交易详情"], ["daily_position", "每日持仓&收益"], ["log_output", "日志输出"], ["performance", "性能分析"], ["strategy_code", "策略代码"], ["report", "Markdown 报告"], ["attribution", "归因"]] },
+      { title: "指标页", items: [["metric_strategy_return", "策略收益"], ["metric_benchmark_return", "基准收益"], ["metric_alpha", "阿尔法"], ["metric_beta", "贝塔"], ["metric_sharpe", "夏普比率"], ["metric_sortino", "索提诺比率"], ["metric_ir", "信息比率"], ["metric_volatility", "波动率"], ["metric_bm_volatility", "基准波动率"], ["metric_max_drawdown", "最大回撤"]] },
+    ];
+    const navGroups = navDef.map(g => ({ title: g.title, items: g.items.map(([k, l]) => ({ key: k, label: l, cls: "jq-run-detail-navitem" + (tab === k ? " active" : ""), onClick: () => this.setState({ tab: k }) })) }));
+
+    const vm = {
+      recordName: "周频多因子-中证500增强", status: "completed", benchmark: bench, frequency: "周频(周五收盘)",
+      analysisRange: "2019-01-02 → 2024-12-31", startedAt: "2026-06-20 09:14",
+      navGroups,
+      isOverview: tab === "overview", isTrades: tab === "trade_detail", isPositions: tab === "daily_position",
+      isLog: tab === "log_output", isPerf: tab === "performance", isCode: tab === "strategy_code",
+      isReport: tab === "report", isAttribution: tab === "attribution", isMetric: tab.startsWith("metric_"),
+    };
+
+    if (!d) {
+      // streaming placeholders before data is generated
+      vm.metricsRow1 = []; vm.metricsRow2 = []; vm.tradeDays = []; vm.positionDays = []; vm.logLines = [];
+      vm.artifactRows = []; vm.outputRows = []; vm.attrSummary = []; vm.attrRows = []; vm.metricTableRows = [];
+      vm.rangeStart = st.rangeStart; vm.rangeEnd = st.rangeEnd; vm.dateMin = ""; vm.dateMax = "";
+      vm.isLinear = st.yMode === "linear"; vm.isLogAxis = st.yMode === "log";
+      vm.legS = "jq-run-tb-legend"; vm.legE = "jq-run-tb-legend"; vm.legB = "jq-run-tb-legend";
+      vm.strategyFile = "weekly_cn_multifactor.py"; vm.strategyCode = ""; vm.reportEl = null;
+      return vm;
+    }
+
+    // metrics rows
+    const defs1 = [["strategy_return", "策略收益", "pct"], ["strategy_annual_return", "策略年化收益", "pct"], ["excess_return", "超额收益", "pct"], ["benchmark_return", "基准收益", "pct"], ["alpha", "阿尔法", "pct"], ["beta", "贝塔", "num"], ["sharpe_ratio", "夏普比率", "num"], ["win_rate", "胜率", "pct"], ["profit_loss_ratio", "盈亏比", "num"], ["max_drawdown", "最大回撤", "pct"], ["sortino_ratio", "索提诺比率", "num"]];
+    const defs2 = [["avg_daily_excess_return", "日均超额收益", "pct"], ["excess_max_drawdown", "超额最大回撤", "pct"], ["excess_sharpe_ratio", "超额夏普比率", "num"], ["daily_win_rate", "日胜率", "pct"], ["profit_count", "盈利次数", "num"], ["loss_count", "亏损次数", "num"], ["information_ratio", "信息比率", "num"], ["strategy_volatility", "策略波动率", "pct"], ["benchmark_volatility", "基准波动率", "pct"], ["max_drawdown_period", "最大回撤区间", "text"]];
+    vm.metricsRow1 = defs1.map(([k, l, f]) => ({ label: l, display: this._fmtMetric(k, f, d.jq[k]), tone: this._toneFor(k, d.jq[k]) }));
+    vm.metricsRow2 = defs2.map(([k, l, f]) => ({ label: l, display: this._fmtMetric(k, f, d.jq[k]), tone: this._toneFor(k, d.jq[k]), blockCls: "jq-run-overview-metric-block" + (k === "max_drawdown_period" ? " jq-run-overview-metric-block--col2" : "") }));
+
+    // toolbar
+    vm.isLinear = st.yMode === "linear"; vm.isLogAxis = st.yMode === "log";
+    vm.legS = "jq-run-tb-legend" + (st.showStrategy ? "" : " off");
+    vm.legE = "jq-run-tb-legend" + (st.showExcess ? "" : " off");
+    vm.legB = "jq-run-tb-legend" + (st.showBenchmark ? "" : " off");
+    vm.toggleStrategy = () => this.setState(s => ({ showStrategy: !s.showStrategy }));
+    vm.toggleExcess = () => this.setState(s => ({ showExcess: !s.showExcess }));
+    vm.toggleBenchmark = () => this.setState(s => ({ showBenchmark: !s.showBenchmark }));
+    vm.setLinear = () => this.setState({ yMode: "linear" });
+    vm.setLog = () => this.setState({ yMode: "log" });
+    vm.preset1m = () => this._preset("1m"); vm.preset3m = () => this._preset("3m"); vm.preset1y = () => this._preset("1y"); vm.presetAll = () => this._preset("all");
+    vm.rangeStart = st.rangeStart; vm.rangeEnd = st.rangeEnd; vm.dateMin = d.dates[0]; vm.dateMax = d.dates[d.dates.length - 1];
+    vm.onStartDate = (e) => this._applyZoom(e.target.value, st.rangeEnd);
+    vm.onEndDate = (e) => this._applyZoom(st.rangeStart, e.target.value);
+
+    // trades
+    let tdays = d.trades;
+    vm.tradeDays = (st.tradeOrder === "asc" ? [...tdays].reverse() : tdays);
+    vm.tradeGroupCls = "jq-tab-button active"; vm.toggleTradeGroup = () => {};
+    vm.tradeOrderLabel = st.tradeOrder === "desc" ? "最新在前" : "最旧在前";
+    vm.toggleTradeOrder = () => this.setState(s => ({ tradeOrder: s.tradeOrder === "desc" ? "asc" : "desc" }));
+
+    // positions
+    vm.positionDays = d.posDays;
+
+    // logs
+    vm.logTabLogsCls = "jq-run-log-tab" + (st.logTab === "logs" ? " active" : "");
+    vm.logTabErrCls = "jq-run-log-tab" + (st.logTab === "errors" ? " active" : "");
+    vm.setLogTabLogs = () => this.setState({ logTab: "logs" });
+    vm.setLogTabErr = () => this.setState({ logTab: "errors" });
+    vm.logLines = st.logTab === "errors" ? d.logLines.filter(l => /ERROR|WARN/.test(l.level)) : d.logLines;
+
+    // performance
+    vm.artifactRows = [
+      { name: "portfolio.csv", state: "已提供", size: "1.4 MB", rows: d.n.toLocaleString() },
+      { name: "trades.csv", state: "已提供", size: "318 KB", rows: (d.trades.length * 5 * 52).toLocaleString() },
+      { name: "positions.csv", state: "已提供", size: "2.1 MB", rows: (d.n * 8).toLocaleString() },
+      { name: "report.md", state: "已提供", size: "6 KB", rows: "—" },
+      { name: "strategy.py", state: "已提供", size: "4 KB", rows: "—" },
+      { name: "attribution.csv", state: "已提供", size: "44 KB", rows: (d.n).toLocaleString() },
+    ];
+    vm.outputRows = [
+      { name: "nav_curve", dataset: "run_wk_cn_8f2a/portfolio", version: "v1", rows: d.n.toLocaleString() },
+      { name: "weekly_signal", dataset: "strategy_outputs/weekly_cn", version: "v2", rows: "312" },
+      { name: "factor_exposure", dataset: "run_wk_cn_8f2a/attribution", version: "v1", rows: d.n.toLocaleString() },
+    ];
+
+    // attribution
+    const jq = d.jq;
+    vm.attrSummary = [
+      { label: "方法", value: "Brinson + 因子回归" }, { label: "基准", value: bench },
+      { label: "窗口", value: "2019-01 → 2024-12" }, { label: "总超额", value: this._pct(jq.excess_return) },
+    ];
+    const attr = [["surprise_sue", 0.42, 0.067, 41], ["mom_20_120", 0.37, 0.041, 26], ["ep_ttm", 0.23, 0.022, 13], ["size", -0.12, -0.008, -4], ["beta", 0.05, 0.003, 2], ["residual", null, null, 8]];
+    const tot = attr.reduce((a, r) => a + Math.abs(r[3]), 0);
+    vm.attrRows = attr.map(([f, ex, ret, c]) => ({ factor: f, exposure: ex == null ? "—" : ex.toFixed(2), ret: ret == null ? "—" : this._pct(ret), retCls: ret == null ? "" : (ret >= 0 ? "positive" : "negative"), contrib: (c >= 0 ? "+" : "") + c, contribCls: c >= 0 ? "positive" : "negative", share: (Math.abs(c) / tot * 100).toFixed(0) + "%" }));
+
+    // strategy code & report
+    vm.strategyFile = "weekly_cn_multifactor.py";
+    vm.strategyCode = this._code();
+    vm.reportEl = React.createElement("div", { dangerouslySetInnerHTML: { __html: this._report() } });
+
+    // metric page
+    if (vm.isMetric) {
+      const cfg = this._metricCfg(); const arr = d.series[cfg.key];
+      const last = [...arr].reverse().find(x => x != null);
+      vm.metricTitle = cfg.title; vm.metricColor = cfg.color;
+      vm.metricLatest = cfg.fmt === "pct" ? this._pct(last) : this._num(last);
+      vm.metricSubtitle = cfg.key === "max_drawdown" ? "区间运行中回撤（峰值回落）" : (cfg.fmt === "pct" && (cfg.key === "strategy_return" || cfg.key === "benchmark_return") ? "累计收益曲线" : "滚动 60 日窗口");
+      // weekly sample table (latest first)
+      const rowsT = [];
+      for (let i = d.n - 1; i >= 0; i -= 5) { const v = arr[i]; if (v == null) continue; rowsT.push({ date: d.dates[i], value: cfg.fmt === "pct" ? this._pct(v) : this._num(v), cls: v > 0 ? "positive" : v < 0 ? "negative" : "" }); if (rowsT.length >= 160) break; }
+      vm.metricTableRows = rowsT;
+    } else { vm.metricTableRows = []; }
+
+    // chart refs only once data is ready (init reads this._d)
+    vm.ovcRef = this._ovRef; vm.mtcRef = this._mtRef;
+    return vm;
+  }
+
+  _code() {
+    return [
+      "# weekly_cn_multifactor.py — 周频多因子 · 中证500增强",
+      "# 策略台只组装+回测：因子来自因子台 QUALIFIED，模型来自 Model台 staging（不在此重训）",
+      "from quantbt import Strategy, schedule, order_target_percent",
+      "",
+      "FACTOR_SET = 'fs_cn_3f'            # surprise_sue, mom_20_120, ep_ttm",
+      "MODEL_ID   = 'lgbm_rank_6f@v2'    # Model台 已发布，只引用 model_id",
+      "BENCHMARK  = '000905.XSHG'        # 中证500",
+      "",
+      "class WeeklyMultiFactor(Strategy):",
+      "    book_size   = 10_000_000",
+      "    top_pct     = 0.10            # 截面前 10% 为多头候选",
+      "    max_weight  = 0.03            # 单票上限",
+      "    max_holdings = 50",
+      "",
+      "    def initialize(self, ctx):",
+      "        ctx.set_benchmark(BENCHMARK)",
+      "        ctx.use_factor_set(FACTOR_SET)",
+      "        ctx.load_model(MODEL_ID)   # 排序分模型，只读",
+      "        schedule(self.rebalance, when='week_end', time='close')",
+      "",
+      "    def rebalance(self, ctx):",
+      "        # 1) 模型出截面排序分（不做后处理）",
+      "        score = ctx.model.predict(ctx.factors())",
+      "        # 2) 信号层：排序→分位阈值→Top-K",
+      "        universe = ctx.tradable(min_adv=2e7)        # 流动性下限 2000万/日",
+      "        ranked   = score.loc[universe].rank(pct=True)",
+      "        longs    = ranked[ranked >= 1 - self.top_pct].index[: self.max_holdings]",
+      "        # 3) 风控约束下做等风险加权（仓位是风控的一部分）",
+      "        w = ctx.risk.equal_risk_weight(longs, cap=self.max_weight,",
+      "                                       sector_dev=0.05, turnover_cap=0.60)",
+      "        if ctx.drawdown() <= -0.20:                 # 组合回撤熔断",
+      "            w *= 0.0",
+      "        # 4) 执行机制：由信号触发，分批建仓平滑冲击",
+      "        for sym, target in w.items():",
+      "            order_target_percent(sym, target, slice='twap')",
+    ].join("\n");
+  }
+
+  _report() {
+    const j = this._d.jq; const p = v => this._pct(v); const nm = v => this._num(v);
+    const md = [
+      ["h1", "回测报告 · 周频多因子-中证500增强"],
+      ["p", "run_id: <code>run_wk_cn_8f2a</code> · 基准 中证500 · 周频 · 2019-01-02 → 2024-12-31"],
+      ["h2", "一、绩效摘要"],
+      ["p", "策略累计收益 <code>" + p(j.strategy_return) + "</code>，年化 <code>" + p(j.strategy_annual_return) + "</code>，同期基准 <code>" + p(j.benchmark_return) + "</code>，累计超额 <code>" + p(j.excess_return) + "</code>。"],
+      ["p", "夏普 <code>" + nm(j.sharpe_ratio) + "</code> · 索提诺 <code>" + nm(j.sortino_ratio) + "</code> · 信息比率 <code>" + nm(j.information_ratio) + "</code> · 最大回撤 <code>" + p(j.max_drawdown) + "</code>。"],
+      ["h2", "二、风险与回撤"],
+      ["p", "最大回撤区间 " + j.max_drawdown_period[0] + " ~ " + j.max_drawdown_period[1] + "（对应 2022 单边下行），组合回撤熔断阈值 20% 未被触发但曾逼近，期间降杠杆至 0.85 后修复。"],
+      ["p", "策略波动率 <code>" + p(j.strategy_volatility) + "</code>，基准波动率 <code>" + p(j.benchmark_volatility) + "</code>，beta <code>" + nm(j.beta) + "</code>，alpha <code>" + p(j.alpha) + "</code>。"],
+      ["h2", "三、交易与换手"],
+      ["p", "周频调仓，平均周换手约 18%，胜率 <code>" + p(j.win_rate) + "</code>，盈亏比 <code>" + nm(j.profit_loss_ratio) + "</code>，盈利 " + j.profit_count + " 周 / 亏损 " + j.loss_count + " 周。"],
+      ["h2", "四、结论"],
+      ["p", "模型跨时间稳健（walk-forward 8/8 窗口超额为正），超额主要来自盈余惊喜与中期动量因子；估值因子提供分散。建议保持周频，关注 2022 类风格切换下的回撤控制。"],
+    ];
+    return md.map(([t, s]) => "<" + t + ">" + s + "</" + t + ">").join("");
+  }
+}
+</script>
+</body>
+</html>

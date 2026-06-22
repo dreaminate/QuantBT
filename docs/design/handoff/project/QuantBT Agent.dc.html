@@ -1,0 +1,569 @@
+<!DOCTYPE html>
+<html>
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<script src="./support.js"></script>
+</head>
+<body>
+<x-dc>
+<helmet>
+<link href="https://fonts.googleapis.com/css2?family=JetBrains+Mono:wght@400;500;600;700&display=swap" rel="stylesheet">
+<style>
+  * { box-sizing: border-box; }
+  html, body { margin: 0; padding: 0; height: 100%; background: #1c1b19; }
+  body { font-family: "JetBrains Mono", ui-monospace, "SF Mono", Menlo, monospace; -webkit-font-smoothing: antialiased; }
+  ::selection { background: rgba(217,119,87,0.28); }
+  a { text-decoration: none; }
+  *::-webkit-scrollbar { width: 9px; height: 9px; }
+  *::-webkit-scrollbar-thumb { background: #3a3733; border-radius: 6px; }
+  *::-webkit-scrollbar-track { background: transparent; }
+  @keyframes ccblink { 0%,49% { opacity: 1; } 50%,100% { opacity: 0; } }
+  @keyframes ccring { 0% { box-shadow: 0 0 0 0 rgba(217,119,87,0.5); } 100% { box-shadow: 0 0 0 7px rgba(217,119,87,0); } }
+  textarea, input { font-family: inherit; }
+</style>
+</helmet>
+<div style="display:flex; flex-direction:column; height:100vh; background:#1c1b19; color:#e6e1d6; font-size:13.5px; line-height:1.5;">
+
+  <!-- ░░ TITLE BAR + 台 SWITCHER ░░ -->
+  <div style="flex:none; display:flex; align-items:center; gap:12px; height:42px; padding:0 14px; background:#201f1c; border-bottom:1px solid #302d29;">
+    <div style="display:flex; gap:7px; align-items:center; padding-right:2px;">
+      <span style="width:11px; height:11px; border-radius:50%; background:#3a3733;"></span>
+      <span style="width:11px; height:11px; border-radius:50%; background:#3a3733;"></span>
+      <span style="width:11px; height:11px; border-radius:50%; background:#3a3733;"></span>
+    </div>
+    <span style="color:#d97757; font-weight:700;">✳</span>
+    <span style="font-weight:600;">QuantBT</span>
+    <div style="display:flex; gap:2px; margin-left:8px; background:#1a1916; border:1px solid #302d29; border-radius:8px; padding:3px;">
+      <sc-for list="{{ stations }}" as="st" hint-placeholder-count="4">
+        <sc-if value="{{ st.link }}"><a href="{{ st.href }}" style="{{ st.style }}" style-hover="background:#2a2723; color:#e6e1d6;">{{ st.label }}</a></sc-if><sc-if value="{{ st.plain }}"><div style="{{ st.style }}"><span>{{ st.label }}</span><sc-if value="{{ st.soon }}"><span style="margin-left:6px; font-size:8.5px; color:#5f5b53; border:1px solid #3a3733; border-radius:8px; padding:0 5px;">敬请</span></sc-if></div></sc-if>
+      </sc-for>
+    </div>
+    <div style="flex:1;"></div>
+    <span style="color:#5f5b53; font-size:11px;">~/strategies/weekly-cn</span>
+    <button onClick="{{ restart }}" style="margin-left:6px; background:transparent; border:1px solid #302d29; color:#8f897c; font-family:inherit; font-size:11px; padding:5px 10px; border-radius:7px; cursor:pointer;" style-hover="border-color:#4a463f; color:#e6e1d6;">↻ 重放</button>
+  </div>
+
+  <!-- ░░ MILESTONE LADDER (策略台: 立题→数据→因子集→模型→回测) ░░ -->
+  <div style="flex:none; background:#1a1916; border-bottom:1px solid #302d29; padding:8px 18px 9px;">
+    <div style="display:flex; align-items:center; margin-bottom:5px;">
+      <span style="font-size:9.5px; letter-spacing:1px; color:#5f5b53;">策略台 · 组装 + 回测</span>
+      <span style="margin-left:auto; font-size:9.5px; color:#5f5b53;">终点：候选策略 → 交接模拟台</span>
+    </div>
+    <div style="display:flex;">
+      <sc-for list="{{ milestones }}" as="m" hint-placeholder-count="5">
+        <div onClick="{{ m.go }}" style="flex:1; display:flex; flex-direction:column; align-items:center; gap:4px; cursor:pointer;" style-hover="opacity:0.85;">
+          <div style="display:flex; align-items:center; width:100%; height:12px;">
+            <div style="flex:1; height:2px; background:{{ m.leftColor }};"></div>
+            <div style="{{ m.dot }}"></div>
+            <div style="flex:1; height:2px; background:{{ m.rightColor }};"></div>
+          </div>
+          <div style="font-size:11.5px; color:{{ m.labelColor }}; font-weight:{{ m.weight }};">{{ m.label }}</div>
+          <div style="font-size:9px; color:{{ m.subColor }}; height:11px;">{{ m.sub }}</div>
+        </div>
+      </sc-for>
+    </div>
+  </div>
+
+  <!-- ░░ BODY: chat | workspace ░░ -->
+  <div style="flex:1; min-height:0; display:flex;">
+
+    <!-- LEFT · CHAT (collapsible) -->
+    <sc-if value="{{ chatCollapsed }}">
+      <div onClick="{{ chatToggle }}" style="flex:none; width:32px; border-right:1px solid #302d29; background:#1d1c19; display:flex; flex-direction:column; align-items:center; padding-top:12px; gap:8px; cursor:pointer;" style-hover="background:#211f1c;"><span style="color:#d97757;">✳</span><span style="writing-mode:vertical-rl; font-size:11px; color:#8f897c; letter-spacing:1px;">对话 ›</span></div>
+    </sc-if>
+    <sc-if value="{{ chatOpen }}">
+    <div style="{{ chatSizing }} display:flex; flex-direction:column; border-right:1px solid #302d29;">
+      <div id="cc-scroll" style="flex:1; min-height:0; overflow-y:auto;">
+        <div style="padding:8px 18px 8px;">
+
+          <sc-for list="{{ blocks }}" as="b" hint-placeholder-count="0">
+            <div id="blk-{{ b.id }}">
+
+              <sc-if value="{{ b.isUser }}">
+                <div style="display:flex; gap:9px; margin:16px 0 4px;"><span style="color:#d97757; flex:none; font-weight:700;">&gt;</span><span style="color:#cfc8ba; white-space:pre-wrap;">{{ b.text }}</span></div>
+              </sc-if>
+
+              <sc-if value="{{ b.isThinking }}">
+                <div style="margin:11px 0 7px;">
+                  <div onClick="{{ b.toggle }}" style="display:flex; gap:8px; align-items:center; cursor:pointer; color:#8a7e6a;"><span style="color:#9b8d72;">✻</span><span style="font-style:italic;">{{ b.thinkLabel }}</span><span style="color:#5f5b53; font-size:11px;">{{ b.thinkMeta }}</span></div>
+                  <sc-if value="{{ b.open }}"><div style="margin:6px 0 0 22px; padding-left:11px; border-left:1px solid #34302a; color:#7d7568; font-style:italic; white-space:pre-wrap; font-size:12.5px;">{{ b.text }}<sc-if value="{{ b.streaming }}"><span style="display:inline-block; width:6px; height:13px; background:#9b8d72; vertical-align:-2px; animation:ccblink 1s step-end infinite;"></span></sc-if></div></sc-if>
+                </div>
+              </sc-if>
+
+              <sc-if value="{{ b.isSay }}">
+                <div style="display:flex; gap:9px; margin:9px 0;"><span style="color:#d97757; flex:none; line-height:1.5;">●</span><span style="color:#e6e1d6; white-space:pre-wrap;">{{ b.text }}<sc-if value="{{ b.streaming }}"><span style="display:inline-block; width:6px; height:13px; background:#d97757; vertical-align:-2px; animation:ccblink 1s step-end infinite;"></span></sc-if></span></div>
+              </sc-if>
+
+              <sc-if value="{{ b.isTodos }}">
+                <div style="display:flex; gap:9px; margin:11px 0;"><span style="color:#d97757; flex:none;">●</span>
+                  <div style="flex:1;"><div style="color:#8f897c; margin-bottom:5px;">Update Todos</div>
+                    <div style="border-left:1px solid #34302a; padding-left:13px; display:flex; flex-direction:column; gap:4px;">
+                      <sc-for list="{{ b.items }}" as="it" hint-placeholder-count="0"><div style="display:flex; gap:8px; align-items:baseline;"><span style="flex:none; color:{{ it.color }};">{{ it.box }}</span><span style="{{ it.style }} font-size:12.5px;">{{ it.t }}</span></div></sc-for>
+                    </div>
+                  </div>
+                </div>
+              </sc-if>
+
+              <!-- compact tool line; rich artifact lives in Cowork -->
+              <sc-if value="{{ b.isTool }}">
+                <div style="margin:9px 0;">
+                  <div style="display:flex; gap:9px; align-items:baseline;">
+                    <span style="flex:none; color:{{ b.dotColor }};">{{ b.dot }}</span>
+                    <div style="flex:1; min-width:0;">
+                      <div style="white-space:pre-wrap; word-break:break-word;"><span style="color:#e6e1d6; font-weight:600;">{{ b.name }}</span><span style="color:#6f6a61;">(</span><span style="color:#9a9488;">{{ b.argInline }}</span><span style="color:#6f6a61;">)</span><span style="color:#5f5b53; font-size:11px; margin-left:5px;">{{ b.statusLabel }}</span></div>
+                      <sc-if value="{{ b.done }}">
+                        <div style="margin-top:4px; display:flex; gap:7px;"><span style="flex:none; color:#4d4942;">⎿</span><div style="flex:1; min-width:0; color:#9bbd5a; font-size:12.5px;">{{ b.summary }}<sc-if value="{{ b.hasCowork }}"> <span onClick="{{ b.focus }}" style="color:#6f9bd1; cursor:pointer; white-space:nowrap;" style-hover="text-decoration:underline;">↗ {{ b.coworkLabel }}</span></sc-if></div></div>
+                      </sc-if>
+                    </div>
+                  </div>
+                </div>
+              </sc-if>
+
+              <!-- permission gate -->
+              <sc-if value="{{ b.isGate }}">
+                <div style="margin:13px 0 13px 18px;">
+                  <div style="border:1px solid #5a4a3a; background:#231f1b; border-radius:10px; overflow:hidden;">
+                    <div style="padding:10px 13px; border-bottom:1px solid #3a322a; display:flex; align-items:center; gap:8px;"><span style="color:#d9b25f;">⏵</span><span style="color:#e6e1d6; font-weight:600; font-size:12.5px;">{{ b.gateTitle }}</span><span style="margin-left:auto; font-size:10.5px; color:#8f897c; border:1px solid #4a433a; padding:2px 7px; border-radius:20px;">{{ b.gateSe }}</span></div>
+                    <div style="padding:11px 13px;">
+                      <div style="color:#cfc8ba; margin-bottom:9px; font-size:12.5px; white-space:pre-wrap;"><span style="color:#d97757; font-weight:600;">{{ b.gateTool }}</span> — {{ b.gateBlurb }}</div>
+                      <div style="background:#1a1916; border:1px solid #302d29; border-radius:7px; padding:8px 10px; margin-bottom:11px; color:#9a9488; font-size:11.5px; white-space:pre-wrap;">{{ b.gateArgs }}</div>
+                      <sc-if value="{{ b.pending }}">
+                        <div style="color:#8f897c; margin-bottom:7px; font-size:12.5px;">Do you want to proceed?</div>
+                        <div style="display:flex; flex-direction:column; gap:6px;">
+                          <button onClick="{{ b.approveOnce }}" style="text-align:left; background:#1f2a1c; border:1px solid #3c5230; color:#bcd98a; font-family:inherit; font-size:12.5px; padding:8px 11px; border-radius:8px; cursor:pointer;" style-hover="border-color:#5d8a3a; background:#243420;"><span style="color:#7fa650; font-weight:700;">1.</span> Yes</button>
+                          <button onClick="{{ b.approveAlways }}" style="text-align:left; background:#1f2a1c; border:1px solid #3c5230; color:#bcd98a; font-family:inherit; font-size:12.5px; padding:8px 11px; border-radius:8px; cursor:pointer;" style-hover="border-color:#5d8a3a; background:#243420;"><span style="color:#7fa650; font-weight:700;">2.</span> Yes, 别再问 backtest.run <span style="color:#6b8a4a;">(→auto)</span></button>
+                          <button onClick="{{ b.reject }}" style="text-align:left; background:#2a1d1b; border:1px solid #523630; color:#d99a8e; font-family:inherit; font-size:12.5px; padding:8px 11px; border-radius:8px; cursor:pointer;" style-hover="border-color:#8a4d3a; background:#341f1b;"><span style="color:#d97066; font-weight:700;">3.</span> No, 告诉 Claude 怎么改 <span style="color:#8a5a4a;">(esc)</span></button>
+                        </div>
+                      </sc-if>
+                      <sc-if value="{{ b.resolved }}"><div style="color:{{ b.resColor }}; font-size:12.5px;">{{ b.resText }}</div></sc-if>
+                    </div>
+                  </div>
+                </div>
+              </sc-if>
+
+              <!-- handoff card (终点) -->
+              <sc-if value="{{ b.isHandoff }}">
+                <div style="margin:13px 0 13px 18px;">
+                  <div style="border:1px solid #3c5230; background:#1e261a; border-radius:10px; padding:12px 14px;">
+                    <div style="display:flex; align-items:center; gap:8px; color:#9bbd5a; font-weight:600; margin-bottom:6px;"><span>⇲</span>策略台终点 · 候选策略已就绪</div>
+                    <div style="color:#a7b48f; font-size:12.5px; margin-bottom:11px; line-height:1.6;">strat_wk_cn_01 已回测 + 体检通过。策略台到此为止——是否提交到<span style="color:#cfc8ba;">模拟台</span>候选池？（进场与否、监控由模拟台决定）</div>
+                    <sc-if value="{{ b.pending }}"><button onClick="{{ b.submit }}" style="background:#7fa650; border:none; color:#16180f; font-family:inherit; font-weight:700; font-size:12.5px; padding:9px 15px; border-radius:8px; cursor:pointer;" style-hover="background:#8fbb5c;">⇲ 提交进模拟台候选</button></sc-if>
+                    <sc-if value="{{ b.resolved }}"><div style="color:#9bbd5a; font-size:12.5px;">✓ 已提交。strat_wk_cn_01 进入模拟台候选池，等你在模拟台选择进场。</div></sc-if>
+                  </div>
+                </div>
+              </sc-if>
+
+            </div>
+          </sc-for>
+
+          <sc-if value="{{ busy }}"><div style="display:flex; gap:9px; align-items:center; margin:13px 0; color:#8a7e6a;"><span style="color:#d97757;">✻</span><span style="font-style:italic;">{{ busyWord }}</span><span style="color:#5f5b53; font-size:11px;">({{ busySecs }}s · ↑ {{ busyTokens }} tok · esc)</span></div></sc-if>
+          <div style="height:8px;"></div>
+        </div>
+      </div>
+
+      <!-- INPUT + STATUS -->
+      <div style="flex:none; border-top:1px solid #302d29; background:#1c1b19;">
+        <div style="padding:11px 18px 9px;">
+          <sc-if value="{{ slashOpen }}">
+            <div style="margin-bottom:8px; background:#211f1c; border:1px solid #3a352e; border-radius:10px; overflow:hidden;">
+              <sc-for list="{{ slashCmds }}" as="s" hint-placeholder-count="0"><div onClick="{{ s.pick }}" style="display:flex; gap:10px; padding:7px 12px; cursor:pointer; border-bottom:1px solid #2a2723;" style-hover="background:#262320;"><span style="color:#d97757; min-width:96px; font-size:12.5px;">{{ s.cmd }}</span><span style="color:#8f897c; font-size:11.5px;">{{ s.desc }}</span></div></sc-for>
+            </div>
+          </sc-if>
+          <div style="display:flex; gap:10px; align-items:flex-start; border:1px solid {{ inputBorder }}; background:#211f1c; border-radius:11px; padding:10px 13px;">
+            <span style="color:#d97757; font-weight:700; line-height:1.6;">&gt;</span>
+            <textarea value="{{ draft }}" onInput="{{ onDraft }}" onKeyDown="{{ onKey }}" placeholder="{{ placeholder }}" rows="1" style="flex:1; resize:none; background:transparent; border:none; outline:none; color:#e6e1d6; font-size:13px; line-height:1.6; max-height:120px;"></textarea>
+            <button onClick="{{ send }}" style="flex:none; background:#d97757; border:none; color:#1c1b19; font-family:inherit; font-weight:700; font-size:11.5px; padding:6px 12px; border-radius:8px; cursor:pointer;" style-hover="background:#e08862;">{{ sendLabel }}</button>
+          </div>
+          <div style="display:flex; align-items:center; margin-top:7px; font-size:11px; color:#6f6a61; flex-wrap:wrap;">
+            <span style="color:#9bbd5a;">⏺</span><span style="margin:0 7px 0 5px; color:#8f897c;">{{ model }}</span><span style="color:#3a3733;">│</span>
+            <span style="margin:0 7px; color:{{ permColor }};">{{ permGlyph }} {{ permMode }}</span><span style="color:#3a3733;">│</span>
+            <span style="margin:0 7px; display:inline-flex; align-items:center; gap:5px;">ctx<span style="display:inline-block; width:42px; height:5px; background:#302d29; border-radius:3px; overflow:hidden;"><span style="display:block; height:100%; width:{{ ctxPct }}; background:{{ ctxColor }};"></span></span></span><span style="color:#3a3733;">│</span>
+            <span style="margin:0 7px; color:#8f897c;">⎇ {{ branch }}</span>
+          </div>
+        </div>
+      </div>
+    </div>
+    </sc-if>
+
+    <!-- splitter (drag to resize chat/workspace) -->
+    <sc-if value="{{ showSplitter }}">
+      <div onPointerDown="{{ splitDown }}" style="flex:none; width:5px; cursor:col-resize; background:#26241f; align-self:stretch;" style-hover="background:#d97757;"></div>
+    </sc-if>
+
+    <!-- RIGHT · WORKSPACE (collapsible) -->
+    <sc-if value="{{ wsCollapsed }}">
+      <div onClick="{{ wsToggle }}" style="flex:none; width:34px; border-left:1px solid #302d29; background:#1d1c19; display:flex; flex-direction:column; align-items:center; padding-top:12px; gap:8px; cursor:pointer;" style-hover="background:#211f1c;">
+        <span style="color:#d97757;">◳</span><span style="writing-mode:vertical-rl; font-size:11px; color:#8f897c; letter-spacing:1px;">‹ 产物工作区</span>
+      </div>
+    </sc-if>
+    <sc-if value="{{ wsOpen }}">
+    <div style="flex:1; min-width:0; display:flex; flex-direction:column; background:#191815;">
+      <div style="flex:none; display:flex; align-items:center; gap:3px; padding:7px 14px; border-bottom:1px solid #302d29; background:#1d1c19;">
+        <button onClick="{{ tabCoworkClick }}" style="{{ tabCoworkStyle }}">◳ 产物</button>
+        <button onClick="{{ tabCodeClick }}" style="{{ tabCodeStyle }}">⌨ Strategy.yaml</button>
+        <sc-if value="{{ reportReady }}"><button onClick="{{ tabReportClick }}" style="{{ tabReportStyle }}">▤ Report.md</button></sc-if>
+        <div style="flex:1;"></div>
+        <span style="font-size:11px; color:#5f5b53;">{{ workspaceHint }}</span>
+        <span onClick="{{ wsToggle }}" style="margin-left:10px; font-size:13px; color:#6f6a61; cursor:pointer;" style-hover="color:#cfc8ba;" data-comment-anchor="630d9b11ec-span">›</span>
+      </div>
+
+      <div style="flex:1; min-height:0; overflow-y:auto; padding:18px 20px;">
+
+        <!-- ▒ COWORK ▒ -->
+        <sc-if value="{{ showCowork }}">
+          <div style="max-width:620px; margin:0 auto;">
+
+            <sc-if value="{{ coEmpty }}"><div style="color:#5f5b53; font-size:13px; text-align:center; padding:80px 20px; line-height:2;">{{ coEmptyText }}</div></sc-if>
+
+            <!-- hypothesis -->
+            <sc-if value="{{ coHypothesis }}">
+              <div style="border:1px solid #34302a; background:#1d1c19; border-radius:11px; overflow:hidden;">
+                <div style="padding:12px 16px; background:#221f1c; border-bottom:1px solid #302d29; display:flex; align-items:center; gap:9px;"><span style="color:#d97757;">◇</span><span style="font-weight:600;">假设卡 · hyp_wk_cn_01</span><span style="margin-left:auto; font-size:11px; color:#d9b25f; background:rgba(217,178,95,0.14); padding:3px 10px; border-radius:20px;">exploratory</span></div>
+                <div style="padding:14px 16px; display:flex; flex-direction:column; gap:11px;">
+                  <div><div style="color:#7d7668; font-size:11px; margin-bottom:3px;">命题</div><div style="color:#e6e1d6;">SUE + 中期动量 + 估值，在 A股周频可获年化超额 ≥ 15%</div></div>
+                  <div><div style="color:#7d7668; font-size:11px; margin-bottom:3px;">可证伪条件</div><div style="color:#d99a8e;">样本外 DSR ≤ 0 或 PBO ≥ 0.5 即推翻</div></div>
+                  <div style="display:flex; gap:24px;"><div><div style="color:#7d7668; font-size:11px;">benchmark</div><div style="color:#cfc8ba;">中证500 · 000905.SH</div></div><div><div style="color:#7d7668; font-size:11px;">goal_ref</div><div style="color:#cfc8ba;">sg_wk_cn_01</div></div></div>
+                </div>
+              </div>
+            </sc-if>
+
+            <!-- market (data used) -->
+            <sc-if value="{{ coMarket }}">
+              <div style="border:1px solid #34302a; background:#1d1c19; border-radius:11px; overflow:hidden;">
+                <div style="padding:12px 16px; background:#221f1c; border-bottom:1px solid #302d29; display:flex; align-items:center; gap:9px;"><span style="color:#d97757;">▦</span><span style="font-weight:600;">市场 · equity_cn · 用了哪些数据</span></div>
+                <div style="padding:12px 16px;">
+                  <div style="color:#7d7668; font-size:11px; margin-bottom:6px;">数据源（3）</div>
+                  <div style="display:flex; flex-direction:column; gap:6px; margin-bottom:12px;">
+                    <div style="display:flex; gap:10px; background:#211f1c; border:1px solid #302d29; border-radius:8px; padding:8px 11px;"><span style="font-weight:600; min-width:150px;">official_cn_eod</span><span style="flex:1; color:#8f897c; font-size:12px;">日频量价 ohlcv·adj·fundamental</span></div>
+                    <div style="display:flex; gap:10px; background:#211f1c; border:1px solid #302d29; border-radius:8px; padding:8px 11px;"><span style="font-weight:600; min-width:150px;">official_consensus</span><span style="flex:1; color:#8f897c; font-size:12px;">一致预期 analyst_est·sue</span></div>
+                    <div style="display:flex; gap:10px; background:#211f1c; border:1px solid #302d29; border-radius:8px; padding:8px 11px;"><span style="font-weight:600; min-width:150px;">user_altdata_v3</span><span style="flex:1; color:#8f897c; font-size:12px;">北向 north_flow·turnover_ext</span></div>
+                  </div>
+                  <div style="color:#7d7668; font-size:11px; margin-bottom:5px;">字段宇宙 · 41 列</div>
+                  <sc-for list="{{ fieldGroups }}" as="g" hint-placeholder-count="4"><div style="padding:7px 0; border-bottom:1px solid #2a2723;"><div style="color:#7d7668; font-size:11px; margin-bottom:2px;">{{ g.k }}</div><div style="color:#cfc8ba; font-size:12px;">{{ g.v }}</div></div></sc-for>
+                  <div style="margin-top:10px; color:#7d7668; font-size:11.5px; line-height:1.6;">覆盖 5412 只 A股 · 引用列全部命中字段宇宙，无缺失。中证500 基准、周五调仓。</div>
+                </div>
+              </div>
+            </sc-if>
+
+            <!-- factor set (selected from 因子台) -->
+            <sc-if value="{{ coFactorSet }}">
+              <div style="border:1px solid #34302a; background:#1d1c19; border-radius:11px; overflow:hidden;">
+                <div style="padding:12px 16px; background:#221f1c; border-bottom:1px solid #302d29; display:flex; align-items:center; gap:9px;"><span style="color:#d97757;">⊞</span><span style="font-weight:600;">因子集 · fs_core3</span><span style="margin-left:auto; font-size:10.5px; color:#6f9bd1; background:rgba(111,155,209,0.12); padding:3px 10px; border-radius:20px;">← 因子台 · 选用</span></div>
+                <div style="padding:12px 16px;">
+                  <div style="display:flex; flex-direction:column; gap:8px;">
+                    <sc-for list="{{ factorSet }}" as="f" hint-placeholder-count="3">
+                      <div style="display:flex; align-items:center; gap:12px; background:#211f1c; border:1px solid #302d29; border-left:3px solid #9bbd5a; border-radius:8px; padding:9px 12px;"><span style="font-weight:600; min-width:120px;">{{ f.id }}</span><span style="flex:1; color:#8f897c; font-size:12px;">{{ f.note }}</span><span style="font-size:11px; color:#8f897c;">IC {{ f.ic }}</span><span style="font-size:10.5px; font-weight:600; color:#9bbd5a; background:rgba(127,166,80,0.14); padding:3px 9px; border-radius:20px;">{{ f.state }}</span></div>
+                    </sc-for>
+                  </div>
+                  <div style="margin-top:11px; color:#7d7668; font-size:11.5px; line-height:1.6;">两两相关 |ρ| &lt; 0.35（低冗余）· resid_vol 已在因子台被淘汰（t=1.1），不纳入 · 策略台只选用 QUALIFIED+ 因子，不在此造因子。</div>
+                </div>
+              </div>
+            </sc-if>
+
+            <!-- model card (selected from Model台) -->
+            <sc-if value="{{ coModel }}">
+              <div style="border:1px solid #34302a; background:#1d1c19; border-radius:11px; overflow:hidden;">
+                <div style="padding:12px 16px; background:#221f1c; border-bottom:1px solid #302d29; display:flex; align-items:center; gap:9px;"><span style="color:#d97757;">▣</span><span style="font-weight:600;">模型 · lgbm_rank_6f @ v2</span><span style="margin-left:auto; font-size:10.5px; color:#6f9bd1; background:rgba(111,155,209,0.12); padding:3px 10px; border-radius:20px;">← Model台 · staging</span></div>
+                <div style="padding:14px 16px; display:flex; flex-direction:column; gap:10px;">
+                  <div style="display:flex; gap:24px;"><div><div style="color:#7d7668; font-size:11px;">task</div><div style="color:#cfc8ba;">LambdaRank</div></div><div><div style="color:#7d7668; font-size:11px;">CV NDCG@50</div><div style="color:#9bbd5a;">0.231 ± 0.016</div></div><div onClick="{{ wfToggle }}" style="cursor:pointer;" style-hover="opacity:0.85;"><div style="color:#7d7668; font-size:11px;">walk-forward</div><div style="color:#9bbd5a;">8/8 窗口正 <span style="color:#6f9bd1;">{{ wfCaret }}</span></div></div></div>
+                  <sc-if value="{{ wfOpen }}">
+                    <div style="background:#161512; border:1px solid #2a2723; border-radius:8px; padding:11px 13px; font-size:11px;">
+                      <div style="line-height:1.55; margin-bottom:9px; color:#c4bdaf;">滚动前向验证（Model台）：永远用过去训练、用紧接的未来测试，窗口逐段往前滚。下列 <span style="color:#9bbd5a;">8/8</span> 个样本外窗口超额全为正：</div>
+                      <div style="display:flex; flex-direction:column; gap:4px;">
+                        <div style="display:flex; gap:10px; color:#6f6a61; padding-bottom:3px; border-bottom:1px solid #2a2723;"><span style="width:26px;">窗口</span><span style="flex:1;">训练段 → 测试段</span><span style="width:56px; text-align:right;">OOS超额</span><span style="width:56px; text-align:right;">NDCG@50</span></div>
+                        <div style="display:flex; gap:10px;"><span style="color:#6f6a61; width:26px;">W1</span><span style="flex:1; color:#9a9488;">2019–20 → 21H1</span><span style="width:56px; text-align:right; color:#9bbd5a;">+4.2%</span><span style="width:56px; text-align:right; color:#9a9488;">0.241</span></div><div style="display:flex; gap:10px;"><span style="color:#6f6a61; width:26px;">W2</span><span style="flex:1; color:#9a9488;">2019–21H1 → 21H2</span><span style="width:56px; text-align:right; color:#9bbd5a;">+3.1%</span><span style="width:56px; text-align:right; color:#9a9488;">0.228</span></div><div style="display:flex; gap:10px;"><span style="color:#6f6a61; width:26px;">W3</span><span style="flex:1; color:#9a9488;">2019–21 → 22H1</span><span style="width:56px; text-align:right; color:#9bbd5a;">+1.8%</span><span style="width:56px; text-align:right; color:#9a9488;">0.207</span></div><div style="display:flex; gap:10px;"><span style="color:#6f6a61; width:26px;">W4</span><span style="flex:1; color:#9a9488;">2019–22H1 → 22H2</span><span style="width:56px; text-align:right; color:#d9b25f;">+0.9%</span><span style="width:56px; text-align:right; color:#9a9488;">0.196</span></div><div style="display:flex; gap:10px;"><span style="color:#6f6a61; width:26px;">W5</span><span style="flex:1; color:#9a9488;">2019–22 → 23H1</span><span style="width:56px; text-align:right; color:#9bbd5a;">+3.6%</span><span style="width:56px; text-align:right; color:#9a9488;">0.233</span></div><div style="display:flex; gap:10px;"><span style="color:#6f6a61; width:26px;">W6</span><span style="flex:1; color:#9a9488;">2019–23H1 → 23H2</span><span style="width:56px; text-align:right; color:#9bbd5a;">+2.4%</span><span style="width:56px; text-align:right; color:#9a9488;">0.219</span></div><div style="display:flex; gap:10px;"><span style="color:#6f6a61; width:26px;">W7</span><span style="flex:1; color:#9a9488;">2019–23 → 24H1</span><span style="width:56px; text-align:right; color:#9bbd5a;">+4.0%</span><span style="width:56px; text-align:right; color:#9a9488;">0.238</span></div><div style="display:flex; gap:10px;"><span style="color:#6f6a61; width:26px;">W8</span><span style="flex:1; color:#9a9488;">2019–24H1 → 24H2</span><span style="width:56px; text-align:right; color:#9bbd5a;">+2.7%</span><span style="width:56px; text-align:right; color:#9a9488;">0.224</span></div>
+                      </div>
+                      <div style="margin-top:9px; color:#7d7668; line-height:1.55;">最差窗口 W4（2022 单边下行）仍 +0.9% 为正 → 模型跨时间稳健、非单年运气。策略台只引用、不重算。</div>
+                    </div>
+                  </sc-if>
+                  <div><div style="color:#7d7668; font-size:11px; margin-bottom:3px;">特征重要度</div><div style="color:#cfc8ba; font-size:12.5px;">sue 0.40 · mom 0.37 · ep 0.23</div></div>
+                  <div style="color:#7d7668; font-size:11.5px; line-height:1.6;">模型回测（Purged-CV / walk-forward）在 Model台 完成并发布。策略台只引用 model_id，不训练 —— 重训去 Model台。</div>
+                </div>
+              </div>
+            </sc-if>
+
+            <!-- signal -->
+            <sc-if value="{{ coSignal }}">
+              <div style="border:1px solid #34302a; background:#1d1c19; border-radius:11px; overflow:hidden;">
+                <div style="padding:12px 16px; background:#221f1c; border-bottom:1px solid #302d29; display:flex; align-items:center; gap:9px;"><span style="color:#d97757;">⇗</span><span style="font-weight:600;">信号 · 打分 → 可交易信号</span></div>
+                <div style="padding:14px 16px; display:flex; flex-direction:column; gap:11px;">
+                  <div><div style="color:#7d7668; font-size:11px; margin-bottom:3px;">信号规则</div><div style="color:#e6e1d6;">每周五收盘按模型分排序，取截面前 10% 为多头候选</div></div>
+                  <div style="display:flex; gap:24px;"><div><div style="color:#7d7668; font-size:11px;">调仓频率</div><div style="color:#cfc8ba;">周频 · 周五收盘</div></div><div><div style="color:#7d7668; font-size:11px;">方向</div><div style="color:#cfc8ba;">纯多头（对冲基准）</div></div><div><div style="color:#7d7668; font-size:11px;">候选数</div><div style="color:#cfc8ba;">~50 只（前 10%）</div></div></div>
+                  <div style="color:#7d7668; font-size:11.5px; line-height:1.6;">模型只出排序分；信号层把分转成"买哪些"的离散决策——排序、分位阈值、调仓节奏在此固化。</div>
+                </div>
+              </div>
+            </sc-if>
+
+            <!-- portfolio + risk -->
+            <sc-if value="{{ coPortfolio }}">
+              <div style="border:1px solid #34302a; background:#1d1c19; border-radius:11px; overflow:hidden;">
+                <div style="padding:12px 16px; background:#221f1c; border-bottom:1px solid #302d29; display:flex; align-items:center; gap:9px;"><span style="color:#d97757;">⛨</span><span style="font-weight:600;">风控 + 执行机制</span></div>
+                <div style="padding:13px 16px; display:flex; flex-direction:column; gap:14px;">
+                  <div>
+                    <div style="display:flex; align-items:center; gap:8px; margin-bottom:9px;"><span style="color:#d99a8e; font-size:12.5px; font-weight:600;">⛨ 风控</span><span style="font-size:11px; color:#7d7668;">仓位是风控的一部分</span></div>
+                    <div style="display:flex; flex-direction:column; gap:11px;">
+                      <div><div style="color:#7d7668; font-size:11px; margin-bottom:4px;">仓位构建</div><div style="display:flex; gap:10px; flex-wrap:wrap;"><span style="font-size:12px; color:#cfc8ba; background:#211f1c; border:1px solid #302d29; border-radius:7px; padding:5px 10px;">等风险加权</span><span style="font-size:12px; color:#cfc8ba; background:#211f1c; border:1px solid #302d29; border-radius:7px; padding:5px 10px;">单票 ≤ 3%</span><span style="font-size:12px; color:#cfc8ba; background:#211f1c; border:1px solid #302d29; border-radius:7px; padding:5px 10px;">行业偏离 ≤ 5%</span><span style="font-size:12px; color:#cfc8ba; background:#211f1c; border:1px solid #302d29; border-radius:7px; padding:5px 10px;">换手 ≤ 60%/周</span></div></div>
+                      <div><div style="color:#7d7668; font-size:11px; margin-bottom:4px;">风险限额</div><div style="display:flex; gap:10px; flex-wrap:wrap;"><span style="font-size:12px; color:#d99a8e; background:#231b1a; border:1px solid #4a322c; border-radius:7px; padding:5px 10px;">组合回撤熔断 20%</span><span style="font-size:12px; color:#d99a8e; background:#231b1a; border:1px solid #4a322c; border-radius:7px; padding:5px 10px;">单日跌停不接</span><span style="font-size:12px; color:#d99a8e; background:#231b1a; border:1px solid #4a322c; border-radius:7px; padding:5px 10px;">流动性下限 ¥2000万/日</span></div></div>
+                    </div>
+                  </div>
+                  <div style="border-top:1px solid #2a2723; padding-top:13px;">
+                    <div style="display:flex; align-items:center; gap:8px; margin-bottom:9px;"><span style="color:#d97757; font-size:12.5px; font-weight:600;">⇗ 执行机制</span><span style="font-size:11px; color:#7d7668;">由信号触发 · 信号给候选名单，执行机制决定如何进出</span></div>
+                    <div style="display:flex; flex-direction:column; gap:11px;">
+                      <div><div style="color:#7d7668; font-size:11px; margin-bottom:4px;">进入</div><div style="color:#cfc8ba; font-size:12.5px; line-height:1.55;">信号选入前 10% 且未触及停牌/涨停板；分批建仓平滑冲击成本。</div></div>
+                      <div><div style="color:#7d7668; font-size:11px; margin-bottom:4px;">退出</div><div style="color:#cfc8ba; font-size:12.5px; line-height:1.55;">信号跌出前 30% 分位 / 个股止损 -12% / 周五再平衡时换出。</div></div>
+                    </div>
+                  </div>
+                </div>
+              </div>
+            </sc-if>
+
+            <!-- run verdict -->
+            <sc-if value="{{ coRun }}"><dc-import name="RunVerdictCard" run="{{ runObj }}" hint-size="100%,420px"></dc-import></sc-if>
+          </div>
+        </sc-if>
+
+        <!-- ▒ STRATEGY.YAML ▒ -->
+        <sc-if value="{{ showCode }}">
+          <div style="max-width:640px; margin:0 auto; background:#161512; border:1px solid #2a2723; border-radius:10px; overflow:hidden;">
+            <div style="padding:7px 14px; background:#1d1c19; border-bottom:1px solid #2a2723; color:#7d7668; font-size:11px;">strategy/weekly_cn_multifactor.yaml</div>
+            <div style="padding:12px 0;">
+              <sc-for list="{{ codeLines }}" as="ln" hint-placeholder-count="6"><div style="display:flex; padding:0 14px;"><span style="color:#3f3b35; min-width:28px; text-align:right; padding-right:14px; user-select:none; font-size:12px;">{{ ln.n }}</span><span style="color:{{ ln.color }}; white-space:pre; font-size:12.5px;">{{ ln.t }}</span></div></sc-for>
+            </div>
+          </div>
+        </sc-if>
+
+        <!-- ▒ REPORT.MD ▒ -->
+        <sc-if value="{{ showReport }}">
+          <div style="max-width:620px; margin:0 auto; background:#1d1c19; border:1px solid #34302a; border-radius:11px; padding:18px 22px;">
+            <sc-for list="{{ reportMd }}" as="m" hint-placeholder-count="6"><div style="{{ m.style }}">{{ m.t }}</div></sc-for>
+          </div>
+        </sc-if>
+
+      </div>
+    </div>
+    </sc-if>
+
+  </div>
+</div>
+</x-dc>
+<script type="text/x-dc" data-dc-script data-props="{&quot;$preview&quot;:{&quot;width&quot;:1280,&quot;height&quot;:880},&quot;permissionStart&quot;:{&quot;editor&quot;:&quot;enum&quot;,&quot;default&quot;:&quot;auto&quot;,&quot;options&quot;:[&quot;ask&quot;,&quot;auto&quot;,&quot;bypass&quot;],&quot;tsType&quot;:&quot;string&quot;},&quot;autoplay&quot;:{&quot;editor&quot;:&quot;boolean&quot;,&quot;default&quot;:true,&quot;tsType&quot;:&quot;boolean&quot;}}">
+class Component extends DCLogic {
+  state = {
+    permMode: null, blocks: [], cursor: 0, busy: false, busyWord: "Cogitating", busySecs: 0, busyTokens: 0,
+    thinkOpen: {}, draft: "", slashOpen: false, started: false, gateWaiting: false, ctxUsed: 12,
+    reachedMs: [], activeMs: null, coworkOverride: null, wsTab: "cowork",
+    factorsSelected: false, modelSelected: false, signalSelected: false, portfolioSelected: false, runReady: false, reportReady: false, wfOpen: false,
+    wsOpen: true, chatOpen: true, chatW: 440,
+  };
+
+  componentDidMount() { this._uid = 0; this._timers = []; this._msAnchor = {}; this._build();
+    this._mv = (ev) => { if (!this._split) return; const w = Math.max(280, Math.min(760, this._split.w0 + (ev.clientX - this._split.x0))); this.setState({ chatW: w }); };
+    this._up = () => { this._split = null; };
+    document.addEventListener("pointermove", this._mv); document.addEventListener("pointerup", this._up);
+    if (this.props.autoplay ?? true) this._t(() => this._start(), 600); else this.setState({ draft: this._firstPrompt }); }
+  componentWillUnmount() { (this._timers || []).forEach(clearTimeout); if (this._busyTick) clearInterval(this._busyTick); if (this._mv) document.removeEventListener("pointermove", this._mv); if (this._up) document.removeEventListener("pointerup", this._up); }
+  _t(fn, ms) { const id = setTimeout(fn, ms); this._timers.push(id); return id; }
+  _scroll() { this._t(() => { const el = document.getElementById("cc-scroll"); if (el) el.scrollTop = el.scrollHeight; }, 30); }
+
+  _build() {
+    if (this._built) return; this._built = true;
+    this._firstPrompt = "组装一个 A股周频多因子策略：超额 15% / 回撤 ≤ 20%。从因子台和 Model台已发布的资产里选用因子集和模型，跑回测。";
+    this.permMode = this.props.permissionStart ?? "ask";
+    const equity = []; const bench = [];
+    let e = 1.0, b = 1.0; const seed = [3,-1,4,2,-2,5,1,3,-1,4,6,-3,2,5,1,4,-2,3,6,2,-1,5,3,1,4,-2,6,3,2,5,-1,4,1,3,6,-2,5,2,4,-1,3,6,1,5,-2,4,3,2,6,1,-1,5,3,4,2,6,-2,5,3,4];
+    for (let i = 0; i < 58; i++) { e *= 1 + (seed[i] * 0.6 + (i % 7 === 0 ? -2.4 : 0.5)) / 100; b *= 1 + (seed[i] * 0.18 + 0.12) / 100; equity.push(e); bench.push(b); }
+    this._runObj = { run_id: "run_wk_cn_8f2a", sharpe: 1.82, annExcess: 0.173, maxDD: 0.158, turnover: 0.42, winWeeks: 0.61, ir: 1.41, equity, bench,
+      cost: [{ preset: "optimistic", sharpe: 2.05, excess: 0.196 }, { preset: "neutral", sharpe: 1.82, excess: 0.173 }, { preset: "pessimistic", sharpe: 1.49, excess: 0.138 }], pbo: 0.18, dsr: 1.34 };
+    this._factorSet = [
+      { id: "surprise_sue", state: "QUALIFIED", ic: "0.067", note: "盈余惊喜 · 最强、衰减慢" },
+      { id: "mom_20_120", state: "QUALIFIED", ic: "0.058", note: "中期动量 · 稳健正贡献" },
+      { id: "ep_ttm", state: "QUALIFIED", ic: "0.044", note: "估值 · 与动量低相关、分散" },
+    ];
+    this._fieldGroups = [["canonical 量价", "open high low close vwap volume amount"], ["canonical 财务", "pe_ttm pb roe_ttm netprofit_yoy"], ["official_ 前缀", "official_sue official_north_net"], ["freeform(用户)", "turnover_ext north_flow_z"]];
+
+    const S = (id, ev) => ({ id, ...ev });
+    this._events = [
+      S("u1", { type: "user", text: this._firstPrompt }),
+      S("th1", { type: "thinking", secs: 4, tokens: 286, text: "策略台只做组装+回测：先立假设卡，确认字段，然后从因子台拉 QUALIFIED+ 因子组 factor_set、从 Model台拉 staging+ 模型（不在这训），组装跑 backtest.run。到回测拍板为止——进场是模拟台的事。" }),
+      S("sH", { type: "say", text: "先把这句话立成可证伪的假设卡（exploratory）：" }),
+      S("tH", { type: "tool", ms: "立题", cowork: "hypothesis", name: "hypothesis.create", args: { goal_ref: "sg_wk_cn_01", stage: "exploratory" }, dur: 800, summary: "假设卡 hyp_wk_cn_01 已建" }),
+      S("td1", { type: "todos", items: [["立题：假设卡", "doing"], ["市场：确认数据/字段宇宙", "todo"], ["选用因子集（因子台）", "todo"], ["选用模型（Model台）", "todo"], ["信号 → 风控", "todo"], ["组装 + 回测", "todo"]] }),
+      S("s1", { type: "say", text: "市场层：确认这套策略用了哪些数据、因子要引用的列都在字段宇宙里：" }),
+      S("t2", { type: "tool", ms: "市场", cowork: "market", name: "data.describe_fields", args: { market: "equity_cn" }, dur: 900, summary: "市场 equity_cn · 3 源 5412 标的 · 字段宇宙 41 列 · 引用列全命中" }),
+      S("s3", { type: "say", text: "从因子台选 QUALIFIED+ 的因子组成 factor_set（不在策略台造因子）：" }),
+      S("t4", { type: "tool", ms: "因子集", cowork: "factorSet", name: "factor_set.compose", args: { from: "因子台", filter: "state>=QUALIFIED" }, dur: 1100, setFactors: true, summary: "fs_core3 · 3 因子选用（surprise_sue · mom_20_120 · ep_ttm）" }),
+      S("s5", { type: "say", text: "从 Model台选已发布的 staging 模型（重训去 Model台）：" }),
+      S("t5", { type: "tool", ms: "模型", cowork: "model", name: "model_registry.select", args: { model: "lgbm_rank_6f@v2", stage: "staging" }, dur: 900, setModel: true, summary: "lgbm_rank_6f@v2（staging）选用 · walk-forward 8/8 正" }),
+      S("td2", { type: "todos", items: [["立题：假设卡", "done"], ["市场：确认数据/字段宇宙", "done"], ["选用因子集（因子台）", "done"], ["选用模型（Model台）", "done"], ["信号 → 风控", "doing"], ["组装 + 回测", "todo"]] }),
+      S("sSig", { type: "say", text: "模型出的是打分，要先转成可交易信号：定义打分→排序→选股的信号规则。" }),
+      S("tSig", { type: "tool", ms: "信号", cowork: "signal", name: "signal.define", args: { rule: "rank(score) top decile", rebalance: "weekly_fri" }, dur: 1000, setSignal: true, summary: "信号已定义 · 周五按模型分排序、取前 10% 为多头候选" }),
+      S("sPos", { type: "say", text: "信号是候选名单，还要定风控（仓位在内）与执行机制（由信号触发）才能落地交易：" }),
+      S("tPos", { type: "tool", ms: "仓位风控", cowork: "portfolio", name: "portfolio.construct", args: { sizing: "equal_risk", max_pos: 0.03, dd_halt: 0.20 }, dur: 1100, setPortfolio: true, summary: "风控+执行机制已定义 · 等权风险 · 单票≤3% · 回撤熔断20%" }),
+      S("td3b", { type: "todos", items: [["立题：假设卡", "done"], ["市场：确认数据/字段宇宙", "done"], ["选用因子集（因子台）", "done"], ["选用模型（Model台）", "done"], ["信号 → 风控", "done"], ["组装 + 回测", "doing"]] }),
+      S("s6", { type: "say", text: "组装成 strat_wk_cn_01（因子集+模型+信号+风控），跑回测。backtest.run 写 runs/，ask 模式需你确认：" }),
+      S("g1", { type: "gate", tool: "backtest.run", se: "side_effect: none", blurb: "组装 fs_core3 + lgbm_rank_6f@v2 + 信号/风控规则，neutral 成本跑周频回测，写 runs/run_wk_cn_8f2a/。", args: { factor_set: "fs_core3", model_id: "lgbm_rank_6f@v2", signal: "top_decile", cost_preset: "neutral" } }),
+      S("t8", { type: "tool", ms: "回测", cowork: "run", name: "backtest.run", args: { factor_set: "fs_core3", model_id: "lgbm_rank_6f@v2" }, dur: 2300, setRun: true, summary: "回测+体检完成 · 超额17.3% · 回撤15.8% · PBO0.18 · DSR1.34" }),
+      S("td3", { type: "todos", items: [["立题：假设卡", "done"], ["市场：确认数据/字段宇宙", "done"], ["选用因子集（因子台）", "done"], ["选用模型（Model台）", "done"], ["信号 → 风控", "done"], ["组装 + 回测", "done"]] }),
+      S("f1", { type: "say", text: "回测拍板：双目标达标、PBO/DSR 排除过拟合。这是策略台的终点。" }),
+      S("h1", { type: "handoff" }),
+    ];
+    this._milestoneDefs = [
+      { key: "立题", label: "立题", cowork: "hypothesis" }, { key: "市场", label: "市场", cowork: "market" },
+      { key: "因子集", label: "因子集", cowork: "factorSet" }, { key: "模型", label: "模型", cowork: "model" },
+      { key: "信号", label: "信号", cowork: "signal" }, { key: "仓位风控", label: "风控", cowork: "portfolio" },
+      { key: "回测", label: "回测", cowork: "run" },
+    ];
+  }
+
+  _start() { if (this.state.started) return;
+    this.setState({ started: true, draft: "", blocks: [], cursor: 0, thinkOpen: {}, reachedMs: [], activeMs: null, coworkOverride: null, wsTab: "cowork", factorsSelected: false, modelSelected: false, runReady: false, reportReady: false });
+    this._uid = 0; this._msAnchor = {}; this.permMode = this.props.permissionStart ?? "ask"; this.setState({ permMode: this.permMode }); this._next(); }
+  _restart() { (this._timers || []).forEach(clearTimeout); this._timers = []; if (this._busyTick) clearInterval(this._busyTick);
+    this.setState({ started: false, blocks: [], cursor: 0, busy: false, ctxUsed: 12, reachedMs: [], activeMs: null, coworkOverride: null, wsTab: "cowork", factorsSelected: false, modelSelected: false, runReady: false, reportReady: false }, () => this._t(() => this._start(), 200)); }
+
+  _push(bk) { this.setState(s => ({ blocks: [...s.blocks, bk] })); this._scroll(); }
+  _patchLast(p) { this.setState(s => { const b = s.blocks.slice(); b[b.length - 1] = { ...b[b.length - 1], ...p }; return { blocks: b }; }); this._scroll(); }
+  _reachMs(key, id, cowork) { this._msAnchor[key] = id; this.setState(s => ({ reachedMs: s.reachedMs.includes(key) ? s.reachedMs : [...s.reachedMs, key], activeMs: key, coworkOverride: null, wsTab: "cowork" })); }
+  _busyOn(w) { this.setState({ busy: true, busyWord: (w || this._word()) + "…", busySecs: 0, busyTokens: 0 }); if (this._busyTick) clearInterval(this._busyTick); this._busyTick = setInterval(() => this.setState(s => ({ busySecs: s.busySecs + 1, busyTokens: s.busyTokens + 40 + Math.floor(Math.random() * 80) })), 1000); }
+  _busyOff() { this.setState({ busy: false }); if (this._busyTick) { clearInterval(this._busyTick); this._busyTick = null; } }
+  _word() { const w = ["Cogitating", "Crunching", "Assembling", "Composing", "Backtesting"]; return w[Math.floor(Math.random() * w.length)]; }
+  _bumpCtx(n) { this.setState(s => ({ ctxUsed: Math.min(90, s.ctxUsed + n) })); }
+
+  _applyEffect(ev) {
+    if (ev.setFactors) this.setState({ factorsSelected: true });
+    if (ev.setModel) this.setState({ modelSelected: true });
+    if (ev.setSignal) this.setState({ signalSelected: true });
+    if (ev.setPortfolio) this.setState({ portfolioSelected: true });
+    if (ev.setRun) this.setState({ runReady: true, reportReady: true });
+  }
+
+  _next() {
+    const ev = this._events[this.state.cursor]; if (!ev) { this._busyOff(); return; }
+    this.setState(s => ({ cursor: s.cursor + 1 })); this._bumpCtx(2 + Math.floor(Math.random() * 3));
+    if (ev.ms) this._t(() => this._reachMs(ev.ms, ev.id, ev.cowork), 0);
+    if (ev.type === "user") { this._push({ ...ev }); this._t(() => this._next(), 500); return; }
+    if (ev.type === "thinking") { this._busyOn("Thinking"); this._push({ ...ev, text: "", streaming: true }); this.setState(s => ({ thinkOpen: { ...s.thinkOpen, [ev.id]: true } }));
+      this._typewrite(ev.text, 9, () => { this._patchLast({ streaming: false }); this._busyOff(); this._t(() => { this.setState(s => ({ thinkOpen: { ...s.thinkOpen, [ev.id]: false } })); this._next(); }, 450); }); return; }
+    if (ev.type === "say") { this._busyOn(); this._push({ ...ev, text: "", streaming: true }); this._typewrite(ev.text, 13, () => { this._patchLast({ streaming: false }); this._busyOff(); this._t(() => this._next(), 320); }); return; }
+    if (ev.type === "todos") { this._push({ ...ev }); this._t(() => this._next(), 520); return; }
+    if (ev.type === "tool") { this._busyOn(this._word()); this._push({ ...ev, _status: "running" });
+      this._t(() => { this._patchLast({ _status: "done" }); this._applyEffect(ev); this._busyOff(); this._t(() => this._next(), 420); }, ev.dur || 1000); return; }
+    if (ev.type === "gate") { if (!this._gate(ev.se)) { this._next(); return; } this._push({ ...ev, _pending: true }); this.setState({ gateWaiting: true }); return; }
+    if (ev.type === "handoff") { this._push({ ...ev, _pending: true }); this.setState({ gateWaiting: true }); return; }
+  }
+  _gate() { return this.permMode === "ask"; }
+  _typewrite(full, sp, done) { let i = 0; const step = () => { i = Math.min(full.length, i + (1 + Math.floor(Math.random() * 3))); this._patchLast({ text: full.slice(0, i) }); if (i < full.length) this._t(step, sp + Math.random() * 16); else done(); }; this._t(step, sp); }
+
+  _resolveGate(kind) {
+    if (kind === "no") { this._patchLast({ _pending: false, _resolved: "no" }); this.setState({ gateWaiting: false }); this._t(() => this._push({ id: "no1", type: "say", text: "好的，已取消。要换 pessimistic 成本预设，还是先调因子集再回测？", streaming: false }), 300); return; }
+    if (kind === "always") { this.permMode = "auto"; this.setState({ permMode: "auto" }); }
+    this._patchLast({ _pending: false, _resolved: kind }); this.setState({ gateWaiting: false }); this._t(() => this._next(), 420);
+  }
+  _submitHandoff() { this._patchLast({ _pending: false, _resolved: true }); this.setState({ gateWaiting: false }); }
+
+  _send() { if (!this.state.started) { this._start(); return; }
+    const d = (this.state.draft || "").trim(); if (!d) return;
+    if (d === "/clear" || d === "/restart") { this.setState({ draft: "", slashOpen: false }); this._restart(); return; }
+    this._push({ id: "u" + (++this._uid), type: "user", text: d }); this.setState({ draft: "", slashOpen: false });
+    this._t(() => { this._busyOn(); this._push({ id: "ack" + this._uid, type: "say", text: "", streaming: true }); this._typewrite("（原型 demo：策略台脚本已跑到回测拍板 + 模拟台交接。点「↻ 重放」或进度线节点回看。）", 15, () => { this._patchLast({ streaming: false }); this._busyOff(); }); }, 250); }
+  _onDraft(e) { const v = e.target.value; this.setState({ draft: v, slashOpen: v.startsWith("/") }); }
+  _onKey(e) { if (e.key === "Enter" && !e.shiftKey) { e.preventDefault(); this._send(); } }
+  _slashCmds() { return [["/clear", "清空并重放策略台流程"], ["/factor-set", "从因子台选用因子组 factor_set"], ["/model", "从 Model台选用已发布模型"], ["/backtest", "backtest.run — 组装回测"], ["/handoff", "提交候选策略进模拟台"], ["/permissions", "切权限 ask / auto / bypass"]].map(([cmd, desc]) => ({ cmd, desc, pick: () => this.setState({ draft: cmd, slashOpen: false }) })); }
+
+  _gotoMs(key) { if (!this.state.reachedMs.includes(key)) return; const def = this._milestoneDefs.find(m => m.key === key); this.setState({ coworkOverride: def.cowork, wsTab: "cowork" });
+    const a = this._msAnchor[key]; this._t(() => { const el = document.getElementById("blk-" + a); const sc = document.getElementById("cc-scroll"); if (el && sc) sc.scrollTop += el.getBoundingClientRect().top - sc.getBoundingClientRect().top - 60; }, 40); }
+  _focusCowork(cowork) { if (cowork) this.setState({ coworkOverride: cowork, wsTab: "cowork" }); }
+
+  _argInline(a) { const ks = Object.keys(a || {}); if (!ks.length) return ""; return ks.map(k => { let v = a[k]; if (Array.isArray(v)) v = "[" + v.join(",") + "]"; return k + ": " + v; }).join(", "); }
+  _box(s) { return s === "done" ? "☑" : s === "doing" ? "◐" : "☐"; }
+  _boxColor(s) { return s === "done" ? "#7fa650" : s === "doing" ? "#d9b25f" : "#5f5b53"; }
+  _itemStyle(s) { return s === "done" ? "color:#6f6a61; text-decoration:line-through; text-decoration-color:#4a463f;" : s === "doing" ? "color:#e6e1d6;" : "color:#9a9488;"; }
+
+  _coworkMode() { if (this.state.coworkOverride) return this.state.coworkOverride; const def = this._milestoneDefs.find(m => m.key === this.state.activeMs); return def ? def.cowork : null; }
+
+  _codeLines() {
+    const r = this.state.reachedMs; const L = []; const C = { key: "#7d8aa0", val: "#cbb89a", str: "#9bbd5a", cmt: "#5f6a52", plain: "#a39a8a", ref: "#6f9bd1" };
+    const push = (t, color) => L.push({ t, color: color || C.plain });
+    push("name: weekly_cn_multifactor", C.plain);
+    if (r.includes("立题")) { push("hypothesis: hyp_wk_cn_01            # exploratory", C.cmt); }
+    if (r.includes("立题")) { push("goal:", C.key); push("  asset_class: equity_cn", C.val); push("  objective: 年化超额≥15% · 回撤≤20%", C.val); push("  horizon: weekly", C.val); push('  benchmark: "000905.SH"', C.str); }
+    if (r.includes("因子集")) { push("", C.plain); push("factor_set: fs_core3                  # ← 因子台", C.ref); push("  - surprise_sue          # IC 0.067 · QUALIFIED", C.cmt); push("  - mom_20_120            # IC 0.058 · QUALIFIED", C.cmt); push("  - ep_ttm                # IC 0.044 · QUALIFIED", C.cmt); }
+    if (r.includes("模型")) { push("", C.plain); push("model: lgbm_rank_6f@v2                # ← Model台 · staging", C.ref); push("  task: lambdarank", C.val); push("  cv_ndcg: 0.231", C.val); push("  walk_forward: 8/8 windows +", C.val); }
+    if (r.includes("回测")) { push("", C.plain); push("backtest:", C.key); push("  cost_preset: neutral", C.val); push("  window: 2019-01..2024-12", C.val); push("  result: { excess: 0.173, mdd: 0.158, pbo: 0.18, dsr: 1.34 }", C.val); }
+    return L.map((x, i) => ({ n: i + 1, t: x.t, color: x.color }));
+  }
+  _reportMd() { return [["h", "# strat_wk_cn_01 · 回测报告"], ["p", "fs_core3 + lgbm_rank_6f@v2 · 2019–2024 · 中证500 · neutral"], ["h2", "## 结论"], ["li", "年化超额 17.3% — 达标 (≥15%)"], ["li", "最大回撤 15.8% — 达标 (≤20%)"], ["li", "PBO 0.18 / DSR 1.34 — 非过拟合幸存者"], ["h2", "## 交接"], ["p", "策略台终点。候选策略可提交模拟台，进场与监控由模拟台决定。"]]
+    .map(([k, t]) => ({ t: t.replace(/^#+\s*/, "").replace(/^-\s*/, "· "), style: k === "h" ? "color:#e6e1d6; font-weight:700; font-size:16px; margin-bottom:8px;" : k === "h2" ? "color:#d97757; font-weight:600; margin:13px 0 5px;" : k === "li" ? "color:#bcd98a; margin:3px 0 3px 4px;" : "color:#9a9488; margin-bottom:6px; line-height:1.6;" })); }
+
+  renderVals() {
+    if (!this._built) this._build();
+    const st = this.state;
+    const permMode = st.permMode || this.permMode || "ask";
+
+    // stations
+    const stationDefs = [{ label: "因子台", soon: true }, { label: "Model台", href: "Model%E5%8F%B0.dc.html" }, { label: "策略台", active: true }, { label: "模拟台", soon: true }];
+    const stations = stationDefs.map(d => { const active = !!d.active; const link = !!d.href; return { label: d.label, soon: !!d.soon, link, plain: !link, href: d.href || "",
+      style: "display:flex; align-items:center; font-family:inherit; font-size:11.5px; padding:4px 11px; border-radius:6px; text-decoration:none; cursor:" + (link ? "pointer" : "default") + "; " + (active ? "background:#d97757; color:#1c1b19; font-weight:700;" : link ? "background:transparent; color:#a39a8a;" : "background:transparent; color:#6f6a61;") }; });
+
+    // milestones
+    const order = this._milestoneDefs.map(m => m.key); const activeIdx = order.indexOf(st.activeMs);
+    const milestones = this._milestoneDefs.map((m, i) => {
+      const reached = st.reachedMs.includes(m.key); const isActive = m.key === st.activeMs;
+      let dot; if (isActive) dot = "width:11px; height:11px; border-radius:50%; background:#d97757; animation:ccring 1.4s ease-out infinite;";
+      else if (reached) dot = "width:9px; height:9px; border-radius:50%; background:#7fa650;";
+      else dot = "width:9px; height:9px; border-radius:50%; background:transparent; border:1.5px solid #3a3733;";
+      let sub = ""; if (m.key === "因子集" && st.factorsSelected) sub = "fs_core3"; if (m.key === "模型" && st.modelSelected) sub = "v2·staging"; if (m.key === "回测" && st.runReady) sub = "拍板✓";
+      return { label: m.label, dot, leftColor: i === 0 ? "transparent" : (i <= activeIdx ? "#5d7a3a" : "#302d29"), rightColor: i === order.length - 1 ? "transparent" : (i < activeIdx ? "#5d7a3a" : "#302d29"),
+        labelColor: isActive ? "#d97757" : reached ? "#cfc8ba" : "#5f5b53", weight: isActive ? "700" : "500", sub, subColor: isActive ? "#d9905f" : "#5f5b53", go: () => this._gotoMs(m.key) };
+    });
+
+    // blocks
+    const blocks = (st.blocks || []).map(b => {
+      const vm = { id: b.id, isUser: false, isThinking: false, isSay: false, isTodos: false, isTool: false, isGate: false, isHandoff: false, text: b.text || "", streaming: !!b.streaming };
+      if (b.type === "user") vm.isUser = true;
+      else if (b.type === "thinking") { vm.isThinking = true; vm.open = st.thinkOpen[b.id]; vm.thinkLabel = b.streaming ? "Thinking…" : "Thought process"; vm.thinkMeta = b.streaming ? "" : "(" + b.secs + "s · 点击展开)"; vm.toggle = () => this.setState(s => ({ thinkOpen: { ...s.thinkOpen, [b.id]: !s.thinkOpen[b.id] } })); }
+      else if (b.type === "say") vm.isSay = true;
+      else if (b.type === "todos") { vm.isTodos = true; vm.items = b.items.map(([t, s]) => ({ t, box: this._box(s), color: this._boxColor(s), style: this._itemStyle(s) })); }
+      else if (b.type === "tool") { vm.isTool = true; const done = b._status === "done"; vm.name = b.name; vm.argInline = this._argInline(b.args); vm.done = done; vm.dot = done ? "●" : "◐"; vm.dotColor = done ? "#7fa650" : "#d9b25f"; vm.statusLabel = done ? "" : "running…"; vm.summary = b.summary;
+        vm.hasCowork = !!b.cowork && done; vm.coworkLabel = { hypothesis: "假设卡", fields: "字段", factorSet: "因子集", model: "模型卡", run: "回测拍板" }[b.cowork] || "产物"; vm.focus = () => this._focusCowork(b.cowork); }
+      else if (b.type === "gate") { vm.isGate = true; vm.gateTitle = "权限确认 · " + permMode; vm.gateTool = b.tool; vm.gateBlurb = b.blurb; vm.gateSe = b.se; vm.gateArgs = "backtest.run({ " + this._argInline(b.args) + " })"; vm.pending = !!b._pending; vm.resolved = !!b._resolved;
+        if (b._resolved === "once") { vm.resColor = "#7fa650"; vm.resText = "✓ 已批准本次执行。"; } else if (b._resolved === "always") { vm.resColor = "#7fa650"; vm.resText = "✓ 已批准，backtest.run 不再询问（→auto）。"; } else if (b._resolved === "no") { vm.resColor = "#d99a8e"; vm.resText = "✗ 已拒绝，等待新指示。"; }
+        vm.approveOnce = () => this._resolveGate("once"); vm.approveAlways = () => this._resolveGate("always"); vm.reject = () => this._resolveGate("no"); }
+      else if (b.type === "handoff") { vm.isHandoff = true; vm.pending = !!b._pending; vm.resolved = !!b._resolved; vm.submit = () => this._submitHandoff(); }
+      return vm;
+    });
+
+    // workspace
+    const cowork = this._coworkMode(); const tab = st.wsTab;
+    const showCowork = tab === "cowork"; const showCode = tab === "code"; const showReport = tab === "report" && st.reportReady;
+    const tabStyle = on => "background:" + (on ? "#2a2723" : "transparent") + "; color:" + (on ? "#e6e1d6" : "#7d7668") + "; border:none; font-family:inherit; font-size:11.5px; padding:5px 12px; border-radius:7px; cursor:pointer;";
+
+    return {
+      stations, milestones, blocks, restart: () => this._restart(),
+      busy: st.busy, busyWord: st.busyWord, busySecs: st.busySecs, busyTokens: st.busyTokens,
+      draft: st.draft, onDraft: e => this._onDraft(e), onKey: e => this._onKey(e), send: () => this._send(),
+      sendLabel: st.started ? "↵" : "▶ 开始", placeholder: st.started ? "回复，或 / 命令…" : "Enter 发送，开始组装策略…", inputBorder: st.draft ? "#4a463f" : "#302d29", slashOpen: st.slashOpen, slashCmds: this._slashCmds(),
+      model: "sonnet-4.5", permMode, permColor: permMode === "auto" ? "#d9b25f" : "#7fa650", permGlyph: permMode === "auto" ? "◐" : "⏸", ctxPct: st.ctxUsed + "%", ctxColor: st.ctxUsed > 75 ? "#d9b25f" : "#7fa650", branch: "strat/weekly-cn",
+      // workspace tabs
+      tabCoworkClick: () => this.setState({ wsTab: "cowork" }), tabCodeClick: () => this.setState({ wsTab: "code" }), tabReportClick: () => this.setState({ wsTab: "report" }),
+      tabCoworkStyle: tabStyle(showCowork), tabCodeStyle: tabStyle(showCode), tabReportStyle: tabStyle(showReport), reportReady: st.reportReady,
+      workspaceHint: showCowork ? "实时产物 · 点对话 ↗ 或进度线节点切换" : showCode ? "可复现配置 · 随进度累积" : "回测报告",
+      showCowork, showCode, showReport,
+      wsOpen: st.wsOpen, wsCollapsed: !st.wsOpen, wsToggle: () => this.setState(s => ({ wsOpen: !s.wsOpen })),
+      chatSizing: st.wsOpen ? ("flex:none; width:" + st.chatW + "px; min-width:0;") : "flex:1 1 auto; min-width:0;", showSplitter: st.chatOpen && st.wsOpen,
+      chatOpen: st.chatOpen, chatCollapsed: !st.chatOpen, chatToggle: () => this.setState(s => ({ chatOpen: !s.chatOpen })), chatW: st.chatW,
+      splitDown: (ev) => { ev.preventDefault(); this._split = { x0: ev.clientX, w0: st.chatW }; },
+      // cowork content
+      coEmpty: showCowork && !cowork, coEmptyText: "组装开始后\n假设卡 / 因子集 / 模型卡 / 回测拍板\n会在这里逐步出现",
+      coHypothesis: showCowork && cowork === "hypothesis", coMarket: showCowork && cowork === "market", coFactorSet: showCowork && cowork === "factorSet" && st.factorsSelected, coModel: showCowork && cowork === "model" && st.modelSelected, coSignal: showCowork && cowork === "signal" && st.signalSelected, coPortfolio: showCowork && cowork === "portfolio" && st.portfolioSelected, coRun: showCowork && cowork === "run" && st.runReady,
+      fieldGroups: this._fieldGroups.map(([k, v]) => ({ k, v })), factorSet: this._factorSet, runObj: this._runObj,
+      wfOpen: st.wfOpen, wfCaret: st.wfOpen ? "▴" : "▾", wfToggle: () => this.setState(s => ({ wfOpen: !s.wfOpen })),
+      // code / report
+      codeLines: this._codeLines(), reportMd: this._reportMd(),
+    };
+  }
+}
+</script>
+</body>
+</html>

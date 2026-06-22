@@ -6,6 +6,12 @@
 ## <日期> · <标题>
 - 建/改了什么 + 命门  - 验收：<对抗测试 + 变异 + 全量数字>  - 下一步：<…> -->
 
+## 2026-06-20 · T-035 epic 拆分（leader 领）+ 批次 commit
+
+- **批次 commit** `e3a859a`（33 files +1191/-66）：T-026~T-034 实装 + 4 决策 + 4 gap pool 卡 + 51 新测试；署名 dreaminate 无 co-author，不含 graphify-out。
+- **T-035 epic 拆为 4 子卡**（分配 dreaminate）：T-040 `82120b9c` 前端窗口核心 · T-041 `3d95e0f6` 弹窗+文案 · T-042 `bc21c7c1` Tauri 挂载 · T-043 `3bb62d7d` 无副作用工具接真引擎(P1)。epic 标 done（规划+拆分完成，实装由子卡承接）。
+- **下一步**：4 子卡待 self-review + 实装（T-043 为北极星最后一公里：agent 真跑回测）。T-035 拆分这批未 commit。
+
 ## 2026-06-20 · T-033 完成 · 诚实残余核验（2 verified / 4 gap 升级 pool）
 
 - **核验**（workflow 7 agent 逐项复证，无假绿灯）：✅ venue_lease(INV-3 lease-only 生产做实) · ✅ jsonl_tamper(hash chain 防篡改 25 tests) · 🟡 monitor_loop / portfolio_triangle / stacking_oof / pit_bitemporal 确为 gap。
@@ -164,3 +170,49 @@
 - **关键设计纠正**（对抗复核揪出）：计数键从 `config_hash` 单键 → **复合键 `(config_hash, strategy_goal_ref)`**——否则第二个主题的同 config 试验撞行被静默吞掉（honest-N 洗白，HIGH）。
 - **验收**：25 对抗测试绿 + **13 变异全杀**（种坏门必抓）+ ultracode 5-lens 对抗复核确认 **11 真发现全修** + 二轮 second-look 无缺陷。全量 **796 passed / 13 skipped**（763 基线未破）。
 - **下一步**：**T-014 确定性内核**（node 身份/durable/effectful 不可幂等边界，依赖 ids+ledger 已就绪）；其后 T-015 接 M10 守门进 run 闸门（头号 gap）。
+
+## 2026-06-21 · 整套台前端实装 epic（cfb0fea9）开卡
+
+- **背景**：用户提供 Claude Design handoff bundle(quantbt-claude)，要把整套 DC 原型（策略台/因子台/Model台/模拟台/回测详情+裁决卡/Agent 窗口）pixel-perfect 还原成 React。三板拍板：先开卡自分配 leader / 分期开齐全套卡 P0→完整 / 整套台全做。
+- **开卡**：mint epic cfb0fea9 + 17 子卡（地基×3 G1/G2/G3 + 台×10 + Agent 补×4），全自分配 dreaminate；validate PASS（51 卡 DAG 无环、依赖无悬空、视图新鲜）。leader self-review 18 张新卡 review_status 0→1。
+- **待拍**：A 类工程取舍 7 条 leader 已决（图 codegen 子集/promote 复用晋级门/成本档/里程碑切 tab/self-approve 归属/handoff 形态/handler 深度，写回各卡 [已决]）；B 类 2 条等用户拍（F1 三纯库+暴力遍历范围 / F2 audit 方法学口径），state 待决岔路点名，P0 不阻塞。
+- **理解资产**：2 轮并行理解 workflow（4+6 agent，~98 万 token）吃透 7 个台/组件 + DC 运行时（support.js）+ 跨台共享地基 + 冻结红线边界，落 /tmp/qbt-*.md（本机临时，不入库）。
+- **诚实状态**：本 session 未写任何前端/后端代码，纯开卡 + 落档；实装由子卡承接，每卡对抗测试已钉权限⟂治理/冻结页/止于模拟盘/弱点一等/措辞合规。
+- **下一步**：P0 地基 G1（暗色台壳件+token+accent）→ G2 画布引擎 / G3 Agent 对话+Inspector+Dock → 各台 P0 像素还原；因子台进实现前清 F1/F2 待拍。
+
+## 2026-06-21（续）· F1=B 拍板 + 前端测试缺口补卡 + 真值源入库
+
+- **用户拍板「1走b、都做」**：F1=B 走 (b)——三纯库（算术/ML/DL 分库+信号契约 R17）+ 暴力遍历挖掘（生成/守门解耦、诚实-N R16）本期补，handoff 无稿由 leader 直接设计实装，立 **F3 `a11e2aa5`**（前端设计+实装）/ **F4 `51271d38`**（后端）承接；F2 方法学口径延后到 F2 实现时拍。
+- **前端测试缺口**：勘查 `app/frontend` 零测试设施（无 vitest/playwright、0 测试文件），所有前端卡对抗测试无处落地=违「门必抓」铁律——立 **G0 `e2de3d32`**（vitest+RTL+对抗 harness）作 G1 及全部前端实装卡硬前置。
+- **真值源入库**：handoff bundle → `docs/design/handoff/`；10 份理解报告 → `dev/research/findings/desk-handoff/`（防 /tmp 清）。
+- **落档**：epic 子卡 17→20（+G0/F3/F4）；决策 D-DESK-F1B；build_card_counters/board/dev_map/ledger 全刷新，validate PASS（25 活跃卡、唯一待拍 F2 b106177f）。**仍未写任何实装代码**。
+- **下一步**：P0 顺序 G0 测试设施 → G1 地基 → G2/G3 → 各台像素还原（S1 策略台优先）。
+
+## 2026-06-21（续3）· P0 地基 G0-G3 + 第一波 5 台实装完成（9 卡 done）
+
+- **地基**：G0 测试设施（vitest+RTL+jsdom+对抗 harness 禁词/冻结守卫，runner 绿能绿红能红自证）· G1 desk 壳件+theme-cc `--desk-*` token+per-desk accent+cssToObj（零硬编码色值）· G2 画布引擎（GraphCanvas/Node/Edge/MiniMap/geometry，受控）· G3 Agent对话7型气泡(gate 治理弱点强制展开 R25)+Inspector(locked→disabled)+Dock。
+- **第一波**：S1 策略台（DAG 工作台 17 节点/19 连线 mock + 治理三层硬强制：删除门/校验门/连线门 B6）· F1 因子台 5 视图 · M1 Model台 4 子台（晋级门 approver≠creator 校验对齐后端 422）· P1 模拟台 5 视图+PaperBoardCard（A股止 paper、风险门只读、晋级须人工 INV-5）· R1 裁决卡（verdict 三态不混 GateVerdict「晋级候选」、R7 措辞「排除过拟合」改写为「容差内/未触发熔断」、不嵌冻结页、promote 受控）。
+- **路由**：App.tsx 加 desk 全屏分支（绕 cc Shell，与冻结页同理），/strategy /factors /models /paper；/factors /models 从 cc Shell 迁入 desk。
+- **验证**：全量 vitest 11 files / **124 passed** · tsc clean · `npm run build` ✓（基线不破）· 零硬编码色值全目录。
+- **落档**：G0-G3 + S1/F1/M1/P1/R1 → done（9 卡）。R1 残余：frontend-run-detail 顶栏（非冻结 cosmetic）land 前补。
+- **进行中**：第二波 F3（因子台三纯库+暴力遍历挖掘）+ Agent 窗口（T-040/A1/A2/A3 合并）；后续后端波 S2/F2/F4/M2/P2/R2/A4（pytest）→ land。诚实：前端 P0 用 mock+MockBadge，接真后端在后端波。
+
+## 2026-06-22 · 真实联调（dev server + 后端真跑）+ 抓修 1 真 bug + 前后端真连通验证
+
+- **真实环境**：起后端 `uvicorn app.main:app:8000` + 前端 `vite:5173`，浏览器逐台真渲染验证（非单测 mock）。
+- **5 台真渲染全过**：per-desk accent 全对（策略橙 / 因子紫 `#a98fd4` / Model蓝 `#6f9bd1` / 模拟绿 `#9bbd5a` / Agent橙 `#d97757`）；策略台画布 **18 节点 / 21 连线** 真渲染、pan-zoom 几何 `translate(44px,70px) scale(0.72)` 与 DC 原型初始值**逐字一致**；7 个因子 sub-tab（F1+F3 并入同台）。
+- **抓 + 修 1 真 bug**（单测没抓、真跑才暴露）：`AgentWorkbenchPage.advance()` 把 `setBlocks` 等副作用写在 `setCursor` updater 内 → React 18 StrictMode 双调 updater → blocks 双推 → 重复 key 刷屏。修：副作用移出 updater（`cursorRef` 读游标）+ autoplay StrictMode 双挂载守卫 + restart 重置游标。验证：DOM 19 block **0 重复 id**、agent-workbench 60 vitest、全量 **241 vitest + tsc + build** 全绿。
+- **层面2 前后端真连通**：模拟台 `/api/paper/runs/.../{status,positions,fills,balance,promotion}` + Model台 `/api/training/jobs` 浏览器实测**全 200 OK**；curl 后端确认真数据（paper balance CASH 1e6 / config symbols / promotion 4 门真值；training job xgboost succeeded）。authFetch ↔ 端点 URL 全对、真数据流通——「前端切真」从「写了代码」坐实为「真跑通」。
+- **e2e 完整闭环**：登录(devqa)→建策略 200→`validate` 200 `{ok:true,errors:[],warnings:[]}`→`versions` 200 真版本史(content_hash b2dc13ad)；validate before-login 401(URL/方法对)、login 后链路全通。不需 auth 台 paper/training 200 + 真数据。
+- **视觉逐像素核对**(computed style 实测，比截图准)：root bg #1c1b19 / 文字 #e6e1d6 / accent #d97757 / JetBrains Mono、节点卡 bg #1d1c19 / border 1.5px / w176、五台 accent 全中 DC 精确值、pan-zoom `translate(44,70)scale(.72)` 逐字一致。
+- **残余全清（2026-06-22）**：① 3 pre-existing bug 修（`_dt` NameError create_verdict 500→200 + operators `ts_corr/ts_cov` 跨 symbol 泄露 `.over(order_by="ts")` + 4 个 Cargo/Tauri 缺陷），bug-catch proof（revert 即 FAIL）+ 后端全量 **1237 passed** ② **T-042 桌面 `tauri build` 真跑通**：cargo check ✅ + tauri build --debug ✅(47.76s)，产物落盘 quantbt-desktop(Mach-O arm64 34MB)+QuantBT.app+QuantBT_1.0.0_aarch64.dmg(10MB) ③ R1 frontend-run-detail 顶栏(logo QB/nav 6tab/血缘按钮)，冻结 RunDetailPage 零改动。
+- **诚实保留**：操作触发型 fetch 仅策略台 validate 做了完整 e2e（其余因子 audit/裁决卡同源封装、未逐一点）；视觉核对抽样关键元素（未逐像素扫全台每个组件）；Tauri 仅 aarch64-apple-darwin 本机原生（跨平台 nsis/deb/appimage 未产）。
+- **land**：实装 + 真实联调 + e2e + 视觉核对 + 残余全清完成，commit / 合并 main 待用户授权（不擅自 commit/push）。
+
+## 2026-06-22 · 整套台前端 epic（cfb0fea9）实装完成（24 卡 done）
+
+- 三波前端（地基 G0-G3 / 台前端 S1·F1·M1·P1·R1·F3 / Agent 窗口 T-040·A1·A2·A3）+ 两波后端接真（S2·R2·M2·P2·F4·A4·F2）+ 教学/桌面（T-041·T-042）= **24 子卡全实装落档 done**，活跃卡 0，validate 49✅/0❌/0⚠️。
+- **最终全量验证**：后端 pytest **1231 passed/13 skipped**、前端 vitest **241 passed/21 files**、tsc clean、`npm run build` ✓。
+- **治理红线全守**：冻结 RunDetailPage 不嵌不深色化、权限轴⟂治理（bypass 不跳门）、默认止于模拟盘、弱点一等呈现(R25)、裁决措辞禁词走 _verdict_note(R7)、A股止 paper、晋级 approver≠creator+背书(INV-5)。零硬编码色值（全 --desk-* token）。
+- **诚实残余**：①各台未接端点处 mock+MockBadge（P1 深度功能逐步接真）②T-042 桌面 `tauri build` 待 npm install tauri-cli + 修 pre-existing Cargo `[lib]` 缺 src/lib.rs ③pre-existing bug 已 spawn 修复任务：`create_verdict` _dt NameError（无测试覆盖）、`operators ts_corr/ts_cov` 跨 symbol 泄露（注册前视门已防住入库）。
+- **land**：实装完成、验证绿、24 卡落档 done；**commit/合并 main 待用户授权**（CLAUDE.md 不擅自 commit/push）。当前全部改动在工作区（fullstack 分支）。

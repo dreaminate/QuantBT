@@ -137,6 +137,27 @@ textarea {
   font-weight: 600;
 }
 
+.jq-lineage-btn {
+  display: inline-flex;
+  align-items: center;
+  margin-left: auto;
+  flex-shrink: 0;
+  padding: 5px 12px;
+  border: 1px solid rgba(255, 255, 255, 0.25);
+  border-radius: 7px;
+  color: var(--topbar-text);
+  text-decoration: none;
+  font-size: 13px;
+  white-space: nowrap;
+  transition: color 150ms, border-color 150ms, background 150ms;
+}
+
+.jq-lineage-btn:hover {
+  color: #ffffff;
+  border-color: rgba(255, 255, 255, 0.45);
+  background: rgba(255, 255, 255, 0.06);
+}
+
 /* ==================== Secondary Nav Bar ==================== */
 
 .jq-secondary-bar {

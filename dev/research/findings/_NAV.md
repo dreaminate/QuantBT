@@ -2,6 +2,18 @@
 
 > developer → 文件 + 梗概。**只定位；实时看原文。**
 
+## desk-handoff
+- `desk-handoff/agentDeck.md` — I now have a complete picture. I've read the full 570-line d
+- `desk-handoff/auditDev.md` — I now have everything needed for the structured audit. The "
+- `desk-handoff/factorDeck.md` — I now have a complete picture: design file fully read, exist
+- `desk-handoff/modelDeck.md` — I now have complete coverage of the design file, the backend
+- `desk-handoff/paperDeck.md` — I now have a complete picture. Here is the structured analys
+- `desk-handoff/parseConsole.md` — I have now read both files completely, including the full `<
+- `desk-handoff/parseRuntime.md` — I now have a complete picture: the runtime semantics (suppor
+- `desk-handoff/runDetailDeck.md` — I now have a complete picture. The backend has all the data 
+- `desk-handoff/scoutFrontend.md` — I have all the data needed. Producing the structured report.
+- `desk-handoff/sharedFoundation.md` — I now have a complete, verified picture across all desks plu
+
 ## dreaminate
 - `dreaminate/spine-designs/00-contracts-and-coherence.md` — 00 · 脊柱跨部件契约一致性 + 测试真实性复核
 - `dreaminate/spine-designs/01-deterministic-kernel.md` — 01 · 确定性 DAG 内核 + checkpoint/replay/fork/rollback + 交易副作用不可幂

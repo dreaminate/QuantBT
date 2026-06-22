@@ -250,7 +250,7 @@ export function Mode2ChatPage() {
   if (!me) {
     return (
       <div className="cc-card cc-dim" style={{ padding: 24 }}>
-        请先登录后使用 Mode 2 教学型 agent。
+        请先登录后使用 Mode 2 研究问答。
       </div>
     );
   }
@@ -259,8 +259,8 @@ export function Mode2ChatPage() {
     <>
       <div className="cc-page-header">
         <div>
-          <h1 className="cc-page-title">{"// Mode 2 · 量化教练"}</h1>
-          <div className="cc-soft">研究流程教练 + 风控副驾驶 · 多轮 Socratic · RAG glossary</div>
+          <h1 className="cc-page-title">{"// Mode 2 · 策略研究问答"}</h1>
+          <div className="cc-soft">研究流程问答 + 风控复核 · 多轮对话 · 术语库检索（RAG）</div>
         </div>
         <div className="cc-page-actions">
           <select value={marketMode} onChange={(e) => setMarketMode(e.target.value)} className="cc-select cc-select--sm">
@@ -384,7 +384,7 @@ function MessageBubble({ m }: { m: ChatMessage }) {
         }}
       >
         <div className="cc-dim" style={{ fontSize: 10, marginBottom: 4 }}>
-          {isUser ? "你" : "Mode 2 Agent"} · {m.created_at_utc.slice(11, 19)}
+          {isUser ? "你" : "Mode 2 助手"} · {m.created_at_utc.slice(11, 19)}
         </div>
         <div style={{ whiteSpace: "pre-wrap" }}>{m.content}</div>
         {m.metadata?.rag_hits && m.metadata.rag_hits.length > 0 && (

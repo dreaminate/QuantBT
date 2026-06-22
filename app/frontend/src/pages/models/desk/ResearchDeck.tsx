@@ -48,7 +48,7 @@ export function ResearchDeck(props: ResearchDeckProps) {
         onToggle={props.onToggleChat}
         side="left"
         width={340}
-        label="研究助手"
+        label="研究面板"
       >
         <div
           style={{
@@ -61,7 +61,7 @@ export function ResearchDeck(props: ResearchDeckProps) {
           }}
         >
           <span style={{ color: "var(--desk-ghost)" }}>⚗</span>
-          <span style={{ fontSize: 12, color: "var(--desk-text-soft)" }}>研究助手</span>
+          <span style={{ fontSize: 12, color: "var(--desk-text-soft)" }}>研究面板</span>
           <span style={{ marginLeft: "auto" }}>
             <MockBadge />
           </span>

@@ -59,7 +59,7 @@ export function HomePage() {
     <>
       <OnboardingBanner />
       <section className="cc-hero">
-        <div className="cc-hero-eyebrow">v0.8.5.1 · 教学型 agent 冲刺</div>
+        <div className="cc-hero-eyebrow">v0.8.5.1 · 教学型对话工作台</div>
         <h1 className="cc-hero-title">QuantBT · A股 + 加密的全栈量化软件</h1>
         <p className="cc-hero-subtitle">
           因子工厂 · ML 模型 · Purged k-fold · HRP 组合 · BacktestVenue · Binance 实盘 · Agent

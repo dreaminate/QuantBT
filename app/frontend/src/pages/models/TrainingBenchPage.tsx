@@ -233,6 +233,10 @@ export function TrainingBenchPage() {
           label_col: ds.label_col,
           asset_class: ds.asset_class,
           hyperparams: hyper,
+          // OOS 无泄露：选了「前 N% 训练」就下发 train_fraction，后端据此只用前段训练、
+          // 回测自动取互补后段做严格样本外（service.py/_slice_front_dates + main.py strict_oos）。
+          // =0（全程）时 JSON.stringify 自动省略该字段，后端按全样本训练。否则 UI「无泄露」承诺无法兑现。
+          train_fraction: trainFraction > 0 ? trainFraction : undefined,
         }),
       });
       if (!r.ok) {

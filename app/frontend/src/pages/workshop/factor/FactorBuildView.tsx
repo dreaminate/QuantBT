@@ -150,6 +150,9 @@ export function FactorBuildView(props: FactorBuildViewProps) {
   } = props;
 
   const balanced = isBalanced(expr);
+  // 注册门：表达式配平 +（未接真则演示放行 / 已接真则必须 live.valid）。
+  // 绝不在后端判前视未过时仍放行注册（不假绿灯）。
+  const canRegister = balanced && (!live || live.valid);
   // 接真：编译/前视门状态用后端 validate 真结果（前视未过 = 红，绝不假绿灯）。
   let validTxt = balanced ? "✓ 括号配平 · 编译通过" : "✕ 括号未配平";
   let validColor = balanced ? "var(--desk-success)" : "var(--desk-danger)";
@@ -216,10 +219,20 @@ export function FactorBuildView(props: FactorBuildViewProps) {
     { icon: "△", color: "var(--desk-warning)", t: "换手提示：含 1 日窗口，预计周换手偏高" },
   ];
 
+  // 接真后：live 存在且未过校验时，前视/重名门不得再显示绿 ✓（否则与第一门红 ✕ 自相矛盾、假绿灯）。
+  const liveFailed = !!live && !live.valid;
   const gateChecks = [
     { icon: balanced ? "✓" : "✕", color: validColor, t: "表达式编译通过（polars 计算图）" },
-    { icon: "✓", color: "var(--desk-success)", t: "前视检查通过 · 无标签穿越" },
-    { icon: "✓", color: "var(--desk-success)", t: "registry 无重名 · 版本 v1" },
+    {
+      icon: liveFailed ? "✕" : "✓",
+      color: liveFailed ? "var(--desk-danger)" : "var(--desk-success)",
+      t: "前视检查通过 · 无标签穿越",
+    },
+    {
+      icon: liveFailed ? "○" : "✓",
+      color: liveFailed ? "var(--desk-text-muted)" : "var(--desk-success)",
+      t: "registry 无重名 · 版本 v1",
+    },
   ];
 
   return (
@@ -501,6 +514,8 @@ export function FactorBuildView(props: FactorBuildViewProps) {
               <div style={{ display: "flex", gap: 9 }}>
                 <button
                   onClick={onGateConfirm}
+                  disabled={!canRegister}
+                  title={canRegister ? undefined : "表达式需配平且通过前视/编译校验后才能注册"}
                   style={{
                     background: "var(--desk-accent)",
                     border: "none",
@@ -510,7 +525,8 @@ export function FactorBuildView(props: FactorBuildViewProps) {
                     fontSize: 12,
                     padding: "9px 16px",
                     borderRadius: "var(--desk-radius)",
-                    cursor: "pointer",
+                    cursor: canRegister ? "pointer" : "not-allowed",
+                    opacity: canRegister ? 1 : 0.5,
                   }}
                 >
                   ✓ 注册

@@ -1,0 +1,340 @@
+<!DOCTYPE html>
+<html>
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<script src="./support.js"></script>
+</head>
+<body>
+<x-dc>
+<helmet>
+<link href="https://fonts.googleapis.com/css2?family=JetBrains+Mono:wght@400;500;600;700&display=swap" rel="stylesheet">
+<style>
+  * { box-sizing: border-box; }
+  html, body { margin: 0; padding: 0; height: 100%; background: #1c1b19; }
+  body { font-family: "JetBrains Mono", ui-monospace, "SF Mono", Menlo, monospace; -webkit-font-smoothing: antialiased; }
+  ::selection { background: rgba(217,119,87,0.28); }
+  *::-webkit-scrollbar { width: 10px; height: 10px; }
+  *::-webkit-scrollbar-thumb { background: #3a3733; border-radius: 6px; }
+  *::-webkit-scrollbar-track { background: transparent; }
+  a { text-decoration: none; color: inherit; }
+  #doc h2 { scroll-margin-top: 20px; }
+  pre { margin: 0; font-family: inherit; }
+</style>
+</helmet>
+<div style="display:flex; flex-direction:column; height:100vh; background:#1c1b19; color:#e6e1d6; font-size:13px; line-height:1.65;">
+
+  <!-- TITLE BAR -->
+  <div style="flex:none; display:flex; align-items:center; gap:12px; height:42px; padding:0 16px; background:#201f1c; border-bottom:1px solid #302d29;">
+    <span style="color:#d97757; font-weight:700;">✳</span>
+    <span style="font-weight:600;">QuantBT</span>
+    <span style="color:#5f5b53;">/</span>
+    <span style="color:#cfc8ba;">策略台前端 · 架构蓝本</span>
+    <span style="margin-left:10px; font-size:10px; color:#8f897c; border:1px solid #3a3733; border-radius:20px; padding:2px 9px;">仅前端 · Mock 驱动</span>
+    <span style="font-size:10px; color:#8f897c; border:1px solid #3a3733; border-radius:20px; padding:2px 9px;">DC = Claude Code 实现蓝本</span>
+    <div style="flex:1;"></div>
+    <a href="%E7%AD%96%E7%95%A5%E5%8F%B0.dc.html" style="font-size:11.5px; color:#16202c; background:#d97757; font-weight:700; padding:5px 12px; border-radius:7px;">→ 打开 P0 画布原型</a>
+  </div>
+
+  <div style="flex:1; min-height:0; display:flex;">
+
+    <!-- LEFT · TOC -->
+    <div style="flex:none; width:232px; border-right:1px solid #302d29; background:#1a1916; overflow-y:auto; padding:16px 14px;">
+      <div style="font-size:9.5px; letter-spacing:1px; color:#5f5b53; text-transform:uppercase; margin-bottom:10px;">目录</div>
+      <a href="#s1" style="display:block; padding:5px 8px; border-radius:6px; color:#cfc8ba; font-size:12px;" style-hover="background:#262320;">01 · 现状审查 + 复用清单</a>
+      <a href="#s2" style="display:block; padding:5px 8px; border-radius:6px; color:#cfc8ba; font-size:12px;" style-hover="background:#262320;">02 · 边界与不可违反约束</a>
+      <a href="#s3" style="display:block; padding:5px 8px; border-radius:6px; color:#cfc8ba; font-size:12px;" style-hover="background:#262320;">03 · Screen Map / 路由</a>
+      <a href="#s4" style="display:block; padding:5px 8px; border-radius:6px; color:#cfc8ba; font-size:12px;" style-hover="background:#262320;">04 · 页面信息架构 · 四区</a>
+      <a href="#s5" style="display:block; padding:5px 8px; border-radius:6px; color:#cfc8ba; font-size:12px;" style-hover="background:#262320;">05 · 组件树</a>
+      <a href="#s6" style="display:block; padding:5px 8px; border-radius:6px; color:#cfc8ba; font-size:12px;" style-hover="background:#262320;">06 · 节点 Registry + 端口</a>
+      <a href="#s7" style="display:block; padding:5px 8px; border-radius:6px; color:#cfc8ba; font-size:12px;" style-hover="background:#262320;">07 · 节点状态机</a>
+      <a href="#s8" style="display:block; padding:5px 8px; border-radius:6px; color:#cfc8ba; font-size:12px;" style-hover="background:#262320;">08 · 画布状态模型</a>
+      <a href="#s9" style="display:block; padding:5px 8px; border-radius:6px; color:#cfc8ba; font-size:12px;" style-hover="background:#262320;">09 · Agent Proposal/Patch</a>
+      <a href="#s10" style="display:block; padding:5px 8px; border-radius:6px; color:#cfc8ba; font-size:12px;" style-hover="background:#262320;">10 · TypeScript Contract</a>
+      <a href="#s11" style="display:block; padding:5px 8px; border-radius:6px; color:#cfc8ba; font-size:12px;" style-hover="background:#262320;">11 · 页面状态矩阵</a>
+      <a href="#s12" style="display:block; padding:5px 8px; border-radius:6px; color:#cfc8ba; font-size:12px;" style-hover="background:#262320;">12 · 后端接口清单</a>
+      <a href="#s13" style="display:block; padding:5px 8px; border-radius:6px; color:#cfc8ba; font-size:12px;" style-hover="background:#262320;">13 · 落地映射 P0/P1/P2</a>
+    </div>
+
+    <!-- RIGHT · CONTENT -->
+    <div id="doc" style="flex:1; min-width:0; overflow-y:auto;">
+      <div style="max-width:920px; margin:0 auto; padding:28px 40px 120px;">
+
+        <div style="font-size:24px; font-weight:700; color:#fff; margin-bottom:4px;">策略台前端重构 · 架构蓝本</div>
+        <div style="color:#8f897c; margin-bottom:6px;">无边画布 · 机构级语义阶段 · 强类型端口 · Agent 协作 · 回测血缘双向联动</div>
+        <div style="color:#6f6a61; font-size:11.5px; border-left:2px solid #d97757; padding-left:10px; line-height:1.7;">本文是<strong style="color:#cfc8ba;">交互蓝本（Design Component）</strong>的配套规格，供 Claude Code 在 <span style="color:#cfc8ba;">QuantBT/app/frontend</span> 落地 React。<br>所有「现状」结论引用真实文件路径；所有契约为前端先定义、Repository/Adapter 隔离、Mock 驱动，不伪造后端实现。</div>
+
+        <!-- ░░ 01 现状审查 ░░ -->
+        <h2 id="s1" style="font-size:17px; color:#d97757; margin:36px 0 6px; padding-top:8px; border-top:1px solid #2a2723;">01 · 现状审查 + 复用 / 改造 / 新建清单</h2>
+        <p style="color:#a39a8a; margin:0 0 14px;">审查范围：现有策略台、Model 台无边画布、quantbt 回测详情页、Agent 面板、状态管理、设计系统。结论全部引用真实位置。</p>
+
+        <div style="overflow:hidden; border:1px solid #302d29; border-radius:9px; margin-bottom:14px;">
+          <div style="display:grid; grid-template-columns:1.5fr 2.1fr 0.9fr 2fr; background:#221f1c; font-size:11px; color:#8f897c; padding:8px 12px; gap:10px;">
+            <span>资产 / 真实路径</span><span>现状</span><span>处置</span><span>说明</span>
+          </div>
+          <div style="display:grid; grid-template-columns:1.5fr 2.1fr 0.9fr 2fr; padding:9px 12px; gap:10px; border-top:1px solid #2a2723; font-size:11.5px;">
+            <span style="color:#cfc8ba;">Model台.dc.html · <span style="color:#6f6a61;">#bd-pan / bdCanvasDown / bdZoom</span></span>
+            <span style="color:#a39a8a;">已有无边画布：translate+scale 平移缩放、SVG 连线+arrow marker、in/out 端口、marquee 框选、左侧调色板、右侧代码面板</span>
+            <span><span style="color:#9bbd5a; background:rgba(127,166,80,.14); padding:2px 8px; border-radius:20px; font-size:10px;">复用</span></span>
+            <span style="color:#a39a8a;">画布交互范式直接移植；扩展为强类型端口 + 语义阶段框 + 子画布</span>
+          </div>
+          <div style="display:grid; grid-template-columns:1.5fr 2.1fr 0.9fr 2fr; padding:9px 12px; gap:10px; border-top:1px solid #2a2723; font-size:11.5px;">
+            <span style="color:#cfc8ba;">QuantBT Agent.dc.html</span>
+            <span style="color:#a39a8a;">现「策略台」：Agent 叙事式 对话+工作区+里程碑阶梯，线性流程，非画布</span>
+            <span><span style="color:#6f9bd1; background:rgba(111,155,209,.14); padding:2px 8px; border-radius:20px; font-size:10px;">改造</span></span>
+            <span style="color:#a39a8a;">Agent 面板（对话/思考/工具行/权限门/Ghost）整块复用进左栏；旧文件保留对照</span>
+          </div>
+          <div style="display:grid; grid-template-columns:1.5fr 2.1fr 0.9fr 2fr; padding:9px 12px; gap:10px; border-top:1px solid #2a2723; font-size:11.5px;">
+            <span style="color:#cfc8ba;">回测详情.dc.html · RunVerdictCard.dc.html</span>
+            <span style="color:#a39a8a;">JoinQuant 风浅色回测详情（navy #1a2b4a + 侧边导航组 + ECharts）；裁决卡组件已抽出</span>
+            <span><span style="color:#6f9bd1; background:rgba(111,155,209,.14); padding:2px 8px; border-radius:20px; font-size:10px;">改造</span></span>
+            <span style="color:#a39a8a;">P1 补 Lineage Explorer / Node Contribution / Strategy Snapshot，做画布↔回测双向跳转</span>
+          </div>
+          <div style="display:grid; grid-template-columns:1.5fr 2.1fr 0.9fr 2fr; padding:9px 12px; gap:10px; border-top:1px solid #2a2723; font-size:11.5px;">
+            <span style="color:#cfc8ba;">frontend/src/types.ts</span>
+            <span style="color:#a39a8a;">仅含 Data / Job / Artifact / BacktestRun 契约；<strong style="color:#d99a8e;">无 StrategyGraph / Node / Edge / Stage 任何类型</strong></span>
+            <span><span style="color:#d99a8e; background:rgba(217,154,142,.14); padding:2px 8px; border-radius:20px; font-size:10px;">新建</span></span>
+            <span style="color:#a39a8a;">新增 strategy-graph 契约模块（见 §10）；复用既有 BacktestRun/Job 类型对接回测</span>
+          </div>
+          <div style="display:grid; grid-template-columns:1.5fr 2.1fr 0.9fr 2fr; padding:9px 12px; gap:10px; border-top:1px solid #2a2723; font-size:11.5px;">
+            <span style="color:#cfc8ba;">frontend/src/features/*</span>
+            <span style="color:#a39a8a;">仅 glossary / onboarding；无 canvas / graph-state / node-registry feature</span>
+            <span><span style="color:#d99a8e; background:rgba(217,154,142,.14); padding:2px 8px; border-radius:20px; font-size:10px;">新建</span></span>
+            <span style="color:#a39a8a;">按 §05 组件树新增 features/strategy-board 分层</span>
+          </div>
+          <div style="display:grid; grid-template-columns:1.5fr 2.1fr 0.9fr 2fr; padding:9px 12px; gap:10px; border-top:1px solid #2a2723; font-size:11.5px;">
+            <span style="color:#cfc8ba;">设计系统 · theme-cc.css / styles.css</span>
+            <span style="color:#a39a8a;">深色 Claude-Code 终端风 + JetBrains Mono + #1c1b19/#d97757；台切换器（因子台/Model台/策略台/模拟台）</span>
+            <span><span style="color:#9bbd5a; background:rgba(127,166,80,.14); padding:2px 8px; border-radius:20px; font-size:10px;">复用</span></span>
+            <span style="color:#a39a8a;">沿用全部 token；回测详情保留其浅色子主题</span>
+          </div>
+        </div>
+        <div style="background:#231f1b; border:1px solid #4a322c; border-radius:8px; padding:10px 13px; color:#d9b29e; font-size:11.5px;">前端技术债 / 注意：① 真实仓库无任何图编辑基础设施，画布是净新增，需独立 graph-state，勿塞进现有 store；② 回测详情为浅色独立主题，双向联动需跨主题桥接（统一用 lineageId / nodeId 锚点，不靠视觉）；③ Agent 叙事逻辑目前内嵌在单一 DC 的脚本里，落地时应抽为 agent feature。</div>
+
+        <!-- ░░ 02 约束 ░░ -->
+        <h2 id="s2" style="font-size:17px; color:#d97757; margin:36px 0 6px; padding-top:8px; border-top:1px solid #2a2723;">02 · 边界与不可违反约束</h2>
+        <p style="color:#a39a8a; margin:0 0 12px;">下列为已确认产品决策，前端实现须把它们编码为<strong style="color:#cfc8ba;">校验规则 / 不可变 UI 约束</strong>，而非提示文案。</p>
+        <div style="display:flex; flex-direction:column; gap:7px;">
+          <div style="display:flex; gap:11px; background:#1d1c19; border:1px solid #302d29; border-radius:8px; padding:9px 12px;"><span style="color:#d97757; font-weight:700; flex:none;">B1</span><span style="color:#cfc8ba;">市场组合 与 投资标的池 是<strong>两个独立节点</strong>，经 Tradable Domain 求交：<span style="color:#9bbd5a;">TradableDomain = InvestmentUniverse ∩ MarketConstraints</span>。支持显式 Union/Intersection/Difference 节点。</span></div>
+          <div style="display:flex; gap:11px; background:#1d1c19; border:1px solid #302d29; border-radius:8px; padding:9px 12px;"><span style="color:#d97757; font-weight:700; flex:none;">B2</span><span style="color:#cfc8ba;">投资标的池只定义<strong>允许交易哪些标的</strong>，不含最终权重。</span></div>
+          <div style="display:flex; gap:11px; background:#1d1c19; border:1px solid #302d29; border-radius:8px; padding:9px 12px;"><span style="color:#d97757; font-weight:700; flex:none;">B3</span><span style="color:#cfc8ba;">Model 只从 <strong>Model Registry 引用</strong>（model_id@version + Schema + Artifact 策略）；策略台<strong>不实现训练画布</strong>，重训去 Model 台。</span></div>
+          <div style="display:flex; gap:11px; background:#1d1c19; border:1px solid #302d29; border-radius:8px; padding:9px 12px;"><span style="color:#d97757; font-weight:700; flex:none;">B4</span><span style="color:#cfc8ba;">因子可<strong>直接产生信号</strong>，也可进入 Model，或与 Model 输出组合。</span></div>
+          <div style="display:flex; gap:11px; background:#231f1b; border:1px solid #4a322c; border-radius:8px; padding:9px 12px;"><span style="color:#d9b25f; font-weight:700; flex:none;">B5</span><span style="color:#d9c4a0;">Model 可直接输出 Target Portfolio，<strong>但 UI 仍强制其后经过</strong>：Position Validation → Portfolio Risk → <span style="color:#d99a8e;">Final Risk Gate</span> → Execution。</span></div>
+          <div style="display:flex; gap:11px; background:#2a1d1b; border:1px solid #523630; border-radius:8px; padding:9px 12px;"><span style="color:#d97066; font-weight:700; flex:none;">B6</span><span style="color:#e6b8ab;"><strong>Final Risk Gate 不可删除、不可绕过</strong>。任何到 Execution 的路径必须穿过它；画布层禁止建立绕过边。</span></div>
+          <div style="display:flex; gap:11px; background:#1d1c19; border:1px solid #302d29; border-radius:8px; padding:9px 12px;"><span style="color:#d97757; font-weight:700; flex:none;">B7</span><span style="color:#cfc8ba;">同一张图表达 Backtest / Paper / Live；<strong>已发布 Live 版本只读</strong>，编辑触发 Fork 新草稿。</span></div>
+          <div style="display:flex; gap:11px; background:#1d1c19; border:1px solid #302d29; border-radius:8px; padding:9px 12px;"><span style="color:#d97757; font-weight:700; flex:none;">B8</span><span style="color:#cfc8ba;">Ask 先展示 Ghost Flow + Diff，提交后应用；Auto / Bypass 直接改草稿但<strong>必须事务化、整轮可 Undo、有 Patch ID + 快照</strong>。Bypass ≠ 绕过 Final Risk Gate / 发布审批。</span></div>
+          <div style="display:flex; gap:11px; background:#1d1c19; border:1px solid #302d29; border-radius:8px; padding:9px 12px;"><span style="color:#d97757; font-weight:700; flex:none;">B9</span><span style="color:#cfc8ba;">不伪造真实后端执行；所有 Mock 数据与模拟行为<strong>必须显式标注</strong>（UI 角标 <span style="color:#6f9bd1;">MOCK</span>）。</span></div>
+        </div>
+
+        <!-- ░░ 03 Screen Map ░░ -->
+        <h2 id="s3" style="font-size:17px; color:#d97757; margin:36px 0 6px; padding-top:8px; border-top:1px solid #2a2723;">03 · Screen Map / 路由</h2>
+        <pre style="background:#161512; border:1px solid #2a2723; border-radius:9px; padding:14px 16px; color:#a39a8a; font-size:11.5px; overflow-x:auto; white-space:pre;">/strategy                              策略库（列表 · Draft/Live 分组 · 新建/Clone/Branch）
+/strategy/:sid                         → 重定向到最新草稿版本
+/strategy/:sid/v/:vid                  ★ 策略台画布（四区主工作台）
+        ?stage=signal                  深链到某语义阶段（聚焦/折叠）
+        ?node=nd_xxx                    深链选中节点（Inspector 打开）
+        ?sub=nd_xxx                     进入某节点的子画布
+        ?panel=lineage|run|logs|diff    底部工作台 Tab
+/strategy/:sid/v/:vid/diff/:baseVid    版本对比（只读双图 overlay）
+/strategy/:sid/v/:vid/readonly         只读快照（Live / 历史回测快照）
+/strategy/:sid/publish                 发布检查清单 + 生命周期推进
+/run/:runId                            回测详情页（quantbt 现有 · 改造）
+        ?from=node:nd_xxx               携带来源节点，支持「回画布」
+        ?trace=trade:tx_123            交易→信号→节点 血缘定位
+模式覆盖（query/state，非路由）: runtime=backtest|paper|live · agentMode=ask|auto|bypass</pre>
+
+        <!-- ░░ 04 IA 四区 ░░ -->
+        <h2 id="s4" style="font-size:17px; color:#d97757; margin:36px 0 6px; padding-top:8px; border-top:1px solid #2a2723;">04 · 页面信息架构 · 四区布局</h2>
+        <pre style="background:#161512; border:1px solid #2a2723; border-radius:9px; padding:14px 16px; color:#a39a8a; font-size:11px; overflow-x:auto; white-space:pre; line-height:1.5;">┌──────────────────────────────────────────────────────────────────────────────┐
+│ TOPBAR  策略名 · 版本▾ · Runtime[Backtest|Paper|Live] · ▷运行 · ✓校验 · 发布 · 历史 │
+├────────────┬────────────────────────────────────────────────┬──────────────────┤
+│ LEFT 320   │ CENTER · 无边策略画布（主工作区，优先）            │ RIGHT 340        │
+│ Agent      │  ┌ 阶段框: 立题│市场&标的│数据&因子│Model│信号 …┐  │ Inspector        │
+│ · 对话/思考 │  │  节点 · 端口 · 连线 · Ghost · Markup · Comments │  │ · 参数(schema表单)│
+│ · 任务 todo │  │  阶段完成度 · 缺失项 · 非法依赖标记            │  │ · 端口/兼容性     │
+│ · 权限门    │  └────────────────────────────────────────────┘  │ · 校验结果        │
+│ · Patch轮次 │  MiniMap · 缩放控件 · 自动布局 · 搜索定位          │ · 版本/血缘       │
+├────────────┴────────────────────────────────────────────────┴──────────────────┤
+│ BOTTOM 工作台（可折叠/拉高）  [输出预览][Schema][统计][日志][运行历史][Diff][血缘]  │
+└──────────────────────────────────────────────────────────────────────────────┘
+可折叠/可调整大小 · 布局持久化(localStorage) · 大屏/普通/窄屏降级 · 画布始终主区</pre>
+        <p style="color:#a39a8a; margin:10px 0 0; font-size:11.5px;">复杂度控制：上下文 Inspector、抽屉、Tab、可折叠阶段；不把所有能力永久堆在一屏。左/右/底三栏均可折叠成图标条（沿用现策略台 chatCollapsed/wsCollapsed 范式）。</p>
+
+        <!-- ░░ 05 组件树 ░░ -->
+        <h2 id="s5" style="font-size:17px; color:#d97757; margin:36px 0 6px; padding-top:8px; border-top:1px solid #2a2723;">05 · 组件树</h2>
+        <pre style="background:#161512; border:1px solid #2a2723; border-radius:9px; padding:14px 16px; color:#a39a8a; font-size:11px; overflow-x:auto; white-space:pre; line-height:1.5;">StrategyBoardPage
+├─ BoardTopBar            版本切换 · Runtime 段控 · 运行/校验/发布 · 历史
+├─ AgentPanel (left)                         ← 复用 QuantBT Agent.dc.html
+│   ├─ AgentModeSwitch    ask / auto / bypass
+│   ├─ ConversationStream Thinking·Say·ToolLine·PermissionGate
+│   ├─ ProposalRoundCard  Ghost 摘要 · Patch ID · 受影响节点 · 整轮撤销
+│   └─ AgentComposer      slash 命令 · ctx 进度
+├─ CanvasStage (center)
+│   ├─ CanvasViewport     pan/zoom/marquee（移植 bd-pan）
+│   │   ├─ StageFrame[]   语义阶段框（完成度/缺失/折叠/阶段校验入口）
+│   │   │   └─ GraphNode[]→ NodeRenderer(byCategory) · Port[] · NodeBadges(state/mock/lineage)
+│   │   ├─ EdgeLayer(svg) Edge · CompatBadge · GhostEdge
+│   │   ├─ GhostLayer     Agent 提议的 Ghost 节点/连线/删除标记
+│   │   ├─ MarkupLayer    框选注释 · 风险/泄漏/未来函数标记
+│   │   └─ CommentPins    对象级 Comment（绑 id+version）
+│   ├─ NodePalette        Node Registry 拖源（按 category 分组）
+│   ├─ CanvasControls     缩放 · 自动布局 · 搜索 · 只读/对比/运行覆盖层切换
+│   └─ MiniMap
+├─ InspectorPanel (right)
+│   ├─ ParamForm(jsonSchema)  · PortInspector(typed) · ValidationList · VersionLineage
+│   └─ Editors: RuleDSLEditor · MathExprEditor · OptimizationEditor · PythonCodeNodeEditor
+├─ WorkbenchDock (bottom)
+│   └─ Tabs: DataPreview · SchemaView · Stats · Logs · RunHistory · DiffView · LineageExplorer
+└─ overlays: PublishChecklistDrawer · VersionDiffOverlay · SubgraphBreadcrumb · CommandPalette</pre>
+
+        <!-- ░░ 06 Node Registry ░░ -->
+        <h2 id="s6" style="font-size:17px; color:#d97757; margin:36px 0 6px; padding-top:8px; border-top:1px solid #2a2723;">06 · 节点 Registry + 强类型端口</h2>
+        <p style="color:#a39a8a; margin:0 0 12px;">元数据驱动的 NodeDefinition（见 §10），<strong style="color:#cfc8ba;">不写巨型 switch</strong>。8 大类：</p>
+        <div style="display:grid; grid-template-columns:repeat(2,1fr); gap:8px; margin-bottom:14px;">
+          <div style="background:#1d1c19; border:1px solid #302d29; border-radius:8px; padding:9px 12px;"><div style="color:#6f9bd1; font-size:11px; margin-bottom:4px;">① 研究与范围</div><div style="color:#a39a8a; font-size:11px;">Thesis · MarketPortfolio · InvestmentUniverse · TradableDomain · Capital&Account · Benchmark · Set(Union/∩/Diff)</div></div>
+          <div style="background:#1d1c19; border:1px solid #302d29; border-radius:8px; padding:9px 12px;"><div style="color:#6f9bd1; font-size:11px; margin-bottom:4px;">② 数据与变换</div><div style="color:#a39a8a; font-size:11px;">DataSource · Resample · As-OfJoin · Align · Lag/Delay · RollingWindow · MissingValue · Standardize · Winsorize · Neutralize · Filter · Calendar/TZ</div></div>
+          <div style="background:#1d1c19; border:1px solid #302d29; border-radius:8px; padding:9px 12px;"><div style="color:#6f9bd1; font-size:11px; margin-bottom:4px;">③ 因子与 Model</div><div style="color:#a39a8a; font-size:11px;">FactorInstance · FactorSet · ModelRegistryRef · ModelOutputAdapter · FeatureMapping · ArtifactPolicy</div></div>
+          <div style="background:#1d1c19; border:1px solid #302d29; border-radius:8px; padding:9px 12px;"><div style="color:#6f9bd1; font-size:11px; margin-bottom:4px;">④ 信号与决策</div><div style="color:#a39a8a; font-size:11px;">RuleDSL · MathExpr · CS-Rank · TS-Signal · SignalCombiner · Voting · WeightedEnsemble · StateMachine · SignalAdapter · TargetPortfolioAdapter</div></div>
+          <div style="background:#1d1c19; border:1px solid #302d29; border-radius:8px; padding:9px 12px;"><div style="color:#6f9bd1; font-size:11px; margin-bottom:4px;">⑤ 入场/退出/仓位</div><div style="color:#a39a8a; font-size:11px;">Entry · Exit · Stop/Take/Trailing · HoldingPeriod · Re-entry · PositionSizing · PortfolioOptimizer · Rebalance</div></div>
+          <div style="background:#1d1c19; border:1px solid #302d29; border-radius:8px; padding:9px 12px;"><div style="color:#6f9bd1; font-size:11px; margin-bottom:4px;">⑥ 风险与执行</div><div style="color:#a39a8a; font-size:11px;">SignalRiskFilter · PortfolioRisk · ExposureLimit · LiquidityCheck · DrawdownGuard · VaR/CVaR · <span style="color:#d99a8e;">FinalRiskGate</span> · ExecutionAlgo · OrderIntent · BrokerRuntimeRef</div></div>
+          <div style="background:#1d1c19; border:1px solid #302d29; border-radius:8px; padding:9px 12px;"><div style="color:#6f9bd1; font-size:11px; margin-bottom:4px;">⑦ 状态与控制</div><div style="color:#a39a8a; font-size:11px;">State · Delay · Position/Portfolio/Order/ModelState · Checkpoint · Switch · Gate · Fallback · ErrorHandler</div></div>
+          <div style="background:#1d1c19; border:1px solid #302d29; border-radius:8px; padding:9px 12px;"><div style="color:#6f9bd1; font-size:11px; margin-bottom:4px;">⑧ 开发与说明</div><div style="color:#a39a8a; font-size:11px;">PythonCodeNode · Comment · Annotation · Group · SubgraphRef · StrategyRef</div></div>
+        </div>
+        <p style="color:#a39a8a; margin:0 0 8px; font-size:12px;">端口类型系统（每端口可查看 9 维）：<span style="color:#cfc8ba;">port_name · data_type · schema · frequency · asset_scope · time_scope · currency · nullable · required</span>。连线兼容性 5 态：</p>
+        <div style="display:flex; gap:7px; flex-wrap:wrap; margin-bottom:10px;">
+          <span style="font-size:11px; color:#9bbd5a; background:rgba(127,166,80,.14); border:1px solid #3c5230; padding:3px 10px; border-radius:20px;">● 完全兼容</span>
+          <span style="font-size:11px; color:#6f9bd1; background:rgba(111,155,209,.14); border:1px solid #2c4452; padding:3px 10px; border-radius:20px;">◐ 可自动适配</span>
+          <span style="font-size:11px; color:#d9b25f; background:rgba(217,178,95,.14); border:1px solid #5a4a2a; padding:3px 10px; border-radius:20px;">⚠ 需转换节点</span>
+          <span style="font-size:11px; color:#d97066; background:rgba(217,112,102,.14); border:1px solid #523630; padding:3px 10px; border-radius:20px;">✕ 不兼容</span>
+          <span style="font-size:11px; color:#8f897c; background:rgba(143,137,124,.14); border:1px solid #3a3733; padding:3px 10px; border-radius:20px;">? 待后端校验</span>
+        </div>
+        <p style="color:#a39a8a; margin:0; font-size:11.5px;">典型校验：日频输出不可隐式接分钟级输入 · 截面因子需同期多标的 · 股票专用因子不可直接用于黄金 · 非 PIT 数据不可用于历史回测 · Model 输入 Schema 必须匹配 · TargetPortfolio 不应误接 SignalIntent 口 · <strong style="color:#d99a8e;">不允许绕过 Final Risk Gate 进入执行（B6）</strong>。校验信息常驻 Inspector + 底部工作台，可定位，不只在 Toast。</p>
+
+        <!-- ░░ 07 节点状态机 ░░ -->
+        <h2 id="s7" style="font-size:17px; color:#d97757; margin:36px 0 6px; padding-top:8px; border-top:1px solid #2a2723;">07 · 节点状态机</h2>
+        <pre style="background:#161512; border:1px solid #2a2723; border-radius:9px; padding:14px 16px; color:#a39a8a; font-size:11px; overflow-x:auto; white-space:pre; line-height:1.5;">idle ─edit→ dirty ─validate→ validating ─┬→ valid ──run→ queued → running ─┬→ succeeded
+                                          └→ invalid                        ├→ warning
+ succeeded/valid ─(上游改动)→ stale ─revalidate→ validating                 ├→ failed
+ queued/running ─cancel→ cancelled                                          └ (retry → queued)</pre>
+        <div style="display:flex; gap:6px; flex-wrap:wrap; margin-top:10px;">
+          <span style="font-size:10.5px; color:#8f897c; background:#1d1c19; border:1px solid #302d29; padding:3px 9px; border-radius:6px;">idle 灰</span>
+          <span style="font-size:10.5px; color:#d9b25f; background:#1d1c19; border:1px solid #302d29; padding:3px 9px; border-radius:6px;">dirty 琥珀</span>
+          <span style="font-size:10.5px; color:#6f9bd1; background:#1d1c19; border:1px solid #302d29; padding:3px 9px; border-radius:6px;">validating/queued 蓝</span>
+          <span style="font-size:10.5px; color:#9bbd5a; background:#1d1c19; border:1px solid #302d29; padding:3px 9px; border-radius:6px;">valid/succeeded 绿</span>
+          <span style="font-size:10.5px; color:#d97757; background:#1d1c19; border:1px solid #302d29; padding:3px 9px; border-radius:6px;">running 脉冲橙</span>
+          <span style="font-size:10.5px; color:#d9b25f; background:#1d1c19; border:1px solid #302d29; padding:3px 9px; border-radius:6px;">warning</span>
+          <span style="font-size:10.5px; color:#d97066; background:#1d1c19; border:1px solid #302d29; padding:3px 9px; border-radius:6px;">invalid/failed 红</span>
+          <span style="font-size:10.5px; color:#8f897c; background:#1d1c19; border:1px solid #302d29; padding:3px 9px; border-radius:6px;">stale 斜纹</span>
+          <span style="font-size:10.5px; color:#8f897c; background:#1d1c19; border:1px solid #302d29; padding:3px 9px; border-radius:6px;">cancelled</span>
+        </div>
+        <p style="color:#a39a8a; margin:10px 0 0; font-size:11.5px;">运行入口：Validate · Run Node · Run From Here · Run Selection · Run Full Graph · Dry Run · Cancel · Retry · Compare Runs。状态以非颜色冗余表达（图标+文字），满足可访问性。</p>
+
+        <!-- ░░ 08 画布状态模型 ░░ -->
+        <h2 id="s8" style="font-size:17px; color:#d97757; margin:36px 0 6px; padding-top:8px; border-top:1px solid #2a2723;">08 · 画布状态模型（分桶，勿合并为单一 store）</h2>
+        <pre style="background:#161512; border:1px solid #2a2723; border-radius:9px; padding:14px 16px; color:#cbb89a; font-size:11px; overflow-x:auto; white-space:pre; line-height:1.55;"><span style="color:#5f6a52;">// 1 服务端状态（React Query）</span>  graphQuery · runQuery · registryQuery · modelRegistryQuery
+<span style="color:#5f6a52;">// 2 画布持久状态（持久化 / 进 Undo 栈）</span>
+graph: { nodes: Record&lt;id,NodeInstance&gt;, edges: Record&lt;id,Edge&gt;, stages: Stage[], subgraphs }
+<span style="color:#5f6a52;">// 3 视口/UI 临时态（不进 Undo）</span>  viewport:{panX,panY,zoom} · marquee · hoverPort · linking · dockTab · panelSizes
+<span style="color:#5f6a52;">// 4 选中态</span>            selection:{ nodeIds[], edgeIds[], subgraphPath[] }
+<span style="color:#5f6a52;">// 5 Agent 提议态</span>     proposal:{ patchId, ghosts:GhostOp[], diff, affected[], status } | null
+<span style="color:#5f6a52;">// 6 Patch / Undo 态</span>  undoStack:Patch[] · redoStack:Patch[]  (整轮 Agent 修改 = 一个 Patch)
+<span style="color:#5f6a52;">// 7 Runtime 态</span>       runtime:'backtest'|'paper'|'live' · readonly:boolean(live→true)
+<span style="color:#5f6a52;">// 8 回测 Trace 态</span>    activeRunId · lineageFocus:{ nodeId?, tradeId?, t? } · contributionByNode</pre>
+        <p style="color:#a39a8a; margin:10px 0 0; font-size:11.5px;">性能：大量节点虚拟化（仅渲染视口内）· selector 局部订阅 · 边/节点增量更新 · 大子图折叠为摘要 · 大型 Trace 渐进加载。Undo/Redo 以不可变 Patch 表达（apply/invert）。</p>
+
+        <!-- ░░ 09 Agent Patch ░░ -->
+        <h2 id="s9" style="font-size:17px; color:#d97757; margin:36px 0 6px; padding-top:8px; border-top:1px solid #2a2723;">09 · Agent Proposal / Patch 状态机</h2>
+        <pre style="background:#161512; border:1px solid #2a2723; border-radius:9px; padding:14px 16px; color:#a39a8a; font-size:11px; overflow-x:auto; white-space:pre; line-height:1.55;">ASK   : idle → proposing → <span style="color:#d9b25f;">preview</span>(Ghost+Diff 可见) ─┬ acceptAll → applying → applied(入Undo栈,1 Patch)
+                                                          ├ acceptPartial(选 GhostOp 子集) → applying → applied
+                                                          ├ reject → idle
+                                                          └ refine(继续对话改建议) → proposing
+AUTO  : idle → applying(草稿直接改) → applied  · 展示本轮变更摘要 + Patch ID + 受影响节点 + 快照
+BYPASS: 同 AUTO，可跨节点批量改，不逐项询问
+全模式: 整轮可 Undo（撤销整个 Patch）· 可恢复到会话开始前快照
+红线 : Auto/Bypass 不可删除/绕过 FinalRiskGate(B6)，不可越过发布审批(B7/B8)</pre>
+        <p style="color:#a39a8a; margin:10px 0 0; font-size:11.5px;">GhostOp 种类：addNode · addEdge · removeNode(删除标记) · setParam(参数 Diff) · setFormula(公式 Diff) · setCode(Code Diff) · relayout。Preview 同时呈现影响范围与风险提示。</p>
+
+        <!-- ░░ 10 Contract ░░ -->
+        <h2 id="s10" style="font-size:17px; color:#d97757; margin:36px 0 6px; padding-top:8px; border-top:1px solid #2a2723;">10 · TypeScript Domain Contract（新增 strategy-graph 模块）</h2>
+        <p style="color:#a39a8a; margin:0 0 10px; font-size:11.5px;">前端先定义、JSON Schema + Mock Fixture + Adapter Interface + contractVersion 配套。核心类型节选：</p>
+        <pre style="background:#161512; border:1px solid #2a2723; border-radius:9px; padding:14px 16px; color:#cbb89a; font-size:10.5px; overflow-x:auto; white-space:pre; line-height:1.5;"><span style="color:#5f6a52;">type Id = string; type RuntimeType = 'backtest'|'paper'|'live';</span>
+<span style="color:#7d8aa0;">interface</span> PortDefinition { name:Id; dir:'in'|'out'; dataType:string; schema?:JsonSchema;
+  frequency?:string; assetScope?:string; timeScope?:string; currency?:string; nullable?:boolean; required?:boolean }
+<span style="color:#7d8aa0;">interface</span> NodeDefinition { type:string; category:NodeCategory; title:string; description?:string;
+  inputs:PortDefinition[]; outputs:PortDefinition[]; parameterSchema:JsonSchema;
+  supportedRuntimes:RuntimeType[]; capabilities:NodeCapability[]; inspectorRenderer?:string; summaryRenderer?:string }
+<span style="color:#7d8aa0;">interface</span> NodeInstance { id:Id; type:string; stageId?:Id; subgraphId?:Id; pos:{x:number;y:number};
+  params:Record&lt;string,unknown&gt;; state:NodeState; locked?:boolean; mock?:boolean }
+<span style="color:#7d8aa0;">interface</span> Edge { id:Id; from:{node:Id;port:Id}; to:{node:Id;port:Id}; compat:Compat; adapterHint?:string }
+<span style="color:#7d8aa0;">interface</span> Stage { id:Id; key:StageKey; title:string; collapsed:boolean; completeness:number; missing:string[] }
+<span style="color:#7d8aa0;">interface</span> StrategyGraph { id:Id; nodes:Record&lt;Id,NodeInstance&gt;; edges:Record&lt;Id,Edge&gt;;
+  stages:Stage[]; subgraphs:Record&lt;Id,Subgraph&gt; }
+<span style="color:#7d8aa0;">interface</span> GraphVersion { vid:Id; sid:Id; parentVid?:Id; lifecycle:StrategyLifecycle; runtime:RuntimeType;
+  readonly:boolean; createdAt:string; graph:StrategyGraph }
+<span style="color:#7d8aa0;">interface</span> SignalIntent { instrument:string; timestamp:string; direction:'long'|'short'|'flat';
+  strength?:number; confidence?:number; expectedReturn?:number; horizon?:string; reason?:string; lineageId?:Id }
+<span style="color:#7d8aa0;">interface</span> TargetPortfolioItem { instrument:string; timestamp:string; targetWeight?:number;
+  targetNotional?:number; targetExposure?:number; validUntil?:string; lineageId?:Id }
+<span style="color:#7d8aa0;">interface</span> ModelReference { modelId:Id; version:string; inputSchema:JsonSchema; outputSchema:JsonSchema;
+  assetClasses:string[]; frequency:string; artifactPolicy:ModelArtifactPolicy }
+<span style="color:#7d8aa0;">type</span> ModelArtifactPolicy = {kind:'pinned';artifactId:Id} | {kind:'asOf';asOf:string} | {kind:'rolling';policy:string}
+<span style="color:#7d8aa0;">interface</span> GraphValidationResult { ok:boolean; issues:ValidationIssue[] }  <span style="color:#5f6a52;">// issue 绑 nodeId/edgeId+severity</span>
+<span style="color:#7d8aa0;">interface</span> AgentProposal { patchId:Id; ops:GhostOp[]; diff:Diff; affected:Id[]; risks:string[]; status:ProposalStatus }
+<span style="color:#7d8aa0;">interface</span> AgentPatch { patchId:Id; mode:'ask'|'auto'|'bypass'; ops:GraphOp[]; snapshotBefore:Id; createdAt:string }
+<span style="color:#7d8aa0;">interface</span> CommentThread { id:Id; target:{kind:'node'|'edge'|'param'|'region';ref:Id;vid:Id}; comments:Comment[]; resolved:boolean }
+<span style="color:#7d8aa0;">interface</span> RuntimeLineage { runId:Id; vid:Id; nodes:Record&lt;Id,NodeExecution&gt;; trades:TradeTrace[] }
+<span style="color:#5f6a52;">// 复用现有: BacktestRun / Job / Artifact (frontend/src/types.ts) — 不重定义</span></pre>
+
+        <!-- ░░ 11 状态矩阵 ░░ -->
+        <h2 id="s11" style="font-size:17px; color:#d97757; margin:36px 0 6px; padding-top:8px; border-top:1px solid #2a2723;">11 · 页面状态矩阵</h2>
+        <div style="overflow:hidden; border:1px solid #302d29; border-radius:9px;">
+          <div style="display:grid; grid-template-columns:0.9fr 1.4fr 1.4fr 1.4fr 1.5fr; background:#221f1c; font-size:10.5px; color:#8f897c; padding:8px 12px; gap:8px;"><span>区域</span><span>Empty</span><span>Loading</span><span>Error</span><span>Read-only / Live</span></div>
+          <div style="display:grid; grid-template-columns:0.9fr 1.4fr 1.4fr 1.4fr 1.5fr; padding:9px 12px; gap:8px; border-top:1px solid #2a2723; font-size:11px;"><span style="color:#cfc8ba;">画布</span><span style="color:#a39a8a;">空图引导：拖第一个 Thesis / 用模板</span><span style="color:#a39a8a;">骨架节点占位 + 脉冲</span><span style="color:#a39a8a;">加载失败横幅 + 重试，保留最后本地快照</span><span style="color:#a39a8a;">Live：水印+锁标，拖拽禁用，提示 Fork</span></div>
+          <div style="display:grid; grid-template-columns:0.9fr 1.4fr 1.4fr 1.4fr 1.5fr; padding:9px 12px; gap:8px; border-top:1px solid #2a2723; font-size:11px;"><span style="color:#cfc8ba;">Inspector</span><span style="color:#a39a8a;">未选中：提示选节点</span><span style="color:#a39a8a;">schema 拉取中骨架</span><span style="color:#a39a8a;">校验错误列表（可点定位）</span><span style="color:#a39a8a;">字段只读灰显</span></div>
+          <div style="display:grid; grid-template-columns:0.9fr 1.4fr 1.4fr 1.4fr 1.5fr; padding:9px 12px; gap:8px; border-top:1px solid #2a2723; font-size:11px;"><span style="color:#cfc8ba;">工作台</span><span style="color:#a39a8a;">「尚未运行，点 ▷ Run」</span><span style="color:#a39a8a;">日志流式 + 进度</span><span style="color:#a39a8a;">运行失败堆栈 + Retry</span><span style="color:#a39a8a;">展示历史 run 只读 Trace</span></div>
+          <div style="display:grid; grid-template-columns:0.9fr 1.4fr 1.4fr 1.4fr 1.5fr; padding:9px 12px; gap:8px; border-top:1px solid #2a2723; font-size:11px;"><span style="color:#cfc8ba;">Agent</span><span style="color:#a39a8a;">建议起手 prompt</span><span style="color:#a39a8a;">思考脉冲 + token 计数</span><span style="color:#a39a8a;">提议失败可重试/改写</span><span style="color:#a39a8a;">Live 下仅咨询，改动落到 Fork 草稿</span></div>
+        </div>
+        <p style="color:#a39a8a; margin:10px 0 0; font-size:11.5px;">所有 Mock 来源数据统一加 <span style="color:#6f9bd1;">MOCK</span> 角标（B9）。Live 只读全局以 readonly 标志驱动，编辑动作一律转「Fork 新草稿」(B7)。</p>
+
+        <!-- ░░ 12 后端清单 ░░ -->
+        <h2 id="s12" style="font-size:17px; color:#d97757; margin:36px 0 6px; padding-top:8px; border-top:1px solid #2a2723;">12 · 后端接口清单（Repository / Adapter 隔离，Mock 先行）</h2>
+        <pre style="background:#161512; border:1px solid #2a2723; border-radius:9px; padding:14px 16px; color:#a39a8a; font-size:10.5px; overflow-x:auto; white-space:pre; line-height:1.55;"><span style="color:#5f6a52;">// 前端只依赖此接口；MockStrategyRepo 实现它驱动页面，真后端按同形实现即可</span>
+StrategyRepository {
+  listStrategies() · getVersion(sid,vid) · saveDraft(graph) · forkDraft(vid) · branch(vid)
+  diffVersions(a,b) · rollback(sid,vid) · validateGraph(graph): GraphValidationResult
+  applyPatch(vid,AgentPatch) · revertPatch(vid,patchId)
+}
+NodeRegistryRepository { listDefinitions(): NodeDefinition[] · getDefinition(type) }
+ModelRegistryRepository { listModels() · getModelRef(id,version): ModelReference }   <span style="color:#5f6a52;">// ← Model 台</span>
+FactorRepository { listDefinitions() · instantiate(defId): FactorInstance }            <span style="color:#5f6a52;">// ← 因子台</span>
+RunRepository { runNode(vid,nodeId) · runFromHere · runGraph · dryRun · cancel(runId)
+  getRunSummary(runId) · getRunManifest · streamLogs(runId) · previewIO(nodeId) }
+LineageRepository { getRuntimeLineage(runId) · traceTrade(runId,tradeId) · nodeContribution(runId) }
+AgentRepository { propose(ctx,prompt): AgentProposal · refine() · stream() }
+CommentRepository { listThreads(vid) · post · resolve · reopen }
+LifecycleRepository { publishChecklist(vid) · transition(vid,toState) · deploymentRollback }
+<span style="color:#5f6a52;">建议后端 REST 端点（与 Repo 一一映射）:</span>
+GET  /api/strategy/:sid/versions            GET  /api/strategy/:sid/v/:vid
+POST /api/strategy/:sid/v/:vid/validate     POST /api/strategy/:sid/v/:vid/patch
+POST /api/strategy/:sid/fork                POST /api/strategy/:sid/v/:vid/run
+GET  /api/run/:runId/manifest|lineage|logs  GET  /api/registry/nodes|models|factors
+POST /api/strategy/:sid/v/:vid/comments     POST /api/strategy/:sid/publish</pre>
+
+        <!-- ░░ 13 落地 ░░ -->
+        <h2 id="s13" style="font-size:17px; color:#d97757; margin:36px 0 6px; padding-top:8px; border-top:1px solid #2a2723;">13 · 落地映射 · P0 / P1 / P2</h2>
+        <div style="display:flex; flex-direction:column; gap:9px;">
+          <div style="background:#1e261a; border:1px solid #3c5230; border-radius:9px; padding:11px 14px;"><div style="color:#9bbd5a; font-weight:600; margin-bottom:3px;">P0 · 必须做实（本轮交付的画布原型）</div><div style="color:#a7b48f; font-size:11.5px;">四区布局 · 无边画布(平移/缩放/拖节点/拉连线/框选/Undo·Redo) · 8 语义阶段框 · Node Registry · 强类型端口 + 连线 5 态校验 · Inspector · 完整 A 股 ML 链路（立题→市场组合→标的池→数据→因子集→Model Registry→信号→入场退出→仓位优化→PortfolioRisk→FinalRiskGate→执行→回测基准→结果）</div></div>
+          <div style="background:#231f1b; border:1px solid #5a4a2a; border-radius:9px; padding:11px 14px;"><div style="color:#d9b25f; font-weight:600; margin-bottom:3px;">P1 · 一条完整演示</div><div style="color:#d9c4a0; font-size:11.5px;">Agent Ask + Ghost Flow + 参数/结构 Diff · 底部工作台（节点状态/数据预览/日志） · 一笔交易 Lineage 定位（画布↔回测详情双向跳转）</div></div>
+          <div style="background:#1d1c19; border:1px solid #302d29; border-radius:9px; padding:11px 14px;"><div style="color:#8f897c; font-weight:600; margin-bottom:3px;">P2 · 框架 + 关键状态</div><div style="color:#a39a8a; font-size:11.5px;">Auto / Bypass 整轮撤销 · 完整回测详情联动 + Lineage Explorer · 版本历史/Diff/Rollback · Runtime 切换 · 发布生命周期 · Paper/Live 只读治理 + Kill Switch</div></div>
+        </div>
+
+        <div style="margin-top:28px; padding-top:14px; border-top:1px solid #2a2723; color:#5f5b53; font-size:11px;">contractVersion: strategy-graph@0.1.0 · 本蓝本 + 画布原型构成验收第 1–20 条的可视化依据。下一步：实现 P0 画布原型 → 策略台.dc.html。</div>
+
+      </div>
+    </div>
+  </div>
+</div>
+</x-dc>
+<script type="text/x-dc" data-dc-script data-props="{&quot;$preview&quot;:{&quot;width&quot;:1280,&quot;height&quot;:900}}"></script>
+</body>
+</html>

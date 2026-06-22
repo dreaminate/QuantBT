@@ -2,6 +2,21 @@
 
 桌面端套壳 React 前端 + 内置 Python backend 子进程。
 
+## 一套组件两处挂载（T-042）
+
+桌面窗口与 Web 共用同一套 React 组件，**不重写、不分叉**：
+- Tauri 主窗口 `url` = `index.html?view=agent-workbench`（`tauri.conf.json` → `app.windows[main]`）。
+- `index.html` 在 dev server 与生产 asset 协议下都能解析；`?view=` 是「桌面视图选择器」。
+- `frontend/src/main.tsx` 的入口门在 React 挂载前读 `?view=`，按白名单 `VIEW_ROUTES`
+  把初始路由 `history.replaceState` 改写成 `/agent-workbench`，再交给既有 `App.tsx` 路由。
+- Web 端无 `?view=` ⇒ 入口门空操作，URL/路由行为完全不变。
+
+桌面因此渲染**同一个被治理的 `AgentWorkbenchPage`**（同 router、同权限三态、同 GatePanel/HandoffCard
+治理门）——桌面路径不绕治理门。回归门：`frontend/src/pages/workshop/agent-workbench/desktopMount.test.tsx`。
+
+> 新增桌面视图：在 `VIEW_ROUTES` 加一条 `视图名 → /路由`，并用 `index.html?view=视图名` 作窗口 url。
+> 切勿用 `history.replaceState(..., location.search)` 裸路径（开放重定向；测试会抓）。
+
 **安全特性**：API key（含 Binance mainnet）**永远不离开用户本机** — 走 OS keyring。
 即便 QuantBT 云服务被攻破，桌面用户资金不受影响。
 

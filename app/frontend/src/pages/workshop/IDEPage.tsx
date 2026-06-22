@@ -89,6 +89,9 @@ interface AIContext {
 
 export function IDEPage() {
   const me = getStoredUser();
+  // 用稳定的身份代理做 effect 依赖：getStoredUser() 每次 render 返回新对象引用，
+  // 直接进依赖数组会触发无限重拉（请求风暴）。
+  const userId = me?.user_id ?? null;
   const navigate = useNavigate();
   const [strategies, setStrategies] = useState<StrategyFile[]>([]);
   const [currentName, setCurrentName] = useState<string | null>(null);
@@ -123,16 +126,16 @@ export function IDEPage() {
   }, []);
 
   useEffect(() => {
-    if (me) reload();
-  }, [me, reload]);
+    if (userId) reload();
+  }, [userId, reload]);
 
   useEffect(() => {
-    if (!me) return;
+    if (!userId) return;
     authFetch("/api/ide/ai_context")
       .then((r) => (r.ok ? r.json() : null))
       .then((c) => c && setAIContext(c))
       .catch(() => {/* noop */});
-  }, [me]);
+  }, [userId]);
 
   const openStrategy = (s: StrategyFile) => {
     setCurrentName(s.name);
@@ -153,12 +156,13 @@ export function IDEPage() {
   };
 
   const save = async () => {
-    if (!currentName) {
+    let targetName = currentName;
+    if (!targetName) {
       const name = prompt("策略名 (字母数字 - _):", "my_strategy_v1");
       if (!name) return;
       setCurrentName(name);
+      targetName = name;
     }
-    const targetName = currentName || "my_strategy_v1";
     setSaving(true);
     try {
       const res = await authFetch("/api/ide/strategies", {
@@ -286,7 +290,7 @@ export function IDEPage() {
       <div className="cc-page-header">
         <div>
           <h1 className="cc-page-title">{"// IDE · 策略代码工坊"}</h1>
-          <div className="cc-soft">聚宽风 IDE · 子进程沙箱跑你的策略 · LLM 帮你写</div>
+          <div className="cc-soft">策略代码编辑器 · 子进程沙箱运行你的策略 · 内置代码助手</div>
         </div>
         <div className="cc-page-actions">
           <button type="button" className="cc-btn" onClick={save} disabled={saving || running}>
@@ -403,7 +407,7 @@ export function IDEPage() {
               onClick={() => setRightTab("ai")}
               style={{ cursor: "pointer" }}
             >
-              AI 助手
+              代码助手
             </a>
           </div>
           <div style={{ padding: 12, maxHeight: "70vh", overflow: "auto" }}>
@@ -619,13 +623,13 @@ function AIPanel(props: {
   return (
     <div>
       <div className="cc-row" style={{ justifyContent: "space-between", marginTop: 0 }}>
-        <div className="cc-section-title" style={{ margin: 0 }}>AI 辅助 (BigQuant 风)</div>
+        <div className="cc-section-title" style={{ margin: 0 }}>代码助手</div>
         {context && (
           <button
             type="button"
             className="cc-btn cc-btn--ghost cc-btn--sm"
             onClick={onToggleContext}
-            title="查看 LLM 拿到的上下文"
+            title="查看发送给模型的上下文"
             style={{ fontSize: 10 }}
           >
             ⓘ 上下文 {context.connectors.length}·{context.factors.length}·{context.operators.length}
@@ -676,7 +680,7 @@ function AIPanel(props: {
         onChange={(e) => setPrompt(e.target.value)}
         placeholder={
           mode === "write" ? "描述你想写什么策略..." :
-          mode === "explain" ? "想让 AI 解释什么？(默认解释左侧全文)" :
+          mode === "explain" ? "想解释哪段代码？(默认解释左侧全文)" :
           "代码报什么错？把 stderr 关键行粘进来"
         }
         className="cc-input"
@@ -689,12 +693,12 @@ function AIPanel(props: {
         disabled={busy || !prompt.trim()}
         style={{ marginTop: 8, width: "100%" }}
       >
-        {busy ? "LLM 思考中..." : "✦ 让 AI 写"}
+        {busy ? "生成中..." : "✦ 生成"}
       </button>
       {reply && (
         <div style={{ marginTop: 12 }}>
           <div className="cc-row" style={{ justifyContent: "space-between", marginBottom: 4 }}>
-            <span className="cc-section-title" style={{ margin: 0, fontSize: 11 }}>AI 返回</span>
+            <span className="cc-section-title" style={{ margin: 0, fontSize: 11 }}>模型返回</span>
             <button type="button" className="cc-btn cc-btn--sm" onClick={onInsert}>
               ↪ 插入编辑器
             </button>
