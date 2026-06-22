@@ -533,6 +533,119 @@ def test_resubmit_without_symbols_reports_existing_not_empty(client):
     assert paper["symbols"] == ["BTCUSDT"], "缺标的二次注册不可返空列表谎称无标的"
 
 
+# ════════════════ U5 并发 + perf 对抗（种已知坏门必抓） ════════════════
+def test_prime_equity_points_equals_mtm_count_and_log_lines():
+    """perf 修正不撕语义：equity_points 取内存 mtm_count，须 == mtm_count == 实际净值行数。"""
+
+    svc = PaperDeskService()
+    svc.register_run(run_id="u5_pts", name="x", origin="o", market="crypto",
+                     symbols=["BTCUSDT"], bench="BTC", creator="c",
+                     equity_log_path=_tmp_eqlog("u5_pts"))
+    primed = svc.prime_run("u5_pts", ticks=11)
+    eq = svc.equity_log("u5_pts")
+    assert primed["mtm_count"] == 11, "11 轮 MTM → mtm_count==11"
+    assert primed["equity_points"] == primed["mtm_count"], "equity_points 必 == mtm_count（perf 源一致）"
+    assert primed["equity_points"] == len(eq), "equity_points 必 == 实际净值行数（不撕语义）"
+
+
+def test_prime_empty_shell_equity_points_zero_via_mtm_count():
+    """空壳分支同样用 mtm_count 算 equity_points：无 provider → 0，与净值恒空一致（不假绿灯）。"""
+
+    svc = PaperDeskService()
+    svc.register_run(run_id="u5_shell", name="x", origin="o", market="crypto",
+                     symbols=["BTCUSDT"], bench="BTC", creator="c",
+                     equity_log_path=_tmp_eqlog("u5_shell"), simulate=False)
+    primed = svc.prime_run("u5_shell", ticks=8)
+    assert primed["equity_points"] == primed["mtm_count"] == 0
+    assert svc.equity_log("u5_shell") == []
+
+
+def test_reprime_after_start_does_not_tear_equity_log():
+    """种已知坏门（M4 并发竞态）：start 启高频后台 loop 后反复 re-prime——
+
+    旧坏门：prime 不停后台 loop 就复位 venue/state + 清空 equity_log，而 _bar_loop 正 mid-tick
+    改同 venue._positions/_cash/state.bars_fed → reset 与 loop 撞车：dict mid-iterate 改抛
+    RuntimeError、bars_fed 错乱、equity_log 撕裂/残留旧行（write_text("") 与 append 互撞）。
+    本测试把 bar_interval 压到极小让 _bar_loop 高频 tick，扩大复位窗口的撞车概率（旧码必炸/漂）。
+    新约束：prime 先 scheduler.stop() join 后台线程再复位/喂数据 → reset 段对 loop 原子。
+
+    验收（每次 re-prime 后停 loop 取静默快照——观察 prime 的原子结果，排除重启后自由跑的 loop 混淆）：
+      · prime_run 不抛异常（旧码并发改 _positions/_cash 会 RuntimeError/撕裂）；
+      · equity_log 每行均为合法 JSON（撕裂写产半行 → json.loads 抛错）；
+      · mtm_count == equity_points == 实际净值行数（计数与文件严格一致，无错乱/漂）；
+      · prime 段产确定性 16 点序列（与基准单跑逐点相同，loop 未串入额外/撕裂/残留行）；
+      · re-prime 不静默停掉用户已 start 的 run（每轮重启回 running）。
+    """
+
+    import json
+
+    svc = PaperDeskService()
+    svc.register_run(run_id="u5_race", name="x", origin="o", market="crypto",
+                     symbols=["BTCUSDT", "ETHUSDT", "SOLUSDT"], bench="BTC", creator="c",
+                     equity_log_path=_tmp_eqlog("u5_race"))
+    # 把 bar loop 间隔压到极小：_bar_loop 几乎不停 tick → 高频改 venue，放大复位窗口撞车概率。
+    svc.get("u5_race").scheduler._cfg.bar_interval_seconds = 0.0001  # noqa: SLF001
+    # 基准：单跑（未 start）确定性序列。
+    svc.prime_run("u5_race", ticks=16)
+    base_eq = [round(r["total_equity"], 6) for r in svc.equity_log("u5_race")]
+    assert len(base_eq) == 16
+
+    # start 高频后台 loop，随即反复 re-prime → 持续撞复位窗口（旧坏门在此撕裂/抛错）。
+    # try/finally 包住：任一轮断言炸也确保停掉后台 daemon 线程（不泄漏高频 loop 到后续测试）。
+    try:
+        for _ in range(40):
+            svc.start("u5_race")
+            # prime_run 本身在并发下不得抛（旧码：reset 与 loop tick 撞车 → RuntimeError/撕裂）。
+            primed = svc.prime_run("u5_race", ticks=16)
+            # re-prime 不应停掉已 start 的 run（prime finally 须按原态重启）。
+            assert svc.get("u5_race").scheduler.state.running is True, "re-prime 后 run 须仍在跑"
+            # 停 loop 取静默快照：观察 prime 的原子产物，排除重启后自由跑的 loop 混淆计数。
+            svc.stop("u5_race")
+            path = svc.get("u5_race").equity_log_path
+            raw = [ln for ln in path.read_text(encoding="utf-8").splitlines() if ln.strip()]
+            # 每行合法 JSON：撕裂写会产半行 → json.loads 抛错（旧坏门在此炸）。
+            parsed = [json.loads(ln) for ln in raw]
+            mtm = svc.get("u5_race").scheduler.state.mtm_count
+            # 计数与文件严格一致：mtm_count == equity_points == 实际行数（无错乱/漂/残留）。
+            assert mtm == primed["mtm_count"] == primed["equity_points"] == len(parsed), (
+                f"计数/文件不一致：mtm={mtm} primed_mtm={primed['mtm_count']} "
+                f"pts={primed['equity_points']} 行={len(parsed)}"
+            )
+            # prime 段产确定性 16 点：与基准单跑逐点相同（loop 未串入额外/撕裂/残留行）。
+            got = [round(r["total_equity"], 6) for r in parsed]
+            assert got == base_eq, "re-prime 净值须与基准单跑逐点一致（无 loop 污染/拼接/撕裂/残留）"
+    finally:
+        svc.stop("u5_race")  # 断言失败也停后台线程，绝不泄漏高频 daemon loop
+
+
+def test_reprime_reset_failure_does_not_restart_loop_on_partial_state():
+    """异常安全：复位段中途抛错（如喂数据失败），prime 不把后台 loop 拉回半复位 venue 上跑。
+
+    种坏门：让 reset 后的 tick 抛 → prime_run 上抛异常，且已 start 的 run 不被静默重启
+    （reset_ok=False → finally 不 start），避免后台 loop 在半复位状态上继续撕裂。
+    """
+
+    svc = PaperDeskService()
+    svc.register_run(run_id="u5_excsafe", name="x", origin="o", market="crypto",
+                     symbols=["BTCUSDT"], bench="BTC", creator="c",
+                     equity_log_path=_tmp_eqlog("u5_excsafe"))
+    svc.prime_run("u5_excsafe", ticks=4)
+    svc.start("u5_excsafe")
+    sched = svc.get("u5_excsafe").scheduler
+    # 注入故障：mtm_once 抛错模拟复位段写盘/喂数据失败。
+    boom = RuntimeError("simulated reset-phase failure")
+    orig_mtm = sched.mtm_once
+    sched.mtm_once = lambda: (_ for _ in ()).throw(boom)  # type: ignore[assignment, method-assign]
+    try:
+        with pytest.raises(RuntimeError):
+            svc.prime_run("u5_excsafe", ticks=4)
+        # reset_ok=False → finally 不重启：后台 loop 不被拉回半复位 venue 上继续跑。
+        assert sched.state.running is False, "复位段抛错后 run 须保持 stopped（不在半复位态重启 loop）"
+    finally:
+        sched.mtm_once = orig_mtm  # type: ignore[method-assign]
+        svc.stop("u5_excsafe")
+
+
 # ---- helper ----
 def _tmp_eqlog(name: str):
     import tempfile
