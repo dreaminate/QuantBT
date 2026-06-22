@@ -24,6 +24,12 @@ from typing import Any, Literal
 from ..execution.base import ExecutionAuditLog
 from ..execution.paper_venue import PaperVenue
 from ..lineage.ids import content_hash
+from .replay_provider import (
+    ReplayBarProvider,
+    make_bar_provider,
+    make_mark_provider,
+    seed_positions,
+)
 from .scheduler import MarketKind, PaperScheduler, PaperSchedulerConfig
 
 
@@ -54,6 +60,10 @@ class PaperRunRecord:
     paper_annual: float = 0.0
     promoted: bool = False
     promotion_gate_id: str | None = None
+    # 回放 provider（模拟 bar/mark 源，非实盘 key）。注入即 tick_once 真喂数据产净值；None=空壳。
+    provider: ReplayBarProvider | None = None
+    simulated_source: str | None = None  # 数据来源标注（bundled_sample_replay）——明确是模拟非实盘
+    initial_cash: float = 1_000_000.0  # 注册时起始现金（prime_run 幂等重置基准）
 
 
 class PaperRunNotFound(KeyError):
@@ -247,24 +257,83 @@ class PaperDeskService:
         cash: float = 1_000_000.0, days_running: int = 0,
         paper_excess_return: float = 0.0, backtest_annual: float = 0.0,
         paper_annual: float = 0.0, risk_limits: dict[str, Any] | None = None,
+        simulate: bool = True,
     ) -> PaperRunRecord:
+        """注册一条 paper run。simulate=True（默认）注入回放 provider + 建仓种子单：
+
+        tick_once 真喂【捆绑样本 bars（模拟，非实盘 key）】撮合 → MTM 写出移动净值序列。
+        simulate=False 留空壳（无 provider）——tick_once 返 0、净值不动（诚实：未喂数据即不假绿灯）。
+
+        治理：本方法只建模拟台 run，不绕审批、不动钱、A股恒 paper（live 下单仍走 attempt_live_order 恒拒）。
+        """
+
         with self._lock:
             audit = ExecutionAuditLog()
             venue = PaperVenue(cash=cash, equity_log_path=equity_log_path, audit=audit)
             cfg = PaperSchedulerConfig(strategy_id=run_id, symbols=list(symbols), market=market,
                                        equity_log_path=equity_log_path)
-            sched = PaperScheduler(venue, cfg)
+            provider: ReplayBarProvider | None = None
+            bar_p = mark_p = None
+            if simulate and symbols:
+                # 回放 provider = 模拟 bar/mark 源（绝非实盘 key 取数；A股仍恒拒 live，仅模拟撮合）。
+                provider = ReplayBarProvider(symbols=list(symbols))
+                bar_p = make_bar_provider(provider)
+                mark_p = make_mark_provider(provider)
+                # 注入模拟建仓引子（非下单路径）：MTM 反映持仓盈亏 → 净值非空壳。
+                seed_positions(venue, list(symbols))
+            sched = PaperScheduler(venue, cfg, bar_provider=bar_p, mark_provider=mark_p)
             rec = PaperRunRecord(
                 run_id=run_id, name=name, origin=origin, market=market, symbols=list(symbols),
                 bench=bench, creator=creator, scheduler=sched, venue=venue,
                 equity_log_path=equity_log_path, days_running=days_running,
                 paper_excess_return=paper_excess_return, backtest_annual=backtest_annual,
-                paper_annual=paper_annual,
+                paper_annual=paper_annual, provider=provider,
+                simulated_source=(provider.source if provider else None),
+                initial_cash=cash,
             )
             self._runs[run_id] = rec
             # 注册即发布并冻结风险门（门限会话外不可改）。
             self.risk.publish(run_id, risk_limits or _default_risk_limits(market))
             return rec
+
+    def prime_run(self, run_id: str, *, ticks: int = 16) -> dict[str, Any]:
+        """幂等：把 run 复位到刚注册态后驱动 N 轮 tick（喂模拟 bars）+ MTM（写净值）产真净值序列。
+
+        幂等性（复位再跑）：每次先 reset provider 游标 + 清 venue 持仓/现金 + 清空 equity_log + 归零计数，
+        再跑同一确定性窗口 → 重复 prime / 重复 submit / 重启 reseed 都产同一 N 点序列，不串行拼接、不漂。
+        仅对已注入 provider 的 run 有效；空壳 run（无 provider）tick_once 返 0、净值恒空（§3 不假绿灯）。
+        """
+
+        with self._lock:
+            rec = self.get(run_id)
+            # 空壳（无 provider）不喂数据：tick_once 返 0、也不写假 MTM 平线（§3 不假绿灯）。
+            # 唯有真喂到 bar 才 MTM 写净值——净值序列与 bars_fed>0 严格绑定。
+            if rec.provider is None:
+                return {
+                    "run_id": run_id, "bars_fed": rec.scheduler.state.bars_fed,
+                    "mtm_count": rec.scheduler.state.mtm_count, "fills": 0,
+                    "equity_points": len(self.equity_log(run_id)),
+                    "simulated": False, "source": None,
+                }
+            # 幂等复位：游标归零 + venue 清态/复位现金/清空 equity_log + 计数归零 + 重新建仓引子。
+            rec.provider.reset()
+            rec.venue.reset_simulation_state(rec.initial_cash)
+            rec.scheduler.state.bars_fed = 0
+            rec.scheduler.state.mtm_count = 0
+            seed_positions(rec.venue, rec.symbols)
+            fills = 0
+            for _ in range(max(0, ticks)):
+                fills += rec.scheduler.tick_once()
+                rec.scheduler.mtm_once()
+            return {
+                "run_id": run_id,
+                "bars_fed": rec.scheduler.state.bars_fed,
+                "mtm_count": rec.scheduler.state.mtm_count,
+                "fills": fills,
+                "equity_points": len(self.equity_log(run_id)),
+                "simulated": rec.simulated_source is not None,
+                "source": rec.simulated_source,
+            }
 
     def get(self, run_id: str) -> PaperRunRecord:
         with self._lock:
@@ -296,6 +365,8 @@ class PaperDeskService:
         snap["origin"] = rec.origin
         snap["bench"] = rec.bench
         snap["market"] = rec.market
+        # 数据来源标注：simulated_source 非空 = 回放捆绑样本（模拟）；None = 空壳（未喂数据）。
+        snap["simulated_source"] = rec.simulated_source
         return snap
 
     def positions(self, run_id: str) -> list[dict[str, Any]]:
@@ -452,7 +523,8 @@ class PaperDeskService:
         return {
             "id": rec.run_id, "name": rec.name, "origin": rec.origin, "market": rec.market,
             "bench": rec.bench, "running": st.running, "days": rec.days_running,
-            "promoted": rec.promoted,
+            "promoted": rec.promoted, "bars_fed": st.bars_fed,
+            "simulated_source": rec.simulated_source,
         }
 
 

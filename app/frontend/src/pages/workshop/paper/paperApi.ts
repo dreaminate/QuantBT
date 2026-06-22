@@ -4,7 +4,7 @@
  * 视图代码无需改。fetch 失败/未接处由调用方回退 mock 并保留 MockBadge（诚实不假绿灯）。
  */
 import { authFetch } from "../../../lib/auth";
-import { signColor, pnlColor } from "./colors";
+import { signColor, pnlColor, pct } from "./colors";
 import type {
   SchedRow,
   BookPosition,
@@ -12,9 +12,24 @@ import type {
   BalanceCell,
   PromoCheck,
   PaperMarket,
+  RunListItem,
+  DeskColor,
 } from "./types";
 
 // ── 后端原始响应类型（与 app/paper/desk.py 对齐）──
+/** 模拟台列表项（list_runs 派生：含 bars_fed / simulated_source 供「真/空壳」判定）。 */
+export interface PaperRunListItem {
+  id: string;
+  name: string;
+  origin?: string;
+  market?: PaperMarket;
+  bench?: string;
+  running?: boolean;
+  days?: number;
+  promoted?: boolean;
+  bars_fed?: number;
+  simulated_source?: string | null;
+}
 export interface PaperStatusResp {
   run_id: string;
   name: string;
@@ -28,6 +43,8 @@ export interface PaperStatusResp {
   last_mtm_at_utc: string | null;
   last_error: string | null;
   config: { interval_seconds: number };
+  /** 数据来源标注：非空=回放捆绑样本（模拟，非实盘 key）；null/缺=空壳。 */
+  simulated_source?: string | null;
 }
 export interface PaperPositionResp {
   symbol: string;
@@ -66,7 +83,7 @@ async function getJson<T>(url: string): Promise<T> {
 }
 
 export const paperApi = {
-  runs: () => getJson<{ runs: { id: string; name: string }[] }>("/api/paper/runs"),
+  runs: () => getJson<{ runs: PaperRunListItem[] }>("/api/paper/runs"),
   status: (id: string) => getJson<PaperStatusResp>(`/api/paper/runs/${id}/status`),
   positions: (id: string) =>
     getJson<{ positions: PaperPositionResp[] }>(`/api/paper/runs/${id}/positions`),
@@ -92,7 +109,46 @@ export const paperApi = {
       method: "POST",
       body: JSON.stringify(body),
     }),
+  /** 过裁决候选 → 注册成模拟台可跑 run（喂模拟 bars 产净值；A股恒 paper、不绕审批）。 */
+  registerRun: async (body: {
+    run_id: string;
+    name?: string;
+    market?: PaperMarket;
+    symbols?: string[];
+    bench?: string;
+  }): Promise<Response> =>
+    authFetch("/api/paper/runs", { method: "POST", body: JSON.stringify(body) }),
 };
+
+// ════════════════ 真 run 列表 → 侧栏 RunListItem ════════════════
+/** 后端 list_runs → 侧栏行（真候选/真 paper run，不再读 mock.ts RUNS）。 */
+export function runsToList(runs: PaperRunListItem[], selRun: string): RunListItem[] {
+  return runs.map((r) => {
+    const running = r.running ?? false;
+    const statColor: DeskColor = running ? "up" : "warn";
+    return {
+      id: r.id,
+      name: r.name,
+      marketLabel: r.market === "crypto" ? "加密" : "A股",
+      days: r.days ?? 0,
+      statText: running ? "运行中" : "已暂停",
+      statColor,
+      // 累计收益真值待对账接入前留占位（不假造涨绿）：bars_fed>0 才算真跑、否则空壳。
+      total: (r.bars_fed ?? 0) > 0 ? "模拟中" : "空壳",
+      pnlColor: "muted" as DeskColor,
+      pulse: running,
+      active: r.id === selRun,
+    };
+  });
+}
+
+/** 列表计数标签（N 个 · M 跑），真 run 派生。 */
+export function runCountLabelLive(runs: PaperRunListItem[]): string {
+  const running = runs.filter((r) => r.running).length;
+  return `${runs.length} 个 · ${running} 跑`;
+}
+
+export { pct };
 
 // ════════════════ 后端响应 → 视图 typed 形状映射 ════════════════
 export function statusToSchedRows(s: PaperStatusResp): SchedRow[] {

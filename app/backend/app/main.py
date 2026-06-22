@@ -194,6 +194,8 @@ def _seed_paper_runs() -> None:
             PAPER_DESK.register_run(
                 equity_log_path=paper_root / s["run_id"] / "equity_log.jsonl", **s,
             )
+            # 注册即喂模拟 bars 跑出真净值序列（非空壳）；明确是回放捆绑样本（模拟，非实盘 key）。
+            PAPER_DESK.prime_run(s["run_id"])
         except Exception:  # noqa: BLE001  种子失败不阻塞 app 启动
             logging.getLogger(__name__).warning("seed paper run failed: %s", s["run_id"])
 
@@ -2118,7 +2120,45 @@ def strategy_submit_candidate(
         )
     except _HandoffRejected as exc:
         raise HTTPException(status_code=422, detail={"rejected": True, "reason": str(exc)}) from exc
-    return record
+    # 候选过裁决 → 注册成模拟台可跑 run（止于 paper；A股恒拒 live、不绕审批门）。
+    # 失败不回滚候选登记（候选已 append-only 落库）；模拟台注册是派生动作，独立容错。
+    paper = _register_candidate_paper_run(record, payload, creator=user.user_id)
+    return {**record, "paper_run": paper}
+
+
+def _register_candidate_paper_run(
+    record: dict[str, Any], payload: dict, *, creator: str
+) -> dict[str, Any] | None:
+    """把过裁决候选注册进模拟台并喂模拟 bars 跑出真净值（idempotent；A股恒 paper）。
+
+    治理：register_run 只建模拟台 run，绝不绕审批/动钱/live 下单（A股 attempt_live_order 仍恒拒）。
+    provider 喂的是【回放捆绑样本（模拟，非实盘 key）】。注册失败返 None（候选仍已落库，不阻塞 handoff）。
+    """
+
+    run_id = record["run_id"]
+    market = payload.get("market") if payload.get("market") in ("equity_cn", "crypto") else "equity_cn"
+    symbols = payload.get("symbols") if isinstance(payload.get("symbols"), list) and payload.get("symbols") else (
+        ["BTCUSDT"] if market == "crypto" else ["600519"]
+    )
+    bench = payload.get("bench") or ("BTC" if market == "crypto" else "中证500")
+    try:
+        try:
+            PAPER_DESK.get(run_id)
+            registered_before = True
+        except PaperRunNotFound:
+            registered_before = False
+        if not registered_before:  # idempotent：已注册的不重复建（重复 submit 不另造，只重 prime）
+            PAPER_DESK.register_run(
+                run_id=run_id, name=record.get("name") or run_id,
+                origin=f"策略台 · {creator}", market=market, symbols=[str(s) for s in symbols],
+                bench=bench, creator=creator,
+                equity_log_path=DATA_ROOT / "paper" / run_id / "equity_log.jsonl",
+            )
+        primed = PAPER_DESK.prime_run(run_id)
+        return {"registered": True, "run_id": run_id, **primed}
+    except Exception as exc:  # noqa: BLE001  注册派生失败不阻塞候选 handoff
+        logging.getLogger(__name__).warning("candidate→paper register failed: %s (%s)", run_id, exc)
+        return None
 
 
 @app.get("/api/strategy/candidates")
@@ -4128,6 +4168,27 @@ def paper_runs() -> dict[str, Any]:
     """模拟盘列表（侧栏 + 选择）。只读。"""
 
     return {"runs": PAPER_DESK.list_runs()}
+
+
+@app.post("/api/paper/runs")
+def paper_register_run(payload: dict = Body(...), user=Depends(require_user_dependency)) -> dict[str, Any]:
+    """注册一条模拟台 run（过裁决候选 → 可跑 run）并喂模拟 bars 跑出真净值。
+
+    治理红线（绝不削弱）：
+      · A股恒 paper：本端点只建模拟台 run，绝不下 live 单（A股 live_order 端点仍恒拒）。
+      · 不绕审批：晋级仍走 INV-5 人工审批门（approver≠creator + 背书），本端点与晋级无关。
+      · provider 喂的是【回放捆绑样本（模拟，非实盘 key）】——绝非实盘行情取数。
+    idempotent：同 run_id 重复 POST 不另造（复用既有 run），只重新 prime 出净值。
+    """
+
+    run_id = (payload.get("run_id") or "").strip()
+    if not run_id:
+        raise HTTPException(422, detail={"reason": "run_id 必填（不对幽灵 run 开模拟台）"})
+    record = {"run_id": run_id, "name": (payload.get("name") or run_id).strip()}
+    paper = _register_candidate_paper_run(record, payload, creator=getattr(user, "user_id", "system"))
+    if paper is None:
+        raise HTTPException(500, detail={"reason": "模拟台注册失败（见服务日志）"})
+    return {"run": PAPER_DESK.status(run_id), "register": paper}
 
 
 @app.get("/api/paper/runs/{run_id}/status")

@@ -79,6 +79,39 @@ class PaperVenue(ExecutionVenue):
     def get_balance(self) -> dict[str, Balance]:
         return {"CASH": Balance(asset="CASH", free=self._cash)}
 
+    def reset_simulation_state(self, cash: float) -> None:
+        """【模拟】回放重置：清持仓/挂单、复位现金、清空 equity_log 文件。
+
+        仅供模拟台回放幂等重跑（prime_run）——把 venue 复位到「刚注册」态，使重复 prime 产同一序列。
+        非下单路径、无 live 语义。审计 log 保留（append-only 不抹），只重置可计算的模拟态。
+        """
+
+        self._cash = cash
+        self._positions.clear()
+        self._open_orders.clear()
+        if self._equity_log and self._equity_log.exists():
+            self._equity_log.write_text("", encoding="utf-8")  # 清空旧净值，避免跨次/跨重启串行拼接
+        self._audit.log("paper_sim_reset", {"cash": cash, "simulated": True})
+
+    def seed_position(self, symbol: str, quantity: float, entry_price: float) -> None:
+        """【模拟】直接建仓种子：为 paper 回放注入初始持仓，扣减对应现金。
+
+        ⚠️ 这是模拟台回放的建仓引子，**非下单路径**（绝不经 OrderGuard/券商，也无 live 语义）——
+        故意不走 place_order：① 这是合成持仓引子非真实订单意图；② 避免污染绕门审计（place_order
+        调用点白名单是治理不变量，模拟引子不应进白名单）。后续 mark_to_market 即反映此持仓盈亏。
+        """
+
+        if quantity == 0:
+            return
+        self._cash -= quantity * entry_price
+        self._positions[symbol] = Position(
+            symbol=symbol, quantity=quantity, entry_price=entry_price, mark_price=entry_price
+        )
+        self._audit.log("paper_seed_position", {
+            "symbol": symbol, "quantity": quantity, "entry_price": entry_price,
+            "simulated": True, "note": "回放建仓引子（非下单、非 live）",
+        })
+
     def feed_bar(self, bar: dict) -> list[dict]:
         """喂一根 bar，撮合 open_orders。bar 至少含 symbol/open/high/low/close/ts。"""
 

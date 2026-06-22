@@ -13,6 +13,7 @@ from .desk import (
     PromotionGate,
     RiskGateMutationForbidden,
 )
+from .replay_provider import ReplayBarProvider, SIMULATED_SOURCE
 from .scheduler import PaperScheduler, PaperSchedulerConfig
 
 __all__ = [
@@ -23,5 +24,7 @@ __all__ = [
     "PaperScheduler",
     "PaperSchedulerConfig",
     "PromotionGate",
+    "ReplayBarProvider",
     "RiskGateMutationForbidden",
+    "SIMULATED_SOURCE",
 ]
