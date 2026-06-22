@@ -81,15 +81,30 @@ def _synth_and_promote(
         llm_client=llm_client,
     )
 
-    # §3 诚实：样本未捆 → 显式失败（绝不伪造回测）。
+    # M1 诚实：捕获用户的组装意图（factor_set/model_id/signal_id/portfolio_id/cost_preset）。
+    # DS-1 合成器尚未把这些注入策略码（只按 market 套确定性动量模板）——绝不静默丢弃这层意图：
+    # 落进 run metadata 可追溯，并在返回 note 里诚实披露「回测的是模板基线、组装被记录但未注入」。
+    assembly_inputs: dict[str, Any] = {}
+    for _k in ("factor_set", "factor_set_id", "model_id", "signal_id", "portfolio_id", "cost_preset"):
+        _v = args.get(_k)
+        if _v is not None and _v != "" and _v != [] and _v != {}:
+            assembly_inputs[_k] = _v
+    has_assembly = bool(assembly_inputs)
+
+    # §3 诚实：样本未捆 → 显式失败（绝不伪造回测）。错误信息清晰引导前端诚实展示（H1）。
     if not has_sample(synth.market, data_root=eff_root):
         return {
             "error": (
-                f"market={synth.market} 的真行情样本未捆绑（{eff_root}）——不伪造回测（§3）。"
-                "crypto 样本随仓自带；stocks_cn 需设 TUSHARE_TOKEN 后跑 sample_data.bundle_hs300_daily。"
+                f"market={synth.market} 的真行情样本未捆绑——不伪造回测（§3）。"
+                "crypto 自带 BTC 样本即用；"
+                "A股（stocks_cn）需设 TUSHARE_TOKEN 后跑 sample_data.bundle_hs300_daily 捆样本。"
             ),
             "market": synth.market,
             "needs_sample": True,
+            "guidance": (
+                "crypto 自带 BTC 样本即用；"
+                "A股需设 TUSHARE_TOKEN 后跑 bundle_hs300_daily"
+            ),
         }
 
     # 沙箱真跑（读 DATA_DIR 真样本产真净值）。
@@ -116,6 +131,8 @@ def _synth_and_promote(
             run_root=run_root,
             ledger=ledger,
             returns_store=returns_store,
+            # M1：把用户组装意图落进 run.json（assembly_inputs），不静默丢弃。
+            extra_metadata=(assembly_inputs or None),
         )
     except PromoteError as exc:
         return {"error": f"落盘 promote 失败: {exc}", "synthesis_method": synth.method}
@@ -136,6 +153,14 @@ def _synth_and_promote(
             "agent 对话回测产真 run（RUN_ROOT 契约·真净值·读真捆绑样本）；run_id 可贯穿裁决/paper。"
         ),
     }
+    # M1 诚实披露：用户做了组装但 DS-1 合成器尚未注入 → 回测的是模板基线，不假装回测了组装。
+    if has_assembly:
+        out["assembly_inputs"] = assembly_inputs
+        out["assembly_injected"] = False
+        out["note"] = (
+            f"本回测为 {synth.market} 动量模板基线（DS-1 合成器尚未注入所选因子/模型组装）；"
+            "已记录你的组装于 metadata（run.json assembly_inputs），组装注入见后续。"
+        )
     if promoted.gate_verdict is not None:
         out["overfit"] = {
             "color": promoted.gate_verdict.get("color"),

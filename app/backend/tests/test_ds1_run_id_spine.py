@@ -82,6 +82,61 @@ def test_agent_backtest_produces_real_run_consumable_by_verdict(iso):
 
 
 @needs_btc
+def test_assembly_inputs_recorded_in_metadata_and_disclosed_honestly(iso):
+    """M8/M1 种坏门：用户组装 factor_set/model_id → 不静默丢；落 run.json assembly_inputs + note 诚实披露。
+
+    旧坏门：_synth_and_promote 忽略组装参数、只跑 momentum 模板 → 用户被误导以为回测了自己的组装。
+    新契约：组装落 metadata（可追溯）+ 返回 note 明说「这是模板基线、组装已记录但未注入」。
+    """
+    import json
+
+    out = _synth_and_promote(
+        args={
+            "market": "crypto_perp", "strategy_goal_ref": "g-assembly", "lookback": 20,
+            "factor_set": "fs_abc123", "model_id": "lgbm_rank_6f",
+            "signal_id": "sig_xyz", "portfolio_id": "pf_789", "cost_preset": "binance_taker",
+        },
+        ledger=iso["ledger"], returns_store=None, data_root=iso["root"],
+        verdict_store=iso["vstore"], verifier=iso["verifier"], llm_client=None,
+    )
+    assert out.get("error") is None, out
+    run_id = out["run_id"]
+    # ① 组装落 run.json metadata（assembly_inputs）—— 可追溯、不静默丢。
+    run_json = json.loads(
+        (iso["root"] / "artifacts" / "experiments" / run_id / "run.json").read_text(encoding="utf-8")
+    )
+    ai = run_json.get("assembly_inputs") or {}
+    assert ai.get("factor_set") == "fs_abc123", run_json
+    assert ai.get("model_id") == "lgbm_rank_6f"
+    assert ai.get("signal_id") == "sig_xyz"
+    assert ai.get("portfolio_id") == "pf_789"
+    assert ai.get("cost_preset") == "binance_taker"
+    # ② 返回 dict 也透出组装 + 诚实 note（不假装回测了组装）。
+    assert out.get("assembly_injected") is False, "DS-1 尚未注入组装，必须诚实标 False"
+    assert out["assembly_inputs"]["factor_set"] == "fs_abc123"
+    note = out.get("note") or ""
+    assert "模板基线" in note and "尚未注入" in note and "已记录" in note, note
+
+
+@needs_btc
+def test_no_assembly_no_assembly_inputs_key(iso):
+    """无组装入参 → 不写 assembly_inputs（向后兼容、不污染既有 run.json）。"""
+    import json
+
+    out = _synth_and_promote(
+        args={"market": "crypto_perp", "strategy_goal_ref": "g-plain", "lookback": 20},
+        ledger=iso["ledger"], returns_store=None, data_root=iso["root"],
+        verdict_store=None, verifier=None, llm_client=None,
+    )
+    assert out.get("error") is None, out
+    run_json = json.loads(
+        (iso["root"] / "artifacts" / "experiments" / out["run_id"] / "run.json").read_text(encoding="utf-8")
+    )
+    assert "assembly_inputs" not in run_json, "无组装不应写 assembly_inputs 键"
+    assert "assembly_injected" not in out
+
+
+@needs_btc
 def test_same_goal_rerun_config_hash_stable_and_honest_n_not_double_spent(iso):
     """同 goal 重跑：config_hash 稳定 + honest-N 不重刷（memoize 单一源）。"""
     ref = "goal-momentum-stable"
@@ -132,6 +187,10 @@ def test_missing_sample_fails_honestly_no_fake_run(iso):
     assert out.get("needs_sample") is True
     assert out.get("run_id") is None, "样本缺绝不伪造 run"
     assert out["market"] == "stocks_cn"
+    # H1：error/guidance 清晰引导前端诚实展示（crypto 自带样本即用 / A股需 TUSHARE_TOKEN+bundle）。
+    msg = (out.get("error") or "") + (out.get("guidance") or "")
+    assert "TUSHARE_TOKEN" in msg and "bundle_hs300_daily" in msg, msg
+    assert "crypto" in msg and "BTC" in msg, msg
 
 
 def test_synth_is_deterministic_and_no_lookahead():
@@ -159,16 +218,65 @@ def test_llm_seam_falls_back_when_output_invalid():
 
 
 def test_llm_seam_accepts_valid_output():
-    """LLM seam：合格输出（含 emit_result + DATA_DIR）→ 采纳为 llm 方法。"""
+    """LLM seam：合格输出（含 emit_result + DATA_DIR + 正确 market 标签 + 实读对应样本路径）→ 采纳为 llm 方法。"""
+    from app.agent.sample_data import sample_rel
+
+    rel = sample_rel("crypto_perp")
+
     class _GoodLLM:
         def complete(self, prompt):  # noqa: ANN001, ARG002
             return (
                 "```python\nimport os\n"
                 "DATA_DIR = os.environ['DATA_DIR']\n"
-                "quantbt.emit_result({'equity_curve': [{'t':'1','equity':1.0}]})\n```"
+                f"open(f'{{DATA_DIR}}/{rel}')\n"
+                "quantbt.emit_result({'equity_curve': [{'t':'1','equity':1.0}],"
+                " 'metadata': {'market': 'crypto_perp'}})\n```"
             )
 
     r = synthesize_strategy_code(market="crypto_perp", strategy_goal_ref="x",
                                  lookback=20, llm_client=_GoodLLM())
     assert r.method == "llm"
     assert "emit_result" in r.code and "```" not in r.code, "应剥离 code fence"
+
+
+def test_llm_seam_rejects_market_mislabel():
+    """M8 种坏门：LLM 读 crypto 样本却把 metadata.market 标 stocks_cn → 判废兜底模板（防 silent mislabel）。"""
+    from app.agent.sample_data import sample_rel
+
+    rel = sample_rel("crypto_perp")  # 实读 crypto 样本
+
+    class _MislabelLLM:
+        def complete(self, prompt):  # noqa: ANN001, ARG002
+            # 实读 crypto 样本，却把 market 标成 stocks_cn —— 标签与实读数据不符。
+            return (
+                "import os\n"
+                "DATA_DIR = os.environ['DATA_DIR']\n"
+                f"open(f'{{DATA_DIR}}/{rel}')\n"
+                "quantbt.emit_result({'equity_curve': [{'t':'1','equity':1.0}],"
+                " 'metadata': {'market': 'stocks_cn'}})\n"
+            )
+
+    r = synthesize_strategy_code(market="crypto_perp", strategy_goal_ref="x",
+                                 lookback=20, llm_client=_MislabelLLM())
+    assert r.method == "template", "market 标签与实读样本不符必须判废，绝不让 mislabel run 通过（§3）"
+
+
+def test_llm_seam_rejects_wrong_sample_path():
+    """M8 种坏门：声明 market 对、但实读的是别的 market 样本路径 → 判废（实读数据须与声明 market 对应）。"""
+    from app.agent.sample_data import sample_rel
+
+    wrong_rel = sample_rel("stocks_cn")  # 声明 crypto_perp 却去读 A股样本路径
+
+    class _WrongPathLLM:
+        def complete(self, prompt):  # noqa: ANN001, ARG002
+            return (
+                "import os\n"
+                "DATA_DIR = os.environ['DATA_DIR']\n"
+                f"open(f'{{DATA_DIR}}/{wrong_rel}')\n"
+                "quantbt.emit_result({'equity_curve': [{'t':'1','equity':1.0}],"
+                " 'metadata': {'market': 'crypto_perp'}})\n"
+            )
+
+    r = synthesize_strategy_code(market="crypto_perp", strategy_goal_ref="x",
+                                 lookback=20, llm_client=_WrongPathLLM())
+    assert r.method == "template", "实读样本路径与声明 market 不对应必须判废（§3）"

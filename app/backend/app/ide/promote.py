@@ -61,6 +61,7 @@ def promote_ide_run(
     run_root: Path = RUN_ROOT,
     ledger: Any = None,
     returns_store: Any = None,
+    extra_metadata: dict[str, Any] | None = None,
 ) -> PromotedRun:
     """把 IDE 沙箱结果落到 runs/<id>/，跑 metrics，返回新 run_id。
 
@@ -69,6 +70,10 @@ def promote_ide_run(
     T-015 接线（**opt-in，向后兼容**）：传入 `ledger`（T-013 一本账）时跑多证据三角 gate，
     把 dsr/pbo/bootstrap 注入 metrics（让 risk_summary 守门规则从死接活）并把 gate_verdict 写进
     run.json。不传 → 行为与既有完全一致（不记账、不跑 gate）。
+
+    M1 诚实接线（**opt-in，向后兼容**）：传入 `extra_metadata`（如 agent 组装的
+    factor_set/model_id/signal_id/portfolio_id/cost_preset）时原样写进 run.json 的
+    `assembly_inputs`——让组装意图可追溯、不被静默丢弃。不传 → 不写该键，行为与既有一致。
     """
 
     equity_curve = result.get("equity_curve")
@@ -120,6 +125,9 @@ def promote_ide_run(
     }
     if gate_verdict is not None:
         manifest["gate_verdict"] = gate_verdict
+    # M1：落 agent 组装意图（factor_set/model_id/...）于 run.json，使其可追溯、不静默丢弃。
+    if extra_metadata:
+        manifest["assembly_inputs"] = dict(extra_metadata)
 
     (run_dir / "run.json").write_text(
         json.dumps(manifest, ensure_ascii=False, indent=2),
