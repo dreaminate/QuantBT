@@ -224,6 +224,20 @@ def _dedupe_time_key(df: pl.DataFrame, time_col: str) -> pl.DataFrame:
     return df.unique(subset=[time_col], keep="last").sort(time_col)
 
 
+def _reload_partition_csv(path: Path) -> pl.DataFrame | None:
+    """回读已写的 p2 年分区做增量 merge（修多日同年 reload-merge schema bug）。
+
+    `timestamp` / `_ts_iso` 落盘时是 ISO Z 字符串（见 `_ms_to_iso_z`）。回读必须
+    `try_parse_dates=False`，否则 polars 把这些字符串列推断成 Datetime('μs','UTC')，
+    与新解析的 String timestamp 在 `pl.concat(how="vertical")` 处
+    `SchemaError: type String is incompatible with Datetime`（多日同年第 2 天起必崩）。
+    保持 String 既修崩、也避免 write_csv 把时间戳重写成非 ISO 格式。
+    """
+    if not path.exists():
+        return None
+    return pl.read_csv(path, try_parse_dates=False)
+
+
 def _merge_by_timestamp_iso(existing: pl.DataFrame | None, new: pl.DataFrame) -> pl.DataFrame:
     if existing is None or existing.height == 0:
         return new
@@ -298,7 +312,7 @@ def _pull_vision_kline_like(
             except ValueError:
                 continue
             path = _p2_year_path(spec.disk_kind, interval, symbol, y)
-            prev = pl.read_csv(path, try_parse_dates=True) if path.exists() else None
+            prev = _reload_partition_csv(path)
             merged = _merge_by_timestamp_iso(prev, part)
             path.parent.mkdir(parents=True, exist_ok=True)
             merged.write_csv(path)
@@ -412,7 +426,7 @@ def pull_vision_agg_trades_date_range(
             except ValueError:
                 continue
             path = _p2_year_path(spec.disk_kind, None, symbol, y)
-            prev = pl.read_csv(path, try_parse_dates=True) if path.exists() else None
+            prev = _reload_partition_csv(path)
             keys = [c for c in ("aggregate_trade_id", "timestamp") if c in (prev.columns if prev is not None else part.columns)]
             if not keys:
                 keys = ["timestamp"]
@@ -485,7 +499,7 @@ def pull_vision_trades_or_metrics_or_book_depth(
             except ValueError:
                 continue
             path = _p2_year_path(spec.disk_kind, None, symbol, y)
-            prev = pl.read_csv(path, try_parse_dates=True) if path.exists() else None
+            prev = _reload_partition_csv(path)
             keys = ["_ts_iso"] if "_ts_iso" in chunk.columns and chunk["_ts_iso"].str.len_chars().max() > 0 else []
             merged = _merge_concat_dedupe_cols(prev, chunk, keys)
             path.parent.mkdir(parents=True, exist_ok=True)
@@ -530,7 +544,7 @@ def pull_vision_funding_monthly_range(
                 pl.col(tcol).map_elements(lambda x: _ms_to_iso_z(x), return_dtype=pl.Utf8).alias("_ts_iso")
             )
         path = _p2_year_path(disk_kind, None, symbol, year)
-        prev = pl.read_csv(path, try_parse_dates=True) if path.exists() else None
+        prev = _reload_partition_csv(path)
         keys = ["_ts_iso"] if "_ts_iso" in frame.columns else []
         merged = _merge_concat_dedupe_cols(prev, frame, keys)
         path.parent.mkdir(parents=True, exist_ok=True)
