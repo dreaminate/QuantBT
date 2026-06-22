@@ -378,6 +378,161 @@ def test_submit_candidate_rejected_destination_no_paper_run(client):
     assert "cand_live" not in ids
 
 
+# ════════════════ U1 注册诚实化对抗（种坏门必抓）════════════════
+def test_submit_candidate_crypto_via_asset_class_not_registered_as_ashare(client):
+    """种坏门（H3）：crypto 候选只带 asset_class（无 market 字段）→ 绝不被注册成 A股 + 伪造 600519。
+
+    旧 bug：payload 无 market 即默认 equity_cn、symbols 凭空 ["600519"]、bench 中证500。
+    """
+
+    r = client.post("/api/strategy/submit_candidate", json={
+        "run_id": "u1_crypto_cand", "name": "u1_crypto", "destination": "paper_desk",
+        "asset_class": "crypto_perp", "symbols": ["BTCUSDT", "ETHUSDT"],
+    })
+    assert r.status_code == 200, r.text
+    paper = r.json()["paper_run"]
+    assert paper["registered"] is True
+    assert paper["market"] == "crypto", "crypto 候选必须注册成 crypto，绝非 A股"
+    assert "600519" not in paper["symbols"], "绝不伪造 A股标的 600519"
+    assert paper["symbols"] == ["BTCUSDT", "ETHUSDT"]
+    # 模拟台真 run 的市场也必须是 crypto（不是被默认成 equity_cn）。
+    st = client.get("/api/paper/runs/u1_crypto_cand/status").json()
+    assert st["market"] == "crypto"
+
+
+def test_submit_candidate_unknown_market_no_fabrication_shows_error(client):
+    """种坏门（H3/H4）：候选缺 market/asset_class → 不默认 A股伪造标的，paper_run 带显式 error。
+
+    候选登记本身仍成功（200），但模拟台派生注册不静默假成功——不凭空造 600519 的 A股幽灵 run。
+    """
+
+    r = client.post("/api/strategy/submit_candidate", json={
+        "run_id": "u1_unknown_cand", "name": "u1_unknown", "destination": "paper_desk",
+    })
+    assert r.status_code == 200, r.text
+    body = r.json()
+    assert body["status"] == "candidate"  # 候选登记成功（handoff 不阻塞）
+    paper = body["paper_run"]
+    assert paper["registered"] is False, "市场判不出绝不静默注册"
+    assert "error" in paper and paper["error"]
+    assert "paper_run_error" in body, "H4：端点透传失败原因供前端显示"
+    # 绝不建出伪造的 A股幽灵 run。
+    ids = {x["id"] for x in client.get("/api/paper/runs").json()["runs"]}
+    assert "u1_unknown_cand" not in ids
+
+
+def test_post_paper_runs_unknown_market_rejected_no_ghost_run(client):
+    """种坏门（H3）：POST /api/paper/runs 缺 market → 422 拒绝、不建伪造 A股 run（不再默认 600519）。"""
+
+    r = client.post("/api/paper/runs", json={"run_id": "u1_ghost", "name": "u1_ghost"})
+    assert r.status_code == 422, r.text
+    assert "market" in r.json()["detail"]["reason"] or "市场" in r.json()["detail"]["reason"]
+    ids = {x["id"] for x in client.get("/api/paper/runs").json()["runs"]}
+    assert "u1_ghost" not in ids
+
+
+def test_resubmit_different_market_not_silently_ignored(client):
+    """种坏门（M3）：同 run_id 先注册 crypto 后换 equity_cn 二次提交 → 显式拒绝，不静默沿用旧值还报 success。"""
+
+    r1 = client.post("/api/strategy/submit_candidate", json={
+        "run_id": "u1_reconcile", "name": "u1_reconcile", "destination": "paper_desk",
+        "market": "crypto", "symbols": ["BTCUSDT"],
+    })
+    assert r1.status_code == 200 and r1.json()["paper_run"]["registered"] is True
+    # 二次提交换成 A股 —— 必须显式标冲突，不能静默返 registered:True。
+    r2 = client.post("/api/strategy/submit_candidate", json={
+        "run_id": "u1_reconcile", "name": "u1_reconcile", "destination": "paper_desk",
+        "market": "equity_cn", "symbols": ["600519"],
+    })
+    assert r2.status_code == 200, r2.text  # 候选登记仍成功
+    paper = r2.json()["paper_run"]
+    assert paper["registered"] is False, "换 market 二次提交不可静默成功"
+    assert "M3" in paper["error"] or "冲突" in paper["error"]
+    # 既有 run 市场不被静默改写——仍是 crypto（治理：不静默改市场）。
+    st = client.get("/api/paper/runs/u1_reconcile/status").json()
+    assert st["market"] == "crypto"
+
+
+def test_resubmit_different_symbols_not_silently_ignored(client):
+    """种坏门（M3）：同 run_id 同 market 但换标的二次提交 → 显式拒绝，不静默沿用旧标的还报 success。"""
+
+    r1 = client.post("/api/strategy/submit_candidate", json={
+        "run_id": "u1_sym_reconcile", "name": "x", "destination": "paper_desk",
+        "market": "crypto", "symbols": ["BTCUSDT"],
+    })
+    assert r1.status_code == 200 and r1.json()["paper_run"]["registered"] is True
+    r2 = client.post("/api/strategy/submit_candidate", json={
+        "run_id": "u1_sym_reconcile", "name": "x", "destination": "paper_desk",
+        "market": "crypto", "symbols": ["ETHUSDT"],
+    })
+    assert r2.status_code == 200
+    paper = r2.json()["paper_run"]
+    assert paper["registered"] is False and ("M3" in paper["error"] or "冲突" in paper["error"])
+
+
+def test_ashare_candidate_still_live_forbidden_after_register(client):
+    """§5 治理不削弱：A股候选正确注册成 equity_cn 后，其 live_order 端点仍恒拒（A股恒 paper）。"""
+
+    r = client.post("/api/strategy/submit_candidate", json={
+        "run_id": "u1_cn_cand", "name": "u1_cn", "destination": "paper_desk",
+        "market": "equity_cn", "symbols": ["600519"],
+    })
+    assert r.status_code == 200 and r.json()["paper_run"]["market"] == "equity_cn"
+    lo = client.post("/api/paper/runs/u1_cn_cand/live_order", json={"symbol": "600519"})
+    assert lo.status_code == 403
+    assert lo.json()["detail"]["a_share_live_forbidden"] is True
+
+
+def test_ashare_spot_asset_class_not_misclassified_as_crypto(client):
+    """种坏门（H3/§5）：A股 spot 候选（asset_class 含 'spot'）绝不被误判成 crypto。
+
+    误判成 crypto 会让该 run 绕过 equity_cn 的 A股 live-forbidden 映射——治理红线，必抓。
+    """
+
+    from app.main import _derive_candidate_market
+
+    for ac in ("a_share_spot", "cn_spot", "stock_spot", "equity_cn_spot"):
+        assert _derive_candidate_market({"asset_class": ac}) == "equity_cn", \
+            f"asset_class={ac!r} 必须判成 equity_cn（A股 spot 不是 crypto）"
+    for ac in ("crypto_spot", "crypto_perp", "usdt_pair", "btc_basket", "perp"):
+        assert _derive_candidate_market({"asset_class": ac}) == "crypto"
+    # 端到端：A股 spot 候选注册后其 live_order 仍恒拒（市场正确派生为 equity_cn）。
+    r = client.post("/api/strategy/submit_candidate", json={
+        "run_id": "u1_cn_spot", "name": "x", "destination": "paper_desk",
+        "asset_class": "a_share_spot", "symbols": ["600519"],
+    })
+    assert r.status_code == 200 and r.json()["paper_run"]["market"] == "equity_cn"
+    lo = client.post("/api/paper/runs/u1_cn_spot/live_order", json={"symbol": "600519"})
+    assert lo.status_code == 403 and lo.json()["detail"]["a_share_live_forbidden"] is True
+
+
+def test_market_field_case_insensitive(client):
+    """显式 market 字段大小写不敏感（CRYPTO/Equity_CN 都识别，与 asset_class casefold 一致）。"""
+
+    from app.main import _derive_candidate_market
+
+    assert _derive_candidate_market({"market": "CRYPTO"}) == "crypto"
+    assert _derive_candidate_market({"market": "Equity_CN"}) == "equity_cn"
+
+
+def test_resubmit_without_symbols_reports_existing_not_empty(client):
+    """二次注册缺 symbols → 返回报既有 run 的真实标的，不返空列表谎称无标的（§3 反向不假）。"""
+
+    r1 = client.post("/api/strategy/submit_candidate", json={
+        "run_id": "u1_sym_keep", "name": "x", "destination": "paper_desk",
+        "market": "crypto", "symbols": ["BTCUSDT"],
+    })
+    assert r1.status_code == 200 and r1.json()["paper_run"]["symbols"] == ["BTCUSDT"]
+    # 二次提交不带 symbols（仅带 market）——成功，但 symbols 必须仍报 ["BTCUSDT"] 不报 []。
+    r2 = client.post("/api/strategy/submit_candidate", json={
+        "run_id": "u1_sym_keep", "name": "x", "destination": "paper_desk", "market": "crypto",
+    })
+    assert r2.status_code == 200
+    paper = r2.json()["paper_run"]
+    assert paper["registered"] is True
+    assert paper["symbols"] == ["BTCUSDT"], "缺标的二次注册不可返空列表谎称无标的"
+
+
 # ---- helper ----
 def _tmp_eqlog(name: str):
     import tempfile
