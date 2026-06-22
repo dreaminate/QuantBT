@@ -6,6 +6,32 @@
 ## <日期> · <标题>
 - 建/改了什么 + 命门  - 验收：<对抗测试 + 变异 + 全量数字>  - 下一步：<…> -->
 
+## 2026-06-22 · D-WAVE1A 整波完成（C + M + 消费者）· 5 卡全 done
+
+- **C 组合三角 full-fat**（`46f1cb3c`）：新 `portfolio/gate.py`（`gate_portfolio` 复用单一源 `evaluate_overfit_gate`、`portfolio_net_returns`、ADV2 `portfolio_composition` 排序入 config_hash 不改 ids、Q3 `strictest_asset_class`）+ `overfit_gate._decide`/`run_overfit_gate` 加 `allow_pbo_absent_green`（A2 override R2，默认 False 单策略不变，A2-green 标 PBO N/A）+ 验收语义重写（「必抓」假命题→「不达 green，red 仅 strong_neg」）。
+- **消费者**（`1e0e65b4`）：`agent/business_tools` 新 `portfolio.gate` 工具（agent 真能调组合 gate，side_effect=none），gate 不再悬空。
+- **M 监控尾部闭环**（`d0e5d208`）：新 `monitor/closure.py`（`monitor_tick` 绩效/漂移→lifecycle 权威 A1→自动 WARNING/RETIRED+单一 PROV；漂移超阈结构化告警+降级动作真调用；范畴红线只接绩效/漂移不接 gate verdict）+ `Scheduler` croniter 硬化（strict 响亮失败）。
+- **命门（C 7 测试 + M 5 测试 + 4 变异）**：C—A2 放行只在 DSR+CI 双正 / 过拟合 strong_neg→red 误绿兜底（变异禁 strong_neg 双红）/ 重排同 config_hash / 无 alpha 不达 green / agent 工具真跑；M—种应退役卡→RETIRED+单一 PROV（变异断 evaluate 红）/ 漂移动作真调用 / croniter strict 响亮失败 / 签名无 gate verdict。
+- **验收**：**全量 1263 passed / 13 skipped**（基线 1240→1263，+23 测试全绿，121s）；validate_dev PASS（55 卡 DAG 无环、消费者 depends_on C 合法）。
+- **整波诚实残余**：① 组合 promote production 端点（record=True 真记 honest-N）未接；② M 生产 weekly cron 调度起点 + store→lifecycle 派生同步未接；③ D：v2 connectors known_at 未填(取舍2=A)、keep_known_at_axis 多集双轴限界、量化各模块未传 as_of_known；④ A2 反假绿灯护栏=用户可选档默认未加。均 tracked、非假绿、非阻断。
+- **下一步**：worktree `wave-1a`、**未 commit**（待用户授权 commit+land main）。CEO flag：下一波宜转交付门垂直切片（陌生人走通 chat→backtest→裁决→paper），非直入 B 因子轨。
+
+## 2026-06-22 · D-WAVE1A · D(R28 全双时态 Stage①②) done
+
+- **deep-opus spec 先行**（修正评审 CTV-4：真 provider=`tushare_quant1/tushare_provider.py`；写层财报 ann_date 在 unique_keys→不同 ann_date 重述保留，只有同 ann_date 脏重述 + 读层 `catalog.py:233` 无条件折叠丢 first-seen）。
+- **实装（扩展不替换）**：写层 `tushare_provider` known_at first-seen + keep-first-on-known_at（同身份取最早=own+幂等，行情类走原 keep='last' 不变）；读层 `catalog.load_panel` 加 `as_of_known`（重述 as-of 点查）+ `keep_known_at_axis`（Stage② 双轴）+ `_STRUCTURAL` 收 known_at；`PanelResult` 加双时态字段；resolver 加 `as_of_known` 第二轴 + `as_of_bound` 升 public（单一源 catalog 复用）。默认路径逐字不变（守 `test_data_contract:139`）。
+- **命门（8 测试 + 2 变异）**：写层 5（重述/脏重述守首披/幂等/不覆盖/行情不变）+ 读层断言3（as_of_known 点查 10.0↔10.5）+ resolver 双轴 + 单轴回归。变异：写层 keep='first'→'last' 红、读层忽略 as_of_known 红。
+- **验收**：**全量 1251 passed / 13 skipped**（基线 1243+8 未破，实跑 133s）；validate_dev PASS。
+- **诚实残余**：keep_known_at_axis 多数据集双轴 ill-defined（限界，仅单集干净）；v2 connectors known_at 暂不填（取舍2=A）；utc_now 兜底非确定性；量化各模块尚未传 as_of_known（参数就绪、按需接）。
+- **下一步**：消费者卡（agent 组合→promote→gate）+ C full-fat（A2 放行语义 + 验收语义重写 + ADV2 config_hash 规范化）+ M。worktree wave-1a，**未 commit**。
+
+## 2026-06-22 · D-WAVE1A 启动 + S(R18 stacking 控制项) done
+
+- **评审**：合规多 voice（16 agents，graphify grounding + 对抗验证 CTV-1~6）审下一波 1A 4 卡 scope/排序；7 项逐一拍板落 DECISIONS `D-WAVE1A`：SEQ-CONSUMER=A(C full-fat+新增消费者卡)/C-Q1=A2(override R2、护栏可选)/C-Q2·Q3=A/D-AXIS=A(写层 owns)/D-NECESSITY=B(全 Stage①②)/M-AUTHORITY=A1(lifecycle 权威)。
+- **S 卡 done** `87ad21fc`：R18 切两面（声明门 `LeakageDeclaration` ✅已建已验证 / stacking 实证 OOF=N/A until 实现）；新 `app/backend/tests/test_r18_stacking_control.py` 3 测试钉死两面 + 单一 CV 源 `purged_cv.py`。命门=种 stacking 对象 / 第二 CV 实现即红。纯 additive 守卫，不造 stacking、不动产品代码。
+- **验收**：3 passed + **变异验证**（种 `class Stacking`+`meta_model`+第二 `purged_kfold/walk_forward` → 两扫描门精确红、删探针回绿，门必抓非纸门 RULES §2）；**全量 1243 passed / 13 skipped**（基线 1240+3 未破，实跑 154s）；validate_dev PASS。
+- **下一步**：按 D-WAVE1A 排序进 **D**（R28 全双时态 Stage①②：写层 owns first-seen + 幂等 + `end_date×known_at` 双轴）→ 消费者卡 → C full-fat(A2+护栏) → M。worktree `wave-1a`，**未 commit**（待用户授权）。
+
 ## 2026-06-20 · T-035 epic 拆分（leader 领）+ 批次 commit
 
 - **批次 commit** `e3a859a`（33 files +1191/-66）：T-026~T-034 实装 + 4 决策 + 4 gap pool 卡 + 51 新测试；署名 dreaminate 无 co-author，不含 graphify-out。

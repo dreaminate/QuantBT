@@ -27,13 +27,15 @@ from pathlib import Path
 import polars as pl
 
 from ..data_quality import DatasetRegistry
+from ..universe.resolver import AsOf, as_of_bound  # R28 双时态 as_of_known 复用单一 as-of 边界
 from .canonical import CANONICAL, CanonicalRegistry
 from .contract import DatasetInfo, FieldRequirement, PanelResult, WidePanel
 from .mapping import FieldMappingStore
 from .sources import DatasetSource, RegistryDatasetSource, is_official_source
 
 # ts/symbol 是 join 键，market/interval 是元数据 —— 不计入"字段宇宙"。
-_STRUCTURAL = {"ts", "symbol", "market", "interval"}
+# known_at 是 R28 双时态 first-seen 属性轴（非字段、非身份键）—— 同样剔出字段宇宙，绝不当因子暴露。
+_STRUCTURAL = {"ts", "symbol", "market", "interval", "known_at"}
 
 SourceFilter = Callable[[str, str | None], bool]  # (source_name, market) -> 是否启用
 
@@ -192,7 +194,24 @@ class FieldCatalog:
 
     # ---- 装载 panel（量化流程入口）-----------------------------------------
 
-    def load_panel(self, req: FieldRequirement, *, enabled_only: bool = True) -> PanelResult:
+    def load_panel(
+        self,
+        req: FieldRequirement,
+        *,
+        enabled_only: bool = True,
+        as_of_known: AsOf | None = None,
+        keep_known_at_axis: bool = False,
+    ) -> PanelResult:
+        """装载 panel（量化流程入口）。R28 双时态：
+
+        - ``as_of_known`` 给定 → 各数据集先按 ``known_at <= as_of_known`` 过滤，再同 (ts,symbol)
+          取最新已知重述（= 重述 as-of 点查）。None → 当前全知视图（``keep="last"``），逐字现状
+          不变（守 ``test_data_contract.py:139`` 折叠契约）。
+        - ``keep_known_at_axis=True``（Stage②）→ 保留 known_at 轴、不折叠（end_date×known_at 双轴
+          长表，单财报集重述时间线分析用）。诚实限界：多数据集双轴对齐 ill-defined（各表重述
+          known_at 不齐），仅对单数据集需求语义干净。
+        """
+
         datasets = self.list_datasets(market=req.market, interval=req.interval, enabled_only=enabled_only)
         universe = self._universe_from_datasets(datasets, req.market)
         ds_index = {ds.dataset_id: ds for ds in datasets}
@@ -207,14 +226,16 @@ class FieldCatalog:
         for entry in resolved.values():
             by_dataset.setdefault(entry.dataset_id, []).append(entry)
 
+        want_known = as_of_known is not None or keep_known_at_axis
         subs: list[pl.DataFrame] = []
         manifest: dict[str, str] = {}
+        any_known_axis = False
         for dataset_id, entries in by_dataset.items():
             ds = ds_index.get(dataset_id)
             if ds is None:
                 continue
             needed = {e.raw_column for e in entries}
-            frame = _read_dataset(ds, needed, req.symbols)
+            frame = _read_dataset(ds, needed, req.symbols, extra_cols=("known_at",) if want_known else ())
             if frame is None or frame.is_empty():
                 continue
             cols = frame.columns
@@ -230,7 +251,9 @@ class FieldCatalog:
                     seen_fids.add(e.field_id)
             if len(select) <= 2:
                 continue
-            sub = frame.select(select).unique(subset=["ts", "symbol"], keep="last", maintain_order=True)
+            sub = _materialize_sub(frame, select, as_of_known, keep_known_at_axis)
+            if want_known and keep_known_at_axis and "known_at" in sub.columns:
+                any_known_axis = True
             subs.append(sub)
 
         panel = _join_on_keys(subs)
@@ -253,8 +276,45 @@ class FieldCatalog:
         missing = [fid for fid in req.canonical_ids if fid not in present]
         optional_missing = [fid for fid in req.optional_ids if fid not in present]
         return PanelResult(
-            panel=panel, manifest=manifest, missing=missing, optional_missing=optional_missing, row_count=panel.height
+            panel=panel,
+            manifest=manifest,
+            missing=missing,
+            optional_missing=optional_missing,
+            row_count=panel.height,
+            as_of_known=as_of_known,
+            has_known_at_axis=any_known_axis,
         )
+
+
+def _materialize_sub(
+    frame: pl.DataFrame,
+    select: list[pl.Expr],
+    as_of_known: AsOf | None,
+    keep_known_at_axis: bool,
+) -> pl.DataFrame:
+    """把单数据集 frame 物化成 sub（R28 双时态折叠分叉）。
+
+    - 无 known_at 列 或 不要双时态 → 现行 keep="last"（同 (ts,symbol) 取最新写入），逐字不变。
+    - as_of_known → 先按 known_at<=as_of_known 过滤，再同 (ts,symbol) 取 known_at 最大者（=该时点
+      最新已知重述），known_at 折叠后 drop（panel 保持 ts×symbol 宽表契约）。
+    - keep_known_at_axis → 保留 known_at 轴、不折叠（双轴长表）。
+    """
+
+    want_known = as_of_known is not None or keep_known_at_axis
+    if not (want_known and "known_at" in frame.columns):
+        return frame.select(select).unique(subset=["ts", "symbol"], keep="last", maintain_order=True)
+    select_kn = [*select, pl.col("known_at")]
+    fr = frame
+    if as_of_known is not None:
+        fr = fr.filter(pl.col("known_at") <= as_of_bound(as_of_known, fr.schema["known_at"]))
+    if keep_known_at_axis:
+        return fr.select(select_kn)
+    return (
+        fr.select(select_kn)
+        .sort("known_at")
+        .unique(subset=["ts", "symbol"], keep="last", maintain_order=True)
+        .drop("known_at")
+    )
 
 
 def _read_file(path: str) -> pl.DataFrame | None:
@@ -269,7 +329,12 @@ def _read_file(path: str) -> pl.DataFrame | None:
         return None
 
 
-def _read_dataset(ds: DatasetInfo, needed_raw: set[str], symbols: list[str] | None) -> pl.DataFrame | None:
+def _read_dataset(
+    ds: DatasetInfo,
+    needed_raw: set[str],
+    symbols: list[str] | None,
+    extra_cols: tuple[str, ...] = (),
+) -> pl.DataFrame | None:
     frames: list[pl.DataFrame] = []
     for fref in ds.files:
         df = _read_file(fref.path)
@@ -281,7 +346,11 @@ def _read_dataset(ds: DatasetInfo, needed_raw: set[str], symbols: list[str] | No
             continue
         if "ts" not in df.columns or "symbol" not in df.columns:
             continue
-        keep = list(dict.fromkeys(["ts", "symbol", *[c for c in needed_raw if c in df.columns]]))
+        keep = list(
+            dict.fromkeys(
+                ["ts", "symbol", *[c for c in needed_raw if c in df.columns], *[c for c in extra_cols if c in df.columns]]
+            )
+        )
         df = df.select(keep)
         if symbols:
             df = df.filter(pl.col("symbol").is_in(symbols))

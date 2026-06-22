@@ -301,13 +301,20 @@ def _topological_sort(tasks: Iterable[DAGTask]) -> list[DAGTask]:
 class Scheduler:
     """轻量 cron 触发器：调用方在 loop 里 every N seconds 调 `tick()`，发到期 DAG 出去执行。"""
 
-    def __init__(self) -> None:
+    def __init__(self, *, strict: bool = False) -> None:
         try:
             from croniter import croniter  # type: ignore[import-not-found]
         except Exception:  # noqa: BLE001
             self._croniter = None
         else:
             self._croniter = croniter
+        # croniter 硬化（M · D-WAVE1A）：生产用 strict=True，缺 croniter 启动**响亮失败**——
+        # 否则 tick() 静默不 fire，使「监控驱动自动降级/退役」沦为 paper-true（CEO voice 红线）。
+        if strict and self._croniter is None:
+            raise RuntimeError(
+                "Scheduler(strict=True) 需 croniter 包：生产缺它则 tick 静默不跑、监控驱动动作=paper-true。"
+                "请安装 croniter（pip install croniter）后再起调度。"
+            )
         self._jobs: dict[str, tuple[DAGDefinition, datetime]] = {}
 
     def add(self, definition: DAGDefinition) -> None:

@@ -50,6 +50,38 @@ def test_min_history_drops_late_listing() -> None:
     assert res.dropped.get("history") == 1
 
 
+def _bitemporal_panel() -> pl.DataFrame:
+    """A 自始已知（known_at=1-01）；B 晚才已知（known_at=6-01）。两者 ts 数据都齐。"""
+    rows: list[dict] = []
+    for i in range(30):
+        d = BASE + timedelta(days=i)
+        rows.append({"ts": d, "symbol": "A", "close": 10.0, "amount": 1000.0, "known_at": date(2024, 1, 1)})
+        rows.append({"ts": d, "symbol": "B", "close": 20.0, "amount": 500.0, "known_at": date(2024, 6, 1)})
+    return pl.DataFrame(rows)
+
+
+def test_resolve_universe_as_of_known_second_axis() -> None:
+    """R28 双时态第二轴：as_of_known 只纳入「截至该知识时点已知」的标的。"""
+    panel = _bitemporal_panel()
+    rules = UniverseRules(market="x")
+    # 单轴（不传 as_of_known）：A、B 都在（现状不变）
+    assert sorted(resolve_universe(rules, panel, _last()).symbols) == ["A", "B"]
+    # 第二轴 2-01：B 的 known_at=6-01 未到 → 仅 A
+    assert resolve_universe(rules, panel, _last(), as_of_known=date(2024, 2, 1)).symbols == ["A"]
+    # 知识轴推进到 7-01：A、B 都已知
+    assert sorted(resolve_universe(rules, panel, _last(), as_of_known=date(2024, 7, 1)).symbols) == ["A", "B"]
+
+
+def test_resolve_universe_singleaxis_unbroken_by_known_at_col() -> None:
+    """单轴 PIT 回归：panel 带 known_at 列但不传 as_of_known → 未来 ts 仍被单轴挡（known_at 不绕过）。"""
+    future = pl.DataFrame(
+        [{"ts": date(2099, 1, 1), "symbol": "Z", "close": 1.0, "amount": 1.0, "known_at": date(2024, 1, 1)}]
+    )
+    panel = pl.concat([_bitemporal_panel(), future])
+    res = resolve_universe(UniverseRules(market="x"), panel, _last())  # 无 as_of_known
+    assert "Z" not in res.symbols  # 未来 ts 被单轴 filter 挡，known_at 早值不让它泄漏入池
+
+
 def test_min_avg_amount_filter() -> None:
     rules = UniverseRules(market="x", min_avg_amount=300.0, min_history_days=1)
     res = resolve_universe(rules, _panel(), _last())

@@ -6,7 +6,7 @@
 
 from __future__ import annotations
 
-from datetime import UTC, datetime, timedelta
+from datetime import UTC, date, datetime, timedelta
 from pathlib import Path
 
 import polars as pl
@@ -182,6 +182,54 @@ def test_missing_when_symbol_absent(tmp_path: Path) -> None:
     assert res.row_count == 0
     assert "close" in res.missing
     assert not res.ok
+
+
+def test_load_panel_as_of_known_restatement_query(tmp_path: Path) -> None:
+    """R28 断言3：读层 as_of_known 透传 —— 重述 as-of 点查读对应时点值（不测写层，铺盘直测读层）。
+
+    门必抓：若 load_panel 收了 as_of_known 却不用（纸门）→ 两次都读到最新 10.5 → 红。
+    """
+    reg = DatasetRegistry(tmp_path / "r.jsonl")
+    f = pl.DataFrame(
+        [
+            {"ts": datetime(2023, 12, 31, tzinfo=UTC), "symbol": "X", "market": "stocks_cn",
+             "interval": "1q", "roe": 10.0, "known_at": date(2024, 1, 30)},
+            {"ts": datetime(2023, 12, 31, tzinfo=UTC), "symbol": "X", "market": "stocks_cn",
+             "interval": "1q", "roe": 10.5, "known_at": date(2024, 4, 15)},
+        ]
+    )
+    p = tmp_path / "fina.parquet"
+    f.write_parquet(p)
+    reg.register("fina", make_wide_fetch_result(f, "user_x"), file_paths=[str(p)],
+                 metadata={"market": "stocks_cn", "interval": "1q", "data_kind": "fina_indicator"})
+    cat = FieldCatalog(reg)
+    req = FieldRequirement(canonical_ids=["roe"], market="stocks_cn", interval="1q")
+
+    # 默认 = 当前全知视图：折叠到最新重述 10.5、1 行（守 test_load_panel_dedups_financial_restatement 契约）
+    base = cat.load_panel(req)
+    assert base.row_count == 1
+    assert base.panel.get_column("roe").to_list() == [10.5]
+    assert base.as_of_known is None
+
+    # as_of_known=2024-02-01：那时只知首披 → roe 10.0
+    r1 = cat.load_panel(req, as_of_known="2024-02-01")
+    assert r1.row_count == 1
+    assert r1.panel.get_column("roe").to_list() == [10.0]
+    assert str(r1.as_of_known) == "2024-02-01"
+
+    # as_of_known=2024-05-01：已见修正 → roe 10.5
+    r2 = cat.load_panel(req, as_of_known="2024-05-01")
+    assert r2.panel.get_column("roe").to_list() == [10.5]
+
+    # known_at 是双时态轴、绝不作为因子字段暴露（_STRUCTURAL 收口）
+    assert "known_at" not in base.panel.columns
+    assert "known_at" not in r1.panel.columns
+
+    # Stage② 双轴长表：保留 known_at 轴、两条重述都在
+    axis = cat.load_panel(req, keep_known_at_axis=True)
+    assert axis.has_known_at_axis is True
+    assert "known_at" in axis.panel.columns
+    assert sorted(axis.panel.get_column("roe").to_list()) == [10.0, 10.5]
 
 
 def test_freeform_ids_are_valid_python_identifiers(tmp_path: Path) -> None:

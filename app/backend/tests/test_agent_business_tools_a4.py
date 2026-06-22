@@ -132,6 +132,21 @@ def test_eval_pbo_real_compute():
     assert out.get("queued") is None, "eval.pbo 不应是 queued 占位"
 
 
+def test_portfolio_gate_tool_no_alpha_not_green():
+    """C 消费者 portfolio.gate（D-WAVE1A）：组合层 gate 经 agent 工具真跑（无 alpha → 不达 green、PBO=N/A）。"""
+    rt = _make_runtime()
+    n = 300
+    ar = {"A": [(-0.02 if i % 2 == 0 else 0.01) for i in range(n)], "B": [0.0] * n}
+    out = rt._tools["portfolio.gate"](  # noqa: SLF001
+        "portfolio.gate",
+        {"portfolio_id": "p1", "weights": {"A": 0.5, "B": 0.5}, "asset_returns": ar, "markets": ["crypto"]},
+    )
+    assert out.get("error") is None, out
+    assert out["color"] != "green"       # 无 alpha 绝不放行
+    assert out["pbo"] is None            # 冷启动单序列 → PBO=N/A
+    assert out["config_hash"]            # 复用 ids 单一身份源
+
+
 # ── ③ permission_gate realmoney 任何模式恒 confirm ──────────────────────────
 @pytest.mark.parametrize("mode", ["ask", "auto", "bypass"])
 def test_permission_gate_realmoney_confirm_every_mode(mode):

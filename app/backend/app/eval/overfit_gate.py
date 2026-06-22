@@ -70,12 +70,18 @@ class GateVerdict:
 
 
 def _decide(
-    dsr_cons: float, pbo: float | None, ci_lower: float, ci_upper: float
+    dsr_cons: float, pbo: float | None, ci_lower: float, ci_upper: float,
+    *, allow_pbo_absent_green: bool = False,
 ) -> tuple[GateColor, bool]:
     """纯裁决逻辑（R2 无单点承重）：三支【同向正】才 green；任一【强负】red；缺 PBO/分歧 yellow。
 
     抽成纯函数便于直测：把任一支异议（pbo 偏高 / ci 跨零 / dsr 不足）都必须能把 green 降级——
     任何「只看一支就放行」的实现都会在直测里露馅。
+
+    `allow_pbo_absent_green`（**组合层 A2 · 用户 override R2 · D-WAVE1A**）：默认 False = 原语义
+    （缺 PBO → 至多 yellow，单策略不变）。组合层冷启动（同主题历史<10 列、PBO 永不可达）传 True 时，
+    PBO 缺席仍可凭 DSR 保守端 + Bootstrap CI **双正**放行（PBO 显式 N/A）。**仍受 strong_neg→red 兜底**：
+    过拟合致 DSR<0.2 / CI 上界≤0 仍 red，绝不因放松而误绿（北极星不假绿灯由 strong_neg 守）。
     """
 
     dsr_ok = dsr_cons >= _DSR_POS
@@ -86,7 +92,10 @@ def _decide(
     if strong_neg:
         return "red", all_agree
     if pbo is None:
-        return "yellow", all_agree        # 缺一支证据，构不成完整三角 → 不放行
+        # A2 组合层 override：缺 PBO 但 DSR 保守端 + CI 双正 → 放行（PBO N/A，非完整三角，all_agree=False）。
+        if allow_pbo_absent_green and dsr_ok and ci_ok:
+            return "green", all_agree
+        return "yellow", all_agree        # 默认：缺一支证据，构不成完整三角 → 不放行
     if all_agree:
         return "green", all_agree
     return "yellow", all_agree
@@ -135,6 +144,7 @@ def run_overfit_gate(
     returns_matrix: np.ndarray | None = None,
     asset_class: str = "crypto",
     periods_per_year: int = 252,
+    allow_pbo_absent_green: bool = False,
 ) -> GateVerdict:
     """多证据三角裁决。`returns`=本策略逐期净收益；`returns_matrix`=同主题历史试验矩阵（PBO 用）。
 
@@ -169,13 +179,15 @@ def run_overfit_gate(
     ci = bootstrap_sharpe_ci(arr, block_size=_auto_block(t), periods_per_year=periods_per_year)
     ci_t = ci.to_tuple()
 
-    color, all_agree = _decide(dsr_cons, pbo, ci_t[0], ci_t[1])
+    color, all_agree = _decide(dsr_cons, pbo, ci_t[0], ci_t[1], allow_pbo_absent_green=allow_pbo_absent_green)
     if color == "red":
         phr = "证据不足以支持：至少一支证据强负（DSR 保守端低 / Sharpe CI 上界≤0 / PBO 偏高）。"
-    elif pbo is None:
-        phr = "证据分歧/不全：策略数不足以做 PBO（缺一支证据），无法构成完整三角 → 不放行。"
+    elif color == "green" and pbo is None:
+        phr = "证据充分(组合层放行)：DSR 保守端 + Bootstrap CI 双正；PBO=N/A(策略数不足)，R2 完整三角由组合层 override(D-WAVE1A 已记决策)。"
     elif color == "green":
         phr = "证据充分：DSR 保守端、PBO、Bootstrap CI 三支同向正。"
+    elif pbo is None:
+        phr = "证据分歧/不全：策略数不足以做 PBO（缺一支证据），无法构成完整三角 → 不放行。"
     else:
         phr = "证据分歧：三支未同向正，不放行（绝不因单支漂亮指标过闸）。"
 

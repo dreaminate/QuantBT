@@ -1874,6 +1874,47 @@ def _detect_year_column(columns: list[str]) -> str | None:
     return None
 
 
+# R28 双时态：first-seen 写层身份属性列（D-AXIS=A 写层 owns）。非身份键，是属性。
+KNOWN_AT_COLUMN = "known_at"
+
+
+def _spec_needs_known_at(spec: TushareDatasetSpec) -> bool:
+    """财报/披露类 spec（unique_keys 含 ann_date）才需 first-seen known_at 轴。
+
+    daily 等行情表 unique_keys=(ts_code,trade_date) 不含 ann_date → 不造 known_at、走原路径。
+    """
+
+    return "ann_date" in spec.unique_keys
+
+
+def _derive_known_at(frame: pl.DataFrame) -> pl.DataFrame:
+    """给财报行派生 first-seen known_at = ann_date；脏/空 ann_date → 落写入日期下界。
+
+    R28 / GOAL §8：Tushare f_ann_date 脏数据（复用 ann_date / null / 不可解析）→ 落 first-seen
+    （写入当日，永不泄漏未来）。幂等：已存在的非空 known_at 原样保留，不被新派生值覆盖
+    （existing CSV 读回的历史 first-seen 守住；keep-first 在 _upsert_partition 再兜一层）。
+    """
+
+    if frame.is_empty():
+        return frame
+    today = _utc_now().date()
+    if "ann_date" in frame.columns:
+        ann = pl.col("ann_date").cast(pl.Utf8).str.strip_chars()
+        ann_date = pl.coalesce(
+            [
+                ann.str.to_date(format="%Y%m%d", strict=False),
+                ann.str.to_date(format="%Y-%m-%d", strict=False),
+            ]
+        )
+    else:
+        ann_date = pl.lit(None, dtype=pl.Date)
+    derived = pl.coalesce([ann_date, pl.lit(today, dtype=pl.Date)])
+    if KNOWN_AT_COLUMN in frame.columns:
+        existing = pl.col(KNOWN_AT_COLUMN).cast(pl.Date, strict=False)
+        derived = pl.coalesce([existing, derived])
+    return frame.with_columns(derived.alias(KNOWN_AT_COLUMN))
+
+
 def _prepare_frame_for_write(spec: TushareDatasetSpec, frame: pl.DataFrame) -> pl.DataFrame:
     if frame.is_empty():
         return frame
@@ -1884,6 +1925,9 @@ def _prepare_frame_for_write(spec: TushareDatasetSpec, frame: pl.DataFrame) -> p
         date_column = _detect_year_column(working.columns)
         if date_column is not None:
             working = working.with_columns(pl.col(date_column).cast(pl.Utf8).str.slice(0, 4).alias("year"))
+    # R28：财报类落 first-seen known_at（行情类不受影响）。year 分区仍按 ann_date（既有），互不干扰。
+    if _spec_needs_known_at(spec):
+        working = _derive_known_at(working)
     return working
 
 
@@ -1921,7 +1965,7 @@ def _batch_materialize_symbols(batch: PullBatch) -> tuple[str, ...]:
 
 
 def _sort_columns(frame: pl.DataFrame) -> list[str]:
-    return [column for column in ("symbol", "ts_code", "trade_date", "ann_date", "end_date", "publish_date") if column in frame.columns]
+    return [column for column in ("symbol", "ts_code", "trade_date", "ann_date", "end_date", "publish_date", "known_at") if column in frame.columns]
 
 
 def _partition_path(paths: ProjectPaths, spec: TushareDatasetSpec, row_frame: pl.DataFrame) -> Path:
@@ -1941,11 +1985,18 @@ def _upsert_partition(path: Path, frame: pl.DataFrame, unique_keys: tuple[str, .
         combined = pl.concat([existing, frame], how="diagonal_relaxed") if existing.height else frame
     else:
         combined = frame
-    dedupe_keys = [key for key in unique_keys if key in combined.columns]
-    if dedupe_keys:
-        combined = combined.unique(subset=dedupe_keys, keep="last", maintain_order=True)
+    # known_at 是属性列、非身份键：从 dedup 子集剔除（防御未来误入 unique_keys）。
+    dedupe_keys = [key for key in unique_keys if key in combined.columns and key != KNOWN_AT_COLUMN]
+    if KNOWN_AT_COLUMN in combined.columns and dedupe_keys:
+        # R28 双时态：同身份多 known_at 取最早（keep-first）= first-seen own + re-backfill 不推进。
+        # 不同 ann_date 的重述身份不同 → 各自成行保留；同 ann_date 脏重述 → 守住首披 known_at。
+        combined = combined.sort(KNOWN_AT_COLUMN, nulls_last=True).unique(
+            subset=dedupe_keys, keep="first", maintain_order=True
+        )
+    elif dedupe_keys:
+        combined = combined.unique(subset=dedupe_keys, keep="last", maintain_order=True)  # 行情类原行为
     else:
-        combined = combined.unique(keep="last", maintain_order=True)
+        combined = combined.unique(keep="last", maintain_order=True)  # 原行为
     sort_cols = _sort_columns(combined)
     if sort_cols:
         combined = combined.sort(sort_cols)

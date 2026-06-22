@@ -10,6 +10,7 @@
 from __future__ import annotations
 
 from dataclasses import dataclass, field
+from typing import Any
 
 import polars as pl
 
@@ -45,6 +46,8 @@ class PanelResult:
     missing: list[str]                         # 必需字段里没解析到的（列缺失 / 全 null / 空 panel）
     optional_missing: list[str] = field(default_factory=list)
     row_count: int = 0                         # panel 行数；ok 不仅看列在、也隐含 row_count>0
+    as_of_known: Any = None                    # R28 双时态：本 panel 按哪个 known_at 时点解析（None=当前全知视图）
+    has_known_at_axis: bool = False            # R28 Stage②：panel 是否保留 known_at 轴（双轴长表，未折叠）
 
     @property
     def ok(self) -> bool:

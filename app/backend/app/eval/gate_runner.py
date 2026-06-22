@@ -100,9 +100,13 @@ def evaluate_overfit_gate(
     periods_per_year: int = 252,
     ledger: Ledger | None = None,
     returns_store=None,
+    allow_pbo_absent_green: bool = False,
     record: bool,
 ) -> GateRunResult:
-    """跑一次三角 gate。`record=True`（promote）记账 + 存快照；`record=False`（preview）只读。"""
+    """跑一次三角 gate。`record=True`（promote）记账 + 存快照；`record=False`（preview）只读。
+
+    `allow_pbo_absent_green`（组合层 A2，D-WAVE1A）：透传给 run_overfit_gate；默认 False 单策略不变。
+    """
 
     chash = _config_hash(
         factor=factor, params=params, universe=universe,
@@ -137,6 +141,7 @@ def evaluate_overfit_gate(
     verdict = run_overfit_gate(
         ret_list, n_eff=neff, honest_n=honest_n, returns_matrix=matrix,
         asset_class=asset_class, periods_per_year=periods_per_year,
+        allow_pbo_absent_green=allow_pbo_absent_green,
     )
     return GateRunResult(verdict=verdict, config_hash=chash, honest_n=honest_n)
 

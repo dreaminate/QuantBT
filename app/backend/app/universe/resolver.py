@@ -73,6 +73,10 @@ def _as_of_bound(as_of: AsOf, ts_dtype: pl.DataType) -> pl.Expr:
     return pl.lit(val)
 
 
+# 公共别名：field_catalog 的 as_of_known 双时态过滤复用同一 as-of 边界逻辑（单一源，§1，不双产）。
+as_of_bound = _as_of_bound
+
+
 def _st_is_flagged(col_name: str, dtype: pl.DataType | None) -> pl.Expr:
     """ST/风险警示真值判定，兼容 bool / 数值(≠0) / 字符串('Y'/'1'/'ST…'/'*ST…')。"""
 
@@ -103,8 +107,14 @@ def resolve_universe(
     *,
     ts_col: str = "ts",
     symbol_col: str = "symbol",
+    as_of_known: AsOf | None = None,
+    known_at_col: str = "known_at",
 ) -> UniverseResult:
-    """按规则解析截至 `as_of` 的资产池成分。"""
+    """按规则解析截至 `as_of` 的资产池成分。
+
+    R28 双时态：`as_of_known` 给定且 panel 含 `known_at_col` 时，叠加第二轴过滤——只看「截至
+    as_of_known 已知」的行（重述 as-of）。默认 None / 列缺失 → 单轴 PIT，逐字现状不变。
+    """
 
     # 静态池：固定成分，仅减去排除项。
     if rules.static_symbols is not None:
@@ -127,6 +137,9 @@ def resolve_universe(
 
     _require(panel, [ts_col, symbol_col])
     df = panel.filter(pl.col(ts_col) <= _as_of_bound(as_of, panel.schema[ts_col]))
+    # R28 双时态第二轴：只看截至 as_of_known 已知的行（重述 as-of）。列缺失则不叠加（单轴）。
+    if as_of_known is not None and known_at_col in panel.columns:
+        df = df.filter(pl.col(known_at_col) <= _as_of_bound(as_of_known, panel.schema[known_at_col]))
     n_candidates = df.select(pl.col(symbol_col).n_unique()).item() if df.height else 0
     if n_candidates == 0:
         return UniverseResult(as_of=as_of, symbols=[], n_candidates=0, n_selected=0, dropped={})
@@ -213,12 +226,18 @@ def resolve_universe_series(
     *,
     ts_col: str = "ts",
     symbol_col: str = "symbol",
+    as_of_known: AsOf | None = None,
+    known_at_col: str = "known_at",
 ) -> dict[Any, list[str]]:
-    """逐再平衡日解析成分（point-in-time）。返回 {as_of: symbols}。"""
+    """逐再平衡日解析成分（point-in-time）。返回 {as_of: symbols}。
+
+    `as_of_known` 透传给 `resolve_universe`（R28 双时态第二轴；默认 None = 单轴现状）。
+    """
 
     out: dict[Any, list[str]] = {}
     for as_of in dates:
         out[as_of] = resolve_universe(
-            rules, panel, as_of, ts_col=ts_col, symbol_col=symbol_col
+            rules, panel, as_of, ts_col=ts_col, symbol_col=symbol_col,
+            as_of_known=as_of_known, known_at_col=known_at_col,
         ).symbols
     return out

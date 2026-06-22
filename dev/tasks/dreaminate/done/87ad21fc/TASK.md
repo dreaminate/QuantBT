@@ -1,10 +1,10 @@
 ---
 uuid: 87ad21fc7aef4c39b956199516ba8626
 title: R18 stacking 控制项 N/A 标注 + 实现时 OOF 约束（T-033 核验 gap）
-status: todo
-owner: wait
-assigned_by:
-review_status: 0
+status: done
+owner: dreaminate
+assigned_by: dreaminate
+review_status: 1
 priority: P3
 area: signals
 source: research
@@ -33,3 +33,15 @@ T-033：grep StackingClassifier/meta_model/out_of_fold 全 0 命中；signals/co
 
 ## 验收一句话 [必填]
 R18 控制项状态诚实（N/A until stacking；实现则强制 OOF 喂 meta）；不破基线。
+
+## 实现落账（done · 2026-06-22 · D-WAVE1A 首卡）
+**评审修正**：原 Scope「R18 整体 N/A」不够诚实——`signal_contract.py:52 LeakageDeclaration` 是**已建已对抗测试的活声明门**（`register` line 207-210 强制 OOF+purge+embargo 自报齐全否则拒入库；`test_adv4_signal_contract_leakage_declaration_gate`/`_unit_gate` 五变体）。故切**两面**：
+- **(a) 声明门 = ✅ 已建并验证**（拒未声明，非证明无泄露）。
+- **(b) stacking meta-learner 实证 OOF 强制 = N/A until 实现**（确无 stacking/meta-model 对象，graphify+grep 0 命中）。
+
+**落地**（纯 additive 守卫，不造 stacking、不动产品代码）：`app/backend/tests/test_r18_stacking_control.py` 3 测试钉死两面 + 单一 CV 源：
+- `test_face_a_declaration_gate_is_live`：声明门拒缺项、准齐全。
+- `test_face_b_no_stacking_meta_model_object_yet`：扫 app/ 无 stacking 对象 → N/A 诚实；**种 stacking 对象即红**，强制实现者补 R18 实证 OOF。
+- `test_single_cv_source_is_purged_cv`：`def purged_kfold`/`def walk_forward` 仅在 `models/purged_cv.py`（§1 单一源）；**种第二个 CV 实现即红**（关 S↔C 软耦合：将来 stacking/组合都复用同一 CV 源）。
+
+**证据**：3 passed（1.96s）；**变异验证**种 `class Stacking`+`meta_model`+第二个 `purged_kfold`/`walk_forward` → 两道扫描门精确变红、删探针回绿（门必抓非纸门，RULES §2）。不破基线（实跑确认见 log）。

@@ -218,6 +218,44 @@ def register_business_tools(
             "note": "风控+组合已构建（真权重 + 单票上限/回撤熔断约束）。进场与否、监控由模拟台决定（D-PERM 止于模拟盘）。",
         }
 
+    # ── 5b. portfolio.gate（C · D-WAVE1A）：组合层多证据三角守门预览（复用单一源 gate，无副作用、不记账） ──
+    def _portfolio_gate(_n: str, args: dict) -> dict[str, Any]:
+        from ..portfolio.gate import gate_portfolio
+
+        weights = args.get("weights") or {}
+        if not isinstance(weights, dict) or not weights:
+            return {"error": "portfolio.gate 需 weights={symbol: weight}（先 portfolio.construct）"}
+        asset_returns = args.get("asset_returns") or {}
+        if not isinstance(asset_returns, dict) or not asset_returns:
+            return {"error": "portfolio.gate 需 asset_returns={symbol: [逐期已实现收益]}（先 backtest.run 各成分）"}
+        markets = args.get("markets") or []
+        if isinstance(markets, str):
+            markets = [m.strip() for m in markets.split(",") if m.strip()]
+        pid = args.get("portfolio_id") or _short_id("pf", sorted(weights), "gate")
+        try:
+            res = gate_portfolio(
+                portfolio_id=str(pid),
+                weights={str(k): float(v) for k, v in weights.items()},
+                asset_returns={str(k): [float(x) for x in v] for k, v in asset_returns.items()},
+                markets=markets,
+                freq=str(args.get("freq") or "1d"),
+                record=False,
+            )
+        except Exception as exc:  # noqa: BLE001
+            return {"error": f"组合 gate 失败: {type(exc).__name__}: {exc}"}
+        v = res.verdict
+        return {
+            "portfolio_id": str(pid),
+            "color": v.color,
+            "pbo": v.pbo,
+            "dsr_conservative": v.dsr_conservative,
+            "bootstrap_ci": list(v.bootstrap_ci),
+            "honest_n": res.honest_n,
+            "config_hash": res.config_hash,
+            "verdict_phrasing": v.verdict_phrasing,
+            "note": "组合层多证据三角守门（预览/只读、不记账）。冷启动 PBO=N/A，A2 凭 DSR+CI 双正放行、过拟合仍 red；honest-N 记账走 promote 治理流。",
+        }
+
     # ── 6. backtest.run（接真）：组装→回测产 run 摘要（无副作用，本地 run 目录可重置） ──
     def _backtest_run(_n: str, args: dict) -> dict[str, Any]:
         # 优先：若给定既有 run_id，投影真 run 摘要（接 run_verdict 单一源）。
@@ -353,6 +391,7 @@ def register_business_tools(
     runtime.register_tool("model_registry.select", _model_registry_select, side_effect="none")
     runtime.register_tool("signal.define", _signal_define, side_effect="none")
     runtime.register_tool("portfolio.construct", _portfolio_construct, side_effect="none")
+    runtime.register_tool("portfolio.gate", _portfolio_gate, side_effect="none")
     runtime.register_tool("backtest.run", _backtest_run, side_effect="none")
     runtime.register_tool("eval.pbo", _eval_pbo, side_effect="none")
     runtime.register_tool("report.generate", _report_generate, side_effect="none")
