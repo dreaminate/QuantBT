@@ -240,7 +240,7 @@ def test_register_with_provider_feeds_real_bars_and_produces_equity():
                      equity_log_path=_tmp_eqlog("ds4a"))  # simulate=True 默认
     primed = svc.prime_run("ds4a", ticks=12)
     assert primed["bars_fed"] > 0, "真喂 bars 后 bars_fed 必 > 0（非空壳）"
-    assert primed["simulated"] is True and primed["source"] == "bundled_sample_replay"
+    assert primed["simulated"] is True and primed["source"] == "deterministic_sim_walk"
     eq = svc.equity_log("ds4a")
     assert len(eq) > 0, "MTM 必写出净值序列（非空壳）"
     # 净值是移动的（回放价格变动），不是一条死平线
@@ -325,7 +325,7 @@ def test_post_paper_runs_registers_runnable_run(client):
     body = r.json()
     assert body["register"]["registered"] is True
     assert body["register"]["bars_fed"] > 0
-    assert body["run"]["simulated_source"] == "bundled_sample_replay"
+    assert body["run"]["simulated_source"] == "deterministic_sim_walk"
     ids = {x["id"] for x in client.get("/api/paper/runs").json()["runs"]}
     assert "ds4_post" in ids
     eq = client.get("/api/paper/runs/ds4_post/equity_log").json()["equity_log"]

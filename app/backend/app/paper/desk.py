@@ -62,7 +62,7 @@ class PaperRunRecord:
     promotion_gate_id: str | None = None
     # 回放 provider（模拟 bar/mark 源，非实盘 key）。注入即 tick_once 真喂数据产净值；None=空壳。
     provider: ReplayBarProvider | None = None
-    simulated_source: str | None = None  # 数据来源标注（bundled_sample_replay）——明确是模拟非实盘
+    simulated_source: str | None = None  # 数据来源标注（deterministic_sim_walk）——明确是模拟非实盘、非真样本
     initial_cash: float = 1_000_000.0  # 注册时起始现金（prime_run 幂等重置基准）
 
 
@@ -365,7 +365,7 @@ class PaperDeskService:
         snap["origin"] = rec.origin
         snap["bench"] = rec.bench
         snap["market"] = rec.market
-        # 数据来源标注：simulated_source 非空 = 回放捆绑样本（模拟）；None = 空壳（未喂数据）。
+        # 数据来源标注：simulated_source 非空 = 确定性合成模拟游走（非真样本）；None = 空壳（未喂数据）。
         snap["simulated_source"] = rec.simulated_source
         return snap
 

@@ -1,8 +1,11 @@
-"""模拟台 bar/mark provider —— 回放**捆绑样本 bars**驱动 PaperScheduler.tick_once。
+"""模拟台 bar/mark provider —— **确定性合成 bar 流**驱动 PaperScheduler.tick_once。
 
-⚠️ 这是【模拟】非实盘：bar 来自本地确定性合成序列（捆绑样本），**绝不取实盘 key、绝不打交易所行情 API**。
-A股恒拒 live（D-PERM default_to_paper）；本 provider 只喂历史/模拟 bars 让模拟台跑出真净值序列，
-不改变任何治理门——动钱/晋级/live 下单一律走既有阶梯，与本模块无关。
+⚠️ 这是【模拟】非实盘：bar 来自 content_hash 派生的**确定性伪随机游走**（可复现、无外部依赖），
+**非真实盘行情、亦非捆绑样本回放**——**绝不取实盘 key、绝不打交易所行情 API**。source 标注
+`deterministic_sim_walk` 诚实声明此性质（§3 不假绿灯：不谎称真数据）。A股恒拒 live（D-PERM
+default_to_paper）；本 provider 只喂模拟 bars 让模拟台跑出移动净值序列，不改任何治理门——动钱/晋级/
+live 下单一律走既有阶梯，与本模块无关。
+（真样本回放 / testnet 真喂 = 后续增强卡，本模块是零依赖模拟兜底。）
 
 设计：
 - 每个 symbol 一条确定性 OHLC 序列（content_hash 派生的伪随机游走，无外部依赖、可复现）。
@@ -25,7 +28,7 @@ from ..execution.paper_venue import PaperVenue
 from ..lineage.ids import content_hash
 
 
-SIMULATED_SOURCE = "bundled_sample_replay"  # 数据来源标注：捆绑样本回放（模拟，非实盘 key）
+SIMULATED_SOURCE = "deterministic_sim_walk"  # 数据来源标注：确定性合成游走（模拟，非实盘 key、非真样本回放）
 
 
 def _seeded_walk(seed: str, n: int) -> list[float]:
@@ -47,7 +50,7 @@ def _seeded_walk(seed: str, n: int) -> list[float]:
 
 @dataclass
 class ReplayBarProvider:
-    """确定性回放 provider：每 symbol 一条捆绑样本 OHLC 序列；tick 推进游标。
+    """确定性模拟 provider：每 symbol 一条合成 OHLC 序列（content_hash 派生游走，非真样本）；tick 推进游标。
 
     线程安全（PaperScheduler 后台线程 + 测试同步驱动共用）。耗尽序列后停在末根（不抛错、不假数据）。
     """
