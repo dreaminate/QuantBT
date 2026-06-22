@@ -216,3 +216,17 @@
 - **治理红线全守**：冻结 RunDetailPage 不嵌不深色化、权限轴⟂治理（bypass 不跳门）、默认止于模拟盘、弱点一等呈现(R25)、裁决措辞禁词走 _verdict_note(R7)、A股止 paper、晋级 approver≠creator+背书(INV-5)。零硬编码色值（全 --desk-* token）。
 - **诚实残余**：①各台未接端点处 mock+MockBadge（P1 深度功能逐步接真）②T-042 桌面 `tauri build` 待 npm install tauri-cli + 修 pre-existing Cargo `[lib]` 缺 src/lib.rs ③pre-existing bug 已 spawn 修复任务：`create_verdict` _dt NameError（无测试覆盖）、`operators ts_corr/ts_cov` 跨 symbol 泄露（注册前视门已防住入库）。
 - **land**：实装完成、验证绿、24 卡落档 done；**commit/合并 main 待用户授权**（CLAUDE.md 不擅自 commit/push）。当前全部改动在工作区（fullstack 分支）。
+
+## 2026-06-22 · 前端交互 bug 修复 + 文案去 AI 包装（已 push origin/fullstack）
+
+- **触发**：用户 goal「前端有交互逻辑 bug；不动大逻辑下把描述去掉 AI feature 包装、改成正常产品描述」。
+- **方法**：并行 deep-opus 子代理地毯式发现（交互 bug + AI 文案盘点）→ leader **亲自复核每条不照单全收** → 改 → tsc + vitest 验证 → 对抗验证待办项。
+- **交互 bug 修复（11+ 处，纯前端·不动大逻辑·tsc0/前端241）**：
+  - 死循环/请求风暴：CopyTrade/IDE `getStoredUser()` 每 render 新对象进依赖数组 → 稳定 `user_id` 代理。
+  - 真钱页假绿灯：Binance `store()/switchToTestnet()` 补 `res.ok` 守卫（HTTP 失败不再报成功+清密钥），对齐同文件 confirmKill 范式。
+  - **OOS 训练泄露（数据有效性级）**：TrainingBench 选「前 N% 训练」但 submit() 漏传 `train_fraction`、UI 却承诺「无泄露」→ 后端全样本训练=真泄露。后端切片管路（`_slice_front_dates`/service.py L245/回测 strict_oos）本已就绪自洽，**前端补传一行**即兑现（详见 D-FE-REVIEW）。
+  - 因子注册假绿灯门（gateChecks 跟随 live + 按钮 disabled + bdRegister 守卫）、StrategyConsole revert 撤错（只栈顶 patch 可 revert）、ChatComposer IME 合成误发、SettingsSecurity 2FA try/catch、Shell 顶栏高亮、Login `?next=` 跳转+防开放重定向、Experiment 非数组崩溃守卫、CommunityFeed toggleLike try/catch。
+- **文案去 AI feature 包装（纯字符串·不动逻辑）**：StrategyWorkshop「自然语言→」失真→「关键词规则提取」；IDE「AI 助手/AI 辅助(BigQuant风)/让 AI 写」→「代码助手/生成」；Mode2「量化教练/副驾驶/Socratic」→「研究问答/复核」；Pricing/CoachBanner/Templates/Glossary(去 GPT 品牌名)/Home(去黑话)/Build·Jobs·Research Deck mock「助手」→「面板」。真 LLM 功能保留准确描述、不删功能。
+- **对抗验证（10 条待办 claim · 每条独立 skeptic 默认当误报）**：真该现在修 3（OOS 已修 / agent-live-mock LIVE 批准门重放 mock 脚本 / jobsdeck selJob 卡 mock id，后两待拍）；**误报 2**（SharedStrategies 刷赞被后端 PK 去重推翻、PaperDesk 双击双审批被后端 self.lock+GateStateError+幂等三护栏推翻）；**死代码 1**（Runs WS 是 stub 永不触发）；其余 mock/低影响 later。**H3「Runs 涨跌色反转」确认误报**——A 股「红涨绿跌」正确惯例，不改（防回潮，见 D-FE-REVIEW）。
+- **入库纪律（D-GITIGNORE-ARTIFACTS）**：gitignore `graphify-out/`（52MB 生成产物）+ `data/strategy/`；demo 示例数据仍入库。push 前凭据扫描 0 命中。
+- **land**：**已 push origin/fullstack**（c213583 主体 + cb2a083 gitignore，138 文件；用户拍板「全部工作区一起推、去掉生成产物」）。dev/ 账本本次同步补记。

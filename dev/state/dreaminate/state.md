@@ -42,7 +42,7 @@
 | M12 实验/模型注册表 | ✅ append-only + lineage | ✅ honest-N 一本账（T-013）+ **promote 审批门状态机（T-019：三要件/approver≠creator/缺口清单，端点已接）** | — |
 | M13 编排调度 | 🟡 mini DAG | ✅ 确定性内核 `DurableExecutor` 已建（T-014）+ **接进 run_dag/jobs/agent 执行路径（T-023：checkpoint 恢复去重绝不重发单 / replay 边界 HALT）** | — |
 | M14 Agent | ✅ tool schema + 工作台 | ✅ LLM 受控（T-016：record/replay + 受控翻译门挡越权；opt-in `LLM_REPLAY_MODE`）| — |
-| M15 前端 | ✅ RunDetailPage 冻结 | 🟡 治理新页面 epic 完成（cfb0fea9：**24 卡 done** 整套台 DC→React · 后端 pytest 1231 + 前端 vitest 241 passed + tsc + build 绿 · 残余诚实：部分未接端点仍 mock / T-042 桌面 tauri build 待工具链 / 3 pre-existing bug 已 spawn）· **导航收口（D-NAV-UNIFY，2026-06-22）：Research/Workshop/Models 三 tab→单 Workshop + 新增总览台、6 台切换器、旧分散页搬台/退役** | 信任层 §6 |
+| M15 前端 | ✅ RunDetailPage 冻结 | 🟡 治理新页面 epic 完成（cfb0fea9：**24 卡 done** 整套台 DC→React · 后端 pytest 1231 + 前端 vitest 241 passed + tsc + build 绿 · 残余诚实：部分未接端点仍 mock / T-042 桌面 tauri build 待工具链 / 3 pre-existing bug 已 spawn）· **导航收口（D-NAV-UNIFY，2026-06-22）：Research/Workshop/Models 三 tab→单 Workshop + 新增总览台、6 台切换器、旧分散页搬台/退役** · **前端交互 bug 修复批 + OOS 泄露补传 train_fraction + 文案去 AI feature 包装（D-FE-REVIEW，2026-06-22，已 push fullstack；tsc0/前端241）** | 信任层 §6 |
 | M16–M21 社区/跟单/IDE/教学/实盘安全/示例 | ✅ 全已建 | n/a | — |
 
 ## 层2 脊柱（A 簇 · 第 0–3 层）
@@ -76,3 +76,4 @@
 - **前端整套台 epic（cfb0fea9）已实装完成**：24 子卡全 done（地基4+台前端6+Agent4+后端接真7+教学/桌面2），最终全量验证绿（后端 1231 / 前端 241 / tsc / build）；commit·合并 main 待用户授权（不擅自 commit）。残余：部分 mock 未接真(P1)/T-042 桌面待工具链/pre-existing bug spawn task。
 - 簇A（T-023/024/025）已 2026-06-19 用户过目通过 + 落档完成；下一波 1A 价值密度混合（C 组合三角 + D 双时态地基 → B 因子轨 → E 信任层 / F 可上线 交织）若遇 `decisions/` 未覆盖新岔路再点名。
 - **导航收口 + killswitch 加固（2026-06-22「a+b / 都做 / 升级」已做完）**：前端三 tab 合一为 Workshop + 总览台 + 旧页搬台/退役（D-NAV-UNIFY）；后端急停/紧急平仓 IP 改服务端派生防伪造 + 二次鉴权升级为服务端真校验密码(PBKDF2)/TOTP、废自证 bool（D-KILLSWITCH-IP）。验证全绿：tsc 0 / 前端 241 / 后端全量 1240 passed（含 IP 防伪造 + 错密码 + 自证 bool 失效 3 条回归）/ 6 台浏览器实证 + 零 console 报错。**commit·合并 main 待用户授权（未擅自 commit）**。
+- **前端交互审查 + 文案去 AI 包装（2026-06-22 已 push origin/fullstack）**：11+ 交互 bug 修复（死循环/真钱页假绿灯/OOS 泄露补 train_fraction/因子门/revert/IME/2FA/顶栏/登录next/崩溃守卫）+ 全前端去 AI hype 文案（D-FE-REVIEW）；gitignore graphify-out/data 产物（D-GITIGNORE-ARTIFACTS）。对抗验证 10 claim 后**剩 2 条待拍**：agent-live-mock（LIVE 批准门重放 mock，违 LIVE 不假绿灯）、jobsdeck selJob 卡 mock id；其余误报/死代码/mock-later 不动。tsc0/前端241/凭据扫描0。
