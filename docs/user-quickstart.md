@@ -7,6 +7,9 @@
 - A股仅 paper trading（不接券商）；加密支持 Binance Spot + USDM Futures 实盘
 - 所有产物以 Parquet/CSV/JSON/MD 落盘，可独立审计
 
+> **数据 token-gated · 诚实说明**：**加密自带样本即开即用**（内置 demo run 不配 key 也能看）；
+> **A股数据需自配 `TUSHARE_TOKEN`**（见第 2 节）。没 token 不影响加密链路与所有 demo。
+
 ---
 
 ## 1. 安装（二选一）

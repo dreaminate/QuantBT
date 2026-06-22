@@ -17,18 +17,36 @@
 - `data/`: 行情数据与回测产物
 - `docs/`: 协议文档
 - `package.json`: 根目录薄转发
-- `start-qb.ps1`
-- `start-qb.bat`
+- `start.sh`（macOS / Linux）
+- `start-qb.ps1` / `start-qb.bat`（Windows）
+- `start-qb.js`（跨平台分发器）
 
 真正的服务在：
 
 - `app/backend/`: FastAPI 后端
 - `app/frontend/`: 统一的 `qb` 前端
-- `app/start-qb.ps1`: 真正的启动脚本
+- `app/start.sh`: macOS / Linux 启动脚本
+- `app/start-qb.ps1`: Windows 启动脚本
+- `app/start-qb.js`: 跨平台分发器（`npm run dev` 走它，按平台选上面对应脚本）
 
 ## 一键启动
 
-首次使用先安装依赖：
+首次使用先安装依赖。
+
+**macOS / Linux**
+
+```bash
+cd app/backend
+python -m venv .venv
+source .venv/bin/activate
+pip install -r requirements.txt
+
+cd ../frontend
+npm install
+cd ../..
+```
+
+**Windows (PowerShell)**
 
 ```powershell
 cd app\backend
@@ -41,18 +59,21 @@ npm install
 cd ..\..
 ```
 
-之后回到项目根目录直接启动：
+之后回到项目根目录直接启动（**三大平台同一条命令**）：
 
-```powershell
+```bash
 npm run dev
 ```
 
-或双击根目录：
+`npm run dev` 会自动按平台分发：macOS / Linux → `app/start.sh`，Windows → `app/start-qb.ps1`。
+也可绕过 npm 直跑：
 
-- `start-qb.ps1`
-- `start-qb.bat`
+- macOS / Linux：`bash app/start.sh`
+- Windows：双击 `start-qb.ps1` / `start-qb.bat`
 
-**前端**在当前终端前台运行（不另开 PowerShell 窗口）；**后端在后台运行，无单独窗口**。按 `Ctrl+C` 会结束前端，后端进程仍在，需在任务管理器中结束对应 Python/uvicorn。
+**前端**在当前终端前台运行；**后端在后台运行**。按 `Ctrl+C` 结束前端：macOS / Linux 上 `start.sh` 会一并收掉后端；Windows 上后端进程仍在，需在任务管理器中结束对应 Python/uvicorn。
+
+> `start.sh` 启动时会自动 `mkdir -p ~/.quantbt`，全新机不会因缺目录失败。
 
 默认地址：
 
