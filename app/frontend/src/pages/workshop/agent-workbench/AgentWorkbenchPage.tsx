@@ -125,6 +125,8 @@ export function AgentWorkbenchPage() {
   const liveAbort = useRef<(() => void) | null>(null);
   // handoff 提交回执（真 /api/strategy/submit_candidate）。
   const [handoffNote, setHandoffNote] = useState<string | null>(null);
+  // handoff 提交失败的诚实错误（§3：失败不显「已提交」绿，显红报错）。
+  const [handoffError, setHandoffError] = useState<string | null>(null);
 
   const scrollRef = useRef<HTMLDivElement | null>(null);
   const anchorIds = useRef<Record<string, string>>({});
@@ -223,6 +225,8 @@ export function AgentWorkbenchPage() {
     setUnlocked(new Set());
     setGateStates({});
     setHandoffSubmitted(false);
+    setHandoffNote(null);
+    setHandoffError(null);
     setReportReady(false);
     setWsTab("cowork");
     setCoworkOverride(null);
@@ -351,7 +355,11 @@ export function AgentWorkbenchPage() {
   }, [liveMode]);
 
   // 接真：handoff 提交真调 /api/strategy/submit_candidate（止于模拟盘）。
+  // §3 不假绿灯：仅后端【明确 ok】才显「已提交」；失败（未登录/网络/后端错）→
+  // 不 submitted、显式报错（绝不「（mock 回执）已提交」伪成功）。
   const submitHandoff = useCallback(async () => {
+    setHandoffNote(null);
+    setHandoffError(null);
     try {
       const res = await authFetch("/api/strategy/submit_candidate", {
         method: "POST",
@@ -370,13 +378,15 @@ export function AgentWorkbenchPage() {
           `候选 ${body.candidate_id ?? ""} 已进模拟台候选池（destination=${body.destination}）。`,
         );
       } else {
-        // 真端点不可用（如未登录）→ 退回 mock 回执，不假绿灯。
-        setHandoffSubmitted(true);
-        setHandoffNote("（mock 回执：真端点需登录；候选止于模拟台。）");
+        // 真端点不可用（如未登录 401 / 后端错）→ 失败显错，不伪「已提交」。
+        setHandoffSubmitted(false);
+        setHandoffError(
+          `提交失败（HTTP ${res.status}）：需登录或后端不可用，候选未进模拟台。`,
+        );
       }
     } catch {
-      setHandoffSubmitted(true);
-      setHandoffNote("（mock 回执：网络不可用；候选止于模拟台。）");
+      setHandoffSubmitted(false);
+      setHandoffError("提交失败（网络不可用）：候选未进模拟台，请重试。");
     }
   }, []);
 
@@ -725,6 +735,26 @@ export function AgentWorkbenchPage() {
                           }}
                         >
                           {handoffNote}
+                        </div>
+                      )}
+                      {/* §3 失败诚实呈现：未提交成功时显红，绝不伪「已提交」。 */}
+                      {handoffError && (
+                        <div
+                          data-handoff-error
+                          data-testid="handoff-error"
+                          role="alert"
+                          style={{
+                            margin: "4px 0 10px 18px",
+                            padding: "8px 11px",
+                            fontSize: 11.5,
+                            color: "var(--desk-danger)",
+                            border: "1px solid var(--desk-danger)",
+                            borderRadius: "var(--desk-radius-sm)",
+                            background:
+                              "color-mix(in srgb, var(--desk-danger) 8%, transparent)",
+                          }}
+                        >
+                          {handoffError}
                         </div>
                       )}
                     </div>

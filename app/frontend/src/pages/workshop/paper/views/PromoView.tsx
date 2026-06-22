@@ -1,3 +1,4 @@
+import { useEffect, useState } from "react";
 import { color } from "../colors";
 import {
   promoStages,
@@ -15,23 +16,46 @@ import { type PaperRun, type PromoCheck } from "../types";
  * INV-5：Agent 永不自动晋级，须人工审批 + 验证背书。审批按钮三态：
  *   ready=可点（人工触发）/ promoted=已晋级只读 / blocked=不可点（禁用），不一键自动晋级。
  * 接真：liveChecks 来自后端 4 门聚合（/api/paper/promotion）；onApprove 由页面接 POST 审批端点。
+ *
+ * §3 不假绿灯：审批须填验证背书(endorsement_ref) + 理由(reason)——后端 INV-5 必拒空，
+ * 前端同样硬拦（空背书/空理由不发请求），失败显式报错、绝不乐观伪「已晋级」绿态。
  */
 export function PromoView({
   run,
   promoted,
   onApprove,
   liveChecks,
+  approving,
+  approveError,
 }: {
   run: PaperRun;
   promoted: boolean;
-  onApprove: () => void;
+  /** 提交真审批：携验证背书 + 理由（INV-5）。失败由页面经 approveError 显式回传。 */
+  onApprove: (form: { endorsementRef: string; reason: string }) => void;
   liveChecks?: PromoCheck[] | null;
+  /** 审批请求在途（禁用按钮，防重复提交）。 */
+  approving?: boolean;
+  /** 审批失败的诚实错误文案（缺背书/未审批/网络失败）；非空即显红，不伪成功。 */
+  approveError?: string | null;
 }) {
   const stages = promoStages(promoted);
   const elig = promoEligibility(run, promoted);
   const checks = liveChecks ?? promoChecks(run);
   const aState = approveState(run, promoted);
   const factors = promoFactors(promoted);
+
+  // 审批表单：验证背书 + 理由（INV-5 必填，前端硬拦空值）。
+  const [endorsementRef, setEndorsementRef] = useState("");
+  const [reason, setReason] = useState("");
+  const formIncomplete = !endorsementRef.trim() || !reason.trim();
+
+  // 晋级成功后清空表单（避免残留旧背书/理由被下次误提交）。
+  useEffect(() => {
+    if (promoted) {
+      setEndorsementRef("");
+      setReason("");
+    }
+  }, [promoted]);
 
   const approveStyle: React.CSSProperties =
     aState === "promoted"
@@ -213,26 +237,88 @@ export function PromoView({
               </div>
             ))}
           </div>
+          {/* 审批表单（INV-5）：验证背书 + 理由必填，仅 ready 态显示（已晋级/blocked 不可填）。 */}
+          {aState === "ready" && (
+            <div
+              data-promote-form
+              style={{ display: "flex", flexDirection: "column", gap: 8, marginBottom: 11 }}
+            >
+              <label style={{ display: "flex", flexDirection: "column", gap: 3 }}>
+                <span style={{ fontSize: 10.5, color: "var(--desk-text-faint)" }}>
+                  验证背书（endorsement_ref · verdict_id / 验证记录引用，必填）
+                </span>
+                <input
+                  data-testid="promote-endorsement"
+                  value={endorsementRef}
+                  onChange={(e) => setEndorsementRef(e.target.value)}
+                  placeholder="如 verdict_8f2a / 独立验证官记录引用"
+                  style={inputStyle}
+                />
+              </label>
+              <label style={{ display: "flex", flexDirection: "column", gap: 3 }}>
+                <span style={{ fontSize: 10.5, color: "var(--desk-text-faint)" }}>
+                  审批理由（reason，必填）
+                </span>
+                <input
+                  data-testid="promote-reason"
+                  value={reason}
+                  onChange={(e) => setReason(e.target.value)}
+                  placeholder="为何放行晋级（留痕进审计）"
+                  style={inputStyle}
+                />
+              </label>
+            </div>
+          )}
           <div style={{ display: "flex", gap: 9, alignItems: "center" }}>
             <button
               type="button"
-              onClick={onApprove}
-              disabled={aState !== "ready"}
-              aria-disabled={aState !== "ready"}
+              onClick={() =>
+                onApprove({ endorsementRef: endorsementRef.trim(), reason: reason.trim() })
+              }
+              disabled={aState !== "ready" || formIncomplete || !!approving}
+              aria-disabled={aState !== "ready" || formIncomplete || !!approving}
               style={{
                 fontFamily: "inherit",
                 fontSize: 12,
                 padding: "9px 16px",
                 borderRadius: "var(--desk-radius)",
-                ...approveStyle,
+                ...(aState === "ready" && (formIncomplete || approving)
+                  ? {
+                      background: "var(--desk-hover)",
+                      border: "1px solid var(--desk-border-strong)",
+                      color: "var(--desk-text-faint)",
+                      cursor: "not-allowed",
+                    }
+                  : approveStyle),
               }}
             >
-              {approveLabel(aState)}
+              {approving ? "审批提交中…" : approveLabel(aState)}
             </button>
             <span style={{ fontSize: 10, color: "var(--desk-text-faint)" }}>
-              {approveHint(aState)}
+              {aState === "ready" && formIncomplete
+                ? "须填验证背书 + 理由（INV-5：裸翻必拒）"
+                : approveHint(aState)}
             </span>
           </div>
+          {/* §3 失败诚实呈现：缺背书/未审批/网络失败 → 显红，绝不伪「已晋级」绿。
+              已晋级（promoted）后绝不并显红错（防绿/红矛盾态）。 */}
+          {approveError && !promoted && (
+            <div
+              data-testid="promote-error"
+              role="alert"
+              style={{
+                marginTop: 10,
+                padding: "8px 11px",
+                fontSize: 11.5,
+                color: "var(--desk-danger)",
+                border: "1px solid var(--desk-danger)",
+                borderRadius: "var(--desk-radius-sm)",
+                background: "color-mix(in srgb, var(--desk-danger) 8%, transparent)",
+              }}
+            >
+              晋级失败（诚实呈现，未晋级）：{approveError}
+            </div>
+          )}
         </div>
       </div>
 
@@ -308,3 +394,13 @@ export function PromoView({
     </div>
   );
 }
+
+const inputStyle: React.CSSProperties = {
+  fontFamily: "inherit",
+  fontSize: 11.5,
+  padding: "6px 9px",
+  borderRadius: "var(--desk-radius-sm)",
+  border: "1px solid var(--desk-border-strong)",
+  background: "var(--desk-card)",
+  color: "var(--desk-text)",
+};

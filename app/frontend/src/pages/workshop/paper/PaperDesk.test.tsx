@@ -128,19 +128,34 @@ describe("对抗测试", () => {
     expect(screen.getByText("永不可改")).toBeInTheDocument();
   });
 
-  it("对抗#3 晋升须人工+背书（INV-5）：不一键自动晋级；不满足条件时审批禁用", () => {
+  it("对抗#3 晋升须人工+背书（INV-5）：表单未填→审批禁用、不一键自动晋级（§3 不假绿灯）", () => {
     renderWithDesk(<PaperDeskPage />);
     fireEvent.click(screen.getByText("⤴ 晋升通道"));
-    // 默认 run 满 28 天且超额>0 → 审批可点；点击前未晋级
+    // 默认 run 满 28 天且超额>0 → ready 态，但背书/理由未填 → 审批按钮禁用（裸翻必拒）。
+    const btn = screen.getByRole("button", { name: /人工审批晋级/ });
+    expect(btn).toBeDisabled();
+    expect(screen.getByText(/须填验证背书 \+ 理由/)).toBeInTheDocument();
+    // 强行点禁用按钮不应晋级（无伪绿）。
+    fireEvent.click(btn);
+    expect(screen.queryByRole("button", { name: /已晋级/ })).toBeNull();
+  });
+
+  it("对抗#3a §3 无后端时填表提交 → 诚实失败、不伪「已晋级」", async () => {
+    renderWithDesk(<PaperDeskPage />);
+    fireEvent.click(screen.getByText("⤴ 晋升通道"));
+    // 填背书 + 理由 → 按钮可点。
+    fireEvent.change(screen.getByTestId("promote-endorsement"), {
+      target: { value: "verdict_8f2a" },
+    });
+    fireEvent.change(screen.getByTestId("promote-reason"), {
+      target: { value: "4 门全过，独立验证已背书" },
+    });
     const btn = screen.getByRole("button", { name: /人工审批晋级/ });
     expect(btn).not.toBeDisabled();
-    expect(screen.getByText(/须人工 \+ 验证背书/)).toBeInTheDocument();
-    // 审批是显式人工动作：点击后才晋级（非自动）
     fireEvent.click(btn);
-    expect(screen.getByRole("button", { name: /已晋级 · 同步因子台/ })).toBeInTheDocument();
-    // 晋级后按钮变只读（cursor default、不可再触发自动循环）
-    const done = screen.getByRole("button", { name: /已晋级/ });
-    expect(done).toHaveStyle({ cursor: "default" });
+    // 无后端（openPromotionGate 抛）→ 显式失败态出现，绝不伪「已晋级」绿。
+    expect(await screen.findByTestId("promote-error")).toBeInTheDocument();
+    expect(screen.queryByRole("button", { name: /已晋级/ })).toBeNull();
   });
 
   it("对抗#3b 不满足条件时审批不可点（blocked，禁用 + not-allowed）", () => {
