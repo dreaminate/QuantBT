@@ -252,6 +252,43 @@ def test_workbench_projects_tool_and_milestone_events():
         "hypothesis.create 应点亮『立题』里程碑"
 
 
+def test_workbench_tool_end_carries_run_id_for_downstream():
+    """DS-3 贯穿：backtest.run 结果带 run_id → tool_end 事件顶层透出 run_id（供前端贯穿裁决/paper）。
+
+    种坏门：若投影只塞进 result.run_id 而不提升到顶层，DS-3 前端就拿不到稳定字段。
+    """
+    from app.agent.agent_runtime import AgentRuntime
+    from app.agent.llm_client import LLMResponse
+    from app.agent.workbench_stream import project_turn_events
+
+    class _Scripted:
+        provider = "test"
+
+        def __init__(self):
+            self._q = [
+                LLMResponse(content="跑回测",
+                            tool_calls=[{"id": "c1", "name": "backtest.run",
+                                         "arguments": json.dumps({})}]),
+                LLMResponse(content="完成"),
+            ]
+
+        def chat(self, messages, *, tools=None, model=None, temperature=0.2):  # noqa: ANN001, ARG002
+            return self._q.pop(0) if self._q else LLMResponse(content="(end)")
+
+    rt = AgentRuntime(_Scripted(), permission_mode="auto")
+    rt.register_tool("backtest.run",
+                     lambda _n, _a: {"run_id": "agentbt_cn_demo", "status": "done"},
+                     side_effect="none")
+    turn = rt.run("回测")
+    events = list(project_turn_events(turn, side_effects=rt._side_effects, permission_mode="auto"))  # noqa: SLF001
+    tool_ends = [e for e in events if e["event"] == "tool_end"]
+    assert tool_ends, "backtest.run 应发 tool_end"
+    assert any(e["data"].get("run_id") == "agentbt_cn_demo" for e in tool_ends), \
+        "带 run_id 的 tool 结果应把 run_id 提升到 tool_end 事件顶层（DS-3 贯穿单一字段）"
+    # 同时保留 result（不替换，扩展）。
+    assert all("result" in e["data"] for e in tool_ends), "tool_end 仍须带完整 result（扩展不替换）"
+
+
 def test_workbench_gate_event_on_realmoney_even_bypass():
     """种坏门：realmoney 工具即便 bypass，投影也发 gate 事件（不发 tool_start 自动执行）。"""
     from app.agent.agent_runtime import AgentRuntime

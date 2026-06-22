@@ -337,6 +337,9 @@ function UserMenu() {
       <NavLink to={`/u/${user.username}`} className="cc-btn cc-btn--ghost cc-btn--sm" title="profile">
         @{user.username}
       </NavLink>
+      <NavLink to="/settings/llm" className="cc-btn cc-btn--ghost cc-btn--sm" title="LLM 配置 (接通对话生成策略 · 含 Hermes 订阅预设)">
+        ◇ LLM
+      </NavLink>
       <NavLink to="/settings/security" className="cc-btn cc-btn--ghost cc-btn--sm" title="安全设置 (mainnet 7 项防御)">
         ⚙
       </NavLink>

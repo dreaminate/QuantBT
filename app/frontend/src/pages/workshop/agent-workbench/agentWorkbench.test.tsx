@@ -21,6 +21,13 @@ import {
 const here = dirname(fileURLToPath(import.meta.url));
 
 // jsdom 无 layout；requestAnimationFrame 在 jsdom 有，剧本铺设是同步 setState，渲染即生效。
+//
+// DS-2：Agent 台默认接真（liveMode=true），mock 剧本退居「看演示」显式入口。
+// 凡断言 mock 剧本（首条 prompt / gate / 批准 / handoff）的用例，先点「看演示」进 demoMode。
+function enterDemo(container: HTMLElement): void {
+  const toggle = container.querySelector("[data-demo-toggle]") as HTMLElement;
+  fireEvent.click(toggle);
+}
 
 describe("Agent 工作台 · 渲染骨架（T-040 / A2）", () => {
   it("DeskShell data-desk=agent（橙 accent 由 data-desk 注入）", () => {
@@ -79,9 +86,37 @@ describe("Agent 工作台 · 渲染骨架（T-040 / A2）", () => {
   });
 });
 
-describe("Agent 工作台 · 对话流 + 产物（T-040 / A1）", () => {
-  it("剧本铺设：user 首条 prompt + tool 块渲染", () => {
-    renderWithDesk(<AgentWorkbenchPage />);
+describe("DS-2 · Agent 台默认接真（liveMode=true，mock 退居「看演示」）", () => {
+  it("默认 liveMode=true：顶栏挂 LIVE 标、不自动放 mock 剧本（无首条 mock prompt）", () => {
+    const { container } = renderWithDesk(<AgentWorkbenchPage />);
+    // 默认接真 → LIVE 角标在、顶栏 MockBadge（「MOCK 数据」）不在。
+    expect(container.querySelector("[data-live-badge]")).not.toBeNull();
+    expect(screen.queryByText("MOCK 数据")).toBeNull();
+    // 默认不铺 mock 剧本：首条 mock prompt 不在（不放假绿灯 mock）。
+    expect(screen.queryByText(/组装一个 A股周频多因子策略/)).toBeNull();
+  });
+
+  it("点「看演示」→ 进 demoMode：挂 MockBadge + 铺 mock 剧本（显式演示入口）", () => {
+    const { container } = renderWithDesk(<AgentWorkbenchPage />);
+    enterDemo(container);
+    // 演示态：MockBadge（「MOCK 数据」）在、LIVE 角标不在。
+    expect(screen.getByText("MOCK 数据")).toBeInTheDocument();
+    expect(container.querySelector("[data-live-badge]")).toBeNull();
+    // mock 剧本已铺：首条 prompt 出现。
+    expect(screen.getByText(/组装一个 A股周频多因子策略/)).toBeInTheDocument();
+  });
+
+  it("对抗：种「默认就放 mock 剧本（假绿灯）」必抓 —— 默认态不得有 mock gate 面板", () => {
+    const { container } = renderWithDesk(<AgentWorkbenchPage />);
+    // 默认接真：mock 剧本的 gate 面板不得自动出现（否则=默认放假绿灯 mock，blocker #1 回归）。
+    expect(container.querySelector("[data-gate-panel]")).toBeNull();
+  });
+});
+
+describe("Agent 工作台 · 对话流 + 产物（T-040 / A1 · 看演示 mock 剧本）", () => {
+  it("剧本铺设：user 首条 prompt + tool 块渲染（进「看演示」后）", () => {
+    const { container } = renderWithDesk(<AgentWorkbenchPage />);
+    enterDemo(container);
     expect(screen.getByText(/组装一个 A股周频多因子策略/)).toBeInTheDocument();
     // 第一道 gate 之前的 tool 已铺（hypothesis.create）。
     expect(screen.getByText(/hypothesis\.create/)).toBeInTheDocument();
@@ -89,6 +124,7 @@ describe("Agent 工作台 · 对话流 + 产物（T-040 / A1）", () => {
 
   it("剧本停在第一道 gate（ask 模式 · backtest.run 需确认）", () => {
     const { container } = renderWithDesk(<AgentWorkbenchPage />);
+    enterDemo(container);
     const gate = container.querySelector("[data-gate-panel]");
     expect(gate).not.toBeNull();
     expect(gate).toHaveAttribute("data-gate-side-effect", "none");
@@ -96,13 +132,15 @@ describe("Agent 工作台 · 对话流 + 产物（T-040 / A1）", () => {
 
   it("批准本次 gate → 继续铺到回测拍板 + RunVerdictCard 出现", () => {
     const { container } = renderWithDesk(<AgentWorkbenchPage />);
+    enterDemo(container);
     fireEvent.click(screen.getByText("1. 批准本次"));
     // 回测产物卡解锁。
     expect(container.querySelector('[data-cowork-card="run"]')).not.toBeNull();
   });
 
   it("工作区 tab：产物 / Strategy.yaml；回测后 Report.md 出现", () => {
-    renderWithDesk(<AgentWorkbenchPage />);
+    const { container } = renderWithDesk(<AgentWorkbenchPage />);
+    enterDemo(container);
     expect(screen.getByText("⌨ Strategy.yaml")).toBeInTheDocument();
     // 回测前无 Report.md。
     expect(screen.queryByText("▤ Report.md")).toBeNull();
@@ -334,6 +372,7 @@ describe("治理红线 ④ — 治理弱点 block 常驻展开不可折叠（R25
 describe("治理红线 ⑤ — handoff 止于模拟盘，不导向实盘（D-PERM · 对抗 #5）", () => {
   it("跑完剧本 → handoff 卡出现，文案指向模拟台候选池", () => {
     const { container } = renderWithDesk(<AgentWorkbenchPage />);
+    enterDemo(container);
     fireEvent.click(screen.getByText("1. 批准本次"));
     const handoff = container.querySelector("[data-handoff-card]");
     expect(handoff).not.toBeNull();
@@ -344,6 +383,7 @@ describe("治理红线 ⑤ — handoff 止于模拟盘，不导向实盘（D-PER
 
   it("对抗：handoff 文案种「直推实盘」必抓 —— 不得出现实盘直推语", () => {
     const { container } = renderWithDesk(<AgentWorkbenchPage />);
+    enterDemo(container);
     fireEvent.click(screen.getByText("1. 批准本次"));
     const handoff = container.querySelector("[data-handoff-card]") as HTMLElement;
     const text = handoff.textContent ?? "";
