@@ -1,7 +1,7 @@
 ---
 uuid: cb463286839c40e2b396f3f68bbe4375
 title: DS-5 §3 假绿灯修——乐观假成功改诚实失败（correctness）
-status: todo
+status: done
 owner: dreaminate
 assigned_by: dreaminate
 review_status: 1
@@ -29,3 +29,7 @@ depends_on: []
 
 ## 验收一句话 [必填]
 失败/mock 绝不渲染成成功绿（§3）；陌生人看到诚实状态；不破基线。
+
+## 完成记录（2026-06-23 · PR #3 merged→delivery-slice · 实跑为准）
+三处乐观假成功改诚实失败：paper 晋级删乐观 setPromoted(true)+背书 endorsement_ref/reason 必填（对齐 INV-5）；handoff 失败显错非「（mock 回执）已提交」；空壳净值 LIVE 标硬绑 bars_fed>0。未碰后端治理门。前端 249 测绿。§3 correctness 卡。
+整合后全量后端 **1292 passed / 13 skipped**、前端 **267 测 + tsc/build 绿**、validate_dev PASS。

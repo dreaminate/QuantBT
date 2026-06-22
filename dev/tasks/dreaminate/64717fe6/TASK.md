@@ -1,0 +1,30 @@
+---
+uuid: 64717fe601994e5999f1bf5c787d3aff
+title: paper provider 真回放捆绑样本——替换确定性合成游走（§3 增强）
+status: todo
+owner: dreaminate
+assigned_by: dreaminate
+review_status: 0
+priority: P2
+area: paper
+source: goal-gap
+source_ref: 2026-06-23 DS-4 leader §3 复审残余 · 真样本回放
+depends_on: [cfb7d950a05f401784ac6063fcc73419]
+---
+
+# paper provider 真回放捆绑样本
+
+## Scope [必填]
+DS-4 的 `ReplayBarProvider` 现喂 content_hash 派生的**确定性合成游走**（已诚实标 `deterministic_sim_walk`、非假绿）。增强：让 crypto 市场的 paper run **真回放 DS-1 捆绑的 BTC 样本**（`data/samples/crypto/BTCUSDT_1d.csv` 真 close 序列）——更「能信」（陌生人晋级的真回测策略在 paper 跑真历史 bars）。须连带修 `seed_positions` 的 entry_price 耦合（现硬编 100 匹配合成 base，换真价 ~16000-47000 需用样本首价反推 qty/entry，否则 P&L 失真）。无样本的市场（A股 token-gated）保留合成兜底、标签诚实区分。
+
+## 接线点（file:line，实现时复核）[必填]
+| 文件 | 位置 | 改什么 |
+|---|---|---|
+| app/backend/app/paper/replay_provider.py | ReplayBarProvider.__post_init__ + seed_positions | crypto 读真样本 close 序列 + entry_price 用样本首价；无样本→合成兜底（标签区分 bundled_sample_replay / deterministic_sim_walk） |
+
+## 对抗测试设计（种已知 bug，门必抓）[必填]
+1. crypto paper run → series = 真 BTC 样本 close（断言序列前几值=样本真值，非合成 100 起）；source=bundled_sample_replay。
+2. entry_price 用样本首价 → P&L 合理（非 300x 失真）；无样本市场→合成兜底 + source=deterministic_sim_walk。
+
+## 验收一句话 [必填]
+crypto paper 真回放 BTC 样本 bars（source 诚实）、P&L 不失真；无样本市场合成兜底标签区分；不破基线。

@@ -6,6 +6,15 @@
 ## <日期> · <标题>
 - 建/改了什么 + 命门  - 验收：<对抗测试 + 变异 + 全量数字>  - 下一步：<…> -->
 
+## 2026-06-23 · 交付门垂直切片整波收官（DS-2~6 + e2e）· 6 worker 并行 + leader 整合 land main
+
+- **审计收卡**：55 done 卡全诚实、0 假绿灯、validate PASS。微调：ba59fb7b/de764e1c pool→自领 active；defe660c Scope 澄清前后端；46f1cb3c/d0e5d208 残余加承接链路注。
+- **6 并行 worker（worktree·各 PR→delivery-slice）**：DS-2 前端(PR#4·默认接真+Hermes 预设页+stream run_id) / DS-3 裁决(PR#2·liveRunId 贯穿+Bootstrap 第三腿) / DS-4 paper(PR#5·register_run 注 provider+POST 端点+真净值·**治理 §5 全不破**) / DS-5 §3假绿灯修(PR#3·乐观假成功改诚实失败) / DS-6 装机(PR#1·跨平台 launcher+mkdir+A股 token 引导) / binance bug(W6·agent API 死 leader 接手 land ac72b81)。每 worker code-review skill 抓真 bug 自修。
+- **leader 整合**：5 PR merge 进 delivery-slice，解 AgentWorkbenchPage/PaperDeskPage 冲突（barsFed 去重 + W4 handoff 测试适配默认接真 + LIVE 标取 §3 严格版）。**§3 复审发现**：DS-4 source 标签 `bundled_sample_replay` 过度声称真样本回放（实为合成游走）→relabel `deterministic_sim_walk` 诚实化；mint 2 follow-up（64717fe6 真样本回放 / a367bfc8 testnet 可选，对应「都做」）。
+- **e2e 终验**：新 test_delivery_slice_e2e（3 测）陌生人 chat→backtest→裁决→paper 全链真产物一条龙（真 goal_id→真 run_id 落 RUN_ROOT 真净值→真 PBO/DSR/Bootstrap concern 不假绿→paper bars_fed>0 真 equity）；空壳 bars_fed=0 不假绿；A股 live 恒拒。
+- **验收**：**全量后端 1292 passed / 13 skipped**（基线 1275→1292，+17 全绿）+ 前端 **267 测 / 23 文件 + tsc/build 绿** + validate_dev PASS。陌生人真路径全程真数据、§3 无假绿灯、治理门（A股恒拒 live/INV-5/止模拟盘/绕门审计）不破。
+- **下一步**：land delivery-slice→main（用户已授权）。残余：真样本回放/testnet（2 follow-up）、A股 token-gated（用户自配）、真 LLM 注入用 Hermes（文档已给）。
+
 ## 2026-06-22 · DS-2 后端核 done（造站接真 · blocker #2 · 卡未整完）
 
 - **建/改**：`strategy_goal_store.py`（新·`StrategyGoalStore` 落库 + `create_from_args`：结构化 args 补 cost_model/evaluation_window 默认校验 / 自然语言走既有 `StrategyGoalSlotFiller`→ 真 goal_id 内容寻址幂等）+ `main.py`（`strategy_goal.create` 回显 lambda→真 handler 校验落库产 goal_id）。**陌生人对话→真 goal_id→DS-1 真回测** 后端入口闭合。

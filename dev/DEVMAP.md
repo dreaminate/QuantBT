@@ -6,16 +6,13 @@
 
 | uuid8 | 标题 | status | area | 位置 |
 |---|---|---|---|---|
-| 07b10903 | DS-6 装机收口——跨平台一键启动 + mkdir（可缓·docker compose 兜底） | todo | onboarding-docs | active |
-| 9a497bde | 交付门 e2e 集成测试——陌生人 chat→backtest→裁决→paper 全后端路径真 | todo | integration-test | active |
+| 64717fe6 | paper provider 真回放捆绑样本——替换确定性合成游走（§3 增强） | todo | paper | active |
+| a367bfc8 | paper testnet 真喂 provider——加密 testnet 实时 bar/mark（用户「都做」可选档） | todo | paper | active |
 | ba59fb7b | 组合 promote production 端点——组合三角 gate record=True 真记 honest-N | todo | portfolio | active |
-| cb463286 | DS-5 §3 假绿灯修——乐观假成功改诚实失败（correctness） | todo | frontend | active |
-| cfb7d950 | DS-4 paper 接真——submit→register_run + POST 端点 + 真 provider 产净值 | todo | paper-fullstack | active |
-| d4cb88f4 | DS-3 裁决接真——run_id 贯穿真裁决卡 + Bootstrap 第三腿前端补全 | todo | frontend | active |
 | de764e1c | 监控生产调度 + 因子观测记录管道——让 monitor_tick 在生产真跑 | todo | monitor | active |
-| defe660c | DS-2 造站接真——Agent台默认接真 + 无key slot-filling 真落库 + Hermes 预设（Fork1=C+Hermes） | todo | agent-frontend | active |
 | e1a98c41 | binance_vision_pull reload-merge schema bug 修——多日同年 try_parse_dates 崩 | todo | data-connectors | active |
 | 05d6f511 | 单人 self-approve 仅非真钱通道(冷却+留痕)，真钱硬双人 | done | approval | done |
+| 07b10903 | DS-6 装机收口——跨平台一键启动 + mkdir（可缓·docker compose 兜底） | done | onboarding-docs | done |
 | 180a341e | 核验 agent tool_call 前端派发是否旁路受控翻译门（R11 前端缺口审计） | done | verification | done |
 | 1e0e65b4 | 组合消费者——agent 可调组合三角 gate（SEQ-CONSUMER=A · C full-fat 触发器） | done | agent | done |
 | 381b6c18 | 实盘因子血统门——未过检验因子上真钱线 → 警告+知情确认 | done | security-invariant | done |
@@ -33,6 +30,7 @@
 | 82120b9c | agent 窗口前端核心（Web）——对话流 + 工具可视化 + 权限模式切换 | done | frontend | done |
 | 87ad21fc | R18 stacking 控制项 N/A 标注 + 实现时 OOF 约束（T-033 核验 gap） | done | signals | done |
 | 8ab894cd | 审批 SLA 与 leverage_cap 可配置；杠杆不设硬上限；真钱超时永远 default_reject | done | config | done |
+| 9a497bde | 交付门 e2e 集成测试——陌生人 chat→backtest→裁决→paper 全后端路径真 | done | integration-test | done |
 | 9d5405ce | 模拟台前端 P0 — 5 视图 + PaperBoardCard(运行/持仓成交/风险门/复盘/晋升) | done | frontend | done |
 | 9fd4f1a6 | 策略台后端接线 — validate/版本/策略级fork/Live只读 端点 + 前端接真 | done | backend | done |
 | T-001 | T-001 | ? | - | done |
@@ -60,12 +58,16 @@
 | be3dc598 | 策略台前端 P0 — DAG 编排工作台像素还原 + mock 交互 | done | frontend | done |
 | c631817e | 防绿灯错觉——三角裁决按权限模式分层呈现 + 工具真实状态标注 | done | governance-ui | done |
 | ca3ab3ec | Agent 窗口里程碑进度线 + 跨台台 switcher | done | frontend | done |
+| cb463286 | DS-5 §3 假绿灯修——乐观假成功改诚实失败（correctness） | done | frontend | done |
 | cfb0fea9 | 整套台前端实装 epic（Claude Design handoff → React，DC→React 治理界面投影） | done | frontend-epic | done |
+| cfb7d950 | DS-4 paper 接真——submit→register_run + POST 端点 + 真 provider 产净值 | done | paper-fullstack | done |
 | d0e5d208 | 监控→自动降级/退役/问责 尾部闭环接线（T-033 核验 gap 升级） | done | monitor | done |
 | d11d1426 | 暗色台地基 — desk 壳件 + design tokens + per-desk accent + 路由边界 | done | frontend-foundation | done |
 | d41b167d | Agent 窗口 D-PERM 反例 UI + self-approve 二次确认 | done | frontend | done |
+| d4cb88f4 | DS-3 裁决接真——run_id 贯穿真裁决卡 + Bootstrap 第三腿前端补全 | done | frontend | done |
 | d5ea778c | 共享 Agent 对话 + Inspector + Dock 组件 | done | frontend-foundation | done |
 | d93dc5a0 | 裁决卡 RunVerdictCard + 回测详情顶栏/血缘入口（非冻结） | done | frontend | done |
+| defe660c | DS-2 造站接真——Agent台默认接真 + 无key slot-filling 真落库 + Hermes 预设（Fork1=C+Hermes） | done | agent-frontend | done |
 | e069d820 | 裁决卡后端接线 — verdict/overfit/cost-sensitivity/promote/热力 端点 + 措辞合规 | done | backend | done |
 | e2de3d32 | 前端测试设施基建 — vitest + React Testing Library + 对抗测试 harness | done | frontend-foundation | done |
 | ecbd0eab | GOAL §7 文档对齐(M10 已接 run 闸门)+ 可证伪性/模式 教学文案 | done | docs | done |
@@ -102,7 +104,7 @@
 | agent | b961f08b · done | dreaminate |
 | agent | edc1e326 · done | dreaminate |
 | agent-backend | f6bb5e8e · done | dreaminate |
-| agent-frontend | defe660c · todo | dreaminate |
+| agent-frontend | defe660c · done | dreaminate |
 | approval | 05d6f511 · done | dreaminate |
 | backend | 4562d903 · done | dreaminate |
 | backend | 51271d38 · done | dreaminate |
@@ -114,8 +116,6 @@
 | data-connectors | e1a98c41 · todo | dreaminate |
 | desktop | bc21c7c1 · done | dreaminate |
 | docs | ecbd0eab · done | dreaminate |
-| frontend | cb463286 · todo | dreaminate |
-| frontend | d4cb88f4 · todo | dreaminate |
 | frontend | 3d95e0f6 · done | dreaminate |
 | frontend | 5e47b82f · done | dreaminate |
 | frontend | 82120b9c · done | dreaminate |
@@ -125,7 +125,9 @@
 | frontend | b2682edc · done | dreaminate |
 | frontend | be3dc598 · done | dreaminate |
 | frontend | ca3ab3ec · done | dreaminate |
+| frontend | cb463286 · done | dreaminate |
 | frontend | d41b167d · done | dreaminate |
+| frontend | d4cb88f4 · done | dreaminate |
 | frontend | d93dc5a0 · done | dreaminate |
 | frontend-epic | 3f5ed0b8 · done | dreaminate |
 | frontend-epic | cfb0fea9 · done | dreaminate |
@@ -134,11 +136,13 @@
 | frontend-foundation | d5ea778c · done | dreaminate |
 | frontend-foundation | e2de3d32 · done | dreaminate |
 | governance-ui | c631817e · done | dreaminate |
-| integration-test | 9a497bde · todo | dreaminate |
+| integration-test | 9a497bde · done | dreaminate |
 | monitor | de764e1c · todo | dreaminate |
 | monitor | d0e5d208 · done | dreaminate |
-| onboarding-docs | 07b10903 · todo | dreaminate |
-| paper-fullstack | cfb7d950 · todo | dreaminate |
+| onboarding-docs | 07b10903 · done | dreaminate |
+| paper | 64717fe6 · todo | dreaminate |
+| paper | a367bfc8 · todo | dreaminate |
+| paper-fullstack | cfb7d950 · done | dreaminate |
 | portfolio | ba59fb7b · todo | dreaminate |
 | portfolio | 46f1cb3c · done | dreaminate |
 | security-invariant | 381b6c18 · done | dreaminate |

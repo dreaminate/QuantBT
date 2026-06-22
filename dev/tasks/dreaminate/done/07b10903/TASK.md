@@ -1,7 +1,7 @@
 ---
 uuid: 07b10903e8184d1d8ccbc5b7b6970c13
 title: DS-6 装机收口——跨平台一键启动 + mkdir（可缓·docker compose 兜底）
-status: todo
+status: done
 owner: dreaminate
 assigned_by: dreaminate
 review_status: 1
@@ -29,3 +29,7 @@ depends_on: []
 
 ## 验收一句话 [必填]
 陌生人在 Mac/Linux 按文档一条命令起得来；cp 不因缺目录失败；不破基线。
+
+## 完成记录（2026-06-23 · PR #1 merged→delivery-slice · 实跑为准）
+跨平台一键启动：新 start.sh(POSIX) + start-qb.js(Node dispatcher 按平台选 sh/ps1)，保留 Windows；mkdir -p ~/.quantbt 兜底（README/installer-guide + start.sh）；A股 token-gated 诚实引导（crypto 自带样本即开即用、A股需自配 TUSHARE_TOKEN）；文档统一指向 npm run dev。code-review 抓 2 bug 全修，bash -n/node --check/docker compose config/npm build 全过。
+整合后全量后端 **1292 passed / 13 skipped**、前端 **267 测 + tsc/build 绿**、validate_dev PASS。

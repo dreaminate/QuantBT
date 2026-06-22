@@ -1,7 +1,7 @@
 ---
 uuid: defe660cad5343bcaf1f01e351b4fb9d
 title: DS-2 造站接真——Agent台默认接真 + 无key slot-filling 真落库 + Hermes 预设（Fork1=C+Hermes）
-status: todo
+status: done
 owner: dreaminate
 assigned_by: dreaminate
 review_status: 1
@@ -33,3 +33,7 @@ depends_on: []
 
 ## 验收一句话 [必填]
 陌生人（含无 key / 用 Hermes 订阅）能对话产出真 goal_id；Agent 台默认接真不放假绿灯 mock；不破基线。
+
+## 完成记录（2026-06-23 · PR #4 merged→delivery-slice · 实跑为准）
+Agent台默认 liveMode=true + mock 退居「看演示」MockBadge；新 LLMSettingsPage（Hermes 预设·复用 POST /api/llm/configure custom provider）；workbench_stream tool_end 带真 run_id（为 DS-3）；docs/hermes-subscription-proxy.md。后端核早 done（6726c4f）。code-review 抓默认接真后 send/clear/restart 仍注 mock（LIVE 标下假绿灯）已修+2 回归门。前端 251 测 + 后端 22 测绿。
+整合后全量后端 **1292 passed / 13 skipped**、前端 **267 测 + tsc/build 绿**、validate_dev PASS。

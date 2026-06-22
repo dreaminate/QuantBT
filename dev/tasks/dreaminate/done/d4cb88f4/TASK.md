@@ -1,7 +1,7 @@
 ---
 uuid: d4cb88f43c824183b694eabea81b9782
 title: DS-3 裁决接真——run_id 贯穿真裁决卡 + Bootstrap 第三腿前端补全
-status: todo
+status: done
 owner: dreaminate
 assigned_by: dreaminate
 review_status: 1
@@ -30,3 +30,7 @@ depends_on: [f6bb5e8ea620412fa0c3e5a48011b74b]
 
 ## 验收一句话 [必填]
 陌生人在裁决卡看到的是自己回测的真 PBO/DSR/Bootstrap 三角；非写死 mock；不破基线。
+
+## 完成记录（2026-06-23 · PR #2 merged→delivery-slice · 实跑为准）
+liveRunId 贯穿（onToolEnd 提取 backtest.run run_id→threaded 到 CoworkArea→RunCard 走 LiveRunVerdictCard）；OverfitResp 加 bootstrap_ci + RunVerdictCard footer 第三格（复用后端 gate 单一源）。+7 测、前端全套绿、code-review(xhigh) 2 候选驳回。
+整合后全量后端 **1292 passed / 13 skipped**、前端 **267 测 + tsc/build 绿**、validate_dev PASS。

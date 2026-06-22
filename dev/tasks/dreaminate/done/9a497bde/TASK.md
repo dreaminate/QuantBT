@@ -1,7 +1,7 @@
 ---
 uuid: 9a497bded262454bad03337b66e7e615
 title: 交付门 e2e 集成测试——陌生人 chat→backtest→裁决→paper 全后端路径真
-status: todo
+status: done
 owner: dreaminate
 assigned_by: dreaminate
 review_status: 1
@@ -28,3 +28,7 @@ depends_on: [cfb7d950a05f401784ac6063fcc73419]
 
 ## 验收一句话 [必填]
 一条 e2e 测试证明陌生人 chat→backtest→裁决→paper 全程真产物、治理门不破；不破基线。
+
+## 完成记录（2026-06-23 · leader commit merged→delivery-slice · 实跑为准）
+新 test_delivery_slice_e2e（3 测）：陌生人 chat→backtest→裁决→paper 全链真产物一条龙（真 goal_id→真 run_id 落 RUN_ROOT→真 PBO/DSR/Bootstrap→paper bars_fed>0 真 equity）；空壳 simulate=False bars_fed=0 不假绿；A股 live 恒拒。leader 终验артефакт。
+整合后全量后端 **1292 passed / 13 skipped**、前端 **267 测 + tsc/build 绿**、validate_dev PASS。

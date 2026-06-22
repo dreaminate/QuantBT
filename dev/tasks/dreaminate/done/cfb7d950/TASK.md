@@ -1,7 +1,7 @@
 ---
 uuid: cfb7d950a05f401784ac6063fcc73419
 title: DS-4 paper 接真——submit→register_run + POST 端点 + 真 provider 产净值
-status: todo
+status: done
 owner: dreaminate
 assigned_by: dreaminate
 review_status: 1
@@ -31,3 +31,7 @@ depends_on: [f6bb5e8ea620412fa0c3e5a48011b74b]
 
 ## 验收一句话 [必填]
 陌生人晋级的策略进模拟台真跑出净值（非空壳/非 mock）；治理门红线不破；不破基线。
+
+## 完成记录（2026-06-23 · PR #5 merged→delivery-slice · 实跑为准）
+submit_candidate→register_run + POST /api/paper/runs；register_run 注真 bar/mark provider（新 replay_provider，确定性合成模拟·明确非实盘 key·非真样本）让 tick 真喂产移动净值；幂等 prime_run；seed_position 刻意不走 place_order 守绕门审计白名单。前端 PaperDeskPage 读真 /api/paper/runs、LIVE 标硬绑 bars_fed>0。**治理 §5 全不破**：A股恒拒 live(403)/INV-5/止模拟盘 e2e 实证。code-review 抓 prime_run 非幂等等 3 bug 全修。leader §3 复审：source 标签 bundled_sample_replay 过度声称→relabel deterministic_sim_walk（真样本回放=后续卡）。
+整合后全量后端 **1292 passed / 13 skipped**、前端 **267 测 + tsc/build 绿**、validate_dev PASS。
