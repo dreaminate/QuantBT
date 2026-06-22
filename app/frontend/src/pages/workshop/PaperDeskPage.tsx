@@ -66,13 +66,13 @@ function LiveBadge() {
 interface LiveData {
   sched: SchedRow[];
   running: boolean;
+  /** 后端真实喂进的 bar 数（DS-4）。0 = 空壳（接了端点但无真数据），绝不盖 LIVE 绿标。 */
+  barsFed: number;
   positions: BookPosition[];
   fills: Fill[];
   balance: BalanceCell[];
   promoChecks: PromoCheck[];
   promoGateId: string | null;
-  /** 真喂数据计数：>0 才算「接真跑出净值」（LIVE 角标硬绑此值，空壳不盖绿）。 */
-  barsFed: number;
 }
 
 const TABS: { value: PaperView; label: string }[] = [
@@ -102,6 +102,9 @@ export function PaperDeskPage() {
   const [promoted, setPromoted] = useState(false);
   const [live, setLive] = useState<LiveData | null>(null);
   const [liveRuns, setLiveRuns] = useState<PaperRunListItem[] | null>(null);
+  // 审批在途 + 失败诚实态（§3：失败不伪绿，显式报错）。
+  const [approving, setApproving] = useState(false);
+  const [approveError, setApproveError] = useState<string | null>(null);
 
   const run = findRun(selRun);
   // 侧栏：后端可达（liveRuns 非 null，含空数组）一律用真数据——空后端就显示「0 个」，绝不退回 mock 假造 run。
@@ -129,6 +132,9 @@ export function PaperDeskPage() {
   useEffect(() => {
     let alive = true;
     setLive(null);
+    // 切 run/市场即清审批失败态，避免上一个 run 的红错串到下一个（诚实状态不串台）。
+    setApproveError(null);
+    setApproving(false);
     (async () => {
       try {
         const [status, pos, fl, bal, promo] = await Promise.all([
@@ -142,12 +148,12 @@ export function PaperDeskPage() {
         setLive({
           sched: statusToSchedRows(status),
           running: status.running,
+          barsFed: status.bars_fed ?? 0,
           positions: positionsToBook(pos.positions, market),
           fills: fillsToView(fl.fills, market),
           balance: balanceToCells(bal, market),
           promoChecks: promotionToChecks(promo),
           promoGateId: promo.gate_id,
-          barsFed: status.bars_fed ?? 0,
         });
         setPromoted(promo.promoted);
       } catch {
@@ -159,30 +165,49 @@ export function PaperDeskPage() {
     };
   }, [selRun, market]);
 
-  // 人工审批晋级（INV-5）：开判定门 → POST 审批端点（approver≠creator + 背书）。
-  // 乐观翻 promoted（人工显式动作，非自动循环）。
-  // 仅当后端【明确返回非 ok】（按 INV-5 拒：缺背书 / 自审 / 不可跳级）才回滚——
-  // 纯网络失败/无后端（dev/单测）保留乐观态，不把后端缺位当成晋级失败。
-  async function handleApprove() {
-    setPromoted(true);
+  // 人工审批晋级（INV-5）：开判定门 → POST 审批端点（approver≠creator + 背书 + 理由）。
+  // §3 不假绿灯：promoted 只在后端【明确返回 ok】后才翻——绝不乐观伪成功。
+  // 任一失败（缺背书 / 未审批 / 自审 / 不可跳级 / 网络 / 无后端）→ 显式报错，不 promoted。
+  async function handleApprove(form: { endorsementRef: string; reason: string }) {
+    // 前端硬拦空背书/空理由（与后端 INV-5 同向，不发空请求伪成功）。
+    // 防御性 trim：即便上游未 trim，纯空白也按空拒（裸翻必拒）。
+    const endorsementRef = form.endorsementRef.trim();
+    const reason = form.reason.trim();
+    if (!endorsementRef || !reason) {
+      setApproveError("缺验证背书或理由：裸翻必拒（INV-5，未验证≠已验证）。");
+      return;
+    }
     const me = getStoredUser();
-    let gate: { gate_id: string };
+    setApproving(true);
+    setApproveError(null);
     try {
-      gate = live?.promoGateId
+      const gate = live?.promoGateId
         ? { gate_id: live.promoGateId }
         : await paperApi.openPromotionGate(selRun);
-    } catch {
-      return; // 无后端：保留乐观态（demo 路径）
-    }
-    try {
       const res = await paperApi.approvePromotion(gate.gate_id, {
         approver: me?.username || "",
-        endorsement_ref: "",
-        reason: "",
+        endorsement_ref: endorsementRef,
+        reason: reason,
       });
-      if (!res.ok) setPromoted(false); // 后端按 INV-5 拒 → 回滚，须补验证背书走完整流程
+      if (res.ok) {
+        setPromoted(true); // 后端确认通过才翻绿。
+        setApproveError(null); // 成功即清残留错，避免「已晋级」绿与红错并存（矛盾态）。
+      } else {
+        // 后端按 INV-5 拒（缺背书 / 自审 / 不可跳级，422）→ 显式失败，不伪成功。
+        let detail = `审批被拒（HTTP ${res.status}）：须补验证背书走完整流程。`;
+        try {
+          const body = await res.json();
+          if (body?.detail?.reason) detail = String(body.detail.reason);
+        } catch {
+          /* 响应体非 JSON：保留默认文案 */
+        }
+        setApproveError(detail);
+      }
     } catch {
-      /* 网络失败：保留乐观态 */
+      // 网络失败 / 无后端：诚实报错，绝不乐观伪「已晋级」。
+      setApproveError("晋级门不可用（网络失败或后端未接）：未晋级，请重试或接后端。");
+    } finally {
+      setApproving(false);
     }
   }
 
@@ -205,10 +230,11 @@ export function PaperDeskPage() {
   );
 
   // 已接真的 tab（run/book/promo）在 live 数据就位后挂 LIVE 角标；review/risk 仍 mock 挂 MockBadge。
-  // run tab 的 LIVE 角标【硬绑 bars_fed>0】：真喂到模拟 bars 才算接真，空壳（bars_fed=0）不盖绿（§3）。
+  // §3 空壳不假绿：仅当后端真喂进 bar（bars_fed>0）才算「LIVE 已接真」——
+  // 接了端点但 bars_fed===0（空壳净值）绝不盖 LIVE 绿标，回退 MockBadge 显诚实状态。
+  // （run/book/promo 全 wired tab 一律 bars_fed>0 才 LIVE，取 DS-5 §3 严格版。）
   const wiredTab = view === "run" || view === "book" || view === "promo";
-  const liveReady = live !== null && (view !== "run" || live.barsFed > 0);
-  const tabIsLive = wiredTab && liveReady;
+  const tabIsLive = wiredTab && live !== null && live.barsFed > 0;
 
   const subtabs = (
     <SubTabBar
@@ -363,6 +389,8 @@ export function PaperDeskPage() {
             promoted={promoted}
             onApprove={handleApprove}
             liveChecks={live?.promoChecks}
+            approving={approving}
+            approveError={approveError}
           />
         )}
         {view === "live_access" && (

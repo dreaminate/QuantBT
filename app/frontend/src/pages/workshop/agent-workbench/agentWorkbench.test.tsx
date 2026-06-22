@@ -3,6 +3,7 @@ import { readFileSync, readdirSync } from "node:fs";
 import { fileURLToPath } from "node:url";
 import { dirname, join } from "node:path";
 import { screen, fireEvent, within, waitFor } from "@testing-library/react";
+import * as authModule from "../../../lib/auth";
 import {
   renderWithDesk,
   assertNoForbiddenWords,
@@ -455,6 +456,66 @@ describe("DS-3 · liveRunId 贯穿裁决卡（真 run_id → LiveRunVerdictCard 
     expect(screen.getAllByText("MOCK 数据").length).toBeGreaterThanOrEqual(1);
     // mock 卡同样补齐三腿（第三格 Bootstrap CI 在）。
     expect(screen.getByText("Bootstrap CI")).toBeInTheDocument();
+  });
+});
+
+describe("§3 handoff 提交失败诚实呈现（不假绿灯）", () => {
+  afterEach(() => vi.restoreAllMocks());
+
+  /** 跑完剧本铺出 handoff 卡（DS-2 默认接真后先进「看演示」demoMode 才有 mock 剧本，再点「批准本次」解锁 report + handoff）。 */
+  function openHandoff() {
+    const r = renderWithDesk(<AgentWorkbenchPage />);
+    enterDemo(r.container);
+    fireEvent.click(screen.getByText("1. 批准本次"));
+    return r;
+  }
+
+  it("后端非 ok（如未登录 401）→ 显式报错、不显「已提交」绿、不伪「（mock 回执）已提交」", async () => {
+    vi.spyOn(authModule, "authFetch").mockResolvedValue(
+      new Response("unauthorized", { status: 401 }),
+    );
+    openHandoff();
+    fireEvent.click(screen.getByText(/提交进模拟台候选/));
+    // 失败诚实态：handoff-error 出现。
+    const err = await screen.findByTestId("handoff-error");
+    expect(err.textContent ?? "").toMatch(/失败/);
+    // 绝不出现「已提交」成功绿回执，也不出现旧的「（mock 回执）」伪成功文案。
+    expect(screen.queryByText(/✓ 已提交/)).toBeNull();
+    expect(screen.queryByText(/mock 回执/)).toBeNull();
+    // 提交按钮仍在（未伪成功切到回执态）。
+    expect(screen.getByText(/提交进模拟台候选/)).toBeInTheDocument();
+  });
+
+  it("网络失败（authFetch 抛）→ 显式报错、不伪「已提交」", async () => {
+    vi.spyOn(authModule, "authFetch").mockRejectedValue(new Error("network down"));
+    openHandoff();
+    fireEvent.click(screen.getByText(/提交进模拟台候选/));
+    const err = await screen.findByTestId("handoff-error");
+    expect(err.textContent ?? "").toMatch(/网络不可用/);
+    expect(screen.queryByText(/✓ 已提交/)).toBeNull();
+    expect(screen.queryByText(/mock 回执/)).toBeNull();
+  });
+
+  it("后端 ok → 真显「已提交」绿回执（成功路径仍诚实可达）", async () => {
+    vi.spyOn(authModule, "authFetch").mockResolvedValue(
+      new Response(
+        JSON.stringify({ candidate_id: "cand_1", destination: "paper_desk" }),
+        { status: 200 },
+      ),
+    );
+    openHandoff();
+    fireEvent.click(screen.getByText(/提交进模拟台候选/));
+    await waitFor(() =>
+      expect(screen.getByText(/进入模拟台候选池/)).toBeInTheDocument(),
+    );
+    expect(screen.queryByTestId("handoff-error")).toBeNull();
+  });
+
+  it("源码守卫：handoff 失败分支不得再用「（mock 回执）...已提交」伪成功", () => {
+    const src = readFileSync(join(here, "AgentWorkbenchPage.tsx"), "utf8");
+    // 失败路径绝不再 setHandoffSubmitted(true) 配 mock 回执文案。
+    expect(src).not.toContain("（mock 回执：真端点需登录");
+    expect(src).not.toContain("（mock 回执：网络不可用");
   });
 });
 
