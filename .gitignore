@@ -63,3 +63,9 @@ workspace/
 
 # dev-os 团队并发：本机开发者身份(每人各异,不入项目库)
 dev/.identity
+
+# 知识图谱本地产物（52MB+，每人本地 graphify update 重建，不入库）
+graphify-out/
+
+# data 运行产物：策略候选等（demo 示例数据仍按上方精细规则入库）
+data/strategy/
