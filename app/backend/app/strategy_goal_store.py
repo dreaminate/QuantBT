@@ -25,7 +25,11 @@ from .strategy_goal import StrategyGoal, _coerce_cost_model
 
 
 def _goal_id(goal: StrategyGoal) -> str:
-    return f"goal_{content_hash([goal.name, goal.asset_class, goal.objective, goal.horizon])[:10]}"
+    # 对完整 goal 的 canonical dump 做内容寻址（复用 lineage.ids.content_hash 单一身份源）：
+    # 身份纳入 benchmark/cost_model/evaluation_window/constraints 等全部语义字段，
+    # 语义不同的 goal 必得不同 id → create() 的 save_yaml 不会静默覆盖前一份；
+    # 同 goal → 同 dump → 同 id，幂等不变（坏门：仅 benchmark 不同曾撞同 id 被覆盖）。
+    return f"goal_{content_hash(goal.model_dump(mode='json'))[:10]}"
 
 
 def _complete_goal_dict(args: dict[str, Any]) -> dict[str, Any]:

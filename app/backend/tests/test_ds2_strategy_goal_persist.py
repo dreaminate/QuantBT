@@ -18,7 +18,8 @@ import app.run_detail_core as rdc
 from app.agent.business_tools import _synth_and_promote
 from app.agent.sample_data import SAMPLE_REL, sample_path
 from app.lineage import Ledger
-from app.strategy_goal_store import StrategyGoalStore
+from app.strategy_goal import StrategyGoal, _coerce_cost_model
+from app.strategy_goal_store import StrategyGoalStore, _complete_goal_dict
 
 
 def test_structured_args_persist_real_goal_id_and_a_share_leverage(tmp_path):
@@ -61,6 +62,40 @@ def test_goal_id_is_content_addressed_idempotent():
     a = store.create_from_args({"asset_class": "crypto_perp", "objective": "max_calmar", "horizon": "daily"})
     b = store.create_from_args({"asset_class": "crypto_perp", "objective": "max_calmar", "horizon": "daily"})
     assert a["strategy_goal_id"] == b["strategy_goal_id"], "同目标必须同 goal_id（内容寻址幂等）"
+
+
+def test_goal_id_distinguishes_benchmark_no_silent_overwrite(tmp_path):
+    """U6/M2 坏门：仅 benchmark 不同的两个 goal 必得不同 goal_id，create 不静默覆盖前一份。
+
+    旧 _goal_id 只哈希 [name, asset_class, objective, horizon] → 漏 benchmark/cost/window，
+    两个仅 benchmark 不同的 goal 撞同 id，save_yaml 直接覆盖 → benchmark 差异静默丢失。
+    身份纳入完整 goal dump 后：不同语义 → 不同 id，两份各自落库、读回 benchmark 各自如初。
+    """
+    store = StrategyGoalStore(tmp_path / "goals")
+    g1 = StrategyGoal.model_validate(_coerce_cost_model(_complete_goal_dict(
+        {"asset_class": "equity_cn", "objective": "info_ratio", "horizon": "weekly", "benchmark": "000300.SH"}
+    )))
+    g2 = StrategyGoal.model_validate(_coerce_cost_model(_complete_goal_dict(
+        {"asset_class": "equity_cn", "objective": "info_ratio", "horizon": "weekly", "benchmark": "000905.SH"}
+    )))
+    gid1 = store.create(g1)
+    gid2 = store.create(g2)
+    assert gid1 != gid2, "仅 benchmark 不同必须产不同 goal_id（否则静默覆盖丢差异）"
+    # 两份各自存在、读回 benchmark 各自如初（没被覆盖）
+    assert store.get(gid1).benchmark == "000300.SH"
+    assert store.get(gid2).benchmark == "000905.SH"
+
+
+def test_goal_id_same_goal_idempotent(tmp_path):
+    """幂等性保持：同一 goal 内容 → 同一 goal_id（内容寻址不因换字段口径而破）。"""
+    store = StrategyGoalStore(tmp_path / "goals")
+    g1 = StrategyGoal.model_validate(_coerce_cost_model(_complete_goal_dict(
+        {"asset_class": "crypto_perp", "objective": "max_calmar", "horizon": "daily", "benchmark": "BTC-USDT"}
+    )))
+    g2 = StrategyGoal.model_validate(_coerce_cost_model(_complete_goal_dict(
+        {"asset_class": "crypto_perp", "objective": "max_calmar", "horizon": "daily", "benchmark": "BTC-USDT"}
+    )))
+    assert store.create(g1) == store.create(g2), "同 goal 必须同 id（幂等）"
 
 
 def _has_btc() -> bool:
