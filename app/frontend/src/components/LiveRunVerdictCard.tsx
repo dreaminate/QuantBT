@@ -35,8 +35,9 @@ interface VerdictResp {
 }
 interface OverfitResp {
   pbo?: number | null;
-  dsr_conservative?: number;
-  dsr_optimistic?: number;
+  // 后端未算时可为 null（OverfitResp 诚实可空）；numOrNull 收口成「未知」→ N/A，不假绿灯。
+  dsr_conservative?: number | null;
+  dsr_optimistic?: number | null;
   // 多证据三角第三腿：GateVerdict.to_dict() 返 [下界, 上界]（NaN→无效，前端显 N/A）。
   bootstrap_ci?: [number, number] | number[];
 }
@@ -56,6 +57,14 @@ function asVerdict(v: string): Verdict {
 
 function num(v: unknown, d = 0): number {
   return typeof v === "number" && Number.isFinite(v) ? v : d;
+}
+
+/**
+ * 过拟合门单值解析（PBO/DSR）：仅有限数才有效；null/缺失/NaN → null（不 default 0）。
+ * 保留「未知」语义 → 下游渲染 N/A，绝不把未算 PBO/DSR 默认成 0 再上成功绿（§3 不假绿灯）。
+ */
+function numOrNull(v: unknown): number | null {
+  return typeof v === "number" && Number.isFinite(v) ? v : null;
 }
 
 /** Bootstrap CI 解析：仅当 [下界,上界] 均为有限数才有效；否则 null（前端显 N/A，不假绿灯）。 */
@@ -121,8 +130,10 @@ function mapToData(
     equity: [],
     bench: [],
     cost: costCells,
-    pbo: num(overfit.pbo, 0),
-    dsr: num(overfit.dsr_conservative ?? overfit.dsr_optimistic, 0),
+    // 后端未算 CSCV/PBO（pbo:null）/缺失/NaN → null（不 default 0）→ 下游显 N/A，
+    // 绝不把未知渲染成健康绿「PBO 0.00」（§3 未验证 ≠ 已验证）。
+    pbo: numOrNull(overfit.pbo),
+    dsr: numOrNull(overfit.dsr_conservative ?? overfit.dsr_optimistic),
     bootstrapCI: ciOrNull(overfit.bootstrap_ci),
     // note 一律后端供给；缺失用合规占位（不杜撰绝对化措辞）。
     verdictNote:

@@ -72,8 +72,13 @@ export interface RunVerdictData {
   equity: number[];
   bench: number[];
   cost: CostCell[];
-  pbo: number;
-  dsr: number;
+  /**
+   * PBO（CSCV 过拟合概率）。后端未算 CSCV/PBO 时为 null/缺失 → 第三态「未知」，
+   * 渲染成中性「N/A」，绝不 default 0 再上成功绿（§3 未验证 ≠ 已验证）。
+   */
+  pbo: number | null;
+  /** DSR（Deflated Sharpe）。同 pbo：未算/缺失 → null → 渲染 N/A，绝不假绿灯。 */
+  dsr: number | null;
   /**
    * Bootstrap Sharpe 置信区间 [下界, 上界]（多证据三角第三腿，来自 overfit_gate.bootstrap_ci）。
    * 健康判据：下界 > 0（区间不跨零 → 显著）。缺省/NaN → 第三格显示「N/A」（诚实，不假绿灯）。
@@ -447,21 +452,17 @@ export function RunVerdictCard({
         }}
       >
         <div style={{ display: "flex", gap: 16, marginBottom: 10 }}>
-          <StatPair
+          <GateStat
             label="PBO"
-            value={data.pbo.toFixed(2)}
+            value={data.pbo}
             hint="<0.5 健康"
-            valueColor={
-              data.pbo < 0.5 ? "var(--desk-success)" : "var(--desk-danger)"
-            }
+            healthy={(v) => v < 0.5}
           />
-          <StatPair
+          <GateStat
             label="DSR"
-            value={data.dsr.toFixed(2)}
+            value={data.dsr}
             hint=">0 显著"
-            valueColor={
-              data.dsr > 0 ? "var(--desk-success)" : "var(--desk-danger)"
-            }
+            healthy={(v) => v > 0}
           />
           <BootstrapStat ci={data.bootstrapCI} />
         </div>
@@ -558,6 +559,43 @@ function StatPair({
       <span style={{ color: valueColor, fontWeight: 700 }}>{value}</span>
       <span style={{ color: "var(--desk-text-faint)", fontSize: 10.5 }}>{hint}</span>
     </div>
+  );
+}
+
+/**
+ * 过拟合门单值展示格（PBO / DSR）。
+ * 后端未算（null）/缺失/NaN → 「N/A」中性色（对齐 BootstrapStat 的 N/A 做法）——
+ * 绝不 default 0 再上成功绿（§3 未验证 ≠ 已验证，不假绿灯）。
+ * 仅当有限数才套健康判据上 success/danger 色。
+ */
+function GateStat({
+  label,
+  value,
+  hint,
+  healthy,
+}: {
+  label: string;
+  value: number | null;
+  hint: string;
+  healthy: (v: number) => boolean;
+}) {
+  if (value === null || !Number.isFinite(value)) {
+    return (
+      <StatPair
+        label={label}
+        value="N/A"
+        hint={hint}
+        valueColor="var(--desk-text-faint)"
+      />
+    );
+  }
+  return (
+    <StatPair
+      label={label}
+      value={value.toFixed(2)}
+      hint={hint}
+      valueColor={healthy(value) ? "var(--desk-success)" : "var(--desk-danger)"}
+    />
   );
 }
 
@@ -747,16 +785,29 @@ function DetailModal({
     { k: "年化换手", v: "21.8x" },
   ];
 
+  // null/缺失/NaN → 「N/A · 未算」中性色，绝不 default 0 再上成功绿（§3 不假绿灯）。
+  const pboKnown = data.pbo !== null && Number.isFinite(data.pbo);
+  const dsrKnown = data.dsr !== null && Number.isFinite(data.dsr);
   const overfit = [
     {
       k: "PBO (CSCV)",
-      v: data.pbo.toFixed(2) + (data.pbo < 0.5 ? " 容差内" : " 超容差"),
-      color: data.pbo < 0.5 ? "var(--desk-success)" : "var(--desk-danger)",
+      v: pboKnown
+        ? data.pbo!.toFixed(2) + (data.pbo! < 0.5 ? " 容差内" : " 超容差")
+        : "N/A · 未算",
+      color: pboKnown
+        ? data.pbo! < 0.5
+          ? "var(--desk-success)"
+          : "var(--desk-danger)"
+        : "var(--desk-text-faint)",
     },
     {
       k: "Deflated Sharpe",
-      v: data.dsr.toFixed(2) + " · p<0.01",
-      color: data.dsr > 0 ? "var(--desk-success)" : "var(--desk-danger)",
+      v: dsrKnown ? data.dsr!.toFixed(2) + " · p<0.01" : "N/A · 未算",
+      color: dsrKnown
+        ? data.dsr! > 0
+          ? "var(--desk-success)"
+          : "var(--desk-danger)"
+        : "var(--desk-text-faint)",
     },
     { k: "honest-N", v: "N_eff = 42", color: "var(--desk-text-soft)" },
     { k: "样本外占比", v: "2024 全年留出", color: "var(--desk-success)" },

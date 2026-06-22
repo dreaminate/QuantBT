@@ -81,6 +81,53 @@ describe("R1 RunVerdictCard · 多证据三角第三腿（Bootstrap CI · DS-3 #
   });
 });
 
+describe("U3 RunVerdictCard · PBO/DSR null 诚实（§3 不假绿灯）", () => {
+  it("pbo=null → 显 N/A 中性色，绝不渲染成功绿「0.00」", () => {
+    renderWithDesk(<RunVerdictCard data={makeData({ pbo: null })} />);
+    const pboLabel = screen.getByText("PBO");
+    // 同行（StatPair）的值格：N/A，且不是「0.00」。
+    const row = pboLabel.parentElement as HTMLElement;
+    const valueCell = within(row).getByText("N/A");
+    expect(valueCell).toBeInTheDocument();
+    // 中性色（对齐 BootstrapStat N/A），绝不成功绿/危险红。
+    expect(valueCell).toHaveStyle({ color: "var(--desk-text-faint)" });
+    expect(valueCell).not.toHaveStyle({ color: "var(--desk-success)" });
+    // 种坏门必抓：未算 PBO 绝不渲染健康绿「0.00」。
+    expect(within(row).queryByText("0.00")).toBeNull();
+  });
+
+  it("dsr=null → 显 N/A 中性色，绝不渲染成功绿/「0.00」", () => {
+    renderWithDesk(<RunVerdictCard data={makeData({ dsr: null })} />);
+    const dsrLabel = screen.getByText("DSR");
+    const row = dsrLabel.parentElement as HTMLElement;
+    const valueCell = within(row).getByText("N/A");
+    expect(valueCell).toHaveStyle({ color: "var(--desk-text-faint)" });
+    expect(valueCell).not.toHaveStyle({ color: "var(--desk-success)" });
+    expect(within(row).queryByText("0.00")).toBeNull();
+  });
+
+  it("有限数仍套健康判据上色：pbo<0.5 → 绿；pbo≥0.5 → 红", () => {
+    const { rerender } = renderWithDesk(
+      <RunVerdictCard data={makeData({ pbo: 0.18 })} />,
+    );
+    const ok = screen.getByText("0.18");
+    expect(ok).toHaveStyle({ color: "var(--desk-success)" });
+    rerender(<RunVerdictCard data={makeData({ pbo: 0.7 })} />);
+    const bad = screen.getByText("0.70");
+    expect(bad).toHaveStyle({ color: "var(--desk-danger)" });
+  });
+
+  it("modal 过拟合体检：pbo/dsr=null → 显「N/A · 未算」中性色（不假绿灯/不崩）", () => {
+    renderWithDesk(<RunVerdictCard data={makeData({ pbo: null, dsr: null })} />);
+    fireEvent.click(screen.getByText("卡内预览"));
+    const modal = screen.getByTestId("verdict-detail-modal");
+    const q = within(modal);
+    // 两格（PBO (CSCV) / Deflated Sharpe）均落 N/A · 未算，非「0.00 容差内」绿。
+    expect(q.getAllByText("N/A · 未算").length).toBe(2);
+    expect(q.queryByText(/0\.00 容差内/)).toBeNull();
+  });
+});
+
 describe("R1 RunVerdictCard · 对抗测试①：禁止 import 冻结页", () => {
   it("源码不含 frontend-run-detail 冻结 RunDetailPage 的 import", () => {
     expect(() => assertNoFrozenPageImport(SOURCE)).not.toThrow();
