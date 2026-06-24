@@ -41,8 +41,29 @@ opt-in 启用（impact_coef>0）时：**须 volume 列**（估 ADV），无则 *
 - `app/execution/backtest_venue.py`：现有 `_cost_for_trade`（commission/slippage/stamp/transfer），冲击项**加**不替换。
 - `app/factor_factory/lifecycle_metrics.py` `strategy_capacity`：同 sqrt-impact 物理，交叉校验测试绑定（不跨模块产依赖，靠测试守一致）。
 
+## 扩张窗 as-of 无泄露自估（resolves P2 0f696e56 · 数学先行）
+**问题**：原自估用**全样本** ADV/σ（`mean(全部 volume)` / `std(全部 close 收益)`）作每笔成交的流动性输入 → 早期成交的参与率 `Q/ADV` 被**未来** bar 的流动性稀释、σ 含未来波动 = **前视泄露**，回测冲击偏乐观。
+
+**修正（扩张窗 as-of 估计）**：设信息流 `F_{t⁻}` = 严格早于 `t` 的全部已实现数据。成交在 bar `t`（市价单于 `t` 开盘成交，故 `t` 当根的量/收益在成交时**尚未实现**）。定义仅依赖 `F_{t⁻}` 的估计：
+
+$$\widehat{\mathrm{ADV}}_{t^-}=\frac{1}{|D_{<t}|}\sum_{d\in D_{<t}}V_d,\quad D_{<t}=\{\text{严格早于 }t\text{ 所在日的已完成日}\};\qquad \widehat{\sigma}_{t^-}=\operatorname{std}_{\text{ddof}=1}\{r_i: r_i\text{ 于 }<t\text{ 实现}\}$$
+
+其中日内 datetime 按**日**聚合量（当日不计入，避免 √(bars/日) 抬升），收益 `r_i=C_i/C_{i-1}-1` 于 bar `i` 收盘实现、故 bar `t` 只用 `r_1..r_{t-1}`。
+
+**无泄露性（证）**：每个被求和的 `V_d` / `r_i` 都在 `<t` 时刻实现 ⇒ 估计量是 `F_{t⁻}`-可测的确定函数 ⇒ 成交冲击只依赖 `F_{t⁻}`，**不可能**依赖 `≥t` 的数据 ∎。判别性命门：向序列**追加任意未来 bar**（量/σ 任意放大）**不得**改变任一早期成交的冲击——全样本估计会变（泄露）、扩张窗 as-of 不变（leak-free 的牙）。
+
+**warmup（诚实处置·不假绿灯·裁决纯由 F_{t⁻} 驱动）**：`|D_{<t}|=0`（首日）或 prior 收益 <2（`t<3`）⇒ 估计在 `F_{t⁻}` 上未定义。**绝不**偷看未来补估，也**不**对该笔静默假装 0 成本——该笔**不计冲击但计数+披露**（`venue._impact_warmup_fills` + 一次性 warning）。**关键（评审 PROBE H 修正）**：warmup-vs-charge 的裁决**只看成交 ts 的 as-of 估计（F_{t⁻}）**，**绝不**用「全样本 `max(volume)>0`」之类含未来的信号判定——否则早期成交的 skip/charge 离散决策会被**未来 bar** 翻转（构成残余前视、且让缺流动性成交伪装成 warmup 静默放过=假绿灯）。「symbol 全样本无 volume」的硬 fail-fast 只保留在 **ts=None 终端路径**（汇总/直接调用，序列末无未来⇒非泄露）；replay 每笔成交一律走 F_{t⁻} as-of，估不出即 warmup-披露。一致性：随历史增长 `\widehat{\cdot}_{t^-}→` 全样本值（LLN），早期估计方差大（披露）；扩张窗剔除的正是全样本估计的乐观偏向。
+
+**ts=None 回退**：直接调用（非 replay、无成交 ts）退化到**终端全样本**标量（序列末无「未来」⇒ 末端点估计用全样本非泄露），供单测/汇总；replay 路径恒传 ts → 走 as-of。
+
+## 复用 [按需]
+- `app/execution/backtest_venue.py`：现有 `_cost_for_trade`（commission/slippage/stamp/transfer），冲击项**加**不替换。
+- `app/factor_factory/lifecycle_metrics.py` `strategy_capacity`：同 sqrt-impact 物理，交叉校验测试绑定（不跨模块产依赖，靠测试守一致）。
+
 ## 未验证残余（诚实）[必填]
-- **ADV/σ 估计**：用回测面板内 volume 均值 / close 收益 std（样本内估计）；真实生产应用滚动/前视无泄露的 ADV/σ（本切片估计口径 docstring 标，未做滚动）。
+- ~~**ADV/σ 估计**：用回测面板内 volume 均值 / close 收益 std（样本内估计）；真实生产应用滚动/前视无泄露~~ → **已解决**（上「扩张窗 as-of 无泄露自估」节，P2 0f696e56 闭环）：replay 每笔成交用 `F_{t⁻}` as-of ADV/σ、warmup 计数披露、追加未来 bar 不改早期冲击（leak-free 判别测试守）。显式点位 ADV/σ 仍是稳态推荐口径。
+- **日内 σ 量纲**：扩张窗 σ 用 close 收益 std（与原口径一致）；日内 datetime 下 ADV 按日聚合、σ 仍是 per-bar 收益 vol → 与 daily-ADV 参与率存在量纲不齐（高频下偏小），与 leak-free 正交、属原口径残余（中低频日频不触发）。
+- **同 symbol 重复 ts**：as-of map 按 ts 建键，同 symbol 同 ts 多行 last-write-wins（评审 low）；`_timestamps` 去重 + 日频唯一 ts 假设下 replay 不触发；如喂重复 ts 面板需上游去重。
 - **Y 冲击系数**：须用户/校准提供（同容量切片），无万能默认；启用时由调用方给。
 - **参与率适用域**：sqrt 律仅合理参与率可信，极大单未加 participation cap（docstring 披露）。
 - **接线**：默认关、opt-in；接进交付门回测预设（三档成本）的生产默认属后续（建议 mint）。

@@ -73,6 +73,7 @@
 | d5ea778c | 共享 Agent 对话 + Inspector + Dock 组件 | done | frontend-foundation | done |
 | d718d5c5 | §5 生产期漂移检测器（rolling-PSR/CUSUM/Page-Hinkley/PSI）+ 理论不变量命门 | done | monitor | done |
 | d93dc5a0 | 裁决卡 RunVerdictCard + 回测详情顶栏/血缘入口（非冻结） | done | frontend | done |
+| d9bf88b1 | sqrt-impact 自估 ADV/σ 扩张窗 as-of 无泄露（根治回测前视泄露） | done | execution-cost | done |
 | de764e1c | 监控生产调度 + 因子观测记录管道——让 monitor_tick 在生产真跑 | done | monitor | done |
 | defe660c | DS-2 造站接真——Agent台默认接真 + 无key slot-filling 真落库 + Hermes 预设（Fork1=C+Hermes） | done | agent-frontend | done |
 | e069d820 | 裁决卡后端接线 — verdict/overfit/cost-sensitivity/promote/热力 端点 + 措辞合规 | done | backend | done |
@@ -86,7 +87,6 @@
 
 | uuid8 | 标题 | status | area |
 |---|---|---|---|
-| 0f696e56 | 平方根冲击 ADV/σ 滚动无泄露自估（消除回测前视泄露） | todo | execution-cost |
 | 31289338 | 冷启动 gate/UI 接 MinTRL：DSR=N/A + PSR + "需 N 期"渐进披露（R25/R27 呈现层） | todo | eval-methodology |
 | 861182e6 | CPCV 接 promote/overfit gate + cv_scheme 双轨 report（价值闭环） | todo | eval-methodology |
 | 92a2182f | conformal 区间消费侧接线——模型台/信号层预测附校准区间 + abstain UI 呈现 | todo | eval-methodology |
@@ -135,6 +135,7 @@
 | eval-methodology | b1e4efdf · done | dreaminate |
 | eval-methodology | d4a324ae · done | dreaminate |
 | execution-cost | 7179ba36 · done | dreaminate |
+| execution-cost | d9bf88b1 · done | dreaminate |
 | factor-lifecycle | b12de4f5 · done | dreaminate |
 | frontend | 3d95e0f6 · done | dreaminate |
 | frontend | 5e47b82f · done | dreaminate |

@@ -928,6 +928,42 @@ def test_sqrt_impact_equals_capacity_cost_cross_check():
         assert abs(tau * frac - a) < 1e-9 * max(1.0, a), f"seed={s} 冲击↔容量不一致"
 
 
+def test_expanding_impact_is_filtration_measurable_future_invariant():
+    """**命门·扩张窗 as-of 无泄露**：自估冲击是 F_{t⁻}-可测 ⇒ 早期成交(<t)的冲击对**任意未来 bar 的改写不变**。
+
+    定理（finding「扩张窗 as-of 无泄露自估」）：ADV_{t⁻}/σ_{t⁻} 仅由严格早于 t 的已实现量/收益构成 ⇒
+    确定地是 F_{t⁻}-可测 ⇒ 成交冲击不依赖 ≥t 的数据。判别性：两序列共享早期 bar(<split)、未来 bar(≥split)
+    量/价任意不同 → 早期成交冲击**逐位相等**；全样本(前视)估计会随未来而变 → 本测立崩、抓泄露回归。
+    """
+    import warnings as _w
+
+    import polars as pl
+
+    from app.execution.backtest_venue import BacktestCostModel, BacktestVenue
+
+    for s in range(40):
+        rng = np.random.default_rng(120_000 + s)
+        n, split = 30, 15
+        close = 100.0 * np.exp(np.cumsum(rng.standard_normal(n) * 0.02))
+        vol_early = rng.uniform(500.0, 5000.0)
+
+        def _panel(vol_late: float, price_mult: float, c=close, sp=split, nn=n, ve=vol_early) -> "pl.DataFrame":
+            cl = c.copy()
+            cl[sp:] = cl[sp:] * price_mult                       # 未来 bar 价任意改写（不应影响 <split 冲击）
+            vol = [ve] * sp + [vol_late] * (nn - sp)
+            return pl.DataFrame({"ts": list(range(nn)), "symbol": ["X"] * nn, "open": cl,
+                                 "high": cl * 1.01, "low": cl * 0.99, "close": cl, "volume": vol})
+
+        with _w.catch_warnings():
+            _w.simplefilter("ignore")
+            va = BacktestVenue(_panel(vol_early, 1.0), BacktestCostModel(commission_bps=0, slippage_bps=0, impact_coef=0.4))
+            vb = BacktestVenue(_panel(vol_early * 50.0, 3.0), BacktestCostModel(commission_bps=0, slippage_bps=0, impact_coef=0.4))
+        ca = va._cost_for_trade("buy", 40, 100.0, "X", ts=8)     # bar8 仅用 <bar8（<split）历史
+        cb = vb._cost_for_trade("buy", 40, 100.0, "X", ts=8)
+        assert ca == cb > 0.0, f"seed={s} 早期成交冲击随未来变（前视泄露）：{ca} vs {cb}"
+        assert va._impact_adv["X"] != vb._impact_adv["X"]        # 终端全样本确随未来不同 → 证未来真变了
+
+
 # ===========================================================================
 # R27 冷启动 MinTRL — 最小业绩期长度（PSR 的解析反解）
 #   设计/推导：dev/research/findings/dreaminate/mintrl-cold-start.md

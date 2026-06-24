@@ -386,3 +386,9 @@
 - **对抗验证（10 条待办 claim · 每条独立 skeptic 默认当误报）**：真该现在修 3（OOS 已修 / agent-live-mock LIVE 批准门重放 mock 脚本 / jobsdeck selJob 卡 mock id，后两待拍）；**误报 2**（SharedStrategies 刷赞被后端 PK 去重推翻、PaperDesk 双击双审批被后端 self.lock+GateStateError+幂等三护栏推翻）；**死代码 1**（Runs WS 是 stub 永不触发）；其余 mock/低影响 later。**H3「Runs 涨跌色反转」确认误报**——A 股「红涨绿跌」正确惯例，不改（防回潮，见 D-FE-REVIEW）。
 - **入库纪律（D-GITIGNORE-ARTIFACTS）**：gitignore `graphify-out/`（52MB 生成产物）+ `data/strategy/`；demo 示例数据仍入库。push 前凭据扫描 0 命中。
 - **land**：**已 push origin/fullstack**（c213583 主体 + cb2a083 gitignore，138 文件；用户拍板「全部工作区一起推、去掉生成产物」）。dev/ 账本本次同步补记。
+
+## 2026-06-25 · sqrt-impact 扩张窗 as-of 无泄露根治（done 卡 d9bf88b1 / 池卡 0f696e56 闭）
+- **根治前视（look-ahead 红线）**：sqrt-impact 自估 ADV/σ 从全样本（含未来 bar）改**扩张窗 as-of**——replay 每笔成交按 ts 只用 `F_{t⁻}`（datetime 按日聚合「严格早于当日」+ int ts 前缀均量 + σ 扩张 std 只用 r_1..r_{t-1}）；`step` 传 next_ts；终端标量仅 ts=None 回退。warning 转 informational（无前视/扩张窗/warmup 披露）。数学推导补进 finding「扩张窗 as-of 无泄露自估」节。
+- **评审三角（deep-opus‖codex 互不知情 + 我裁决）挖出真 critical 并修**：① 初版用全样本 `max(volume)>0` 判 warmup-vs-fail-fast → PROBE H 实测「early bar 逐位相同、仅未来量不同 → 裁决翻转(raise vs warmup)」=残余前视 + 缺流动性伪装 warmup 假绿灯。**修**：warmup 裁决改纯 F_{t⁻} prefix 驱动、剔除全样本信号；未知 ts 改 warmup-披露不回退泄露终端值。② σ 通道测试无牙（原 leak-free 测试只扰量、close 相同）+ ADV 机制未钉死 → 补 σ-价测试 + 非平量机制测试，**MUT-A（σ 全样本）/MUT-B（lag-1）双 mutation 验证真有牙**（旧测漏、新测必抓）。
+- **验证**：全量后端 **1571 passed / 13 skipped / 0 failed**（基线 1564，净 +7）；PROBE H 修前(raise vs cost=0)→修后(两面板同 warmup)实证。**教训**：除 mutation 用定点反向 edit，**绝不 `git checkout` 带未提交改动的文件**（本轮误用一次、全切片实现被抹、已重建）。
+- **land main 待用户授权**（本轮 loop「commit 不擅自 push」→ 本地 commit、未 push）。
