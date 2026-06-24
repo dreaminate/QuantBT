@@ -346,6 +346,11 @@ ORDER_BROKER = _KeyBroker(KEYSTORE)
 RISK_MONITOR = RiskMonitor(RISK_LIMITS)
 KILL_SWITCH = KillSwitch([])  # 实盘 venue 启用时由 settings 注入
 
+# M（卡 de764e1c · D-WAVE1A 残余②）：监控生产调度。startup 才构造 Scheduler(strict=True) +
+# 注册 weekly 监控 DAG（让 monitor_tick 在生产真跑）。缺 croniter → strict=True 启动响亮失败
+# （绝不静默不 tick = paper-true）。调用方在 loop 里周期 tick；本进程级 holder 供运维/测试取句柄。
+PRODUCTION_SCHEDULER: "Scheduler | None" = None
+
 AGENT_SLOT_FILLER = StrategyGoalSlotFiller()
 CODE_REPLICATOR = CodeReplicator()
 # DS-2（造站接真 · blocker #2）：strategy_goal.create 校验落库产真 goal_id（被 DS-1 backtest 消费）。
@@ -436,9 +441,30 @@ def _agent_runtime(run_id: str | None = None, permission_mode: str = "auto", sys
     return runtime
 
 
+def _start_production_monitor_scheduler() -> "Scheduler":
+    """构造生产 `Scheduler(strict=True)` + 注册 weekly 监控 DAG（卡 de764e1c）。
+
+    扩展不替换：在既有 startup 钩子里加监控调度起点，不动其它启动逻辑。
+    - strict=True：缺 croniter → 构造即 raise（响亮失败），绝不让监控 tick 静默不跑（paper-true 红线）。
+    - 幂等：startup 可能被多次触发（如多个 TestClient），重复构造/重复 `.add` 同名 DAG 仅覆盖，无副作用。
+    返回 scheduler 句柄（也存进 PRODUCTION_SCHEDULER 进程级单例，供运维 loop tick / 测试取用）。
+    """
+
+    global PRODUCTION_SCHEDULER
+    from .dag.engine import Scheduler  # 局部导入：与 dag 包解耦，按需起调度
+    from .monitor.production import build_weekly_monitor_dag
+
+    scheduler = Scheduler(strict=True)  # 缺 croniter → 此处响亮失败
+    scheduler.add(build_weekly_monitor_dag())  # 周一早 9 点跑监控扫描（monitor_tick 生产真跑）
+    PRODUCTION_SCHEDULER = scheduler
+    _main_logger.info("生产监控调度已启动：weekly_factor_monitor cron=0 9 * * 1")
+    return scheduler
+
+
 @app.on_event("startup")
 def startup_event() -> None:
     ensure_runtime_dirs()
+    _start_production_monitor_scheduler()
 
 
 @app.get("/api/health")
