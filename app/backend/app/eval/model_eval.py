@@ -18,6 +18,8 @@ from typing import Any
 
 import numpy as np
 
+from .conformal import split_conformal_interval
+
 
 def _bar(id_: str, title: str, labels: list[str], values: list[float]) -> dict[str, Any]:
     return {"id": id_, "title": title, "kind": "bar", "labels": labels, "values": [float(v) for v in values]}
@@ -49,6 +51,52 @@ def _roc_curve(y_true: np.ndarray, y_score: np.ndarray) -> tuple[list[float], li
     _trap = getattr(np, "trapezoid", None) or np.trapz  # type: ignore[attr-defined]
     auc = float(_trap(tpr, fpr))
     return fpr.tolist(), tpr.tolist(), auc
+
+
+def conformal_prediction_band(result: dict[str, Any], alpha: float = 0.1) -> dict[str, Any] | None:
+    """从 OOS 残差 split-conformal 校准预测区间 + **真留出覆盖率**（仅回归；R23 闭环到模型台）。
+
+    时间序切 calib(前半)/test(后半，leak-free) → calib 残差建 `SplitConformalCalibrator` → 带半宽 q̂ →
+    在 test 上报**真·留出覆盖率**（非循环·非自证）。abstain（非回归 / 无 OOS / calib 不足 n<⌈1/α⌉−1）→
+    abstained=True，**绝不返假区间**（不假绿灯）。
+
+    **诚实限界（R5·exchangeability）**：conformal 边际覆盖保证依赖可交换；时序非平稳（calib 早/test 晚）
+    可能令实测覆盖偏离 1−α——note 披露，自适应版见 ACI（`eval/conformal.py`）。返回 None=不适用（分类/无 OOS）。
+    """
+
+    oos = result.get("oos_predictions") or {}
+    task = (result.get("spec") or {}).get("task", "")
+    y_true, y_pred = oos.get("y_true"), oos.get("y_pred")
+    # **白名单·仅 regression**（codex P2）：classification/lambdarank(排序)/未知任务的残差校准区间无意义——
+    # 残差 conformal 只对回归 y_true−y_pred 成立；对 rank 标签/分数发区间=假校准信号。非回归一律 None。
+    if task != "regression" or not y_true or not y_pred or len(y_true) != len(y_pred):
+        return None
+    resid = np.asarray(y_true, dtype=float) - np.asarray(y_pred, dtype=float)
+    n = int(resid.size)
+    mid = n // 2
+    calib, test = resid[:mid], resid[mid:]      # 时间序：前半校准、后半留出（leak-free）
+    iv = split_conformal_interval(calib, 0.0, alpha)
+    base = {"alpha": alpha, "target_coverage": round(1.0 - alpha, 4),
+            "n_calib": int(calib.size), "n_test": int(test.size)}
+    if iv.abstained:
+        return {**base, "abstained": True, "band_half_width": None, "empirical_coverage": None,
+                "note": f"OOS 校准集不足（n_calib={int(calib.size)}）：证据不足、不给校准区间（{iv.reason}）。"}
+    q = float(iv.upper)                          # 预测=0 → 区间 [−q, q]，q=带半宽
+    test_finite = test[np.isfinite(test)]        # 非有限 test 点剔除并披露（与 abstain 非有限口径统一）
+    n_eff = int(test_finite.size)
+    n_dropped = int(test.size - n_eff)
+    cov = float(np.mean(np.abs(test_finite) <= q)) if n_eff else None
+    return {
+        **base, "abstained": False, "band_half_width": round(q, 8),
+        "empirical_coverage": round(cov, 4) if cov is not None else None,
+        "n_test_dropped_nonfinite": n_dropped,
+        # 覆盖率用 .1% 显示（避免 .0% 把 sub-nominal 如 89.6% 进位成「90% 达标」假象）。
+        "note": (f"split-conformal 带 ±{q:.4g}（目标 {1 - alpha:.0%} 覆盖）；留出实测覆盖 {cov:.1%}"
+                 f"（n_test={n_eff}{('、剔非有限 ' + str(n_dropped)) if n_dropped else ''}）。单次覆盖含二项抽样噪声、"
+                 f"跨多次训练取均值方判校准；覆盖保证依赖可交换，时序非平稳可能偏离（自适应见 ACI）。"
+                 if cov is not None else
+                 f"split-conformal 带 ±{q:.4g}（目标 {1 - alpha:.0%}）；留出集无有效点、未实测覆盖。"),
+    }
 
 
 def build_eval_charts(result: dict[str, Any]) -> list[dict[str, Any]]:
@@ -167,4 +215,4 @@ def walk_forward_windows(result: dict[str, Any]) -> dict[str, Any]:
     }
 
 
-__all__ = ["build_eval_charts", "summarize_metrics", "walk_forward_windows"]
+__all__ = ["build_eval_charts", "conformal_prediction_band", "summarize_metrics", "walk_forward_windows"]

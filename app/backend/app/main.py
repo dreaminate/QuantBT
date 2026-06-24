@@ -1278,7 +1278,7 @@ def training_job_eval(job_id: str) -> dict:
     """训练结束的评价图（特征重要度/学习曲线/预测-实际/残差/ROC/分fold）。"""
     import json  # main.py 无模块级 json，函数内 import（与本文件其它端点一致）
 
-    from .eval.model_eval import build_eval_charts, summarize_metrics
+    from .eval.model_eval import build_eval_charts, conformal_prediction_band, summarize_metrics
 
     try:
         job = TRAINING_SERVICE.get_job(job_id)
@@ -1296,6 +1296,8 @@ def training_job_eval(job_id: str) -> dict:
         "family": job.family,
         "charts": build_eval_charts(result),
         "metrics": summarize_metrics(result),
+        # R23 闭环：回归 OOS 的 split-conformal 校准区间 + 真留出覆盖率（None=分类/无 OOS，不适用）。
+        "conformal_interval": conformal_prediction_band(result),
     }
 
 

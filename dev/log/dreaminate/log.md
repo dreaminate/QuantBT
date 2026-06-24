@@ -6,6 +6,17 @@
 ## <日期> · <标题>
 - 建/改了什么 + 命门  - 验收：<对抗测试 + 变异 + 全量数字>  - 下一步：<…> -->
 
+## 2026-06-25 · conformal 校准区间接进 model_eval——第二个价值闭环（卡 d4a324ae · D-CONFORMAL-MODELEVAL）
+
+- **缘起**：autonomous-loop。继续合拢价值闭环——选最大未接数学件 conformal（R23）接进模型台。
+- **实现（additive）**：`model_eval.conformal_prediction_band`——回归 OOS 残差按**时间序**切 calib(前半)/test(后半，leak-free)→ 复用 `split_conformal_interval` 算带 q̂ → 在 test 上报**真留出覆盖率**（非循环自证）；`training_job_eval` 加 `conformal_interval` 字段（additive，不破 charts/metrics）。命门实证：留出覆盖 α=0.1→0.901/α=0.05→0.948（跨 100 seed 匹配总体 k/(m+1)）。
+- **两轮独立复核全闭环（同型门牙缺口第三轮，措辞/判别路径）**：
+  - ① **Stop-hook codex 顾问 P2**：黑名单 `task=="classification"` 漏 **lambdarank(排序)** → 对排序 job 残差发假校准信号 → 改**白名单** `task!="regression"`（regression-only，classification/lambdarank/未知→None）。
+  - ② **多透镜评审 2 confirmed medium**：(a) 覆盖测试措辞「经验均值≥1−α=达标」=**假绿灯**——80-seed 均值 0.8986<0.90 靠 -0.01 slack 过；conformal 保证的是**总体**覆盖 k/(m+1)≈0.9005≥nominal，**经验均值是带噪估计可略低**，称「达标」违 §3 → 改**统计一致性断言**（|均值−k/(m+1)|≤几个 MC 标准误，核 k/(m+1)≥1−α 总体保证，去「达标」绿灯措辞）。(b) **核心命门「非循环·非自证」零牙**——种 test→calib 循环自证 bug（`np.mean(|calib|<=q)`、恒≈0.905）7 测全过=纸糊门（**正是用户在 worktree 种的 `# INJECTED BUG: self-validate on calib`**）→ 加 **σ1/σ3 非循环 sentinel**（calib σ1/test σ3 真留出覆盖 0.36<<0.9，循环自证会≈0.9 被抓）。low 修：.1% 显示去进位掩盖（89.6%≠「90%达标」）/test 非有限掩码披露/抽样噪声 caveat/__all__ 导出。
+  - **第三轮坐实同型盲区**（dsr sr_benchmark / banned-words / 此处循环自证）：我的测试一再"断言 happy-path 数字、不区分正确机制 vs 似真错误机制"。现都补成真有牙 sentinel。
+- **验证**：`test_model_eval_conformal.py` 9 + model_eval 6 回归 passed；**全量后端 1564 passed / 13 skipped / 0 failed**，基线 1554 未破。
+- **交付**：本轮 loop「commit 不擅自 push」→ 本地 commit、未 push。land main 待授权。下一步：继续合拢价值闭环或续方法学。
+
 ## 2026-06-25 · 冷启动 MinTRL 接进 run /overfit 投影——首个价值闭环合拢（卡 b1e4efdf · D-COLDSTART-WIRE）
 
 - **缘起**：autonomous-loop。CEO 透镜连续 6 切片指「数学对、未接到用户」（7 张 P2 接线卡累积）→ 本轮转向**合拢价值闭环**。评估各 P2：CPCV→gate 难（CPCV 需按折 fit-predict、gate 只见最终 returns）、lifecycle→退役是方法学拍板、cold-start→UI 是前端 + RunDetailPage 冻结 → 选**最低风险**：MinTRL 接 /overfit（R27 明言冷启动呈现层、不动治理闸门）。

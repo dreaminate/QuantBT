@@ -68,6 +68,7 @@
 | d0e5d208 | 监控→自动降级/退役/问责 尾部闭环接线（T-033 核验 gap 升级） | done | monitor | done |
 | d11d1426 | 暗色台地基 — desk 壳件 + design tokens + per-desk accent + 路由边界 | done | frontend-foundation | done |
 | d41b167d | Agent 窗口 D-PERM 反例 UI + self-approve 二次确认 | done | frontend | done |
+| d4a324ae | conformal 校准区间接进 model_eval（价值闭环·OOS 真留出覆盖率） | done | eval-methodology | done |
 | d4cb88f4 | DS-3 裁决接真——run_id 贯穿真裁决卡 + Bootstrap 第三腿前端补全 | done | frontend | done |
 | d5ea778c | 共享 Agent 对话 + Inspector + Dock 组件 | done | frontend-foundation | done |
 | d718d5c5 | §5 生产期漂移检测器（rolling-PSR/CUSUM/Page-Hinkley/PSI）+ 理论不变量命门 | done | monitor | done |
@@ -132,6 +133,7 @@
 | eval-methodology | 69e1cb16 · done | dreaminate |
 | eval-methodology | 6acbb499 · done | dreaminate |
 | eval-methodology | b1e4efdf · done | dreaminate |
+| eval-methodology | d4a324ae · done | dreaminate |
 | execution-cost | 7179ba36 · done | dreaminate |
 | factor-lifecycle | b12de4f5 · done | dreaminate |
 | frontend | 3d95e0f6 · done | dreaminate |
