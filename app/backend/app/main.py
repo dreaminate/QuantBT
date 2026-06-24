@@ -3572,6 +3572,114 @@ def promote_run_to_candidate(
     }
 
 
+@app.post("/api/portfolio/{portfolio_id}/promote")
+def promote_portfolio(
+    portfolio_id: str, payload: dict = Body(default_factory=dict), user=Depends(require_user_dependency)
+) -> dict[str, Any]:
+    """组合 promote 生产端点（D-WAVE1A 残余① · ba59fb7b）：组合三角 gate `record=True` 真记 honest-N。
+
+    `ide_promote_run`/`risk_preview` 的【组合层孪生 + record=True 版】：复用单一源 `LEDGER`/
+    `RETURNS_STORE`（一本账，绝不另造）调 `gate_portfolio(record=True, ...)` → 组合独立计入
+    `portfolio:<id>` 命名空间的 honest-N（与单策略串号物理隔离）。是 agent `portfolio.gate` 预览
+    工具（record=False、business_tools.py:5b）的 production 记账孪生：同一组输入契约。
+
+    诚实/PIT 铁律（gate 不自取数，避免前视——调用方喂【已实现】逐期收益，可经 D `load_panel(
+    as_of_known)` PIT join）：
+    - 结构非法（空 weights / 空 asset_returns / 空 markets / 非有限数值）→ 422，**不入账**。
+    - 不可评分（成分集与收益集无交集 → 组合净收益序列 < 2 点）→ 422 **入账前拒绝**：honest-N
+      不可改小（一本账无 set_n/delete），绝不用不可评分的 garbage 永久污染账本。
+    - 有效但样本太短（T≥2 但 < min_T）→ gate 诚实返 `insufficient_evidence`（200，非 HTTP 错误）+
+      照常入账（gate 能评分=一次真实多重检验）。
+    - 裁决 red/yellow → 200，**照常入账**（失败的试验也消耗一次多重检验，绝不靠不记账洗白 honest-N）；
+      `promoted=False`。promote 已记账 ≠ promote 已过闸。
+    - A2 放行（冷启动 PBO N/A）→ 透传 `pbo=None` + `all_agree_positive=False`（非完整三角、组合层
+      override，诚实标，绝不粉饰成三支同向）；强负仍 red（strong_neg 兜底守北极星不假绿灯）。
+
+    本端点不绕单一源：weights/asset_returns 原样透传 `gate_portfolio`（不归一权重、不改序、不改 key
+    大小写——任一都会改 config_hash、破 ADV2 重排同 hash 反作弊）；不接受 body 的 `record`/`ledger`/
+    `strategy_goal_ref`（防 honest-N 洗白：production 只一本账、record 恒 True）。
+    """
+
+    import math
+
+    from .lineage.ledger import HONEST_N_DISCLOSURE
+    from .portfolio.gate import gate_portfolio, portfolio_net_returns
+
+    # —— 结构校验（malformed request → 422，绝不 500、绝不入账）——
+    weights = payload.get("weights")
+    if not isinstance(weights, dict) or not weights:
+        raise HTTPException(status_code=422, detail="weights 须为非空 {symbol: weight}（先构建组合）")
+    asset_returns = payload.get("asset_returns")
+    if not isinstance(asset_returns, dict) or not asset_returns:
+        raise HTTPException(
+            status_code=422,
+            detail="asset_returns 须为非空 {symbol: [逐期已实现收益]}（调用方喂已实现收益，gate 不自取数防前视）",
+        )
+    markets = payload.get("markets")
+    if isinstance(markets, str):
+        markets = [m.strip() for m in markets.split(",") if m.strip()]
+    if not isinstance(markets, list) or not markets:
+        # 空 markets → strictest_asset_class 退化 crypto/252，静默放松 A股 504 min_T → 诚实硬拒。
+        raise HTTPException(
+            status_code=422,
+            detail="markets 须为非空列表（决定最严 min_T：任一成分 A股→504；空列表会静默放松门槛）",
+        )
+
+    # 数值强转（bad float → 422，绝不 500）。
+    try:
+        w_clean = {str(k): float(v) for k, v in weights.items()}
+        ar_clean = {str(k): [float(x) for x in v] for k, v in asset_returns.items()}
+    except (TypeError, ValueError) as exc:
+        raise HTTPException(status_code=422, detail=f"weights/asset_returns 含非数值: {exc}") from exc
+    if any(not math.isfinite(v) for v in w_clean.values()):
+        raise HTTPException(status_code=422, detail="weights 含非有限值（NaN/Inf）")
+    if any(not math.isfinite(x) for series in ar_clean.values() for x in series):
+        raise HTTPException(status_code=422, detail="asset_returns 含非有限值（NaN/Inf）")
+
+    # —— 不可评分前拒绝（入账前）：成分↔收益无交集 → 组合净收益 < 2 点 → 422，绝不入不可评分行污染账本 ——
+    net = portfolio_net_returns(w_clean, ar_clean)
+    if len(net) < 2:
+        raise HTTPException(
+            status_code=422,
+            detail="组合净收益序列不足 2 点（weights 与 asset_returns 无对齐成分）：无法评分，拒绝入账（honest-N 不可改小）",
+        )
+
+    freq = str(payload.get("freq") or "1d")
+    dataset_version = str(payload.get("dataset_version") or "unknown")
+
+    # —— 生产记账：复用单一源一本账（LEDGER/RETURNS_STORE 引用模块全局，便于测试 monkeypatch 隔离）——
+    try:
+        res = gate_portfolio(
+            portfolio_id=str(portfolio_id),
+            weights=w_clean,
+            asset_returns=ar_clean,
+            markets=markets,
+            freq=freq,
+            dataset_version=dataset_version,
+            ledger=LEDGER,                 # 单一源一本账：honest-N 真记账（不另造 store）
+            returns_store=RETURNS_STORE,
+            record=True,                   # production promote 恒记账（≠ 预览 record=False）
+        )
+    except (TypeError, ValueError) as exc:
+        raise HTTPException(status_code=422, detail=f"组合 gate 入参非法: {exc}") from exc
+
+    v = res.verdict
+    out = v.to_dict()
+    out.update({
+        "portfolio_id": str(portfolio_id),
+        "strategy_goal_ref": f"portfolio:{portfolio_id}",   # 独立命名空间（与单策略串号物理隔离）
+        "config_hash": res.config_hash,                      # 复用 ids 单一身份源
+        "honest_n": res.honest_n,                            # 该组合命名空间记账后名义 N（真值下界、不可改小）
+        "honest_n_disclaimer": HONEST_N_DISCLOSURE,          # 诚实免责，逐字（措辞黑名单守门）
+        "recorded": True,                                    # 已写一本账（confirmatory 试验，无论裁决色）
+        "promoted": v.color == "green",                      # 仅 green 视为过闸；记账 ≠ 过闸（诚实）
+        "net_len": len(net),                                 # PIT 对齐后实际入算长度（调用方可见截断）
+        "note": "组合 promote 已记 honest-N（一本账，portfolio:<id> 独立命名空间）。已记账≠已过闸；"
+                "冷启动 PBO=N/A 时 A2 凭 DSR+CI 双正放行(非完整三角)、过拟合仍 red。",
+    })
+    return out
+
+
 @app.get("/api/research/themes/{theme}/honest_n")
 def research_theme_honest_n(theme: str, user=Depends(require_user_dependency)) -> dict[str, Any]:
     """R2 一键下钻：暴露某研究主题的 honest-N（名义 distinct config 计数）+ 诚实免责。
