@@ -6,6 +6,19 @@
 ## <日期> · <标题>
 - 建/改了什么 + 命门  - 验收：<对抗测试 + 变异 + 全量数字>  - 下一步：<…> -->
 
+## 2026-06-25 · R27 冷启动 MinTRL（最小业绩期长度）+ PSR 反解命门 + 用户 mutation 抓门牙缺口（卡 6acbb499 · D-MINTRL-R27）
+
+- **缘起**：autonomous-loop 下一切片。MinTRL 未建、R27=确认「冷启动 N=1 剔 DSR、用 PSR/MinTRL + 显式证据不足」→ 自取（扩展已建 PSR、低风险、直击「能信」+ 降门槛：诚实告诉新用户"业绩期太短、还需 N 期"）。
+- **数学先行 + 并行思考**：落 `findings/dreaminate/mintrl-cold-start.md`（MinTRL=PSR 反解推导）；codex(xhigh) 确认是 PSR 精确反解 + 边界。
+- **实现（扩展不替换）**：`dsr.py` 加 MinTRLResult + minimum_track_record_length，denom² 与 PSR 同项同钳 → **n=MinTRL 时 PSR≡confidence**（实证 8.88e-16 机器精度）。SR≤SR*→+∞、n<3/N=1→insufficient（R27 不假装算出）、冷启动 sufficient=n≥⌈MinTRL⌉。
+- **对抗测试 + 命门**：`test_mintrl_cold_start.py` **10 passed** + 方法学不变量 **+2**（PSR↔MinTRL 反解 8.88e-16 / 单调边界）。
+- **两轮独立复核抓到 2 类同型「门牙缺口」全补（这轮的核心收获）**：
+  - ① **用户在 dsr.py 种 mutation `delta = sr_pp  # dropped sr_benchmark`**（RULES §2「种已知坏门必抓」）——精准戳中我盲区：**所有 MinTRL 测试都用 sr_benchmark=0**，此时 `sr_pp−0≡sr_pp`，mutation 完全隐形，**71 测全绿漏网**。诚实承认门牙缺口 → 补 sr_benchmark≠0 交叉校验（含正/负基准）→ 带 mutation 实测 **RED（max|Δz|=2.08≫1e-9）**、还原正确代码后绿 → 门有牙确认。
+  - ② **多透镜评审 1 confirmed medium**：`test_mintrl_cold_start_sufficiency_verdict` 在 seed=5 落 status='never_significant'（负 edge）→ 核心 `assert not sufficient` 被 `if status==ok` 跳过 → 评审注入「`>=` 翻 `<=`」回归 71 测仍全绿、ok+short 的 sufficient 语义零覆盖。→ 改**确定性构造**（sr_pp=0.05 短→证据不足 / sr_pp=0.3 长→达标）+ **无条件 assert** 钉死两路。
+  - **两条同属「测试过运气/未行权判别路径」**（与 §3 随机游走单种子、§5 NaN 同源教训）。低优：ceil 测试改纯矩确定性（去单种子重采样噪声）。
+- **验收**：**全量后端 1547 passed / 13 skipped / 0 failed**，基线 1534 未破。mint **P2 卡 31289338**（冷启动 gate/UI 接 MinTRL：DSR=N/A + PSR + "需 N 期"渐进披露，R25/R27 呈现层）。
+- **下一步**：land main 待用户授权；进下一切片（倾向开始合拢价值闭环/接 P2，已累计 7 张接线卡）。
+
 ## 2026-06-24 · R18 平方根市场冲击 回测成本项（size-aware）+ 容量交叉校验命门（卡 7179ba36 · D-SQRT-IMPACT-R18）
 
 - **缘起**：autonomous-loop 下一切片。审计发现回测成本 `BacktestCostModel` slippage 是平 bps 常数、随单量不变 → 大单成本系统性低估、大资金回测过优（接近「未复权价喂回测」级 P&L 失真）→ 自取（这次外科、直接接进真回测非孤岛）。

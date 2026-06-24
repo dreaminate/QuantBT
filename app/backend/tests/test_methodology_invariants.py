@@ -30,7 +30,12 @@ from math import comb
 import numpy as np
 import pytest
 
-from app.eval.dsr import _expected_max_sr, deflated_sharpe_ratio, probabilistic_sharpe_ratio
+from app.eval.dsr import (
+    _expected_max_sr,
+    deflated_sharpe_ratio,
+    minimum_track_record_length,
+    probabilistic_sharpe_ratio,
+)
 from app.eval.n_eff import NEFF_CONFIG_VERSION, n_eff_from_matrix
 from app.eval.pbo import cscv_pbo
 from app.eval.conformal import (
@@ -921,3 +926,57 @@ def test_sqrt_impact_equals_capacity_cost_cross_check():
         C = strategy_capacity(a, tau, adv, sig, impact_coef=Y).capacity
         frac = square_root_impact_fraction(tau * C / adv, sig, Y)
         assert abs(tau * frac - a) < 1e-9 * max(1.0, a), f"seed={s} 冲击↔容量不一致"
+
+
+# ===========================================================================
+# R27 冷启动 MinTRL — 最小业绩期长度（PSR 的解析反解）
+#   设计/推导：dev/research/findings/dreaminate/mintrl-cold-start.md
+# ===========================================================================
+
+
+def test_mintrl_is_exact_psr_inverse():
+    """**交叉校验命门**：n=MinTRL_real 时 z≡Φ⁻¹(confidence) ⇒ PSR≡confidence，∀ 随机正-edge 序列。
+
+    定理：MinTRL=1+denom²(Z_p/Δ)² 是 PSR(SR*)=p 的代数反解（denom² 与 PSR 同项同钳）。任何让 MinTRL
+    偏离 PSR（denom 不一致 / √(n−1)↔n / 双侧 Z_p）的改动都让此恒等变红。
+    """
+    from scipy.stats import norm as _norm
+
+    worst = 0.0
+    cnt = 0
+    for s in range(150):
+        rng = np.random.default_rng(90_000 + s)
+        r = rng.standard_normal(int(rng.integers(60, 500))) * rng.uniform(0.005, 0.02) + rng.uniform(0.0006, 0.003)
+        sr_pp_est = float(r.mean() / r.std(ddof=1))
+        # **含非零基准**（正/负）——否则 sr_pp−SR* 的 SR* 项未被行权（dropped sr_benchmark mutation 漏网）。
+        for bench in (0.0, 0.5 * sr_pp_est, -0.3 * abs(sr_pp_est)):
+            for conf in (0.9, 0.95, 0.99):
+                m = minimum_track_record_length(r, bench, conf)
+                if m.status != "ok":
+                    continue
+                sr_pp = m.sr_per_period
+                denom2 = max(1e-12, 1 - _skew_local(r) * sr_pp + (_kurt_local(r) + 2) / 4 * sr_pp ** 2)
+                z = (sr_pp - bench) * math.sqrt(m.min_trl - 1) / math.sqrt(denom2)   # 正确 Δ 含 −bench
+                worst = max(worst, abs(z - _norm.ppf(conf)))
+                cnt += 1
+    assert cnt > 50 and worst < 1e-9, f"MinTRL↔PSR 反解不吻合 max|Δz|={worst:.2e} (n={cnt})（疑 dropped sr_benchmark）"
+
+
+def test_mintrl_monotone_and_boundaries():
+    """confidence↑→MinTRL↑；SR_pp≤SR*→+∞(never_significant)；n<3→insufficient。"""
+    r = np.random.default_rng(91_001).standard_normal(400) * 0.01 + 0.0015
+    ms = [minimum_track_record_length(r, 0.0, c).min_trl for c in (0.9, 0.95, 0.99)]
+    assert ms[0] < ms[1] < ms[2]
+    neg = np.random.default_rng(91_002).standard_normal(400) * 0.01 - 0.002
+    assert minimum_track_record_length(neg, 0.0, 0.95).status == "never_significant"
+    assert minimum_track_record_length(np.array([0.01, 0.02]), 0.0, 0.95).status == "insufficient"
+
+
+def _skew_local(arr):
+    from app.eval.dsr import _skew
+    return _skew(arr)
+
+
+def _kurt_local(arr):
+    from app.eval.dsr import _kurt_excess
+    return _kurt_excess(arr)

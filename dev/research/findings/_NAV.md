@@ -19,6 +19,7 @@
 - `dreaminate/cpcv.md` — FINDING · R4 CPCV（Combinatorial Purged Cross-Validation）多路径回
 - `dreaminate/drift-detectors.md` — FINDING · §5 生产期漂移检测器（rolling-PSR / CUSUM / Page-Hinkley / P
 - `dreaminate/factor-lifecycle-institutional.md` — FINDING · §3 因子机构级生命周期度量（衰减半衰期 / 容量 / 因子族 / 拥挤）
+- `dreaminate/mintrl-cold-start.md` — FINDING · R27 冷启动 MinTRL（最小业绩期长度）+ 诚实"证据不足"
 - `dreaminate/spine-designs/00-contracts-and-coherence.md` — 00 · 脊柱跨部件契约一致性 + 测试真实性复核
 - `dreaminate/spine-designs/01-deterministic-kernel.md` — 01 · 确定性 DAG 内核 + checkpoint/replay/fork/rollback + 交易副作用不可幂
 - `dreaminate/spine-designs/02-llm-record-replay.md` — 02 · LLM 节点 record/replay 确定性 + 受控翻译层
