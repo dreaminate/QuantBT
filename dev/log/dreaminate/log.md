@@ -6,6 +6,16 @@
 ## <日期> · <标题>
 - 建/改了什么 + 命门  - 验收：<对抗测试 + 变异 + 全量数字>  - 下一步：<…> -->
 
+## 2026-06-24 · §3 因子机构级生命周期度量（衰减/容量/因子族/拥挤）+ 命门（卡 b12de4f5 · D-LIFECYCLE-§3）
+
+- **缘起**：autonomous-loop 下一切片。M11 确认「toy 五态机 / 机构级（衰减/拥挤/容量/因子族）未做」→ 自取 GOAL §3 度量层 4 件。
+- **数学先行 + 并行思考**：落 `findings/dreaminate/factor-lifecycle-institutional.md`（AR(1) 半衰期 / sqrt-impact 容量闭式推导 / 因子族相关聚类 / 拥挤定性 + 命门）；codex(xhigh) 复核——加固 **ρ 绝不 clip** / **容量 τ³ 标度** / corr-vs-距离阈钉清 / 拥挤结构隔离。
+- **实现（扩展不替换）**：`lifecycle_metrics.py`（lifecycle.py toy 五态机不动）；**n_eff 抽 `_cluster_labels` 单一聚类口径源**（因子族与 honest-N 同源、cross-check 守不漂）。**命门**：①半衰期绝不 clip ρ（ρ≥1→no_decay/ρ≤0→reversal/ρ̂>0.95 近单位根或 CI 跨0/1→unstable，机器门绝不对随机游走发 ok）②容量 δ=0.5 锁定不暴露入参（R18）、α≤0→no_edge、cost(C)≈α 自检、Y 占位诚实告警③因子族 n_families==n_eff.point 交叉校验 + 阈值不可调（防放水）④拥挤 CrowdingAdvisory 结构无任何减仓/动作字段（GOAL §3 禁自动减仓，R19）、missing≠crowding 0。
+- **对抗测试 + 命门层**：`test_factor_lifecycle_metrics.py` **25 passed** + 方法学不变量 **+6**（半衰期解析点 ρ=0.5→h=1 / ρ 不 clip sentinel / 容量精确标度 + 净 alpha=0 自检 / 因子族==n_eff 交叉校验 / 拥挤无动作字段机器钉死）。
+- **两轮独立复核全闭环（共 7 真问题）**：① **Stop-hook codex 顾问 3 条 P2**——零拥挤 falsy 陷阱（`0.0 or nan` 把有效零相关当 missing→修成 none）/ IC 跨 NaN 缺口拼接（先 arr[isfinite] 压扁 stitch→改原轴建对只丢跨缺口对）/ 因子族阈值 override 放水口（→锁定不暴露）；② **多透镜评审 4 confirmed**——随机游走 ρ=1 ~28% 种子假绿灯 + 测试单种子脆弱（→ρ̂>0.95 local-to-unity 降级 unstable，ρ=1 'ok' 占比降<10%、ρ=0.9 合法仍 100% ok；测试改多种子 sweep）/ 容量 δ 可改离 R18 锁定 0.5（自检循环抓不到→锁定不暴露）/ 容量 Y 占位无诚实告警（→告警）/ 拥挤等级阈值 override 放水（→锁定）+ 越界相关脏值（→insufficient）。数学核心经 correctness/governance/CEO/eng **4 透镜独立复跑全真**、对抗测试有真牙。low 清理：DRY 单一源 / 死 import·Literal / 4 dataclass to_dict / __init__ 导出。
+- **验收**：**全量后端 1518 passed / 13 skipped / 0 failed**（实跑 223s，机器负载偏慢但 `--timeout=120` 单测超时无触发=未卡，非 hang），基线 1487 未破。mint **P2 卡 aa13c3b0**（度量接 lifecycle 退役/sizing/组合独立性生产路径）。
+- **下一步**：land main 待用户授权；进下一切片。
+
 ## 2026-06-24 · R4 CPCV（Combinatorial Purged CV）多路径回测 + 组合学/防泄露命门（卡 41ea6e35 · D-CPCV-R4）
 
 - **缘起**：autonomous-loop 下一切片。确认 GOAL §4「CPCV 双轨 walk-forward（R4）」中 CPCV 多路径**未建**（`models/purged_cv.py` 只有单路径 purged k-fold；pbo.py 的 cscv_pbo 是 PBO 用对称 CV ≠ CPCV 路径生成）→ 自取扩展。数学最密 + correctness-critical（防泄露 + 多路径分布喂已建 PBO/DSR 命门）。

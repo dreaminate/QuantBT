@@ -46,6 +46,13 @@ from app.models.cpcv import (
     n_cpcv_combinations,
     n_cpcv_paths,
 )
+from app.factor_factory.lifecycle_metrics import (
+    CrowdingAdvisory,
+    crowding_advisory,
+    factor_families,
+    ic_decay_half_life,
+    strategy_capacity,
+)
 from app.monitor.drift import (
     _page_hinkley_global_mean_variant,
     cusum_drift,
@@ -810,3 +817,70 @@ def test_cpcv_purge_blocks_label_leakage_and_segmented_not_global():
     mid = splits[[s.test_groups for s in splits].index((0, n - 1))]
     mid_group_samples = np.where(go == n // 2)[0]
     assert np.any(np.isin(mid_group_samples, mid.train_idx)), "中间 group 合法 train 被误删（疑用全局区间 purge）"
+
+
+# ===========================================================================
+# §3 因子机构级生命周期度量 — 衰减半衰期 / 容量 / 因子族 / 拥挤
+#   设计/推导：dev/research/findings/dreaminate/factor-lifecycle-institutional.md
+# ===========================================================================
+
+
+def test_decay_half_life_formula_exact_on_noiseless_geometric():
+    """h=ln(0.5)/ln(ρ) 在无噪声几何序列上精确：ρ=0.5→h=1、ρ=√0.5→h=2、ρ=0.25→h=0.5。
+
+    定理：纯几何 ICₜ=ρ·ICₜ₋₁ ⇒ OLS ρ̂=ρ 精确 ⇒ h 由公式定。任何把 h 算错（如 ln(ρ)/ln(0.5) 倒置）都被抓。
+    """
+    for rho, expect_h in ((0.5, 1.0), (0.5 ** 0.5, 2.0), (0.25, 0.5), (0.5 ** 0.25, 4.0)):
+        ic = rho ** np.arange(120, dtype=float)            # 无噪声几何衰减
+        d = ic_decay_half_life(ic)
+        assert abs(d.rho - rho) < 1e-6, f"ρ̂={d.rho} ≠ {rho}"
+        assert abs(d.half_life - expect_h) < 1e-6, f"ρ={rho} h={d.half_life} ≠ {expect_h}"
+
+
+def test_decay_rho_strictly_not_clipped_sentinel():
+    """Sentinel（门有牙）：爆炸几何（ρ=1.05）必判 no_decay/ρ̂≥1，**绝不**clip 成 status=ok 的有限半衰期。"""
+    ic = 1.05 ** np.arange(120, dtype=float)
+    d = ic_decay_half_life(ic)
+    assert d.rho >= 1.0 and d.status == "no_decay" and not math.isfinite(d.half_life)
+
+
+def test_capacity_exact_scaling_law():
+    """容量精确标度 C=ADV·α²/(τ³Y²σ²)：跨参数逐一核 τ³/α²/ADV¹/σ⁻²/Y⁻²。"""
+    base = strategy_capacity(0.002, 0.1, 1e8, 0.02, impact_coef=0.1).capacity
+    assert abs(strategy_capacity(0.002, 0.3, 1e8, 0.02).capacity / base - 1 / 27) < 1e-9   # τ×3 → /27
+    assert abs(strategy_capacity(0.006, 0.1, 1e8, 0.02).capacity / base - 9.0) < 1e-9       # α×3 → ×9
+    assert abs(strategy_capacity(0.002, 0.1, 3e8, 0.02).capacity / base - 3.0) < 1e-9       # ADV×3 → ×3
+    assert abs(strategy_capacity(0.002, 0.1, 1e8, 0.06).capacity / base - 1 / 9) < 1e-9     # σ×3 → /9
+    assert abs(strategy_capacity(0.002, 0.1, 1e8, 0.02, impact_coef=0.3).capacity / base - 1 / 9) < 1e-9  # Y×3 → /9
+
+
+def test_capacity_net_alpha_zero_definition():
+    """容量定义自检：cost(C)==α_gross（净 alpha=0）∀ 随机合法参数。"""
+    for s in range(100):
+        rng = np.random.default_rng(s)
+        a = rng.uniform(1e-4, 1e-2); tau = rng.uniform(0.02, 0.5)
+        adv = rng.uniform(1e6, 1e9); sig = rng.uniform(0.005, 0.05); Y = rng.uniform(0.05, 0.5)
+        C = strategy_capacity(a, tau, adv, sig, impact_coef=Y).capacity
+        cost = tau * Y * sig * (tau * C / adv) ** 0.5
+        assert abs(cost - a) < 1e-9 * max(1.0, a), f"seed={s} cost(C)≠α"
+
+
+def test_factor_families_equals_neff_invariant():
+    """**交叉校验命门**：因子族数 == n_eff 点估计 ∀ 随机收益矩阵（同一锁定聚类口径，绑 honest-N R8/R19）。
+
+    任何让因子族聚类口径偏离 n_eff（阈值/linkage/距离漂移）的改动都会让两路不吻合、本测变红。
+    """
+    for s in range(40):
+        rng = np.random.default_rng(500 + s)
+        rm = rng.standard_normal((300, int(rng.integers(2, 14)))) * 0.01
+        assert factor_families(rm).n_families == n_eff_from_matrix(rm).point, f"seed={s} 因子族口径漂移"
+
+
+def test_crowding_advisory_schema_forbids_action_fields():
+    """命门红线（机器钉死）：拥挤咨询 schema 恒只含 {level,data_status,evidence}，无任何减仓/动作字段（GOAL §3）。"""
+    assert set(CrowdingAdvisory.__dataclass_fields__) == {"level", "data_status", "evidence"}
+    a = crowding_advisory(basket_correlation=0.95, data_complete=True)
+    for forbidden in ("reduce_position", "haircut", "multiplier", "trade_action", "target_weight", "order", "size"):
+        assert not hasattr(a, forbidden)
+    # 数据不足绝不编码成 none（missing≠不拥挤）
+    assert crowding_advisory().level != "none"

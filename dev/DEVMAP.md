@@ -50,6 +50,7 @@
 | a367bfc8 | paper testnet 真喂 provider——加密 testnet 实时 bar/mark（用户「都做」可选档） | done | paper | done |
 | a75c4beb | Agent 窗口产物工作区 — 8 产物卡 + Strategy.yaml + Report.md | done | frontend | done |
 | b106177f | 因子台后端接线 — 暴露已有 compute + 相关性/分层回测 + alpha审查 | done | backend | done |
+| b12de4f5 | §3 因子机构级生命周期度量（衰减半衰期/容量/因子族/拥挤）+ 命门 | done | factor-lifecycle | done |
 | b2682edc | Model台前端 P0 — 4 子台像素还原 + mock(作业/注册表/构建draw.io/研究) | done | frontend | done |
 | b961f08b | Agent 后端工具补全 — 4 schema+handler + stream 结构化事件 + handoff | done | agent | done |
 | b9af7c82 | 共享画布引擎 — GraphCanvas / NodeCard / EdgeLayer / MiniMap（pan·zoom·连线·框选） | done | frontend-foundation | done |
@@ -83,6 +84,7 @@
 |---|---|---|---|
 | 861182e6 | CPCV 接 promote/overfit gate + cv_scheme 双轨 report（价值闭环） | todo | eval-methodology |
 | 92a2182f | conformal 区间消费侧接线——模型台/信号层预测附校准区间 + abstain UI 呈现 | todo | eval-methodology |
+| aa13c3b0 | 因子机构级度量接 lifecycle 状态机/sizing 生产路径 | todo | factor-lifecycle |
 
 ## 按 area 功能索引
 
@@ -122,6 +124,7 @@
 | docs | ecbd0eab · done | dreaminate |
 | eval-methodology | 41ea6e35 · done | dreaminate |
 | eval-methodology | 69e1cb16 · done | dreaminate |
+| factor-lifecycle | b12de4f5 · done | dreaminate |
 | frontend | 3d95e0f6 · done | dreaminate |
 | frontend | 5e47b82f · done | dreaminate |
 | frontend | 82120b9c · done | dreaminate |
