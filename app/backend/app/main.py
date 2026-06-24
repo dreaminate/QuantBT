@@ -211,7 +211,8 @@ def _seed_paper_runs() -> None:
 def _prime_pending_seed(run_id: str) -> None:
     """惰性补 prime 单个 seed run（首次访问触发）：喂模拟 bars 跑出真净值序列（非空壳）。
 
-    确定性合成模拟游走（deterministic_sim_walk，非真样本回放）。幂等（prime_run 自身复位）；
+    数据源按市场分流：crypto 配捆样本→真 BTC close 回放(bundled_sample_replay)，无样本市场(A股)→
+    确定性合成游走兜底(deterministic_sim_walk)；均为模拟非实盘 key。幂等（prime_run 自身复位）；
     线程安全（取出后才 prime，避免重复跑）。慢/只读 DATA_ROOT 时 prime 失败降级空壳是诚实行为。
     """
 
@@ -2229,7 +2230,8 @@ def _register_candidate_paper_run(
     """把过裁决候选注册进模拟台并喂模拟 bars 跑出真净值（idempotent；A股恒 paper）。
 
     治理：register_run 只建模拟台 run，绝不绕审批/动钱/live 下单（A股 attempt_live_order 仍恒拒）。
-    provider 喂的是【确定性合成模拟游走（deterministic_sim_walk，非真样本回放）】。
+    provider 数据源按市场分流【crypto 真捆样本回放 bundled_sample_replay / 无样本市场合成兜底
+    deterministic_sim_walk】，均为模拟非实盘 key。
 
     返回（永不返 None，让 H4 端点显式透传失败原因）：
       · 成功：{"registered": True, "run_id", "market", "symbols", **primed}
@@ -4418,7 +4420,7 @@ def paper_register_run(payload: dict = Body(...), user=Depends(require_user_depe
     治理红线（绝不削弱）：
       · A股恒 paper：本端点只建模拟台 run，绝不下 live 单（A股 live_order 端点仍恒拒）。
       · 不绕审批：晋级仍走 INV-5 人工审批门（approver≠creator + 背书），本端点与晋级无关。
-      · provider 喂的是【确定性合成模拟游走（deterministic_sim_walk，非真样本回放）】——绝非实盘行情取数。
+      · provider 数据源按市场分流【crypto 真捆样本回放 bundled_sample_replay / 无样本市场合成兜底 deterministic_sim_walk】——均为模拟，绝非实盘行情取数。
     idempotent：同 run_id 重复 POST 不另造（复用既有 run），只重新 prime 出净值。
     """
 

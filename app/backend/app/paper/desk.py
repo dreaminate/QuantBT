@@ -62,7 +62,7 @@ class PaperRunRecord:
     promotion_gate_id: str | None = None
     # 回放 provider（模拟 bar/mark 源，非实盘 key）。注入即 tick_once 真喂数据产净值；None=空壳。
     provider: ReplayBarProvider | None = None
-    simulated_source: str | None = None  # 数据来源标注（deterministic_sim_walk）——明确是模拟非实盘、非真样本
+    simulated_source: str | None = None  # 数据来源标注：bundled_sample_replay(crypto 真捆样本) / deterministic_sim_walk(无样本市场合成兜底)——均为模拟非实盘 key
     initial_cash: float = 1_000_000.0  # 注册时起始现金（prime_run 幂等重置基准）
 
 
@@ -276,11 +276,14 @@ class PaperDeskService:
             bar_p = mark_p = None
             if simulate and symbols:
                 # 回放 provider = 模拟 bar/mark 源（绝非实盘 key 取数；A股仍恒拒 live，仅模拟撮合）。
-                provider = ReplayBarProvider(symbols=list(symbols))
+                # 传 market：crypto 配捆样本→真 BTC close 回放(source=bundled_sample_replay)，
+                # 无样本市场(A股)→合成游走兜底(deterministic_sim_walk)，标签诚实分流。
+                provider = ReplayBarProvider(symbols=list(symbols), market=market)
                 bar_p = make_bar_provider(provider)
                 mark_p = make_mark_provider(provider)
-                # 注入模拟建仓引子（非下单路径）：MTM 反映持仓盈亏 → 净值非空壳。
-                seed_positions(venue, list(symbols))
+                # 注入模拟建仓引子（非下单路径）：entry_price/qty 用各 symbol 序列首价反推
+                # （真样本首价 ~47704 → qty=notional/47704），MTM 反映持仓盈亏且不跨尺度失真。
+                seed_positions(venue, list(symbols), provider=provider)
             sched = PaperScheduler(venue, cfg, bar_provider=bar_p, mark_provider=mark_p)
             rec = PaperRunRecord(
                 run_id=run_id, name=name, origin=origin, market=market, symbols=list(symbols),
@@ -330,7 +333,9 @@ class PaperDeskService:
                 rec.venue.reset_simulation_state(rec.initial_cash)
                 rec.scheduler.state.bars_fed = 0
                 rec.scheduler.state.mtm_count = 0
-                seed_positions(rec.venue, rec.symbols)
+                # 复位重建仓必须传同一 provider：用各 symbol 序列首价反推 entry_price/qty，
+                # 否则 re-prime 会按首价 100 重建仓而 mark 喂 47704 → 重新引入 P&L 失真（A7）。
+                seed_positions(rec.venue, rec.symbols, provider=rec.provider)
                 fills = 0
                 for _ in range(max(0, ticks)):
                     fills += rec.scheduler.tick_once()

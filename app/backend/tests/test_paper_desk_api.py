@@ -232,7 +232,11 @@ def test_chain_tamper_detected():
 
 # ════════════════ DS-4 · 接真 provider 产净值（非空壳）+ 治理门不破 ════════════════
 def test_register_with_provider_feeds_real_bars_and_produces_equity():
-    """种已知坏门反向：注入回放 provider → tick 真喂 bars → 净值非空、bars_fed>0、有持仓。"""
+    """种已知坏门反向：注入回放 provider → tick 真喂 bars → 净值非空、bars_fed>0、有持仓。
+
+    BTCUSDT 配捆样本(真回放) + ETHUSDT 无样本(合成兜底) → run 级 source 为诚实混合标
+    （绝不把含合成的 run 谎称纯 bundled，§3）；位置来自 seed_position（sim 路径不下单，fills 恒 0）。
+    """
 
     svc = PaperDeskService()
     svc.register_run(run_id="ds4a", name="ds4a", origin="o", market="crypto",
@@ -240,13 +244,15 @@ def test_register_with_provider_feeds_real_bars_and_produces_equity():
                      equity_log_path=_tmp_eqlog("ds4a"))  # simulate=True 默认
     primed = svc.prime_run("ds4a", ticks=12)
     assert primed["bars_fed"] > 0, "真喂 bars 后 bars_fed 必 > 0（非空壳）"
-    assert primed["simulated"] is True and primed["source"] == "deterministic_sim_walk"
+    # BTC bundled + ETH 合成 → 混源诚实标（含 bundled 与合成，非纯 bundled、非纯 sim）。
+    assert primed["simulated"] is True
+    assert primed["source"] == "mixed:bundled_sample_replay+deterministic_sim_walk"
     eq = svc.equity_log("ds4a")
     assert len(eq) > 0, "MTM 必写出净值序列（非空壳）"
     # 净值是移动的（回放价格变动），不是一条死平线
     totals = [row["total_equity"] for row in eq]
     assert len(set(round(t, 2) for t in totals)) > 1, "净值须随回放移动，非死平"
-    # 首 tick 成交建仓 → 有真持仓
+    # seed_position 建仓 → 有真持仓（sim 路径不经 place_order，fills 恒 0；持仓来自种子）
     assert len(svc.positions("ds4a")) > 0
 
 
@@ -325,7 +331,8 @@ def test_post_paper_runs_registers_runnable_run(client):
     body = r.json()
     assert body["register"]["registered"] is True
     assert body["register"]["bars_fed"] > 0
-    assert body["run"]["simulated_source"] == "deterministic_sim_walk"
+    # 单 BTCUSDT crypto run → 纯真捆样本回放（source 诚实，非合成）
+    assert body["run"]["simulated_source"] == "bundled_sample_replay"
     ids = {x["id"] for x in client.get("/api/paper/runs").json()["runs"]}
     assert "ds4_post" in ids
     eq = client.get("/api/paper/runs/ds4_post/equity_log").json()["equity_log"]
@@ -337,6 +344,175 @@ def test_post_paper_runs_requires_run_id(client):
 
     r = client.post("/api/paper/runs", json={"name": "no_id"})
     assert r.status_code == 422
+
+
+# ════════════════ 64717fe6 · paper 真捆样本回放（source 诚实 + P&L 不失真）════════════════
+def _sample_first_close() -> tuple[float, float]:
+    """读 data/samples/crypto/BTCUSDT_1d.csv 首行 (close, open)（断言基准从真数据读，样本换不脱钩）。"""
+
+    import polars as pl
+
+    from app.agent.sample_data import has_sample, sample_path
+
+    assert has_sample("crypto_perp"), "BTC 捆样本缺失——真回放测试前置不满足"
+    df = pl.read_csv(sample_path("crypto_perp"), columns=["open", "close"])
+    return float(df["close"][0]), float(df["open"][0])
+
+
+def test_crypto_replays_real_btc_sample_not_synthetic():
+    """坏门#1：crypto paper run 必读真 BTC 样本 close 序列（非合成 100 起）；source=bundled_sample_replay。
+
+    断言序列前值贴近 data/samples/crypto/BTCUSDT_1d.csv 真值（首 close ~47704、首 open ~46210），
+    且明确 ≠ 合成 base=100。坏门若回到合成 100 起或谎称 bundled，本测试转红。
+    """
+
+    from app.paper.replay_provider import BUNDLED_SOURCE, ReplayBarProvider
+
+    first_close, first_open = _sample_first_close()
+    assert first_close > 1000, "真 BTC 样本首价应 ~47704（远大于合成 base 100）——前置数据校验"
+
+    p = ReplayBarProvider(symbols=["BTCUSDT"], market="crypto")
+    assert p.source == BUNDLED_SOURCE, "crypto 配捆样本 → source 必为 bundled_sample_replay"
+    assert p.source_for("BTCUSDT") == BUNDLED_SOURCE
+    # 序列首值 = 样本真 close（非合成 100）
+    assert abs(p.first_price("BTCUSDT") - first_close) < 1e-6
+    assert p._series["BTCUSDT"][0] == pytest.approx(first_close, abs=1e-2)
+    assert p._series["BTCUSDT"][0] > 1000, "真样本价 ~47704，绝非合成 100 起（坏门防线）"
+    # next_bar 也是真样本（open 贴样本首 open ~46210 区间、source 标对）
+    bar = p.next_bar("BTCUSDT")
+    assert bar["source"] == BUNDLED_SOURCE
+    assert bar["close"] == pytest.approx(first_close, abs=1e-2)
+
+
+def test_crypto_hyphen_symbol_resolves_real_sample():
+    """坏门#1b：e2e 用的 'BTC-USDT'（带连字符）也须解析到真捆样本（非因 symbol 写法漏成合成）。"""
+
+    from app.paper.replay_provider import BUNDLED_SOURCE, ReplayBarProvider
+
+    first_close, _ = _sample_first_close()
+    p = ReplayBarProvider(symbols=["BTC-USDT"], market="crypto")
+    assert p.source == BUNDLED_SOURCE, "BTC-USDT 连字符形也须真回放（symbol 归一匹配样本 base）"
+    assert abs(p.first_price("BTC-USDT") - first_close) < 1e-6
+
+
+def test_entry_price_back_derived_from_sample_first_price_pnl_sane():
+    """坏门#2：entry_price 用样本首价反推 qty → P&L 合理（非几百倍失真）。
+
+    真路径：entry=样本首 close(47704)、qty=notional/首价 → 扣现金恰=notional、MTM@t0 positions_value≈
+    notional（~1x）。变异自检（坏门）：故意 entry=100 配 47704 价序列 → positions_value 失真几百倍，
+    断言两侧（真路径 ~1x / 坏门 >100x）证明门能判别。
+    """
+
+    from app.execution.paper_venue import PaperVenue
+    from app.paper.replay_provider import ReplayBarProvider, seed_positions
+
+    first_close, _ = _sample_first_close()
+    notional = 50_000.0
+    init_cash = 1_000_000.0
+
+    # ---- 真路径：entry_price 用样本首价反推 ----
+    p = ReplayBarProvider(symbols=["BTCUSDT"], market="crypto")
+    v = PaperVenue(cash=init_cash, equity_log_path=_tmp_eqlog("fe_good"))
+    seed_positions(v, ["BTCUSDT"], provider=p, notional_per_symbol=notional)
+    pos = v.get_position("BTCUSDT")
+    assert pos.entry_price == pytest.approx(first_close, abs=1e-6), "entry_price 必=样本首 close"
+    assert pos.quantity == pytest.approx(notional / first_close, rel=1e-6), "qty=notional/首价"
+    # 扣现金恰=notional（entry==除数 → 不变量）
+    assert v.get_balance()["CASH"].free == pytest.approx(init_cash - notional, abs=1e-2)
+    # MTM@t0：mark=首 close → positions_value≈notional（P&L 不失真，~1x）
+    marks = p.current_marks(["BTCUSDT"])
+    snap = v.mark_to_market(marks)
+    assert snap.positions_value == pytest.approx(notional, rel=1e-3), "真路径 positions_value≈notional（~1x）"
+    good_ratio = snap.positions_value / notional
+    assert 0.5 < good_ratio < 2.0, "真路径 P&L 在合理带（~1x）"
+
+    # ---- 变异自检（种坏门）：entry=100（合成 base）配真 47704 价序列 → 失真几百倍 ----
+    vbad = PaperVenue(cash=init_cash, equity_log_path=_tmp_eqlog("fe_bad"))
+    vbad.seed_position("BTCUSDT", quantity=round(notional / 100.0, 8), entry_price=100.0)  # 坏门
+    snap_bad = vbad.mark_to_market({"BTCUSDT": first_close})
+    bad_ratio = snap_bad.positions_value / notional
+    assert bad_ratio > 100.0, "坏门：base=100 entry 配 47704 价 → positions_value 失真 >100x（门必抓）"
+    # 真路径与坏门差几百倍——证明反推 entry 确实防失真
+    assert bad_ratio / good_ratio > 100.0, "真路径相对坏门差 >100x（反推 entry 防 P&L 失真生效）"
+
+
+def test_sampleless_market_falls_back_to_synthetic_honest_label():
+    """坏门#3：无捆样本的市场 → 合成兜底 + source=deterministic_sim_walk（诚实区分，不伪造真样本）。"""
+
+    from app.paper.replay_provider import SIMULATED_SOURCE, ReplayBarProvider
+
+    # A股 token-gated 无免费样本 → 合成兜底
+    p_cn = ReplayBarProvider(symbols=["600519"], market="equity_cn")
+    assert p_cn.source == SIMULATED_SOURCE, "A股无样本 → deterministic_sim_walk"
+    assert p_cn.first_price("600519") == 100.0, "合成首价=100（base）"
+    assert p_cn._series["600519"][0] < 1000, "合成游走 base=100，绝非真样本 47704"
+    # crypto 里无对应样本的 symbol（ETHUSDT，无 ETH 样本）也合成兜底（不拿 BTC 序列冒充 ETH）
+    p_eth = ReplayBarProvider(symbols=["ETHUSDT"], market="crypto")
+    assert p_eth.source == SIMULATED_SOURCE, "ETH 无样本 → 合成兜底（不冒充 BTC）"
+    assert p_eth.first_price("ETHUSDT") == 100.0
+
+
+def test_mixed_run_source_is_honest_and_scales_isolated():
+    """坏门#1c（混源诚实）：BTC(真)+ETH(合成) → run source 为诚实混合标（绝不谎称纯 bundled）；
+
+    且两 symbol 各自尺度自洽——BTC 持仓 ~47704 尺度、ETH ~100 尺度，互不串扰（防一处尺度污染另一处）。
+    """
+
+    from app.execution.paper_venue import PaperVenue
+    from app.paper.replay_provider import (
+        BUNDLED_SOURCE,
+        SIMULATED_SOURCE,
+        ReplayBarProvider,
+        seed_positions,
+    )
+
+    p = ReplayBarProvider(symbols=["BTCUSDT", "ETHUSDT"], market="crypto")
+    # run 级标签：含 bundled 与合成 → 显式混合，绝非纯 bundled（§3 不谎称）
+    assert p.source == f"mixed:{BUNDLED_SOURCE}+{SIMULATED_SOURCE}"
+    assert p.source_for("BTCUSDT") == BUNDLED_SOURCE
+    assert p.source_for("ETHUSDT") == SIMULATED_SOURCE
+    # 各 symbol 首价尺度隔离：BTC ~47704、ETH ~100
+    assert p.first_price("BTCUSDT") > 1000
+    assert p.first_price("ETHUSDT") == 100.0
+    v = PaperVenue(cash=1_000_000.0, equity_log_path=_tmp_eqlog("mixed"))
+    seed_positions(v, ["BTCUSDT", "ETHUSDT"], provider=p, notional_per_symbol=50_000.0)
+    btc, eth = v.get_position("BTCUSDT"), v.get_position("ETHUSDT")
+    assert btc.entry_price > 1000 and eth.entry_price == 100.0, "尺度隔离：各用自身首价"
+    assert btc.quantity == pytest.approx(50_000 / p.first_price("BTCUSDT"), rel=1e-6)
+    assert eth.quantity == pytest.approx(50_000 / 100.0, rel=1e-6)
+
+
+def test_reprime_keeps_real_entry_price_not_reset_to_100():
+    """坏门#2b：重复 prime_run 仍用样本首价反推 entry（不因复位重建仓退回 100 引入失真）。"""
+
+    svc = PaperDeskService()
+    svc.register_run(run_id="fe_reprime", name="x", origin="o", market="crypto",
+                     symbols=["BTCUSDT"], bench="BTC", creator="c",
+                     equity_log_path=_tmp_eqlog("fe_reprime"))
+    first_close, _ = _sample_first_close()
+    svc.prime_run("fe_reprime", ticks=8)
+    p1 = svc.positions("fe_reprime")
+    svc.prime_run("fe_reprime", ticks=8)  # 再 prime（触发复位重建仓）
+    p2 = svc.positions("fe_reprime")
+    # 两次 prime 后 entry_price 都=样本首价（复位重建仓未退回 base=100）
+    for snap in (p1, p2):
+        btc = next(x for x in snap if x["symbol"] == "BTCUSDT")
+        assert btc["entry_price"] == pytest.approx(first_close, abs=1e-6), \
+            "re-prime 后 entry 仍=样本首价（未退回 100 → 不重引入失真）"
+
+
+def test_crypto_real_replay_still_rejects_ashare_live_governance():
+    """坏门#4（治理回归）：crypto 真回放不放开 A股 live——A股 run 走 live 路径仍恒拒（治理门不破）。"""
+
+    svc = PaperDeskService()
+    # A股 run（合成兜底真跑）
+    svc.register_run(run_id="fe_cn", name="fe_cn", origin="o", market="equity_cn",
+                     symbols=["600519"], bench="500", creator="c",
+                     equity_log_path=_tmp_eqlog("fe_cn"))
+    svc.prime_run("fe_cn", ticks=4)
+    with pytest.raises(AShareLiveForbidden):  # A股永不 live（与捆样本回放无关，恒拒）
+        svc.attempt_live_order("fe_cn", {"symbol": "600519", "side": "buy", "quantity": 100})
+    assert svc.fills("fe_cn") == [], "A股未进任何下单路径（key 路径不可达）"
 
 
 def test_post_ashare_run_then_live_order_rejected(client):
