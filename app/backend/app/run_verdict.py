@@ -23,6 +23,7 @@ import math
 from collections import OrderedDict
 from typing import Any
 
+from .eval.dsr import minimum_track_record_length, probabilistic_sharpe_ratio
 from .eval.gate_runner import asset_class_of, freq_to_ppy
 from .eval.n_eff import n_eff_from_matrix
 from .eval.overfit_gate import run_overfit_gate
@@ -47,6 +48,10 @@ COST_PRESETS: dict[str, float] = {
     "pessimistic": 35.0,
 }
 _COST_BASE_PRESET = "neutral"
+
+# R7 裁决措辞红线全集（与 verification DISCLOSURE / test_run_verdict_card 同口径）+ 冷启动语境特有「通过」。
+# cold_start.note 是手拼串（不走 Verifier._verdict_note 单一源）→ 用此集 runtime 防御 + 测试双守，绝不漏红线词。
+_BANNED_VERDICT_WORDS = ("可信", "安全", "保证", "可复现", "组织独立", "排除过拟合", "通过")
 
 
 def _safe_float(x: Any, default: float = 0.0) -> float:
@@ -104,6 +109,51 @@ def _metrics(run) -> dict[str, Any]:
     m: dict[str, Any] = {}
     m.update(run.manifest.get("metrics") or {})
     return m
+
+
+def _cold_start_evidence(net_returns: list[float], confidence: float = 0.95) -> dict[str, Any]:
+    """R27 冷启动诚实「证据充分性」（呈现层·不动治理闸门 / 三态裁决）。
+
+    用 MinTRL（PSR 反解，`eval/dsr.py`）判：业绩期够不够长达 `confidence` 置信。短样本绝不渲染成达标——
+    n_observed<⌈MinTRL⌉ → sufficient=False「证据不足」；估不出 Sharpe（N<3 或 σ≈0）→ DSR **不适用**（N=1 DSR
+    退化 PSR=范畴误用，R27）；SR 不超基准 → never_significant（DSR 亦不作判据焦点）。
+    **措辞守门**：note 走 `_BANNED_VERDICT_WORDS` runtime 防御（含 R7 红线全集）——任一红线词出现即退安全兜底串，
+    生产期绝不输出禁词（不只靠测试）。`min_trl_obs` JSON-safe：inf/nan(never_significant/insufficient) → null。
+    """
+
+    rets = [_safe_float(x, 0.0) for x in net_returns]
+    n = len(rets)
+    m = minimum_track_record_length(rets, sr_benchmark=0.0, confidence=confidence)
+    psr = probabilistic_sharpe_ratio(rets, 0.0)
+    min_trl = int(m.min_trl_obs) if math.isfinite(m.min_trl_obs) else None
+    pct = f"{confidence:.0%}"
+    if m.status == "insufficient":
+        # 区分成因（评审 §6 voice）：N<3=样本不足；N≥3 仍 insufficient=收益无波动 σ≈0、Sharpe 无定义。
+        if n < 3:
+            note = f"业绩期 N={n}：样本不足、无法估 Sharpe；DSR 不适用（先验断言未经数据检验）。"
+        else:
+            note = f"业绩期 N={n}：收益无波动（σ≈0），Sharpe 无定义、无法判证据充分性；DSR 不适用。"
+    elif m.status == "never_significant":
+        note = f"业绩期 N={n}：实盘 Sharpe 未超基准，任何样本长度都不显著（证据不足）。"
+    elif m.sufficient:
+        note = f"业绩期 N={n} ≥ 按当前估计所需 {min_trl} 期（{pct} 置信）：达最小业绩期（PSR={psr:.2f}）。"
+    else:
+        note = f"业绩期长度不足：N={n} < 按当前估计所需 {min_trl} 期（{pct} 置信）：证据不足。"
+    # **runtime 措辞守门（不只靠测试）**：手拼 note 若含 R7 红线词（仅可能因未来代码改坏注入）→ 退安全兜底，
+    # 生产期绝不输出禁词。静态模板正常走不到此分支（=defense-in-depth，与 fail-closed 传统一致）。
+    if any(w in note for w in _BANNED_VERDICT_WORDS):
+        note = f"业绩期 N={n}：证据充分性以 sufficient / min_trl 字段为准（本说明仅陈述业绩期长度轴）。"
+    return {
+        "n_observed": n,
+        "psr": round(psr, 6),
+        "min_trl_obs": min_trl,                 # ⌈MinTRL⌉ 整数；null=never_significant/insufficient
+        "min_trl_status": m.status,             # ok | never_significant | insufficient
+        "sufficient": m.sufficient,             # 短业绩期=False（不假绿灯）
+        "dsr_applicable": m.status == "ok",     # 仅 ok（能估 Sharpe）才谈 DSR；N 太小/σ≈0/不超基准 = DSR 不作判据焦点
+        "axis": "track_record_length",          # 本轴 ≠ 过拟合门样本充分性轴（前端归类，防两「证据不足」混读）
+        "confidence": confidence,
+        "note": note,
+    }
 
 
 def _verdict_note_for(verifier: Verifier, verdict: str) -> str:
@@ -215,6 +265,9 @@ def project_overfit(run_id: str) -> dict[str, Any]:
     # 派生展示标签：明确归属过拟合门（非验证官 verdict）。
     d["gate_label"] = _GATE_LABEL.get(gate.color, gate.color)
     d["is_promotion_candidate"] = gate.color == "green"
+    # R27 冷启动证据充分性（additive·呈现层）：短业绩期诚实「证据不足/需 N 期」+ DSR 适用性。
+    # 不动 gate.color/三态裁决——纯附信息，让冷启动 N 小时不被渲染成达标（不假绿灯）。
+    d["cold_start"] = _cold_start_evidence(_net_returns(run))
     return d
 
 

@@ -6,6 +6,17 @@
 ## <日期> · <标题>
 - 建/改了什么 + 命门  - 验收：<对抗测试 + 变异 + 全量数字>  - 下一步：<…> -->
 
+## 2026-06-25 · 冷启动 MinTRL 接进 run /overfit 投影——首个价值闭环合拢（卡 b1e4efdf · D-COLDSTART-WIRE）
+
+- **缘起**：autonomous-loop。CEO 透镜连续 6 切片指「数学对、未接到用户」（7 张 P2 接线卡累积）→ 本轮转向**合拢价值闭环**。评估各 P2：CPCV→gate 难（CPCV 需按折 fit-predict、gate 只见最终 returns）、lifecycle→退役是方法学拍板、cold-start→UI 是前端 + RunDetailPage 冻结 → 选**最低风险**：MinTRL 接 /overfit（R27 明言冷启动呈现层、不动治理闸门）。
+- **实现（additive·扩展不替换）**：`run_verdict._cold_start_evidence`（MinTRL 判证据充分性 4 状态：ok+短→证据不足/N<3 或 σ≈0→DSR 不适用/负 edge→never_significant）；`project_overfit` 加 `cold_start` 字段，**不动 gate.color/is_promotion_candidate/三态裁决**（R27 呈现层不动治理）。axis="track_record_length" 与过拟合门样本充分性轴区分。JSON-safe（inf/nan→null）。
+- **对抗测试**：`test_run_verdict_cold_start.py` 9（短不渲染达标/N=1 DSR 不适用/never_significant/措辞守门/JSON-safe/集成）+ run_verdict_card 14 回归不破。
+- **两轮独立复核全闭环（措辞守门是焦点）**：
+  - ① **用户在 run_verdict.py 种 banned-words mutation**（sufficient 分支 note 塞「可信，已排除过拟合」）——测我的 R7 措辞守门。已撤回正确。教训同 dsr 那次：**让测试显式行权判别路径** → 强化禁词测试**显式覆盖全 4 状态分支（含 ok_sufficient 高危分支）+ 覆盖断言 + sentinel**，那条 mutation 落 ok_sufficient 分支必被抓。
+  - ② **多透镜评审 confirmed（governance medium + correctness low）**：**我的禁词集 `("可信","安全","排除过拟合","通过")` 是 R7 红线不完整子集**——漏 **保证/可复现/组织独立**（姊妹测试 test_run_verdict_card 用完整 6 词；cold_start note 手拼绕过 `_verdict_note` 单一措辞源 → 此测试是唯一守门 → 子集=纸糊门，未来「保证显著」之类会溜）。→ 补全 R7 红线全集 + **加生产 runtime 防御守门**（`_BANNED_VERDICT_WORDS`，红线词出现即退安全兜底、生产期绝不输出禁词、不只靠测试）+ 单一源对齐测试（生产集 ⊇ 红线、测试集==生产集不漂）+ insufficient 分 n<3/σ≈0 措辞 + dsr_applicable 口径修。
+- **验证**：**全量后端 1555 passed / 13 skipped / 0 failed**，基线 1547 未破。
+- **交付**：上轮授权 push 的 6 切片已在 origin；本轮 loop 回「commit 不擅自 push」→ 本切片仅本地 commit、未 push。land main 待授权。下一步：继续合拢价值闭环或续方法学。
+
 ## 2026-06-25 · R27 冷启动 MinTRL（最小业绩期长度）+ PSR 反解命门 + 用户 mutation 抓门牙缺口（卡 6acbb499 · D-MINTRL-R27）
 
 - **缘起**：autonomous-loop 下一切片。MinTRL 未建、R27=确认「冷启动 N=1 剔 DSR、用 PSR/MinTRL + 显式证据不足」→ 自取（扩展已建 PSR、低风险、直击「能信」+ 降门槛：诚实告诉新用户"业绩期太短、还需 N 期"）。
