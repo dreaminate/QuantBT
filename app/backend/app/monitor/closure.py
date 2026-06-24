@@ -19,6 +19,7 @@ from dataclasses import dataclass
 from datetime import UTC, datetime
 
 from ..factor_factory.lifecycle import FactorObservation, LifecycleEvent, LifecycleManager
+from .drift import PerfDriftSignal
 
 # 成本漂移降级阈值（与 cost_drift.py 的 0.30 告警阈同口径）。
 DRIFT_DEGRADE_THRESHOLD = 0.30
@@ -34,6 +35,8 @@ class MonitorAction:
     drift_breach: bool
     alert: str | None                       # 漂移超阈结构化告警（非仅 notes）
     lifecycle_event: LifecycleEvent | None  # A1 权威单一 PROV；None=本次无迁移
+    perf_drift_breach: bool = False         # 绩效轴统计漂移(rolling-PSR/CUSUM/PH)是否 breach
+    perf_drift_detector: str | None = None  # 触发的绩效轴检测器名
 
 
 def _drift_degrade_observation(factor_id: str, version: int, drift_pct: float) -> FactorObservation:
@@ -64,12 +67,21 @@ def monitor_tick(
     observation: FactorObservation | None = None,
     drift_pct: float | None = None,
     drift_threshold: float = DRIFT_DEGRADE_THRESHOLD,
+    perf_drift: PerfDriftSignal | None = None,
 ) -> MonitorAction:
     """一次监控闭环：记绩效观测/漂移信号 → lifecycle 权威评估迁移 → 返回动作 + 单一 PROV。
 
-    `observation`=周期 IC/绩效观测；`drift_pct`=本周成本漂移（来自 `cost_drift.compute_weekly_cost_drift`）。
+    `observation`=周期 IC/绩效观测；`drift_pct`=本周成本漂移（来自 `cost_drift.compute_weekly_cost_drift`）；
+    `perf_drift`=**绩效轴**统计漂移检测器输出（rolling-PSR/CUSUM/Page-Hinkley，见 `drift.py`）。
     漂移超阈 → 发结构化告警 + 记一条降级观测（**动作真被调用，非仅 append note**）。
     迁移与 PROV 由 `manager.evaluate`（A1 权威）单发，绝不在别处重复发。
+
+    **范畴红线（M-AUTHORITY=A1）**：本入参只收**绩效/成本轴**——`PerfDriftSignal`（axis=performance）
+    与 cost `drift_pct`。**绝不接** C 的 gate verdict（DSR/PBO 晋级闸）、**绝不接**特征轴 PSI
+    （`FeatureDriftDiagnosis` 是不同类型、无 breach、类型层即被拒）。运行期再设防伪一道。
+
+    **证据合并语义**：成本轴 breach 与绩效轴 breach **各记一条**降级观测——同一 tick 同时超阈
+    可贡献 2 条负观测（多轴独立证据叠加，由 lifecycle 权威按其连续期规则裁决，非本函数去重）。
     """
 
     breach = drift_pct is not None and abs(drift_pct) > drift_threshold
@@ -79,6 +91,25 @@ def monitor_tick(
     if breach:
         alert = f"⚠️ 成本漂移 {drift_pct:.0%} 超阈 {drift_threshold:.0%} → 触发降级评估（问责落 PROV）"
         manager.record_observation(_drift_degrade_observation(factor_id, version, float(drift_pct)))
+
+    perf_drift_breach = False
+    perf_drift_detector: str | None = None
+    if perf_drift is not None:
+        # 防伪：只认绩效轴信号（FeatureDriftDiagnosis 无 axis=="performance"、亦无 to_lifecycle_observation）。
+        if getattr(perf_drift, "axis", None) != "performance":
+            raise TypeError(
+                "monitor_tick 只接绩效/成本轴信号；特征轴漂移(PSI)仅根因诊断、绝不驱动退役"
+                "（M-AUTHORITY=A1 范畴红线）"
+            )
+        if perf_drift.breach:
+            perf_drift_breach = True
+            perf_drift_detector = perf_drift.detector
+            alert = (alert + " · " if alert else "") + (
+                f"⚠️ 绩效轴漂移 {perf_drift.detector} 越阈"
+                f"（stat={perf_drift.statistic:.3g} vs {perf_drift.threshold:.3g}）→ 触发降级评估"
+            )
+            manager.record_observation(perf_drift.to_lifecycle_observation(factor_id, version))
+
     event = manager.evaluate(factor_id, version)
     return MonitorAction(
         factor_id=factor_id,
@@ -87,6 +118,8 @@ def monitor_tick(
         drift_breach=breach,
         alert=alert,
         lifecycle_event=event,
+        perf_drift_breach=perf_drift_breach,
+        perf_drift_detector=perf_drift_detector,
     )
 
 

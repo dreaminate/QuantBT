@@ -64,6 +64,7 @@
 | d41b167d | Agent 窗口 D-PERM 反例 UI + self-approve 二次确认 | done | frontend | done |
 | d4cb88f4 | DS-3 裁决接真——run_id 贯穿真裁决卡 + Bootstrap 第三腿前端补全 | done | frontend | done |
 | d5ea778c | 共享 Agent 对话 + Inspector + Dock 组件 | done | frontend-foundation | done |
+| d718d5c5 | §5 生产期漂移检测器（rolling-PSR/CUSUM/Page-Hinkley/PSI）+ 理论不变量命门 | done | monitor | done |
 | d93dc5a0 | 裁决卡 RunVerdictCard + 回测详情顶栏/血缘入口（非冻结） | done | frontend | done |
 | de764e1c | 监控生产调度 + 因子观测记录管道——让 monitor_tick 在生产真跑 | done | monitor | done |
 | defe660c | DS-2 造站接真——Agent台默认接真 + 无key slot-filling 真落库 + Hermes 预设（Fork1=C+Hermes） | done | agent-frontend | done |
@@ -138,6 +139,7 @@
 | governance-ui | c631817e · done | dreaminate |
 | integration-test | 9a497bde · done | dreaminate |
 | monitor | d0e5d208 · done | dreaminate |
+| monitor | d718d5c5 · done | dreaminate |
 | monitor | de764e1c · done | dreaminate |
 | onboarding-docs | 07b10903 · done | dreaminate |
 | paper | 64717fe6 · done | dreaminate |

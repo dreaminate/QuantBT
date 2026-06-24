@@ -93,6 +93,43 @@ def deflated_sharpe_ratio(
     return float(norm.cdf(z))
 
 
+def probabilistic_sharpe_ratio(returns: np.ndarray, sr_benchmark: float = 0.0) -> float:
+    """PSR(SR*) = Φ((SR_pp − SR*)·√(n−1)/denom) ∈ [0,1]（Bailey & López de Prado 2012）。
+
+    返回「真 SR 超过基准 SR* 的概率」，含非正态修正（偏度/峰度）。`sr_benchmark` 是
+    **per-period** SR 基准（与内部 SR_pp 同单位），默认 0 ——「实盘 edge 是否仍显著为正」，
+    用于生产期 rolling-PSR 漂移监控（绩效轴主告警）。
+
+    **刻意不暴露 n_trials / var_sr_hat**（命门 · M-AUTHORITY=A1 / GOAL §5）：把 SR* 设成
+    E[max SR over N trials] 即变回 DSR（多重检验通缩）——那是晋级期过拟合闸，绝不能当 live
+    单策略退役触发器。本函数只接固定基准，从签名上杜绝该范畴误用。
+
+    **与 DSR 互为交叉校验**（V-path 恒等，实证 <1e-12）：
+        deflated_sharpe_ratio(r, N, var_sr_hat=V) == probabilistic_sharpe_ratio(r, _expected_max_sr(N, V))
+    两条独立代码路径必须吻合——任何让 PSR 偏离理论的改动都会让 DSR 那侧的断言变红。
+
+    退化输入（n<3 / σ≈0）返回 0.0（与 DSR 守门同口径，便于交叉校验对齐）。注意：PSR 假设收益
+    近 IID；自相关序列会令 √(n−1) 高估有效样本、显著性被高估（调用方须在裁决里披露，R5）。
+    """
+
+    arr = np.asarray(returns, dtype=float)
+    n = arr.size
+    if n < 3:
+        return 0.0
+    if not np.all(np.isfinite(arr)):
+        return 0.0   # 非有限值(NaN/inf)安全归零（与退化口径一致，避免 NaN 漏过守门；调用方应先拦）
+    sd = arr.std(ddof=1)
+    if sd < 1e-12:
+        return 0.0
+    sr_pp = arr.mean() / sd
+    gamma3 = _skew(arr)
+    gamma4_minus_3 = _kurt_excess(arr)
+    # denom 与 dsr.py V-path 逐字符同构（(g2+2)/4 = (γ4−1)/4），max(1e-12,·) 防病态高阶矩 sqrt(负)。
+    denom = math.sqrt(max(1e-12, 1 - gamma3 * sr_pp + (gamma4_minus_3 + 2) / 4.0 * sr_pp ** 2))
+    z = (sr_pp - sr_benchmark) * math.sqrt(n - 1) / denom
+    return float(norm.cdf(z))
+
+
 def _skew(arr: np.ndarray) -> float:
     # 标准（有偏）偏度 g1 = m3 / m2^1.5（总体矩），与 scipy.stats.skew(bias=True) 一致。
     # 旧实现用 std(ddof=1) 当分母 = 混合估计量，与教科书/scipy 差 ~((n-1)/n)^1.5，被独立对账探针抓出。
@@ -118,4 +155,4 @@ def _kurt_excess(arr: np.ndarray) -> float:
     return float(((arr - mu) ** 4).mean() / m2 ** 2 - 3.0)
 
 
-__all__ = ["deflated_sharpe_ratio", "sharpe_ratio"]
+__all__ = ["deflated_sharpe_ratio", "probabilistic_sharpe_ratio", "sharpe_ratio"]

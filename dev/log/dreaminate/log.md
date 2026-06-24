@@ -6,6 +6,16 @@
 ## <日期> · <标题>
 - 建/改了什么 + 命门  - 验收：<对抗测试 + 变异 + 全量数字>  - 下一步：<…> -->
 
+## 2026-06-24 · §5 生产期漂移检测器（rolling-PSR/CUSUM/Page-Hinkley/PSI）+ 理论不变量命门（卡 d718d5c5 · D-DRIFT-§5）
+
+- **缘起**：autonomous-loop（用户授权自主迭代，北极星#1 数学贯穿/#2 理论先证明/#4 监管对齐命门）。所有卡 done、pool 空 → 自取 state.md 点名的「新生残余：§5 漂移检测器」。现有 monitor 只有粗粒度成本漂移阈值，缺 GOAL §5 的统计漂移检测器。
+- **数学先行 + 并行双脑**：落 `findings/dreaminate/drift-detectors.md`（4 检测器公式+推导+治理 voice）；deep-opus‖codex 三脑独立复核——**deep-opus 实证抓到教科书 Page-Hinkley 全局 running-mean 的 √t 假告警致命陷阱**（平稳噪声 FPR→1）→ 改 frozen-baseline 变体 + 配 sentinel 证明弃用对（单脑会照教科书埋雷）。
+- **实现（扩展不替换 + 命门钉死）**：`dsr.py` +`probabilistic_sharpe_ratio`（与已变异验证的 DSR V-path 互为 1e-12 交叉校验锚，实测偏差 0.0）；新建 `monitor/drift.py`（4 检测器 + 三态 ok/breach/insufficient_evidence + 绩效轴/特征轴**类型隔离**）；`monitor_tick` additive `perf_drift`。**三层钉死**：①rolling-PSR 签名不暴露 n_trials/var_sr_hat（杜绝 DSR 通缩走私进 live 退役，违 M-AUTHORITY/GOAL §5）②PSI=FeatureDriftDiagnosis 无 breach/无 to_lifecycle_observation/类型层喂不进 monitor_tick + 运行期 axis 防伪 ③CUSUM/PH 冻结基准（绝不用监控窗自身均值，温水煮青蛙）。
+- **多透镜评审（autoplan 等价：correctness/governance/CEO/eng 并行 + 对抗复核）抓真 bug 全修**：**5 条 confirmed——4 条 NaN 静默假绿灯（high，正中本模块自钉「不假绿灯」命门：喂数缺口插 NaN→NaN<floor 恒 False 绕过守门→主告警读绿=对真钱致命静默）** + 1 条 CEO 阈值代价诚实披露（PSR_FLOOR=0.90 偏激进，已标注）。修法：`_all_finite` 守门 4 检测器全判 insufficient + 对抗测试钉死；eng 4 清理（死常量→_SIGMA_FLOOR、冗余 re-export、饱和值/全零 docstring）全做。
+- **验收**：`test_drift_detectors.py` **31 passed**（温水煮青蛙/方向/PH sentinel/PSI 范畴红线/NaN 假绿灯）+ `test_methodology_invariants.py` **19→38 passed**（+19 理论不变量：PSR↔DSR 恒等含中段判别力、PSI 对称/非负/置换、CUSUM 平移/尺度等变 + sentinel 门有牙、PH FPR 受控）。**全量后端 1426 passed / 13 skipped / 0 failed（167s），基线 1357 未破**。
+- **诚实残余（非假绿）**：冻结基准 μ0/σ0 跨重启持久化依赖上游观测管道（建议 mint 后续卡）；PSR 自相关高估有效 n（docstring 披露）；阈值标定属用户方法学旋钮（代价已诚实标）。
+- **下一步**：land main 待用户授权（不擅自 commit/push）；进下一切片。
+
 ## 2026-06-24 · 交付门收尾波「全量落地 web」全完成（4 P2 卡清零 + glossary 27 + rag 回归修 + land main）
 
 - **缘起**：用户 /autoplan「全量落地 web」→ 3 问全选推荐档（全量范围 / 授权 land delivery-slice / 凭据门码路+文档待验收）。理解 workflow 摸清：项目 ~95% 已绿，真缺口=整波 32 commit 未 land main + 5 张卡（e1a98c41 已做未归档 + 4 待做）。worktree `deliver-final`（基 delivery-slice）。
