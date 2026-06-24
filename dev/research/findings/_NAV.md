@@ -28,4 +28,5 @@
 - `dreaminate/spine-designs/06-security-rbac-gate.md` — 06 · Agent 安全(注入/越权/密钥) + 确定性策略门 deny-by-default + 交易所侧硬墙
 - `dreaminate/spine-designs/07-approval-gates.md` — 07 · HITL 审批门双通道(探索/确证) + promote 改造成带审批门状态机 + 幂等恢复
 - `dreaminate/spine-designs/README.md` — 机构级 Agent OS · 脊柱 build-ready 设计（二轮·第一簇）
+- `dreaminate/sqrt-impact-backtest-cost.md` — FINDING · R18 平方根市场冲击 回测成本项（size-aware impact）
 

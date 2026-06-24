@@ -24,6 +24,7 @@
 | 64717fe6 | paper provider 真回放捆绑样本——替换确定性合成游走（§3 增强） | done | paper | done |
 | 69e1cb16 | R23 不确定性预测区间（split conformal/CQR/ACI）+ abstain + 覆盖定理命门 | done | eval-methodology | done |
 | 6e4eee54 | 入口×必经门覆盖矩阵回归 + 所有 venue 经 OrderGuard.wrap 的 CI 静态检查 | done | security-invariant | done |
+| 7179ba36 | R18 平方根市场冲击 回测成本项（size-aware）+ 容量交叉校验命门 | done | execution-cost | done |
 | 79ebe273 | 模拟台后端接线 — /api/paper/* 整层 + 晋级审批门 + 风险门冻结哈希链 | done | backend | done |
 | 82120b9c | agent 窗口前端核心（Web）——对话流 + 工具可视化 + 权限模式切换 | done | frontend | done |
 | 87ad21fc | R18 stacking 控制项 N/A 标注 + 实现时 OOF 约束（T-033 核验 gap） | done | signals | done |
@@ -82,9 +83,11 @@
 
 | uuid8 | 标题 | status | area |
 |---|---|---|---|
+| 0f696e56 | 平方根冲击 ADV/σ 滚动无泄露自估（消除回测前视泄露） | todo | execution-cost |
 | 861182e6 | CPCV 接 promote/overfit gate + cv_scheme 双轨 report（价值闭环） | todo | eval-methodology |
 | 92a2182f | conformal 区间消费侧接线——模型台/信号层预测附校准区间 + abstain UI 呈现 | todo | eval-methodology |
 | aa13c3b0 | 因子机构级度量接 lifecycle 状态机/sizing 生产路径 | todo | factor-lifecycle |
+| e2afc5c2 | 三档成本预设接 sqrt-impact 默认 + 成交报告 impact 成本归因拆字段 | todo | execution-cost |
 
 ## 按 area 功能索引
 
@@ -124,6 +127,7 @@
 | docs | ecbd0eab · done | dreaminate |
 | eval-methodology | 41ea6e35 · done | dreaminate |
 | eval-methodology | 69e1cb16 · done | dreaminate |
+| execution-cost | 7179ba36 · done | dreaminate |
 | factor-lifecycle | b12de4f5 · done | dreaminate |
 | frontend | 3d95e0f6 · done | dreaminate |
 | frontend | 5e47b82f · done | dreaminate |

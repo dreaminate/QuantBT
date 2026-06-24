@@ -53,6 +53,7 @@ from app.factor_factory.lifecycle_metrics import (
     ic_decay_half_life,
     strategy_capacity,
 )
+from app.execution.impact import IMPACT_DELTA, square_root_impact_fraction
 from app.monitor.drift import (
     _page_hinkley_global_mean_variant,
     cusum_drift,
@@ -884,3 +885,39 @@ def test_crowding_advisory_schema_forbids_action_fields():
         assert not hasattr(a, forbidden)
     # 数据不足绝不编码成 none（missing≠不拥挤）
     assert crowding_advisory().level != "none"
+
+
+# ===========================================================================
+# R18 平方根市场冲击 — 回测成本（size-aware）+ 与 §3 容量交叉校验
+#   设计/推导：dev/research/findings/dreaminate/sqrt-impact-backtest-cost.md
+# ===========================================================================
+
+
+def test_sqrt_impact_scaling_law_exact():
+    """impact_frac = Y·σ·participation^δ（δ=0.5）⇒ participation×k → frac×√k 精确。写成线性 δ=1 则得 ×k。"""
+    base = square_root_impact_fraction(0.01, 0.02, 0.1)
+    for k in (4.0, 9.0, 16.0, 25.0):
+        scaled = square_root_impact_fraction(0.01 * k, 0.02, 0.1)
+        assert abs(scaled / base - math.sqrt(k)) < 1e-9, f"participation×{k} 非 √{k} 标度"
+    assert IMPACT_DELTA == 0.5   # R18 窄带锁定
+
+
+def test_sqrt_impact_linear_in_coef_and_sigma():
+    """impact_frac 关于 Y、σ 各线性（同次幂为 1）；participation 关于 δ=0.5 次幂。"""
+    assert abs(square_root_impact_fraction(0.04, 0.02, 0.2) / square_root_impact_fraction(0.04, 0.02, 0.1) - 2.0) < 1e-9
+    assert abs(square_root_impact_fraction(0.04, 0.04, 0.1) / square_root_impact_fraction(0.04, 0.02, 0.1) - 2.0) < 1e-9
+
+
+def test_sqrt_impact_equals_capacity_cost_cross_check():
+    """**交叉校验命门**：策略在 §3 容量 C 处，单期冲击成本（占 AUM 比）== 毛 alpha ∀ 随机合法参数。
+
+    定理：容量定义 cost(C)=α；单期交易 τ·C 名义、participation=τC/ADV ⇒ τ·impact_frac(participation)=α。
+    回测冲击模型与 strategy_capacity 同一 Y/σ/δ 物理——任何口径漂移让两路不一致、本测变红。
+    """
+    for s in range(80):
+        rng = np.random.default_rng(80_000 + s)
+        a = rng.uniform(1e-4, 8e-3); tau = rng.uniform(0.02, 0.4)
+        adv = rng.uniform(1e6, 1e9); sig = rng.uniform(0.005, 0.05); Y = rng.uniform(0.05, 0.4)
+        C = strategy_capacity(a, tau, adv, sig, impact_coef=Y).capacity
+        frac = square_root_impact_fraction(tau * C / adv, sig, Y)
+        assert abs(tau * frac - a) < 1e-9 * max(1.0, a), f"seed={s} 冲击↔容量不一致"

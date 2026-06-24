@@ -6,6 +6,16 @@
 ## <日期> · <标题>
 - 建/改了什么 + 命门  - 验收：<对抗测试 + 变异 + 全量数字>  - 下一步：<…> -->
 
+## 2026-06-24 · R18 平方根市场冲击 回测成本项（size-aware）+ 容量交叉校验命门（卡 7179ba36 · D-SQRT-IMPACT-R18）
+
+- **缘起**：autonomous-loop 下一切片。审计发现回测成本 `BacktestCostModel` slippage 是平 bps 常数、随单量不变 → 大单成本系统性低估、大资金回测过优（接近「未复权价喂回测」级 P&L 失真）→ 自取（这次外科、直接接进真回测非孤岛）。
+- **数学先行**：落 `findings/dreaminate/sqrt-impact-backtest-cost.md`（平方根冲击律 Y·σ·(Q/ADV)^δ + 理论 Kyle-λ/propagator 凹增 + 容量交叉校验命门）。
+- **实现（扩展不替换 + 向后兼容）**：`execution/impact.py` 单一公式源（δ=0.5 锁定 R18，与 §3 容量 strategy_capacity **同 sqrt-impact 物理**）；`BacktestCostModel` 加 impact_coef 默认 **0=关 → 冲击项恒 0、现有回测字节不变**；启用须 volume 列估 ADV、否则 init raise。
+- **对抗测试 + 命门层**：`test_sqrt_impact_cost.py` **14 passed**（√标度/向后兼容字节不变/大单惩罚/无 volume raise/无效 ADV fail-fast/日内日 ADV/前视 warning/显式无泄露入口）+ 方法学不变量 **+3**（√标度精确/Y·σ 线性/**容量 C 处冲击==毛 alpha 交叉校验**）。
+- **两轮独立复核全闭环**：① **Stop-hook codex 顾问 2 条 P2**——无效 ADV（volume 全 0/null/NaN）静默当 0 冲击=假绿灯（→成交时 fail-fast raise）/ 日内 1m·1h 数据 vol.mean 是每 bar 量非日 ADV、高估 √bars/日（→ts 为 datetime 时按日聚合 volume→真日 ADV）；② **多透镜评审 1 confirmed HIGH**——ADV/σ **全样本估计（含未来 bar）→ 启用 impact 的回测有前视泄露**（实测早期成交参与率被未来高量稀释 50x→冲击低估 ~7x），**命中 RULES.project §17 look-ahead 红线字面**，但评审精准裁定**非 stop-work、是 §7 拍板项**（理由：impact_coef 默认 0=关，active/默认路径无前视、字节不变；finding+docstring 已诚实标注「样本内估计未做滚动无泄露」+ P2 scope → 非 §3 假绿灯）。**按用户护栏「风险决策标清用户自负即放行、别把缓解当不交付硬条件」处置**：① default-off 路径前视红线守住 ② opt-in 自估路径 emit **代码级响亮 warning**（残余文档→代码可见、标用户自负）③ 提供**显式点位无泄露 ADV/σ 入口**（绕开自估、不触发 warning）④ mint **P2 卡 0f696e56**（滚动无泄露自估根治）。数学核心经 correctness/governance/CEO/eng 4 透镜独立复跑全真、对抗测试有真牙。
+- **验收**：**全量后端 1534 passed / 0 真失败**（1 条预存异步 flake `test_eval_endpoint_after_training` 在 354s 重载全量下排队超时报 queued、**单独重跑 1 passed**、与本切片 execution 改动完全无关），基线 1518 未破、**默认关字节不变验证**。mint P2: 0f696e56(无泄露自估) + e2afc5c2(三档成本预设接 sqrt-impact + 成交报告成本归因拆字段)。
+- **下一步**：land main 待用户授权；进下一切片。
+
 ## 2026-06-24 · §3 因子机构级生命周期度量（衰减/容量/因子族/拥挤）+ 命门（卡 b12de4f5 · D-LIFECYCLE-§3）
 
 - **缘起**：autonomous-loop 下一切片。M11 确认「toy 五态机 / 机构级（衰减/拥挤/容量/因子族）未做」→ 自取 GOAL §3 度量层 4 件。

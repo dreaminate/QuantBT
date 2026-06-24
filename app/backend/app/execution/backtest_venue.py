@@ -10,7 +10,9 @@
 
 from __future__ import annotations
 
+import math
 import uuid
+import warnings
 from collections.abc import Iterable
 from dataclasses import dataclass, field
 from typing import Literal
@@ -28,6 +30,7 @@ from .base import (
     OrderStatus,
     Position,
 )
+from .impact import IMPACT_DELTA, square_root_impact_fraction
 
 
 MatchingMode = Literal["next_bar_open", "vwap", "limit_sim"]
@@ -41,6 +44,15 @@ class BacktestCostModel:
     transfer_fee_bps: float = 0.0
     funding_bps_per_8h: float = 0.0
     side_aware: bool = True
+    # R18 平方根市场冲击（size-aware）：默认 0=关 → 冲击项恒 0、现有回测字节不变（向后兼容）。
+    # 启用（>0）须 prices 含 volume 列估 ADV（否则 init raise，绝不静默当 0 冲击=假绿灯）。
+    impact_coef: float = 0.0           # Y：冲击系数（无量纲，用户/校准提供）
+    impact_delta: float = IMPACT_DELTA  # δ=0.5 锁定（R18 窄带；改离须显式）
+    # **前视泄露处置（look-ahead 红线 · 用户拍板项 RULES §7）**：自估 ADV/σ 用**全样本**（含未来 bar），
+    # 启用即 emit 响亮 warning（残余从文档升到代码可见、标清用户自负）。要无泄露：调用方传**点位无泄露**的
+    # per-symbol ADV/σ（绕开自估、不触发 warning）。滚动无泄露自估属 P2（见 finding）。
+    impact_adv: dict[str, float] | None = None      # 显式 per-symbol ADV（点位无泄露，用户提供）
+    impact_sigma: dict[str, float] | None = None    # 显式 per-symbol σ（同上）
 
 
 @dataclass
@@ -81,6 +93,11 @@ class BacktestVenue(ExecutionVenue):
         self._timestamps: list = list(self._prices.get_column("ts").unique().to_list())
         self._cursor: int = 0
         self._audit = audit or ExecutionAuditLog()
+        # R18 平方根冲击：启用时预算 per-symbol ADV(均量) + σ(close 收益 std)。无 volume → raise（不假绿灯）。
+        self._impact_adv: dict[str, float] = {}
+        self._impact_sigma: dict[str, float] = {}
+        if self._cost.impact_coef > 0.0:
+            self._precompute_impact_stats()
 
     @property
     def audit(self) -> ExecutionAuditLog:
@@ -125,7 +142,7 @@ class BacktestVenue(ExecutionVenue):
                 continue
             qty = booked.order.quantity
             side: OrderSide = booked.order.side
-            cost = self._cost_for_trade(side, qty, executed_price)
+            cost = self._cost_for_trade(side, qty, executed_price, booked.order.symbol)
             signed_qty = qty if side == "buy" else -qty
             self._cash -= signed_qty * executed_price + cost
             pos = self._positions.get(booked.order.symbol) or Position(symbol=booked.order.symbol, quantity=0.0)
@@ -184,13 +201,72 @@ class BacktestVenue(ExecutionVenue):
         # 默认按下一 bar open 兜底
         return float(bar["open"])
 
-    def _cost_for_trade(self, side: OrderSide, qty: float, price: float) -> float:
+    def _precompute_impact_stats(self) -> None:
+        """启用平方根冲击时备 per-symbol ADV + σ。
+
+        **优先用调用方显式传入的点位无泄露 ADV/σ**（绕开自估前视）；未传则**全样本自估**（ADV=均日量、
+        σ=close 收益 std）并 emit **响亮 warning**（自估含前视、回测偏乐观、启用即用户自负——look-ahead
+        红线的 §7 拍板项处置）。无 volume → raise（不假绿灯）。滚动无泄露自估属 P2（finding）。
+        """
+        if self._cost.impact_adv is not None:
+            # 显式无泄露口径：用调用方提供的（点位无泄露是其数据管线责任，不触发自估前视 warning）。
+            self._impact_adv = {str(k): float(v) for k, v in self._cost.impact_adv.items()}
+            self._impact_sigma = {str(k): float(v) for k, v in (self._cost.impact_sigma or {}).items()}
+            return
+        warnings.warn(
+            "BacktestCostModel.impact_coef>0 且未传显式 ADV/σ → 自估用**全样本**(含未来 bar)估 ADV/σ，"
+            "构成**前视泄露**：启用 impact 的回测成本偏乐观（早期成交参与率被未来流动性稀释）。"
+            "active/默认路径(impact_coef=0)不受影响。要无泄露请传 BacktestCostModel.impact_adv/impact_sigma"
+            "(点位口径)。启用自估=用户选择/自负。滚动无泄露自估见 P2 卡。",
+            stacklevel=2,
+        )
+        if "volume" not in self._prices.columns:
+            raise ValueError(
+                "BacktestCostModel.impact_coef>0（平方根市场冲击）需 prices 含 'volume' 列估 ADV——"
+                "缺则无法估冲击，绝不静默当 0 冲击（不假绿灯）。请补 volume 或关闭 impact_coef。"
+            )
+        # ts 为 datetime → 先按**日**聚合 volume（日内 1m/1h 数据 vol.mean 是每 bar 量、非日 ADV，
+        # 会把参与率抬高 √(bars/日)、高估冲击）；int ts → 退化为每期量（中低频日频假设，见 finding 残余）。
+        ts_temporal = bool(self._prices.schema["ts"].is_temporal())
+        for sym, sub in self._prices.group_by("symbol"):
+            symbol = str(sym[0] if isinstance(sym, tuple) else sym)
+            if ts_temporal:
+                daily_vol = sub.group_by(pl.col("ts").dt.date()).agg(pl.col("volume").sum()).get_column("volume").drop_nulls()
+                adv = float(daily_vol.mean()) if daily_vol.len() > 0 else 0.0
+            else:
+                vol = sub.get_column("volume").drop_nulls()
+                adv = float(vol.mean()) if vol.len() > 0 else 0.0
+            closes = sub.sort("ts").get_column("close").drop_nulls()
+            if closes.len() >= 3:
+                rets = closes.pct_change().drop_nulls()
+                sigma = float(rets.std(ddof=1)) if rets.len() >= 2 else 0.0
+            else:
+                sigma = 0.0
+            self._impact_adv[symbol] = adv if math.isfinite(adv) else 0.0
+            self._impact_sigma[symbol] = sigma if math.isfinite(sigma) else 0.0
+
+    def _cost_for_trade(self, side: OrderSide, qty: float, price: float, symbol: str | None = None) -> float:
         notional = qty * price
         commission = notional * self._cost.commission_bps * 1e-4
         slippage = notional * self._cost.slippage_bps * 1e-4
         stamp = notional * self._cost.stamp_duty_bps * 1e-4 if side == "sell" else 0.0
         transfer = notional * self._cost.transfer_fee_bps * 1e-4
-        return commission + slippage + stamp + transfer
+        impact = 0.0
+        if self._cost.impact_coef > 0.0 and symbol is not None:
+            adv = self._impact_adv.get(symbol, 0.0)
+            sigma = self._impact_sigma.get(symbol, 0.0)
+            # **不假绿灯·fail-fast**：冲击启用却对要成交的 symbol 估不出有效 ADV（volume 全 0/null/NaN）
+            # → raise，绝不静默当 0 冲击让回测只剩平成本（那正是本选项要防的假绿灯）。
+            if not (math.isfinite(adv) and adv > 0.0):
+                raise ValueError(
+                    f"symbol={symbol} ADV={adv} 无效（volume 全 0/null/NaN）——平方根冲击启用却无法估，"
+                    "绝不静默当 0 冲击（不假绿灯）。请补该 symbol 有效 volume 或关闭 impact_coef。"
+                )
+            participation = qty / adv   # 本笔成交量 / 日均成交量(ADV)
+            impact = notional * square_root_impact_fraction(
+                participation, sigma, self._cost.impact_coef, self._cost.impact_delta
+            )
+        return commission + slippage + stamp + transfer + impact
 
 
 __all__ = ["BacktestCostModel", "BacktestVenue", "MatchingMode"]
