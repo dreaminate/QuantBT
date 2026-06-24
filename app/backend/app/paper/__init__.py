@@ -15,6 +15,11 @@ from .desk import (
 )
 from .replay_provider import ReplayBarProvider, SIMULATED_SOURCE
 from .scheduler import PaperScheduler, PaperSchedulerConfig
+from .testnet_provider import (
+    TESTNET_SOURCE,
+    TestnetBarProvider,
+    make_testnet_provider,
+)
 
 __all__ = [
     "AShareLiveForbidden",
@@ -27,4 +32,7 @@ __all__ = [
     "ReplayBarProvider",
     "RiskGateMutationForbidden",
     "SIMULATED_SOURCE",
+    "TESTNET_SOURCE",
+    "TestnetBarProvider",
+    "make_testnet_provider",
 ]

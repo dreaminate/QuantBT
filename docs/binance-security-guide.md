@@ -78,6 +78,51 @@ UI 上 mainnet 切换需要**二次确认弹窗** + 写入 audit log（`/data/au
 
 ---
 
+## 4.5 模拟台（paper）testnet 真喂（可选档）
+
+模拟台（paper run）默认用**捆绑样本回放 / 合成游走**喂 bar（零依赖、无 key 也能跑，跑出移动净值）。
+如果你配了 **Binance testnet** key，可让 crypto paper run 自动切到喂**交易所 testnet 真实时行情**
+（公共 K 线 / mark），更贴近真盘——这一档**仍是模拟撮合、永不下真单、不动真钱**。
+
+### 怎么配（走 keyring，不进 git）
+
+把 testnet key 以名字 **`binance_testnet`** 写入 keystore（与第 2 节同一接口；切勿落 YAML/环境变量/代码）：
+
+```bash
+curl -X POST http://127.0.0.1:8000/api/security/keystore \
+  -H 'Content-Type: application/json' \
+  -d '{"name":"binance_testnet","api_key":"<TESTNET_KEY>","api_secret":"<TESTNET_SECRET>"}'
+```
+
+testnet key 在 Binance Futures testnet 控制台申请：<https://testnet.binancefuture.com>（与 mainnet 完全
+独立、是假钱）。
+
+### 配好后怎么用
+
+注册 paper run 时带 `testnet=true`（默认 `false`）：
+
+```bash
+curl -X POST http://127.0.0.1:8000/api/paper/runs \
+  -H 'Content-Type: application/json' \
+  -d '{"run_id":"crypto_tn_demo","market":"crypto","symbols":["BTCUSDT"],"testnet":true}'
+```
+
+- **配了 `binance_testnet` key 且连得上** → 喂 testnet 真实时 bar，`status` 里
+  `provider_kind="testnet"`、`simulated_source="binance_testnet_live"`。
+- **没配 key / testnet 连不上** → **诚实回退**到样本/合成兜底（不空跑、不假装连上真交易所）：
+  `provider_kind="replay_fallback"`、`degrade_reason` 写明回退原因，`simulated_source` 仍是兜底真实标签
+  （`bundled_sample_replay` / `deterministic_sim_walk`），**绝不**标成 `binance_testnet_live`。
+
+### 安全边界（与实盘同源，绝不削弱）
+
+- **testnet key 永不进 LLM / agent 提示词**：testnet 行情走**公共**端点（K线 / premiumIndex，无需签名），
+  系统**只查 key 名是否存在、绝不取出明文 secret**（与 KeyBroker「仅查名、不 fetch 本体」同则）。
+- **永走模拟撮合、永不下真单**：testnet 档只**读行情**喂模拟台，不碰任何 `place_order` / 下单签名路径。
+- **仅 crypto**：A股 paper run 永不走 testnet（恒走兜底），且 A股**永不 live 下单**（致命错误防线不破）。
+- testnet 端到端真发单矩阵另见 `pytest -m testnet`（需上面 `binance_testnet` key；默认 skip）。
+
+---
+
 ## 5. 强制阅读的"致命错误清单"（GOAL §12）
 
 如果你或团队成员触犯任意一条，立即停下：

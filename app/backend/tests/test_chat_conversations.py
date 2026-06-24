@@ -120,6 +120,19 @@ def test_retrieve_empty_query_returns_empty():
     assert retrieve("", glossary=glossary) == []
 
 
+def test_retrieve_named_term_ranks_first_over_family_siblings():
+    # 回归门：词条补全后正文变长 + "夏普"散落到 sharpe 家族多个词条（自助法夏普/折减夏普…），
+    # 若无"别名整体点名"的 boost，canonical 词条会被同族稀释挤出 top-1。
+    # 种坏门：谁删了 rag.retrieve 的 named-boost，本测试必红。
+    glossary = load_glossary_dir(Path(__file__).resolve().parents[3] / "docs" / "glossary")
+    # "夏普" 是 sharpe_ratio 的 standalone 别名，应排第一（而非 bootstrap_sharpe_ci/deflated_sharpe）。
+    hits = retrieve("夏普 是什么", glossary=glossary)
+    assert hits and hits[0].slug == "sharpe_ratio"
+    # 同族其它词条仍可出现在后续位次，但不得盖过被点名者。
+    sortino = retrieve("索提诺", glossary=glossary)
+    assert sortino and sortino[0].slug == "sortino_ratio"
+
+
 def test_format_run_context_extracts_key_fields():
     run = {"run_id": "r1", "sharpe": 1.5, "pbo": 0.7, "unknown_field": 42}
     s = format_run_context(run)

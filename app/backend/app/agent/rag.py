@@ -78,6 +78,8 @@ def retrieve(
         return []
 
     # 1. glossary 检索
+    q_set = set(q_tokens)
+    query_lower = query.lower()
     glossary_scored: list[tuple[float, GlossaryTerm]] = []
     for t in glossary:
         # 拼 doc：display + L1 + L2 + aliases
@@ -92,8 +94,19 @@ def retrieve(
         # 归一化 BM25 到 0-1
         bm_norm = min(bm / 8.0, 1.0)
         overlap = _keyword_overlap(q_tokens, d_tokens)
+        # 词条补全后正文变长 + "夏普"等共有词散落到 sharpe 家族多个词条（自助法夏普/折减夏普…），
+        # 纯 BM25/token 重合分不清谁是 canonical。判别信号 = 词条的"别名"是否被查询整体点名：
+        # "夏普"是 sharpe_ratio 的 standalone 别名，而非 bootstrap_sharpe_ci/deflated_sharpe 的别名。
+        handles = [a.lower().strip() for a in t.aliases]
+        handles.append(t.slug.replace("_", " ").lower())
+        named = any(h and len(h) >= 2 and h in query_lower for h in handles)
+        # 次级身份信号：别名/显示名 token 与查询的重合（短语未命中时的兜底排序）
+        id_tokens = set(_tokenize(" ".join([
+            t.frontmatter.display, " ".join(t.aliases), t.slug.replace("_", " "),
+        ])))
+        id_overlap = (len(q_set & id_tokens) / len(q_set)) if q_set else 0.0
         # recency 对 glossary 不适用，给 0
-        score = 0.55 * bm_norm + 0.35 * overlap + 0.10 * 0.0
+        score = 0.55 * bm_norm + 0.35 * overlap + 0.30 * id_overlap + (0.80 if named else 0.0)
         if score > 0.05:
             glossary_scored.append((score, t))
 

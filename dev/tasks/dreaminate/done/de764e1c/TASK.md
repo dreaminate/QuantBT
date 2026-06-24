@@ -1,10 +1,10 @@
 ---
 uuid: de764e1c65a242daa05848ad2ad0f56f
 title: 监控生产调度 + 因子观测记录管道——让 monitor_tick 在生产真跑
-status: todo
+status: done
 owner: dreaminate
 assigned_by: dreaminate
-review_status: 0
+review_status: 1
 priority: P2
 area: monitor
 source: goal-gap
@@ -34,3 +34,8 @@ D-WAVE1A 残余②：M 卡建了闭环机制（`monitor_tick`→lifecycle 权威
 
 ## 验收一句话 [必填]
 生产 weekly 监控真驱动自动降级/退役 + 问责落 PROV；缺 croniter 启动响亮失败；不破基线。
+
+## 完成记录（2026-06-24 · deliver-final）
+- commit `b871c92`：`monitor/production.py`——生产 `Scheduler(strict=True)` + weekly DAG（`"0 9 * * 1"`）；观测管道 ExecutionAuditLog→`compute_weekly_cost_drift`→`monitor_tick`→lifecycle 权威自动降级/退役落单一 PROV；`croniter>=2.0` 登记真依赖（缺则启动响亮失败）。**范畴红线钉死**：`monitor_tick` 绝不接 gate verdict/pbo/dsr/overfit。
+- 对抗测试 +10 + 双轴变异自检；`test_monitor_closure` 15 passed；全量后端 1357 passed / 0 failed。
+- 诚实残余（建议 mint 新卡，未过度造）：① 生产周度 per-factor IC 重算源未建（`observation=None`，退役暂由 cost-drift 驱动）② §5 漂移检测器 PSR/CUSUM/PSI 真未写（诚实标残余，未投机造桩）③ 观测内存级跨进程重启不持久。
