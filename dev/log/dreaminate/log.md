@@ -6,6 +6,15 @@
 ## <日期> · <标题>
 - 建/改了什么 + 命门  - 验收：<对抗测试 + 变异 + 全量数字>  - 下一步：<…> -->
 
+## 2026-06-24 · 交付门收尾波「全量落地 web」全完成（4 P2 卡清零 + glossary 27 + rag 回归修 + land main）
+
+- **缘起**：用户 /autoplan「全量落地 web」→ 3 问全选推荐档（全量范围 / 授权 land delivery-slice / 凭据门码路+文档待验收）。理解 workflow 摸清：项目 ~95% 已绿，真缺口=整波 32 commit 未 land main + 5 张卡（e1a98c41 已做未归档 + 4 待做）。worktree `deliver-final`（基 delivery-slice）。
+- **4 张 P2 卡（deep-opus 各实现，leader 复核真绿 + 变异自检）**：ba59fb7b 组合 promote 生产端点 record=True 真记 honest-N（`4082d5d`，+8 测）/ de764e1c 监控生产调度 strict scheduler+观测管道（`b871c92`，+10 测，范畴红线钉死 monitor_tick 不接 verdict，§5 漂移检测器诚实标残余未投机造桩）/ 64717fe6 paper 真 BTC 样本回放 entry_price 反推防 P&L 失真（`45b0f19`，+7 测）/ a367bfc8 testnet 真喂码路 fail-open 留痕 key 不进 LLM（`2fd185f`，+20 测，真连接待用户 key）+ e1a98c41 vision bug 落档（ac72b81 此前已修）。
+- **glossary 27 词条**：workflow 27 写手并行→6 批对抗验文献真实性→修 6 处（2 critical：var_cvar VaR 公式杂散负号、funding_rate 杜撰文献换真 arXiv:2310.11771）（`2ea71b7`）。validate_glossary PASS count=30。
+- **回归自查（不假绿）**：glossary 补全改了 RAG 检索结果→test_retrieve_glossary_hit 转红（base 0 failed=我引入）。二分定位坐实（glossary 还原 base→测试转绿），修 rag 加别名整体点名 boost（`d39d606`）+ 钉回归门；未让卡2 的「预存」误判蒙混。
+- **验收**：**全量后端 1357 passed / 13 skipped / 0 failed（实跑 189s）**+ 前端 **vitest 280 + tsc 0 + build 绿**（delivery-slice worktree 验，前端源同 deliver-final）+ validate PASS。
+- **下一步**：land delivery-slice（含本波收尾）→ main（用户授权）。凭据门 §9 尾项码路+文档就绪待用户验收；新生残余建议 mint 卡（生产周度 IC 重算、§5 漂移检测器、观测持久化）。
+
 ## 2026-06-23 · code-review 修复批（交付门波 land 后 xhigh 审出 15 缺陷全修）· 6 worker 并行 + land main
 
 - **缘起**：交付门波 land main 后跑 workflow code-review(xhigh)：50 候选→26 验证→**15 报告**。讽刺的是「修 §3 假绿灯」的波自己留了新假绿灯 + 默认路径断 + leader relabel 偷懒。用户「全部要修」。

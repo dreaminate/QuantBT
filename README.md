@@ -107,5 +107,5 @@ docker compose up -d
 
 ```bash
 python -m pytest app/backend/tests -q
-# 1001 passed / 13 skipped
+# 1357 passed / 13 skipped（实跑 2026-06-24；数随套件增长，以实跑为准）
 ```

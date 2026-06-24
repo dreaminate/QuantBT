@@ -1,10 +1,10 @@
 ---
 uuid: a367bfc83bd744788e2404895df29f75
 title: paper testnet 真喂 provider——加密 testnet 实时 bar/mark（用户「都做」可选档）
-status: todo
+status: done
 owner: dreaminate
 assigned_by: dreaminate
-review_status: 0
+review_status: 1
 priority: P2
 area: paper
 source: goal-gap
@@ -29,3 +29,8 @@ depends_on: [cfb7d950a05f401784ac6063fcc73419]
 
 ## 验收一句话 [必填]
 配 testnet key 的 paper run 真喂交易所 testnet bar；无 key 诚实回退；动钱/A股 live 治理门不破；不破基线。
+
+## 完成记录（2026-06-24 · deliver-final）
+- commit `2fd185f`：`paper/testnet_provider.py`——`TestnetMarketClient` 可注入接缝 + 公共端点空凭据（key 结构上不流经、不进 LLM）；有 key 注入 testnet provider、无 key 诚实回退 replay（`provider_kind`+`degrade_reason` 留痕，fail-open per D-T021-3）；A股恒不 testnet、恒拒 live。`docs/binance-security-guide.md §4.5` 加用户插 key 步骤。
+- 对抗测试 +20（key 不进 LLM / 不调真 live 下单 / 无 key 不伪装 / fail-open 留痕 / 有 key bars_fed>0）+ 变异自检（谎称连真 → 5 测转红）；145 passed / 13 skipped（既有 testnet 真发单 e2e 默认 skip，需真 key + `-m testnet`）。
+- 凭据门诚实残余：**真 testnet 端到端连接未验**（需用户 `binance_testnet` key），已文档化「插 key 一跑即真喂」，绝不假装验过真连接。

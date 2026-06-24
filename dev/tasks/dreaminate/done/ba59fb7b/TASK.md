@@ -1,10 +1,10 @@
 ---
 uuid: ba59fb7b858143ea8314c4853838398e
 title: 组合 promote production 端点——组合三角 gate record=True 真记 honest-N
-status: todo
+status: done
 owner: dreaminate
 assigned_by: dreaminate
-review_status: 0
+review_status: 1
 priority: P2
 area: portfolio
 source: goal-gap
@@ -32,3 +32,8 @@ D-WAVE1A 残余①：`gate_portfolio` 的 record=True 能力已具备（C 卡建
 
 ## 验收一句话 [必填]
 组合 promote 在生产真记 honest-N + 走三角 gate；不破基线。
+
+## 完成记录（2026-06-24 · deliver-final）
+- commit `4082d5d`：`POST /api/portfolio/{id}/promote` 接 `gate_portfolio(record=True)` 复用一本账 `LEDGER`/`RETURNS_STORE` 单一源 → 组合 promote 真记 honest-N（独立 `portfolio:<id>` 命名空间）；config_hash 反作弊重排不复刷；过拟合不达 green；单策略路径零破坏；不可评分（净收益<2）入账前 422 拒（不污染不可逆账本）。
+- 对抗测试 +8 + 变异自检（record=False 一翻 → 5 测 assert 0==1 转红）；`test_portfolio_gate` 14 passed；全量后端 1357 passed / 0 failed。
+- 诚实残余：无持久组合 store（weights+已实现收益由调用方喂，防前视）；端点是 caller 证据记录者，PIT join 仍 caller 责任。
