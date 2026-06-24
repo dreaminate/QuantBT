@@ -6,6 +6,17 @@
 ## <日期> · <标题>
 - 建/改了什么 + 命门  - 验收：<对抗测试 + 变异 + 全量数字>  - 下一步：<…> -->
 
+## 2026-06-24 · R23 不确定性预测区间（split conformal/CQR/ACI）+ abstain + 覆盖定理命门（卡 69e1cb16 · D-CONFORMAL-R23）
+
+- **缘起**：autonomous-loop 下一切片。确认 GOAL §4「conformal/CQR/ACI 区间 + abstain（R23）」**完全未实现**（eval/ 无不确定性模块），最高杠杆 + 数学最密 + 直击「能信」（诚实不确定性而非假自信）+ 非凭据门 → 自取。
+- **数学先行 + 并行思考**：落 `findings/dreaminate/conformal-intervals.md`（split conformal/CQR/ACI 公式 + 覆盖定理 + 可证伪不变量 + R23 不锁 α 治理）；codex(xhigh) 独立复核，**修正三处**：ACI 长程界应 (max{α₁,1−α₁}+γ)/(Tγ) 非 (α₁+γ)/(Tγ)；CQR Q̂ 可负（合法收窄）+ 端点交叉 abstain 绝不交换；手写秩分位（非 np.quantile 默认插值）。
+- **实现（扩展不替换）**：新建 `eval/conformal.py`——**模型无关**（接残差/分位预测、不接模型本体，合信号契约解耦）；秩 k=⌈(n+1)(1−α)⌉ 含 +1 校正、k>n→abstain（n<⌈1/α⌉−1）；ACI raw α_t 递推 + clipped-level 工程变体。**命门钉死**：①不锁 α（R23·全调用方传参、内部不硬编，仅 docstring/gamma 出现 0.x 字面量）②abstain 三态不假绿灯 + `__post_init__` 构造期拒矛盾态 + **非 1D 输入亦 abstain**（防畸形数组区间逃网）③exchangeability 诚实披露、ACI 工程变体实测收敛不空引论文界。
+- **对抗测试 + 命门**：`test_conformal_intervals.py` **25 passed**（abstain/CQR符号/Q̂可负/端点交叉/ACI方向/漂移长程覆盖/非1D/构造期拒态）+ 方法学不变量 **+9**（分布无关覆盖 ≥1−α、**+1 校正 sentinel 门有牙**、ACI 漂移长程覆盖收敛、单调嵌套、CQR 覆盖、ACI 递推恒等、不锁 α）。
+- **实证亮点**：split 覆盖 normal/重尾t/偏态/异方差**全≈0.90 分布无关**；**ACI 漂移下长程覆盖 0.901 vs 固定 split 0.542**（漂移崩）；CQR oracle 过窄→Q̂>0 放大、过宽→Q̂<0 收窄。
+- **多透镜评审（autoplan 等价 4 透镜 + 对抗复核）**：confirmed_real 空——数学经 CEO/governance **独立数值复验**全真（覆盖落理论带、abstain 阈跨 α 精确含非整 α、CQR validity 不依赖分位质量、四命门达标）。correctness 透镜点出 1 条 medium：**非 1D 输入绕过 abstain 网产畸形数组区间** → 已修（1D 守门）+ 低优清理全做（CQR max_width 对称旋钮 / `__post_init__` 拒矛盾态 / `to_dict` / 披露面收窄到已实现 / `_min_calib_for` 单一源 / docstring 措辞）。
+- **验收**：**全量后端 1460 passed / 13 skipped / 0 failed**，基线 1453 未破。mint **P2 卡 92a2182f**（消费侧接线：模型台/信号层预测附校准区间 + abstain UI 渐进披露，应 CEO「未接线另一半当 live 债追」）。
+- **下一步**：land main 待用户授权（不擅自 push/land）；进下一切片。
+
 ## 2026-06-24 · §5 生产期漂移检测器（rolling-PSR/CUSUM/Page-Hinkley/PSI）+ 理论不变量命门（卡 d718d5c5 · D-DRIFT-§5）
 
 - **缘起**：autonomous-loop（用户授权自主迭代，北极星#1 数学贯穿/#2 理论先证明/#4 监管对齐命门）。所有卡 done、pool 空 → 自取 state.md 点名的「新生残余：§5 漂移检测器」。现有 monitor 只有粗粒度成本漂移阈值，缺 GOAL §5 的统计漂移检测器。

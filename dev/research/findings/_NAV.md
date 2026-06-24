@@ -15,6 +15,7 @@
 - `desk-handoff/sharedFoundation.md` — I now have a complete, verified picture across all desks plu
 
 ## dreaminate
+- `dreaminate/conformal-intervals.md` — FINDING · R23 不确定性预测区间（split conformal / CQR / ACI）+ abstain
 - `dreaminate/drift-detectors.md` — FINDING · §5 生产期漂移检测器（rolling-PSR / CUSUM / Page-Hinkley / P
 - `dreaminate/spine-designs/00-contracts-and-coherence.md` — 00 · 脊柱跨部件契约一致性 + 测试真实性复核
 - `dreaminate/spine-designs/01-deterministic-kernel.md` — 01 · 确定性 DAG 内核 + checkpoint/replay/fork/rollback + 交易副作用不可幂

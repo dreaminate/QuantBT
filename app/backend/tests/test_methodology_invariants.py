@@ -33,6 +33,12 @@ import pytest
 from app.eval.dsr import _expected_max_sr, deflated_sharpe_ratio, probabilistic_sharpe_ratio
 from app.eval.n_eff import NEFF_CONFIG_VERSION, n_eff_from_matrix
 from app.eval.pbo import cscv_pbo
+from app.eval.conformal import (
+    AdaptiveConformalInference,
+    SplitConformalCalibrator,
+    cqr_interval,
+    split_conformal_interval,
+)
 from app.monitor.drift import (
     _page_hinkley_global_mean_variant,
     cusum_drift,
@@ -573,3 +579,141 @@ def test_rolling_psr_detector_caliber_locked_against_dsr_deflation():
     params = set(inspect.signature(rolling_psr_drift).parameters)
     for forbidden in ("n_trials", "var_sr_hat", "trials", "n_trial", "expected_max_sr"):
         assert forbidden not in params, f"rolling-PSR 暴露了把 DSR 通缩走私进 live 退役的口：{forbidden}"
+
+
+# ===========================================================================
+# R23 不确定性区间 — split conformal / CQR / ACI（分布无关覆盖保证）
+#   设计/推导：dev/research/findings/dreaminate/conformal-intervals.md
+#   覆盖定理是分布无关、有限样本结论 ⇒ 可直接 Monte-Carlo 证伪（覆盖率掉到 1−α 以下即实现跑偏）。
+# ===========================================================================
+
+
+def _split_coverage(dist: str, alpha: float, seeds: int = 60, n_cal: int = 200, n_test: int = 80) -> float:
+    """对某分布跑 split-conformal 边际覆盖 Monte-Carlo（预测器=校准前段均值）。"""
+    covs = []
+    for s in range(seeds):
+        rng = np.random.default_rng(10_000 + s)
+        if dist == "normal":
+            data = rng.standard_normal(n_cal + n_test + 50)
+        elif dist == "heavy_t":
+            data = rng.standard_t(3, n_cal + n_test + 50)
+        elif dist == "skew":
+            data = rng.exponential(1.0, n_cal + n_test + 50) - 1.0
+        else:  # heteroscedastic-ish 混合
+            data = rng.standard_normal(n_cal + n_test + 50) * rng.uniform(0.5, 2.0)
+        mu = float(data[:50].mean())
+        sc = SplitConformalCalibrator(data[50:50 + n_cal] - mu)
+        test = data[50 + n_cal:50 + n_cal + n_test]
+        covs.append(sum(sc.interval(mu, alpha).covers(y) for y in test) / n_test)
+    return float(statistics.mean(covs))
+
+
+def test_split_conformal_marginal_coverage_is_distribution_free():
+    """边际覆盖 ≥1−α 在正态/重尾/偏态/异方差**同保**（分布无关，conformal 核心定理）。
+
+    定理（Vovk; Lei et al. 2018）：可交换 ⇒ P(Y∈C)≥1−α，与底层分布无关。任何让覆盖掉到 1−α
+    以下的实现（漏 +1 校正 / 用错分位 / abstain 当数值）都背离定理。MC tol 容多 seed 抽样噪声。
+    """
+    alpha = 0.1
+    for dist in ("normal", "heavy_t", "skew", "hetero"):
+        cov = _split_coverage(dist, alpha)
+        assert cov >= 1 - alpha - 0.015, f"{dist} 覆盖 {cov:.3f} < 目标 {1 - alpha}（分布无关保证被破坏）"
+
+
+def test_split_conformal_plus_one_correction_has_teeth():
+    """Sentinel（门有牙）：去掉 +1 校正（用 ⌈n(1−α)⌉）在小 n **明显欠覆盖**。
+
+    证明 +1 校正是真判别器：正确实现达标、错误实现欠覆盖、且差距清晰（非恒真废测）。
+    """
+    alpha, n_cal, trials = 0.1, 20, 4000
+
+    def cov(use_plus_one: bool) -> float:
+        hits = 0
+        for s in range(trials):
+            rng = np.random.default_rng(20_000 + s)
+            d = rng.standard_normal(n_cal + 1)
+            calib = np.sort(np.abs(d[:n_cal]))
+            k = math.ceil((n_cal + 1) * (1 - alpha)) if use_plus_one else math.ceil(n_cal * (1 - alpha))
+            q = np.inf if k > n_cal else calib[max(1, k) - 1]
+            hits += abs(d[n_cal]) <= q
+        return hits / trials
+
+    correct, buggy = cov(True), cov(False)
+    assert correct >= 1 - alpha - 0.015, f"正确实现覆盖 {correct:.3f} 不足"
+    assert correct - buggy > 0.02, f"去 +1 校正未明显欠覆盖（correct={correct:.3f} buggy={buggy:.3f}）→ sentinel 无判别力"
+
+
+def test_split_conformal_not_grossly_overcovering():
+    """效率：覆盖 ≤ 1−α + 合理裕度（不靠把区间撑到无穷蒙混达标）。上界理论 ≈1−α+1/(n+1)。"""
+    cov = _split_coverage("normal", 0.1, n_cal=200)
+    assert cov <= 1 - 0.1 + 0.05, f"覆盖 {cov:.3f} 远超 1−α（疑区间无意义地宽/恒覆盖）"
+
+
+def test_split_conformal_calibration_permutation_invariant():
+    """校准集顺序无关（conformal 用的是序统计量、集合运算）。"""
+    rng = np.random.default_rng(30_001)
+    resid = rng.standard_normal(200)
+    base = split_conformal_interval(resid, 0.5, 0.1)
+    perm = split_conformal_interval(rng.permutation(resid), 0.5, 0.1)
+    assert abs(base.width - perm.width) < 1e-12
+
+
+def test_split_conformal_interval_nested_in_alpha():
+    """α₁<α₂ ⇒ C_{α₁} ⊇ C_{α₂}（小 α 区间更宽，单调嵌套）。跨 100 seed。"""
+    for s in range(100):
+        rng = np.random.default_rng(40_000 + s)
+        sc = SplitConformalCalibrator(rng.standard_normal(500))
+        w = [sc.interval(0.0, a).width for a in (0.02, 0.05, 0.1, 0.2)]
+        for i in range(len(w) - 1):
+            assert w[i] >= w[i + 1] - 1e-9, f"seed={s} α 升区间反宽 {w[i]}→{w[i + 1]}"
+
+
+def test_cqr_marginal_coverage_distribution_free():
+    """CQR 边际覆盖 ≥1−α（异方差，给定分位预测）。同 split 保证、宽度自适应。"""
+    covs = []
+    for s in range(40):
+        rng = np.random.default_rng(50_000 + s)
+        x = rng.uniform(0, 5, 600)
+        y = np.sin(x) + rng.standard_normal(600) * (0.1 + 0.3 * x)
+        qlo, qhi = np.sin(x) - 1.64 * (0.1 + 0.3 * x), np.sin(x) + 1.64 * (0.1 + 0.3 * x)
+        hit = [cqr_interval(qlo[:300], qhi[:300], y[:300], qlo[j], qhi[j], 0.1).covers(y[j]) for j in range(300, 600)]
+        covs.append(float(np.mean(hit)))
+    assert statistics.mean(covs) >= 0.9 - 0.02, f"CQR 覆盖 {statistics.mean(covs):.3f} 不足"
+
+
+def test_aci_raw_recursion_identity():
+    """ACI raw 递推恒等：α_{T+1} = α₁ + γ·Σ(α−errₜ)。方向/累加搞错必抓。"""
+    rng = np.random.default_rng(60_001)
+    aci = AdaptiveConformalInference(target_alpha=0.1, gamma=0.03)
+    errs = []
+    for _ in range(200):
+        covered = bool(rng.random() > 0.15)
+        errs.append(0 if covered else 1)
+        aci.record(covered)
+    expected = 0.1 + 0.03 * sum(0.1 - e for e in errs)
+    assert abs(aci.alpha_t - expected) < 1e-9, f"ACI 递推不符 {aci.alpha_t} vs {expected}"
+
+
+def test_aci_long_run_coverage_converges_under_drift():
+    """ACI 长程覆盖在分布漂移下 →1−α（不需可交换）；这是 ACI 区别于 split 的核心定理性质。"""
+    rng = np.random.default_rng(70_001)
+    aci = AdaptiveConformalInference(target_alpha=0.1, gamma=0.05)
+    window = list(np.abs(rng.standard_normal(100)))
+    T = 2000
+    cov = []
+    for t in range(T):
+        scale = 1.0 + 2.5 * t / T
+        y = rng.standard_normal() * scale
+        c = aci.interval(0.0, np.array(window[-100:])).covers(y)
+        cov.append(c)
+        aci.record(c)
+        window.append(abs(y))
+    mean_cov = float(np.mean(cov))
+    assert abs(mean_cov - 0.9) < 0.03, f"ACI 漂移下长程覆盖 {mean_cov:.3f} 未收敛 0.9"
+
+
+def test_conformal_alpha_not_hardcoded():
+    """不锁 α（R23）：split/CQR/ACI 的 α 均为调用方传参，签名无内部硬编的固定显著性。"""
+    assert "alpha" in inspect.signature(SplitConformalCalibrator.interval).parameters
+    assert "alpha" in inspect.signature(cqr_interval).parameters
+    assert "target_alpha" in inspect.signature(AdaptiveConformalInference.__init__).parameters
