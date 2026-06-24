@@ -59,6 +59,21 @@ docker compose up -d
 
 ---
 
+## 上线最后一公里（demo→生产：需你提供的凭据 / 真金）
+
+> demo 与加密研究/回测链路**零凭据即开即用**。下面 4 项是 §9 交付总闸里**代码与文档已就绪、只等你插凭据/真金验收**的部分——这几项软件无法替你验（要真账号/真金/真 key），但码路与对抗测试已绿，**插上一跑即真**。
+
+| 要解锁 | 你提供 | 插哪里 | 文档 |
+|---|---|---|---|
+| A股真数据回测 | `TUSHARE_TOKEN` | `~/.quantbt/secrets.yaml` 的 `tushare.token`，或 `export TUSHARE_TOKEN=` | [secrets-guide](docs/secrets-guide.md) |
+| 真 LLM 多轮 Agent | OpenAI / Anthropic / Qwen API key | `secrets.yaml` 对应字段（无 key 自动回退 DevLocalLLM，不假装） | [user-manual](docs/user-manual.md) |
+| 加密 testnet 真喂 paper | Binance **testnet** key（名 `binance_testnet`） | `/api/security/keystore`（走 keyring 不入 git；无 key 诚实回退样本回放） | [binance-security-guide §4.5](docs/binance-security-guide.md) |
+| 加密小额实盘验证 | Binance **mainnet** key（关提币 + IP 白名单）+ 真金 100 USDT + 一周 | SafeKey wizard → Live Ladder（不可跳级，killswitch 兜底） | [binance-security-guide](docs/binance-security-guide.md) |
+
+> A股**永不实盘**（硬约束）；加密实盘走 backtest→testnet→小额 ladder 不可跳级。详见 [`dev/GOAL.md`](dev/GOAL.md) §5/§9。
+
+---
+
 ## 立即看到的产物
 
 - **5 个 demo run** 入仓可在 RunDetail 直接打开：
