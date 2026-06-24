@@ -6,6 +6,17 @@
 ## <日期> · <标题>
 - 建/改了什么 + 命门  - 验收：<对抗测试 + 变异 + 全量数字>  - 下一步：<…> -->
 
+## 2026-06-24 · R4 CPCV（Combinatorial Purged CV）多路径回测 + 组合学/防泄露命门（卡 41ea6e35 · D-CPCV-R4）
+
+- **缘起**：autonomous-loop 下一切片。确认 GOAL §4「CPCV 双轨 walk-forward（R4）」中 CPCV 多路径**未建**（`models/purged_cv.py` 只有单路径 purged k-fold；pbo.py 的 cscv_pbo 是 PBO 用对称 CV ≠ CPCV 路径生成）→ 自取扩展。数学最密 + correctness-critical（防泄露 + 多路径分布喂已建 PBO/DSR 命门）。
+- **数学先行 + 并行思考**：落 `findings/dreaminate/cpcv.md`（φ=C(N−1,k−1)=k·C(N,k)/N 双计数证明 + golden path_matrix N=4,k=2 + 命门）；codex(xhigh) 复核——确认 φ 恒等/路径重建算法，加固三处：**purge 必须逐 test group 段判**（非全局 min..max，否则误删非连续 test group 中间合法 train）、**PBO 路径≠策略红线**（单策略 φ 路径绝不冒充策略数）、embargo 语义（AFML test 后 vs purged_kfold 两侧）。
+- **实现（扩展不替换）**：`models/cpcv.py` 复用 purged_cv 的 t1-overlap purge 口径；C(N,k) 爆炸预检 raise **绝不静默采样**（否则 φ 公式失效）；多路径 Sharpe 分布给保守分位 q05/min。**命门钉死**：①φ 路径≠φ 策略（不产 PBO，测试守）②饿死/未覆盖路径记 NaN 剔除 + n_paths_dropped 可见、**绝不伪造 0.0 污染保守分位**③insufficient dict 形状对称④R4=B「真实市场未确立」`CPCV_REALWORLD_SUPERIORITY_ESTABLISHED=False` 常量机器钉死（双轨不自动判赢）。
+- **对抗测试 + 命门层**：`test_cpcv.py` **22 passed**（golden path_matrix / 覆盖来源==path_matrix / purge sentinel / embargo AFML 单侧 / 饿死路径不假 0 / PBO 红线 / 爆炸 / 边界）+ 方法学不变量 **+4**（φ 恒等 N=3..12 / occurrence 双射 / 覆盖来源 / 逐段 purge sentinel）。
+- **多透镜评审（autoplan 等价 4 透镜 + 对抗复核，14 agents）**：数学核心经 correctness/governance/CEO/eng **独立复跑全真**、对抗测试有真牙（sentinel 证伪变体确变红）。修 9 confirmed：**medium 命门后门（饿死路径默认 Sharpe 静默假 0.0 污染 q05/min）** + insufficient dict 形状不对称 + 路径覆盖测试缺来源区分牙 + embargo 单侧方向零测试 + low 清理（build_path_matrix 爆炸护栏/负 embargo 拒/死 import/per_combo 长度校验/__init__ 再导出/caveat 机器钉死/文档「生成器→list」）。
+- **实证亮点**：φ 恒等全对（N=3..12）；golden path_matrix 精确匹配 codex；**purge 0 泄露 vs 不 purge 120**；饿死路径记 NaN 不污染 min（修后正收益策略 min>0）。
+- **验收**：**全量后端 1487 passed / 13 skipped / 0 failed**，基线 1478 未破。mint **P2 卡 861182e6**（接 promote/overfit gate + cv_scheme 双轨 report，应 CEO「价值闭环未合拢——CPCV 纯孤岛」）。
+- **下一步**：land main 待用户授权；进下一切片。
+
 ## 2026-06-24 · R23 不确定性预测区间（split conformal/CQR/ACI）+ abstain + 覆盖定理命门（卡 69e1cb16 · D-CONFORMAL-R23）
 
 - **缘起**：autonomous-loop 下一切片。确认 GOAL §4「conformal/CQR/ACI 区间 + abstain（R23）」**完全未实现**（eval/ 无不确定性模块），最高杠杆 + 数学最密 + 直击「能信」（诚实不确定性而非假自信）+ 非凭据门 → 自取。

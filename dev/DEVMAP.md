@@ -15,6 +15,7 @@
 | 3bb62d7d | 无副作用业务工具接真引擎（agent 一句话真跑回测）——T-027 残余 | done | agent | done |
 | 3d95e0f6 | agent 窗口弹窗 + 教学文案（整合 T-028/T-032/T-034 前端残余） | done | frontend | done |
 | 3f5ed0b8 | agent 客户端窗口 epic(仿 Claude Code)——权限模式切换 + 工具可视化 + 审批弹窗 | done | frontend-epic | done |
+| 41ea6e35 | R4 CPCV（Combinatorial Purged CV）多路径回测 + 组合学/防泄露命门 | done | eval-methodology | done |
 | 4562d903 | Model台后端接线 — JobDetail/IoSpec/walkforward/promote字段/图codegen/研究判定 | done | backend | done |
 | 46f1cb3c | 组合层 M8 多证据三角守门（T-033 核验 gap 升级） | done | portfolio | done |
 | 51271d38 | 因子台三纯库+挖掘 后端 — 信号契约 + ML/DL 登记 + 暴力遍历守门引擎 | done | backend | done |
@@ -80,6 +81,7 @@
 
 | uuid8 | 标题 | status | area |
 |---|---|---|---|
+| 861182e6 | CPCV 接 promote/overfit gate + cv_scheme 双轨 report（价值闭环） | todo | eval-methodology |
 | 92a2182f | conformal 区间消费侧接线——模型台/信号层预测附校准区间 + abstain UI 呈现 | todo | eval-methodology |
 
 ## 按 area 功能索引
@@ -118,6 +120,7 @@
 | data-connectors | e1a98c41 · done | dreaminate |
 | desktop | bc21c7c1 · done | dreaminate |
 | docs | ecbd0eab · done | dreaminate |
+| eval-methodology | 41ea6e35 · done | dreaminate |
 | eval-methodology | 69e1cb16 · done | dreaminate |
 | frontend | 3d95e0f6 · done | dreaminate |
 | frontend | 5e47b82f · done | dreaminate |

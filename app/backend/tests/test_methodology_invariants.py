@@ -39,6 +39,13 @@ from app.eval.conformal import (
     cqr_interval,
     split_conformal_interval,
 )
+from app.models.cpcv import (
+    assemble_cpcv_paths,
+    build_path_matrix,
+    cpcv_splits,
+    n_cpcv_combinations,
+    n_cpcv_paths,
+)
 from app.monitor.drift import (
     _page_hinkley_global_mean_variant,
     cusum_drift,
@@ -717,3 +724,89 @@ def test_conformal_alpha_not_hardcoded():
     assert "alpha" in inspect.signature(SplitConformalCalibrator.interval).parameters
     assert "alpha" in inspect.signature(cqr_interval).parameters
     assert "target_alpha" in inspect.signature(AdaptiveConformalInference.__init__).parameters
+
+
+# ===========================================================================
+# R4 CPCV — Combinatorial Purged Cross-Validation（组合学 + 防泄露不变量）
+#   设计/推导：dev/research/findings/dreaminate/cpcv.md（φ 双计数证明 + golden path_matrix）
+# ===========================================================================
+
+import pandas as pd  # noqa: E402
+
+
+def test_cpcv_path_count_identity():
+    """φ = C(N−1,k−1) = k·C(N,k)/N（双计数恒等）∀ 1≤k<N；且 k·C(N,k) 必整除 N。
+
+    定理：按组合计 (group,combo) 出现 = k·C(N,k)；按 group 计 = N·φ ⇒ φ=k·C(N,k)/N=C(N−1,k−1)。
+    任何让组合/路径计数偏离的实现（静默采样、漏组合）都背离组合学。
+    """
+    for n in range(3, 13):
+        for k in range(1, n):
+            assert n_cpcv_combinations(n, k) == comb(n, k)
+            assert n_cpcv_paths(n, k) == comb(n - 1, k - 1) == k * comb(n, k) // n
+            assert (k * comb(n, k)) % n == 0
+
+
+def test_cpcv_path_matrix_bijection():
+    """path_matrix(N×φ)：每 group 恰出现 φ 次；所有 (combo,group)-test occurrence 被用恰一次（双射）。
+
+    定理：每 group 在 test 出现 C(N−1,k−1)=φ 次 ⇒ path_matrix 每行长 φ；全体 occurrence 数 = N·φ
+    = k·C(N,k) = 所有组合的 test-group 槽总数 ⇒ 一一对应、无重无漏。
+    """
+    for n in (4, 6, 8):
+        for k in (1, 2, 3):
+            if k >= n:
+                continue
+            mat = build_path_matrix(n, k)
+            phi = n_cpcv_paths(n, k)
+            assert mat.shape == (n, phi)
+            # 每个 (combo_id, group) occurrence 恰用一次：统计 mat 里每组合被引用次数 == 该组合的 k
+            from collections import Counter
+            ref = Counter(int(c) for c in mat.flat)
+            for ci in range(n_cpcv_combinations(n, k)):
+                assert ref[ci] == k, f"组合 {ci} 被引用 {ref[ci]} ≠ k={k}（occurrence 双射破坏）"
+
+
+def test_cpcv_each_path_covers_every_sample_exactly_once():
+    """每条回测路径恰覆盖每个样本一次（无重无漏）+ 各 group 单元来源 == path_matrix[g,p]（防坍缩成 path0）。
+
+    填**组合 id**而非全 1（评审：全 1 无法区分路径来源，φ 条坍缩成 path0 变体也能蒙混）。
+    """
+    n, k, nsamp = 6, 2, 120
+    times = pd.Series(pd.date_range("2021-01-01", periods=nsamp, freq="D"))
+    splits = cpcv_splits(times, n, k, embargo_pct=0.0)
+    from itertools import combinations as _c
+    per = [np.full(nsamp, np.nan) for _ in _c(range(n), k)]
+    for s in splits:
+        per[s.combination_index][s.test_idx] = float(s.combination_index)   # 标来源 combo
+    mat = build_path_matrix(n, k)
+    go = np.concatenate([np.full(len(p), g) for g, p in enumerate(np.array_split(np.arange(nsamp), n))])
+    paths = assemble_cpcv_paths(per, nsamp, n, k)
+    for p_idx, path in enumerate(paths):
+        assert not np.any(np.isnan(path))                  # 无漏
+        for g in range(n):
+            assert np.all(path[go == g] == mat[g, p_idx])  # 来源精确 = path_matrix（无坍缩/错位）
+
+
+def test_cpcv_purge_blocks_label_leakage_and_segmented_not_global():
+    """purge 无标签泄露 + **逐 test group 段判**（非全局 min..max，否则误删非连续 test group 中间合法 train）。
+
+    构造非连续 test groups（含首尾），短 t1 → 中间 group 的 train 样本标签不跨任何 test 区间 ⇒ 应**保留**；
+    若用全局 [min(test)..max(test)] 大区间会把它误删。这条同时钉死「无泄露」与「逐段非全局」。
+    """
+    n, k, nsamp = 6, 2, 120
+    times = pd.Series(pd.date_range("2021-01-01", periods=nsamp, freq="D"))
+    t1 = pd.Series(times.values + np.timedelta64(2, "D"))   # 短标签跨度
+    ta, t1a = np.asarray(times), np.asarray(t1)
+    go = np.concatenate([np.full(len(p), g) for g, p in enumerate(np.array_split(np.arange(nsamp), n))])
+    splits = cpcv_splits(times, n, k, embargo_pct=0.0, t1=t1)
+    # 无泄露
+    for s in splits:
+        for g in s.test_groups:
+            gs = np.where(go == g)[0]
+            tt0, tt1 = ta[gs[0]], t1a[gs].max()
+            assert not np.any((ta[s.train_idx] <= tt1) & (t1a[s.train_idx] >= tt0)), "purge 后仍泄露"
+    # 逐段非全局：找含首尾两组(0, n-1)的组合，断言中间组的 train 样本被保留
+    mid = splits[[s.test_groups for s in splits].index((0, n - 1))]
+    mid_group_samples = np.where(go == n // 2)[0]
+    assert np.any(np.isin(mid_group_samples, mid.train_idx)), "中间 group 合法 train 被误删（疑用全局区间 purge）"
