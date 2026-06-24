@@ -2280,6 +2280,10 @@ def _register_candidate_paper_run(
                          "——拒绝静默改标的；如需换标的请用新 run_id",
             }
 
+    # DS-4「都做」testnet 真喂可选档（默认 off）：payload.testnet=True 且配 testnet key → 喂 Binance testnet
+    # 公共实时 bar；无 key/连接失败 → 诚实回退兜底（fail-open 留痕）。治理：testnet key 仅查名存在性不进 LLM、
+    # 永走模拟撮合不下 live 单、A股恒拒 testnet（crypto only，desk 内守门）。
+    want_testnet = bool(payload.get("testnet", False))
     try:
         if existing is None:  # idempotent：已注册的不重复建（重复 submit 不另造，只重 prime）
             PAPER_DESK.register_run(
@@ -2287,8 +2291,16 @@ def _register_candidate_paper_run(
                 origin=f"策略台 · {creator}", market=market, symbols=symbols,
                 bench=bench, creator=creator,
                 equity_log_path=DATA_ROOT / "paper" / run_id / "equity_log.jsonl",
+                testnet=want_testnet,
             )
         primed = PAPER_DESK.prime_run(run_id)
+        # provider 档位 + 降级留痕透传（§3 诚实：testnet 真喂 vs 回退兜底对用户透明）。
+        try:
+            _st = PAPER_DESK.status(run_id)
+            primed = {**primed, "provider_kind": _st.get("provider_kind"),
+                      "degrade_reason": _st.get("degrade_reason")}
+        except Exception:  # noqa: BLE001  status 取不到不阻断注册结果
+            pass
         return {"registered": True, "run_id": run_id, "market": market, "symbols": reported_symbols, **primed}
     except Exception as exc:  # noqa: BLE001  注册派生失败不阻塞候选 handoff，但带显式 error（H4）
         logging.getLogger(__name__).warning("candidate→paper register failed: %s (%s)", run_id, exc)
@@ -4421,6 +4433,10 @@ def paper_register_run(payload: dict = Body(...), user=Depends(require_user_depe
       · A股恒 paper：本端点只建模拟台 run，绝不下 live 单（A股 live_order 端点仍恒拒）。
       · 不绕审批：晋级仍走 INV-5 人工审批门（approver≠creator + 背书），本端点与晋级无关。
       · provider 数据源按市场分流【crypto 真捆样本回放 bundled_sample_replay / 无样本市场合成兜底 deterministic_sim_walk】——均为模拟，绝非实盘行情取数。
+      · DS-4 testnet 真喂可选档（payload `testnet=true`，默认 off、crypto only）：配 Binance testnet key 时
+        喂 testnet 公共实时 bar(binance_testnet_live)；无 key/连接失败 → 诚实回退兜底(fail-open 留痕，
+        provider_kind=replay_fallback + degrade_reason)。testnet key 仅查名存在性**不进 LLM**、永走模拟撮合
+        **不下 live 单**（R10/INV-3/D-T021-3）。回退态 source 绝不标 testnet（§3）。
     idempotent：同 run_id 重复 POST 不另造（复用既有 run），只重新 prime 出净值。
     """
 
