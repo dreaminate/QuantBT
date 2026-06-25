@@ -6,6 +6,10 @@
 
 | uuid8 | 标题 | status | area | 位置 |
 |---|---|---|---|---|
+| 61053f3d | Forecast typed 对象 + StrategyBook typed——模型输出→Signal Contract / payoff·constraints·capital accounting（§9） | in_progress | strategy | active |
+| 66195b71 | Document Intelligence 摄入安全栈——quarantine/parser sandbox/no network/mime check/URL allowlist（§6·安全红线） | in_progress | documents | active |
+| 785c79c6 | 发版门禁套件——工程标准 release gate（no silent mock/no template false success/required bindings→拒）（LINE-E·D-RELEASE-GATE） | in_progress | release-gate | active |
+| e62a8933 | 方法学控制面 6 档——strict/standard/loose/exploratory/custom/user_waived + MethodologyChoiceRecord（§10·系统提供用户运行时选） | in_progress | methodology | active |
 | 0430cd78 | 数据更新写时强约束——dataset_version/checksum/lineage 升 block 门（B-VERSION-1） | done | data-pit | done |
 | 05d6f511 | 单人 self-approve 仅非真钱通道(冷却+留痕)，真钱硬双人 | done | approval | done |
 | 0781bb13 | RDP 聚合器——从真血统装配 RDP（DatasetVersion/LLMCallRecord/honest-N/verdict 真填）（D-RDP-2） | done | delivery | done |
@@ -182,6 +186,7 @@
 | delivery | 9d593481 · done | dreaminate |
 | desktop | bc21c7c1 · done | dreaminate |
 | docs | ecbd0eab · done | dreaminate |
+| documents | 66195b71 · in_progress | dreaminate |
 | eval-methodology | 41ea6e35 · done | dreaminate |
 | eval-methodology | 69e1cb16 · done | dreaminate |
 | eval-methodology | 6acbb499 · done | dreaminate |
@@ -230,6 +235,7 @@
 | math-spine | a00b3956 · done | dreaminate |
 | math-spine | b85e34cc · done | dreaminate |
 | math-spine | c86be35e · done | dreaminate |
+| methodology | e62a8933 · in_progress | dreaminate |
 | model-governance | 36f88f6b · done | dreaminate |
 | model-governance | 6144bd61 · done | dreaminate |
 | model-governance | ccb4f333 · done | dreaminate |
@@ -249,12 +255,14 @@
 | portfolio | ba59fb7b · done | dreaminate |
 | qro | 872af176 · done | dreaminate |
 | qro | f19c5c19 · done | dreaminate |
+| release-gate | 785c79c6 · in_progress | dreaminate |
 | research-graph | 76a611d3 · done | dreaminate |
 | review | 3d4a872e · done | dreaminate |
 | security-invariant | 381b6c18 · done | dreaminate |
 | security-invariant | 6e4eee54 · done | dreaminate |
 | signals | 87ad21fc · done | dreaminate |
 | signals-methodology | ee3b8dbd · done | dreaminate |
+| strategy | 61053f3d · in_progress | dreaminate |
 | verification | 180a341e · done | dreaminate |
 | verification | 6403b9bf · done | dreaminate |
 | 数据 | 3a8b2360 · done | dreaminate |
