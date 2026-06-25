@@ -46,6 +46,10 @@ from ..lineage.ids import HASH_LEN, content_hash
 # ── 落盘 / 常量 ──────────────────────────────────────────────────────────────
 _TRUST_SCHEMA = "artifact-trust-v1"
 TRUST_JSONL_FILENAME = "artifact_trust.jsonl"
+# producer 与消费侧【共用】的信任登记落点子目录(C-MODELGOV-1 生产激活)。
+# 约定:落在 `<data_root>/_artifact_trust/`，producer(train_model/train_dl,含 DL 子进程)与
+# 消费侧(service 组合模型)用同一 `data_root` 解析 → 同一 on-disk JSONL,跨进程一致(见 store_under)。
+TRUST_STORE_DIRNAME = "_artifact_trust"
 GENESIS_HASH = "0" * HASH_LEN  # prev_hash 链创世(16 位全零,与全库 HASH_LEN 对齐)
 
 
@@ -218,6 +222,22 @@ class ArtifactTrustStore:
         return True, issues
 
 
+# ── producer/消费侧落点便利构造器(C-MODELGOV-1 生产激活·不改门语义) ─────────────
+def store_under(data_root: str | Path) -> ArtifactTrustStore:
+    """解析 `<data_root>/_artifact_trust/` 信任登记账(producer 与消费侧共用的单一落点)。
+
+    - producer(`models/training.py` train_model / `models/dl/trainer.py` train_dl,含 DL 子进程)
+      落盘后 `store_under(artifact_dir.parent).register(...)` 登记系统自产 artifact；
+    - 消费侧(`training/service.py` 组合已训练模型)`store_under(self._root)` 取【同一】账核验来源。
+      service 的 job 落 `<root>/<job_id>/`，故 producer 的 `artifact_dir.parent`(= `<root>`)与消费侧
+      `self._root` 解析到【同一】 on-disk JSONL,跨进程(DL 子进程登记 / 主进程消费)一致。
+
+    这只是【落点约定】便利构造器:不改任何门语义(`TrustPolicy`/`assert_ok`/`resolve_policy`/
+    `ArtifactTrustStore` 行为一字未动),只把"信任账放哪"收敛成单一源,供 producer/消费侧共用。
+    """
+    return ArtifactTrustStore(Path(data_root) / TRUST_STORE_DIRNAME)
+
+
 # ── 信任策略:把门接到 load 路径 ──────────────────────────────────────────────
 @dataclass
 class TrustPolicy:
@@ -327,6 +347,7 @@ def load_dl_checkpoint(path: str | Path) -> dict[str, Any]:
 
 
 __all__ = [
+    "TRUST_STORE_DIRNAME",
     "ArtifactTrustError",
     "ArtifactTrustStore",
     "TrustPolicy",
@@ -338,4 +359,5 @@ __all__ = [
     "load_torch_checkpoint",
     "reset_default_trust",
     "resolve_policy",
+    "store_under",
 ]

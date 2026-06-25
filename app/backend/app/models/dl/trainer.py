@@ -218,6 +218,19 @@ def train_dl(
         },
         artifact,
     )
+    # 信任门生产登记(C-MODELGOV-1·①):DL 自产 .pt 落盘即登记。train_dl 跑在【子进程】,
+    # 登记写【共享 on-disk JSONL】(`<job_dir.parent>/_artifact_trust`);job_dir 经 runner 注入
+    # `QUANTBT_JOB_DIR=<root>/<job_id>`,故 `job_dir.parent`(=`<root>`)与主进程消费侧
+    # `store_under(self._root)` 同账 → 主进程 enforce 读子进程登记的记录放行(跨进程一致)。
+    # 函数内惰性 import(子进程已全载,无环);.pt 消费仍走 weights_only=True 无回落(§15·验收#3)。
+    from app.training import artifact_trust
+
+    artifact_trust.store_under(job_dir.parent).register(
+        artifact,
+        producer_run=f"dl_train:{job_dir.name}",
+        producer_kind="dl_train",
+        note=f"{arch}/{task}",
+    )
 
     return {
         "spec": {"model": arch, "task": task, "feature_cols": feature_cols, "label_col": label_col, "hyperparams": hp},

@@ -237,6 +237,18 @@ def train_model(
         with target.open("wb") as fh:
             pickle.dump(last_model, fh)
         artifact_path = str(target)
+        # 信任门生产登记(C-MODELGOV-1·①):系统自产 ML artifact 落盘即登记——绑定 full-sha256→
+        # producer-run。消费侧 enforce(service 组合模型)凭此放行；未登记/外来 artifact→拒(§15)。
+        # 落点 `<artifact_dir.parent>/_artifact_trust`,与 service `store_under(self._root)` 同账(单一源)。
+        # 函数内惰性 import:避开 `app.models`↔`app.training` 包级环(调用期两包已全载,无环·见 RULES 扩展不替换)。
+        from ..training import artifact_trust
+
+        artifact_trust.store_under(artifact_dir.parent).register(
+            target,
+            producer_run=f"ml_train:{artifact_dir.name}",
+            producer_kind="ml_train",
+            note=f"{spec.model}/{spec.task}",
+        )
     # R4 CPCV 路径稳健性（opt-in·默认关 → None，不改既有成本/行为）；开启额外 C(N,k) 次拟合产 report-only 分布。
     cpcv_distribution = (
         cpcv_oos_metric_distribution(spec, panel, n_groups=spec.cpcv_n_groups, k_test_groups=spec.cpcv_k_test)

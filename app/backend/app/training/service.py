@@ -27,10 +27,18 @@ import pandas as pd
 from ..experiments.store import ExperimentStore, ModelRegistry, RunStore
 from ..models.catalog import get_model_card
 from ..models.training import ModelSpec, train_model
+from . import artifact_trust
 from .codegen import load_pit_panel, spec_to_code
 from .lib import predict_with
 from .runner import run_code
 from .store import TrainingJob, TrainingJobStore, _gen_id
+
+# C-MODELGOV-1·③ 生产激活:组合已训练模型(input_models)消费侧的【信任门 enforce 默认开关】。
+# 默认 ON = artifact 信任门生产激活(producer 已全接 register·①):组合时只放行【系统自产·已登记】
+# 模型,外来/未登记 artifact 在 load 处被拒(§15)。**单点可逆**:中心整合点跑全量后若发现未登记
+# producer 路径破基线 → 构造 TrainingService(trust_enforce=False) 回退 opt-in(无需改门/改 producer)。
+# 🟡 enforce-默认-翻开【待中心全量验证】:本卡只跑 scoped、只验组合消费路径,绝不声称全量绿。
+_TRUST_ENFORCE_DEFAULT = True
 
 
 def _now() -> str:
@@ -105,10 +113,14 @@ class TrainingService:
         model_registry: ModelRegistry | None = None,
         max_concurrency: int = 1,
         timeout: float | None = None,
+        trust_enforce: bool = _TRUST_ENFORCE_DEFAULT,
     ) -> None:
         self._root = Path(root)
         self._root.mkdir(parents=True, exist_ok=True)
         self._jobs = TrainingJobStore(self._root)
+        # C-MODELGOV-1·③:组合消费侧 artifact 信任门 enforce 开关(默认 ON·见 _TRUST_ENFORCE_DEFAULT)。
+        # 信任账落点 store_under(self._root) 与 producer 的 store_under(artifact_dir.parent) 同源。
+        self._trust_enforce = trust_enforce
         m12_root = self._root.parent / "experiments"
         self._exp = experiment_store or ExperimentStore(m12_root)
         self._runs = run_store or RunStore(m12_root)
@@ -387,9 +399,19 @@ class TrainingService:
     ) -> tuple[pd.DataFrame, TrainingRequest]:
         panel = panel.copy()
         feats = list(request.feature_cols)
+        # 信任门 enforce(C-MODELGOV-1·③):组合已训练模型时,消费侧用本 service 的信任账核验来源——
+        # 系统自产(producer 已登记·①)→ 放行；外来/未登记 artifact → 在 predict_with 的 load 处 raise(§15)。
+        # store_under(self._root) 与 producer 的 store_under(artifact_dir.parent) 解析到同一 on-disk 账。
+        # enforce 默认 ON(可经构造参数 trust_enforce=False 回退 opt-in·🟡 默认翻开待中心全量验证)。
+        trust = artifact_trust.TrustPolicy(
+            store=artifact_trust.store_under(self._root),
+            enforce=self._trust_enforce,
+        )
         for im in request.input_models:
             col = im["as_col"]
-            panel[col] = predict_with(im["artifact_path"], panel, list(im["feature_cols"]))
+            panel[col] = predict_with(
+                im["artifact_path"], panel, list(im["feature_cols"]), trust=trust
+            )
             if col not in feats:
                 feats.append(col)
         return panel, replace(request, feature_cols=feats)
