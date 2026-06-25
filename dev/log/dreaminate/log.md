@@ -618,3 +618,12 @@
 - **子系统**：artifact 信任门 🟡→✅（§15 兑现：机制+生产激活+enforce 默认开+全量验证齐）。
 - **诚实残余**：① 自由代码子进程路（submit_code）enforce 未覆盖（领地外·结构化 spec 路已 enforce）② safetensors 输出保留 .pt（须连带改 backtest auto-find+M12 跨领地）③ 全局策略未翻。
 - **land**：单线 land main（用户授权）。**下一步**：第三波主力 A-GRAPH-1 + LLM Gateway（GOAL-first prep·读 §1/§2/§7）。
+
+## 2026-06-26 · 第三波 3 线并行整合 land（ResearchGraph IR + LLM Gateway + confirmatory-PIT 门·GOAL-first）
+
+- **派 3 deep-opus 主力**（各 GOAL-first·先读对应节·领地不交叠）：A-GRAPH-1 Research Graph IR(`76a611d3`·§1/§2·阻塞 Compiler/各台) / LLM Gateway(`640b66a0`·§7·LINE-A-AGENT 开局) / confirmatory-PIT 门(`25247eb4`·§16)。
+- **验收**：批次全量 **1997 passed / 13 skipped / 0 failed / 125s**（基线 1900+109 新对抗测试全绿·flake 未触发·confirmatory enforce 默认开+portfolio additive 零破基线）+ validate PASS。MUT 钉死：A-GRAPH×6(单一源/typed contract/写隔离…) / LLM Gateway×6(绕过/secret 进账·进 prompt/缺字段/静默降质/凭据越权) / confirmatory×MUT(翻 advisory→11 failed)。
+- **GOAL-锚定成效**：3 条线**全无停工拍板**——A-GRAPH infra 写台切分锚 §2/§1(A-QRO-1 precedent 可逆)、LLM Gateway 锚 D-LLM-ROUTING+D-DELIVERY-SLICE、confirmatory 锚 §11/§16/§6+R28。GOAL 已决直接建。
+- **子系统**：Research Graph IR ✅(地基)·LLM Gateway ✅(核+路由+凭据池+调用账·secret 不进 LLM/日志/导出双扫)·confirmatory-PIT 库层门 ✅。
+- **诚实残余**：A-COMPILER/A-CMD(§1 链续)·Agent Orchestrator+12 role+23 事件(§7)·Gateway 接 main.py/AgentRuntime·confirmatory 端点激活(待上游注册一致)。
+- **land**：3 线整批 land main（用户授权）。推进 GOAL §1/§7/§16。**下一步**：A-COMPILER/A-CMD·Agent Orchestrator·A-QRO-2/D-RDP-2。

@@ -6,9 +6,6 @@
 
 | uuid8 | 标题 | status | area | 位置 |
 |---|---|---|---|---|
-| 25247eb4 | confirmatory 计算路径强制 PIT/注册数据门——无 PIT 语义数据进 confirmatory→拒（B-PIT-CONFIRMATORY） | in_progress | data-pit | active |
-| 640b66a0 | LLM Gateway——唯一调用入口 + ModelRoutingPolicy(混合自适应) + CredentialPool + LLMCallRecord（A-AGENT-GW） | in_progress | llm-gateway | active |
-| 76a611d3 | ResearchGraph IR——QRO 节点 typed 图 + 各台 typed projection + 单一真相源（A-GRAPH-1） | in_progress | research-graph | active |
 | 0430cd78 | 数据更新写时强约束——dataset_version/checksum/lineage 升 block 门（B-VERSION-1） | done | data-pit | done |
 | 05d6f511 | 单人 self-approve 仅非真钱通道(冷却+留痕)，真钱硬双人 | done | approval | done |
 | 07b10903 | DS-6 装机收口——跨平台一键启动 + mkdir（可缓·docker compose 兜底） | done | onboarding-docs | done |
@@ -16,6 +13,7 @@
 | 180a341e | 核验 agent tool_call 前端派发是否旁路受控翻译门（R11 前端缺口审计） | done | verification | done |
 | 1b83a5c5 | IC 持久性 AR(1) 半衰期接进 lifecycle 状态机（perf 轴·advisory） | done | factor-lifecycle | done |
 | 1e0e65b4 | 组合消费者——agent 可调组合三角 gate（SEQ-CONSUMER=A · C full-fat 触发器） | done | agent | done |
+| 25247eb4 | confirmatory 计算路径强制 PIT/注册数据门——无 PIT 语义数据进 confirmatory→拒（B-PIT-CONFIRMATORY） | done | data-pit | done |
 | 29258b77 | conformal 校准区间 + OOS 真留出覆盖接进模型台 UI（能信·不假绿灯） | done | frontend-trust | done |
 | 2da39479 | CPCV 作 cv_scheme 产 per-path OOS 指标分布（report-only · 命门最深件 ①） | done | models-methodology | done |
 | 36f88f6b | 模型 artifact 安全完整门——producer-run + hash 绑定 + allowlist + safetensors（C-MODELGOV-1 full） | done | model-governance | done |
@@ -33,6 +31,7 @@
 | 5e47b82f | 因子台前端 P0 — 5 视图像素还原 + mock(库/相关/评测/构建DSL/研究) | done | frontend | done |
 | 6144bd61 | artifact 信任门生产激活——producer 落盘接 register + 翻 enforce + safetensors 入依赖（C-MODELGOV-1 activate） | done | model-governance | done |
 | 6403b9bf | 诚实残余核验——监控尾部闭环 + 组合层三角 + D2 四残余 | done | verification | done |
+| 640b66a0 | LLM Gateway——唯一调用入口 + ModelRoutingPolicy(混合自适应) + CredentialPool + LLMCallRecord（A-AGENT-GW） | done | llm-gateway | done |
 | 64717fe6 | paper provider 真回放捆绑样本——替换确定性合成游走（§3 增强） | done | paper | done |
 | 67b42025 | RDP 接线——接现导出器 6 字段 + 接真 promote 路径 require_valid_rdp（D-RDP-1 wire） | done | delivery | done |
 | 698a3c60 | 监控调度 driver 接线——补缺失的生产 tick loop，让 weekly cron 真 fire（修复端到端假绿灯） | done | monitor | done |
@@ -43,6 +42,7 @@
 | 6e4eee54 | 入口×必经门覆盖矩阵回归 + 所有 venue 经 OrderGuard.wrap 的 CI 静态检查 | done | security-invariant | done |
 | 7179ba36 | R18 平方根市场冲击 回测成本项（size-aware）+ 容量交叉校验命门 | done | execution-cost | done |
 | 74f93771 | CPCV 路径分布 opt-in 集成进 train_model（cpcv_distribution 入 TrainResult·report-only） | done | models-methodology | done |
+| 76a611d3 | ResearchGraph IR——QRO 节点 typed 图 + 各台 typed projection + 单一真相源（A-GRAPH-1） | done | research-graph | done |
 | 79673e0d | Conformal 预测区间经脊柱绑定（覆盖定理 property）+ 接 model_eval band | done | math-spine | done |
 | 79ebe273 | 模拟台后端接线 — /api/paper/* 整层 + 晋级审批门 + 风险门冻结哈希链 | done | backend | done |
 | 7ac5a0fe | BacktestVenue.cost_summary —— per-fill 成本归因收口到 run 级 | done | execution-cost | done |
@@ -163,8 +163,8 @@
 | backend | e069d820 · done | dreaminate |
 | config | 8ab894cd · done | dreaminate |
 | data-connectors | e1a98c41 · done | dreaminate |
-| data-pit | 25247eb4 · in_progress | dreaminate |
 | data-pit | 0430cd78 · done | dreaminate |
+| data-pit | 25247eb4 · done | dreaminate |
 | data-pit | 6a8752ab · done | dreaminate |
 | data-pit | e01bf12f · done | dreaminate |
 | data-pit | ec7a7d9a · done | dreaminate |
@@ -211,7 +211,7 @@
 | frontend-trust | c5960022 · done | dreaminate |
 | governance-ui | c631817e · done | dreaminate |
 | integration-test | 9a497bde · done | dreaminate |
-| llm-gateway | 640b66a0 · in_progress | dreaminate |
+| llm-gateway | 640b66a0 · done | dreaminate |
 | math-spine | 11b0a3ab · done | dreaminate |
 | math-spine | 4458ff54 · done | dreaminate |
 | math-spine | 79673e0d · done | dreaminate |
@@ -234,7 +234,7 @@
 | portfolio | 46f1cb3c · done | dreaminate |
 | portfolio | ba59fb7b · done | dreaminate |
 | qro | f19c5c19 · done | dreaminate |
-| research-graph | 76a611d3 · in_progress | dreaminate |
+| research-graph | 76a611d3 · done | dreaminate |
 | review | 3d4a872e · done | dreaminate |
 | security-invariant | 381b6c18 · done | dreaminate |
 | security-invariant | 6e4eee54 · done | dreaminate |
