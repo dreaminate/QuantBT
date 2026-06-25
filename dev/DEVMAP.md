@@ -6,10 +6,6 @@
 
 | uuid8 | 标题 | status | area | 位置 |
 |---|---|---|---|---|
-| 67b42025 | RDP 接线——接现导出器 6 字段 + 接真 promote 路径 require_valid_rdp（D-RDP-1 wire） | in_progress | delivery | active |
-| 6a8752ab | PIT 训练全链激活——TrainingService train_now/submit 透传 as_of_known（B-PIT-1 activate） | in_progress | data-pit | active |
-| ec7a7d9a | 数据写门 scope 余项——11 字段 + data 级 lineage + on-disk manifest 自动接线（B-VERSION-1 余） | in_progress | data-pit | active |
-| f19c5c19 | QRO 统一对象信封 + 状态四/五轴——对象脊柱地基（A-QRO-1） | in_progress | qro | active |
 | 0430cd78 | 数据更新写时强约束——dataset_version/checksum/lineage 升 block 门（B-VERSION-1） | done | data-pit | done |
 | 05d6f511 | 单人 self-approve 仅非真钱通道(冷却+留痕)，真钱硬双人 | done | approval | done |
 | 07b10903 | DS-6 装机收口——跨平台一键启动 + mkdir（可缓·docker compose 兜底） | done | onboarding-docs | done |
@@ -34,8 +30,10 @@
 | 5e47b82f | 因子台前端 P0 — 5 视图像素还原 + mock(库/相关/评测/构建DSL/研究) | done | frontend | done |
 | 6403b9bf | 诚实残余核验——监控尾部闭环 + 组合层三角 + D2 四残余 | done | verification | done |
 | 64717fe6 | paper provider 真回放捆绑样本——替换确定性合成游走（§3 增强） | done | paper | done |
+| 67b42025 | RDP 接线——接现导出器 6 字段 + 接真 promote 路径 require_valid_rdp（D-RDP-1 wire） | done | delivery | done |
 | 698a3c60 | 监控调度 driver 接线——补缺失的生产 tick loop，让 weekly cron 真 fire（修复端到端假绿灯） | done | monitor | done |
 | 69e1cb16 | R23 不确定性预测区间（split conformal/CQR/ACI）+ abstain + 覆盖定理命门 | done | eval-methodology | done |
+| 6a8752ab | PIT 训练全链激活——TrainingService train_now/submit 透传 as_of_known（B-PIT-1 activate） | done | data-pit | done |
 | 6acbb499 | R27 冷启动 MinTRL（最小业绩期长度）+ PSR 反解命门 | done | eval-methodology | done |
 | 6e264c59 | 回测成本逐成分诚实归因（impact 单列不混入 commission） | done | execution-cost | done |
 | 6e4eee54 | 入口×必经门覆盖矩阵回归 + 所有 venue 经 OrderGuard.wrap 的 CI 静态检查 | done | security-invariant | done |
@@ -106,9 +104,11 @@
 | e069d820 | 裁决卡后端接线 — verdict/overfit/cost-sensitivity/promote/热力 端点 + 措辞合规 | done | backend | done |
 | e1a98c41 | binance_vision_pull reload-merge schema bug 修——多日同年 try_parse_dates 崩 | done | data-connectors | done |
 | e2de3d32 | 前端测试设施基建 — vitest + React Testing Library + 对抗测试 harness | done | frontend-foundation | done |
+| ec7a7d9a | 数据写门 scope 余项——11 字段 + data 级 lineage + on-disk manifest 自动接线（B-VERSION-1 余） | done | data-pit | done |
 | ecbd0eab | GOAL §7 文档对齐(M10 已接 run 闸门)+ 可证伪性/模式 教学文案 | done | docs | done |
 | edc1e326 | 主对话入口接 AgentRuntime + 无副作用工具 + 权限三态(ask/auto/bypass) | done | agent | done |
 | ee3b8dbd | conformal 校准区间接进信号层弃权（消费侧·不对噪声下单） | done | signals-methodology | done |
+| f19c5c19 | QRO 统一对象信封 + 状态六轴（四核心轴不混单绿灯）——对象脊柱地基（A-QRO-1） | done | qro | done |
 | f1bd08f2 | CPCV q05→gate 最后一公里——promote_ide_run 真实路径读 emit cpcv 透传 gate（死接线修复） | done | eval-methodology | done |
 | f6bb5e8e | DS-1 run_id 脊梁——agent backtest 接真引擎写 RUN_ROOT + run_id 贯穿（Fork3=A） | done | agent-backend | done |
 | ff286f80 | 因子收益归因（returns-based attribution）—— 北极星「归因」阶段建库 | done | eval-methodology | done |
@@ -160,11 +160,11 @@
 | backend | e069d820 · done | dreaminate |
 | config | 8ab894cd · done | dreaminate |
 | data-connectors | e1a98c41 · done | dreaminate |
-| data-pit | 6a8752ab · in_progress | dreaminate |
-| data-pit | ec7a7d9a · in_progress | dreaminate |
 | data-pit | 0430cd78 · done | dreaminate |
+| data-pit | 6a8752ab · done | dreaminate |
 | data-pit | e01bf12f · done | dreaminate |
-| delivery | 67b42025 · in_progress | dreaminate |
+| data-pit | ec7a7d9a · done | dreaminate |
+| delivery | 67b42025 · done | dreaminate |
 | delivery | 9d593481 · done | dreaminate |
 | desktop | bc21c7c1 · done | dreaminate |
 | docs | ecbd0eab · done | dreaminate |
@@ -227,7 +227,7 @@
 | paper-fullstack | cfb7d950 · done | dreaminate |
 | portfolio | 46f1cb3c · done | dreaminate |
 | portfolio | ba59fb7b · done | dreaminate |
-| qro | f19c5c19 · in_progress | dreaminate |
+| qro | f19c5c19 · done | dreaminate |
 | review | 3d4a872e · done | dreaminate |
 | security-invariant | 381b6c18 · done | dreaminate |
 | security-invariant | 6e4eee54 · done | dreaminate |

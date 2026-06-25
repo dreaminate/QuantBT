@@ -98,7 +98,7 @@ factor.lifecycle_state **原样 carried 不重释**（M-AUTHORITY：registry 仍
   evidence/governance/runtime），卡正文对抗测试只点名 4 个核心轴。**裁定（未停工·GOAL §1 已不含糊地决）**：
   实现 GOAL §1 全 6 轴 verbatim，四核心轴（definition/evidence/governance/runtime）做 `axis_clearance`
   载荷面，theory/consistency 两轴如实承载、强标签裁定让给 spine_gate。6 ⊃ 4，对抗测试全过、向后无破坏。
-  → **未升级为 [需拍板]**：源（GOAL §1）已唯一确定，无真歧义；如中心要收窄回纯 4 轴，theory/consistency
+  → **未升级为需拍板项**：源（GOAL §1）已唯一确定，无真歧义；如中心要收窄回纯 4 轴，theory/consistency
   默认 not_required/not_applicable，下游忽略即可、零破坏。**点名留痕供中心知悉。**
 
 ## 诚实残余（会变任务·非设计极限）

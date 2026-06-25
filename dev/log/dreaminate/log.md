@@ -600,3 +600,12 @@
 - **诚实状态**：4 卡核心 seam/机制 ✅+对抗验证齐；全 scope wiring 据实标 🟡（W1 生产激活 / W2 service 全链 / W3 字段+data lineage / W4 接导出器+真 promote）→ mint 4 follow-on P2（`6144bd61`/`6a8752ab`/`ec7a7d9a`/`67b42025`·depends_on 各 canonical）。
 - **dev/ reconcile**：最初在旧分支 fix-u2-synth（pool 空）误判 → 用新 uuid 建了重复卡；纠正=删中心自建的 4 重复·canonical pool 卡(`36f88f6b` 等)移 done + 补完成记录·施工图 uuid 对齐 → 无双重记账。
 - **land**：4 线整批 land main（用户授权·能回滚兜底）。**下一步**：开 LINE-A 对象脊柱（QRO/Graph/Compiler/Command·最强上游瓶颈·阻塞几乎全部下游）。
+
+## 2026-06-26 · 第二波 4 线并行整合 land（LINE-A 对象脊柱开局 + wave-1 接线激活）
+
+- **派 4 deep-opus 并行线**（隔离 worktree·领地不交叠·避开 main.py 中心独占）：A-QRO-1 QRO 对象信封+状态六轴(`f19c5c19`·头号 gap#1 LINE-A 地基) / W2-service PIT 全链(`6a8752ab`) / W3-fields 数据写门余项(`ec7a7d9a`) / W4-wire RDP 接 promote(`67b42025`)。
+- **验收**：批次全量 **1878 passed / 13 skipped / 0 真失败**（基线 1798 + 80 新对抗测试；唯一失败 `test_effect_ledger_concurrent_same_key` 隔离 1.19s 绿=已知负载 flake 非回归·4 线零碰 ledger/dag 并发代码）+ validate_dev PASS。各线 MUT 种坏门必抓（A-QRO×5 含四轴分离 / W2×2 双机制泄露 / W3×2 manifest+缺字段 / W4×6 promote 缺 RDP）。中心补 main.py:1510 入口透传闭合 PIT HTTP→service 全链。
+- **诚实状态**：A-QRO-1 信封+六轴+收编结构门 ✅（下游接线 A-QRO-2/axis↔spine 🟡）；W2 PIT 全链 ✅（demo 无 known_at 列·真数据集另卡）；W3 信封/lineage/manifest/secret 守门 ✅；W4 RDP 接 promote 门 ✅（强制档默认关待 D-RDP-2 聚合器）。
+- **2 拍板项停报中心（保守默认 land·非阻塞·摆代价待用户拍）**：W3 ①字段提级必备(方法学口径) ②data_pull legacy 回收(越领地·canonical intake 已覆盖)；W4 RDP 强制档常开(待 D-RDP-2)。均方法学松紧/范围·保守默认已 land·用户决定是否调紧。
+- **dev/ 整合**：4 张 assigned 卡删(opus done supersede)·done 卡 32-hex uuid 齐·f19c5c19 待拍字面量修。
+- **land**：4 线整批 land main（用户授权·能回滚兜底）。推进 GOAL §1/§11/§17。**下一步**：第三波 A-GRAPH-1 ResearchGraph IR(LINE-A 续) / LINE-A-AGENT LLM Gateway(另一最强瓶颈) / A-QRO-2 / D-RDP-2。
