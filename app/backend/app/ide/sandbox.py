@@ -11,10 +11,17 @@
 
 注意：这不是 hardened sandbox（macOS 无 namespace），只是 best-effort 拦截 90% 业余攻击。
 顶级前端 banner 提示"代码只跑在受限沙箱，仅原型验证"。
+
+⚠ 安全审计 pass3 #1（2026-06-25）：已补封审计**实测**的逃逸向量——os.posix_spawn/posix_fork 族（prelude）
++ 用户直接 import ctypes/cffi（run_user_strategy 入口 AST 预检）。**但这仍是黑名单 best-effort，非 hardened**：
+解释器图灵完备，getattr/importlib/mmap+shellcode 等未列举路径仍可绕。**多租户 hosted 下用户=不可信时，真隔离
+必须 OS 级**（容器/nsjail/seccomp/sandbox-exec·只读挂载·网络命名空间·与凭据进程隔离）——见 P0 卡 5bfb5202，
+deployment-mode（单机 best-effort 可接受 / hosted 必须 OS 隔离）由用户拍板。
 """
 
 from __future__ import annotations
 
+import ast
 import json
 import os
 import resource
@@ -70,6 +77,13 @@ _os.execv = lambda *a, **k: (_ for _ in ()).throw(PermissionError("沙箱禁止 
 _os.execve = lambda *a, **k: (_ for _ in ()).throw(PermissionError("沙箱禁止 os.exec*"))
 _os.fork = lambda *a, **k: (_ for _ in ()).throw(PermissionError("沙箱禁止 os.fork"))
 _os.spawnv = lambda *a, **k: (_ for _ in ()).throw(PermissionError("沙箱禁止 os.spawn*"))
+# posix_spawn / posix_fork / forkpty / 其余 spawn* 族（安全审计 pass3 #1 实测逃逸向量·补黑名单覆盖·
+# defense-in-depth；合法策略不用这些→封禁安全）。注意：黑名单本质非 hardened，OS 级隔离才是真修（见 P0 卡）。
+for _spawn_fn in ('posix_spawn', 'posix_spawnp', 'posix_fork', 'forkpty',
+                  'spawnl', 'spawnle', 'spawnlp', 'spawnlpe', 'spawnve', 'spawnvp', 'spawnvpe'):
+    if hasattr(_os, _spawn_fn):
+        setattr(_os, _spawn_fn,
+                lambda *a, _n=_spawn_fn, **k: (_ for _ in ()).throw(PermissionError(f"沙箱禁止 os.{_n}")))
 
 try:
     import subprocess as _sp
@@ -142,6 +156,39 @@ def _preexec_apply_limits() -> None:
         pass
 
 
+# FFI 模块（审计 pass3 #1 实测：ctypes.CDLL(libc).system(...) RCE 逃逸）：用户代码**直接** import 即拒。
+# 只查用户 AST、不影响 numpy/scipy 等库的传递性 ctypes 使用（库在自己模块内 import·不进用户 AST·不会被误伤）。
+_FORBIDDEN_USER_IMPORTS = frozenset({"ctypes", "cffi", "_ctypes"})
+
+
+def _scan_forbidden_imports(code: str) -> str | None:
+    """AST 预检：拒用户代码**直接** import/调 __import__ ctypes/cffi（FFI→libc RCE 向量·defense-in-depth）。
+
+    返回拒绝理由（命中）或 None（放行）。**非 hardened**：getattr/importlib 混淆仍可绕——真隔离=OS 级（P0 卡 5bfb5202）。
+    语法错误不在此拦（交子进程报错）。
+    """
+
+    try:
+        tree = ast.parse(code)
+    except SyntaxError:
+        return None
+    for node in ast.walk(tree):
+        if isinstance(node, ast.Import):
+            for alias in node.names:
+                if (alias.name or "").split(".")[0] in _FORBIDDEN_USER_IMPORTS:
+                    return f"沙箱拒绝：禁止 import {alias.name}（FFI 可逃逸·安全审计 pass3 #1）"
+        elif isinstance(node, ast.ImportFrom):
+            if (node.module or "").split(".")[0] in _FORBIDDEN_USER_IMPORTS:
+                return f"沙箱拒绝：禁止 from {node.module} import（FFI 可逃逸·安全审计 pass3 #1）"
+        elif (
+            isinstance(node, ast.Call) and isinstance(node.func, ast.Name) and node.func.id == "__import__"
+            and node.args and isinstance(node.args[0], ast.Constant) and isinstance(node.args[0].value, str)
+            and node.args[0].value.split(".")[0] in _FORBIDDEN_USER_IMPORTS
+        ):
+            return f"沙箱拒绝：禁止 __import__('{node.args[0].value}')（FFI 可逃逸·安全审计 pass3 #1）"
+    return None
+
+
 def run_user_strategy(
     code: str,
     *,
@@ -151,12 +198,20 @@ def run_user_strategy(
 ) -> SandboxResult:
     """在隔离子进程里运行用户策略代码。
 
+    安全分层见模块 docstring（best-effort 黑名单·**非 hardened**）。入口先 AST 预检拒 FFI 直接 import
+    （封审计 pass3 #1 验证的 ctypes 逃逸向量）；prelude 另封 posix_spawn/posix_fork 族。**真隔离=OS 级**（P0 卡 5bfb5202）。
+
     :param code: 用户写的 Python 策略源码（不含 prelude）
     :param extra_env: 额外环境变量（如 DATA_DIR），仅这些被透传给子进程
     :param timeout_s: wallclock 超时秒数
     :param work_root: 沙箱临时目录的父目录（默认 /tmp）
     :returns: SandboxResult
     """
+
+    # 0. AST 预检：用户代码直接 import ctypes/cffi → 拒（不进子进程·defense-in-depth）。
+    reason = _scan_forbidden_imports(code)
+    if reason is not None:
+        return SandboxResult(exit_code=-1, stdout="", stderr=reason, duration_s=0.0, error=reason)
 
     # 1. 准备隔离 tempdir 作为子进程 cwd
     workdir = Path(tempfile.mkdtemp(prefix="qbt-ide-", dir=str(work_root) if work_root else None))

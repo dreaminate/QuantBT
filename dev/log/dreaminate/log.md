@@ -6,6 +6,14 @@
 ## <日期> · <标题>
 - 建/改了什么 + 命门  - 验收：<对抗测试 + 变异 + 全量数字>  - 下一步：<…> -->
 
+## 2026-06-25 · ide 沙箱 posix_spawn/ctypes 逃逸止血（defense-in-depth·卡 b02bc743 · D-SANDBOX-STOPGAP）
+
+- **缘起**：autonomous-loop（ultracode）。第三轮审计 #1 实测 os.posix_spawn + ctypes.CDLL 沙箱逃逸 RCE。真修=OS 隔离（P0 5bfb5202·deployment-mode 用户拍）；本切片先**止血**封实测向量（留着已验证 RCE 向量不止血不负责任）。
+- **安全先行**：posix_spawn 族合法策略不用→黑名单封安全；ctypes 不可整体封（numpy/scipy 传递性用）→ AST 预检只拒用户**直接** import/`__import__`；仍非 hardened（getattr/importlib/mmap 可绕）→ docstring 明标真隔离 OS 级·**绝不 claim 修好**（不假绿灯）。
+- **实现（additive）**：prelude 加 posix_spawn/posix_fork/forkpty/spawn* 族封禁循环；+`_scan_forbidden_imports`（AST·ctypes/cffi/_ctypes·含 __import__ 串）+ run_user_strategy 入口调用；docstring 诚实标注非终态。
+- **验收**：+5 测试。**MUT-posix（去 prelude 封禁）→ posix_spawn 真执行 echo（stdout='x' 无 CAUGHT）红=实证 RCE 向量真实可触发**；MUT-ctypes（去 AST 预检）→ ctypes 不被拒红；不误伤（import json/math 正常）。**全量后端 1665 passed / 13 skipped / 0 failed / 215s**（基线 1660，净 +5）；首跑机器重载触已知 flaky test_effect_ledger_concurrent_same_key 兜底（隔离 1.16s 绿·改动只碰 sandbox 证非回归·复跑全绿）。
+- **下一步**：P0 5bfb5202 真修=OS 级隔离（容器/nsjail/seccomp/sandbox-exec·只读挂载·网络命名空间）+ open/glob 文件读隔离——待用户 deployment-mode 拍板；分支续 land-ready。
+
 ## 2026-06-25 · 补未披露 unauthed 数据泄露端点 + 第三轮安全审计命中 RCE（卡 3c9c3732 · D-ENDPOINT-AUTH）
 
 - **缘起**：autonomous-loop（ultracode）。第三轮**安全聚焦审计**（workflow w5jwdr2ec·copy_trade/ide.sandbox/paper-key/agent side_effect/data_export·16 agent）排 10 真缺口。

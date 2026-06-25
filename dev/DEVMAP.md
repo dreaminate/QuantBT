@@ -67,6 +67,7 @@
 | a11e2aa5 | 因子台三纯库 + 暴力遍历挖掘 — 前端设计+实装（GOAL §3，无 handoff 稿，D-DESK-EPIC F1=B 路 b） | done | frontend | done |
 | a367bfc8 | paper testnet 真喂 provider——加密 testnet 实时 bar/mark（用户「都做」可选档） | done | paper | done |
 | a75c4beb | Agent 窗口产物工作区 — 8 产物卡 + Strategy.yaml + Report.md | done | frontend | done |
+| b02bc743 | ide 沙箱 posix_spawn/ctypes 逃逸止血（defense-in-depth·封审计实测向量·非终态） | done | security | done |
 | b106177f | 因子台后端接线 — 暴露已有 compute + 相关性/分层回测 + alpha审查 | done | backend | done |
 | b12de4f5 | §3 因子机构级生命周期度量（衰减半衰期/容量/因子族/拥挤）+ 命门 | done | factor-lifecycle | done |
 | b1e4efdf | 冷启动 MinTRL 接进 run /overfit 投影（价值闭环·呈现层不动治理） | done | eval-methodology | done |
@@ -218,6 +219,7 @@
 | portfolio | ba59fb7b · done | dreaminate |
 | review | 3d4a872e · done | dreaminate |
 | security | 3c9c3732 · done | dreaminate |
+| security | b02bc743 · done | dreaminate |
 | security-invariant | 381b6c18 · done | dreaminate |
 | security-invariant | 6e4eee54 · done | dreaminate |
 | signals | 0f8ec248 · done | dreaminate |

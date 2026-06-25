@@ -37,9 +37,11 @@ depends_on: []
 | ide/service.py:342 run_user_strategy | 入口前 AST 白名单预检 | 禁 import ctypes/cffi/mmap·禁 Attribute 访问 posix_spawn/posix_fork/_exit/dup2/openpty·禁裸 __import__/eval/exec |
 | prod backend.Dockerfile | USER 非 root + 执行主体与持 Fernet master 口令的后端进程隔离 | 独立无凭据执行主体 |
 
-## 短期止血（非终态·明标 best-effort·下迭代可先做）[按需]
-sandbox.py prelude 补 `_os.posix_spawn/posix_spawnp/posix_fork=拒绝` + _FORBIDDEN 加 ctypes/cffi/_ctypes/mmap + 入口 AST 预检拒危险 import/attr。
-**封住已验证的 posix_spawn/ctypes 向量（defense-in-depth·提高门槛）**，但 docstring 须明标**仍是黑名单非 hardened·不得当终态**（防假绿灯）。
+## 短期止血（✅ done 2026-06-25·done 卡 b02bc743·D-SANDBOX-STOPGAP）[按需]
+**已封审计实测的两条逃逸向量**：① prelude 加 os.posix_spawn/posix_fork/forkpty/spawn* 族封禁（合法策略不用·安全）；
+② run_user_strategy 入口 AST 预检拒用户**直接** import/`__import__` ctypes/cffi（不整体封以免破 numpy/scipy 传递性使用）。
+MUT-posix（实证 posix_spawn 真执行）/MUT-ctypes 双变异抓。docstring 已明标**仍非 hardened·真隔离=OS 级**（防假绿灯）。
+**剩=本卡主体（OS 级真隔离·下方·deployment-mode 用户拍）**：止血只封了「已列举」向量，getattr/importlib/mmap+shellcode 仍可绕 + open/glob 文件读（#3）未解。
 
 ## 对抗测试设计（种已知坏门必抓）[必填]
 1. test_sandbox_blocks_posix_spawn：用户代码 os.posix_spawn('/bin/sh',...) → 必被拒/隔离（不得 exit 0 执行）。
