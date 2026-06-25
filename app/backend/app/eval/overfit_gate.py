@@ -17,6 +17,7 @@ from __future__ import annotations
 
 import math
 from dataclasses import asdict, dataclass
+from functools import lru_cache
 from typing import Literal
 
 import numpy as np
@@ -62,6 +63,9 @@ class GateVerdict:
     reason: str
     verdict_phrasing: str
     model_risk_disclosure: list[str]
+    # Mathematical Spine 一致性核（决策 D-MATH-SPINE）：本裁决所依赖估计器（DSR）实现↔定义是否一致。
+    # None=未核（check_spine_consistency=False）；{"dsr": {promotable, granted_label, violations}}。
+    spine_consistency: dict | None = None
 
     def to_dict(self) -> dict:
         d = asdict(self)
@@ -136,6 +140,20 @@ def _insufficient(t: int, min_t: int, n_eff: NEffResult) -> GateVerdict:
     )
 
 
+@lru_cache(maxsize=1)
+def dsr_spine_decision():
+    """DSR 实现↔数学定义一致性的脊柱裁定（memoized：源码进程内不变 → 一次即可）。
+
+    懒导入避免 eval ↔ lineage/spine_bindings 的导入期环。用【已审定】指纹 `DSR_PINNED_FINGERPRINT`
+    当 binding 记录 hash → 既抓数值漂移（独立 oracle 对账），又抓 staleness（改 dsr.py 但常量未刷新
+    → live≠pinned → fresh 子句拒）。决策 D-MATH-SPINE：守门器自身估计器漂离定义 = 系统错误。
+    """
+
+    from .spine_bindings import DSR_PINNED_FINGERPRINT, verify_dsr_consistency
+
+    return verify_dsr_consistency(pinned_code_hash=DSR_PINNED_FINGERPRINT)
+
+
 def run_overfit_gate(
     returns,
     *,
@@ -145,6 +163,7 @@ def run_overfit_gate(
     asset_class: str = "crypto",
     periods_per_year: int = 252,
     allow_pbo_absent_green: bool = False,
+    check_spine_consistency: bool = True,
 ) -> GateVerdict:
     """多证据三角裁决。`returns`=本策略逐期净收益；`returns_matrix`=同主题历史试验矩阵（PBO 用）。
 
@@ -158,6 +177,45 @@ def run_overfit_gate(
     min_t = _MIN_T.get(asset_class, _DEFAULT_MIN_T)
     if t < min_t:
         return _insufficient(t, min_t, n_eff)
+
+    # ── Mathematical Spine 一致性核（决策 D-MATH-SPINE）—— 必须在【用 DSR 之前】fail-closed ──
+    # 本裁决的红绿全建在 DSR 估计器上。先核 DSR 实现↔数学定义一致（数值漂移 + staleness：pinned vs live
+    # 指纹），再用它。不一致【或 DSR 执行/签名漂移致抛错】→ 降级 insufficient_evidence（复用既有非
+    # promote sink），不报 DSR 单点数字（估计器不可信），绝不静默放行、绝不让坏估计器把整个 gate 炸成
+    # 异常。正常路径（DSR 一致）只记录 promotable=True、继续原裁决 → color/numbers 不变、不破基线。
+    spine_consistency: dict | None = None
+    if check_spine_consistency:
+        try:
+            _dec = dsr_spine_decision()
+            _promotable = _dec.promotable
+            _granted = _dec.granted_label
+            _violations = list(_dec.violations)
+        except Exception as exc:  # DSR 漂移致执行/签名错 → 同样 fail-closed，不让 promote 报错
+            _promotable = False
+            _granted = "execution_error"
+            _violations = [f"DSR 执行失败：{type(exc).__name__}: {exc}"]
+        spine_consistency = {
+            "dsr": {"promotable": _promotable, "granted_label": _granted, "violations": _violations}
+        }
+        if not _promotable:
+            _nan = float("nan")
+            return GateVerdict(
+                color="insufficient_evidence",
+                dsr_optimistic=_nan, dsr_conservative=_nan,
+                pbo=None, bootstrap_ci=(_nan, _nan), bootstrap_method="n/a",
+                all_agree_positive=False, n_observed=n_eff.n_observed, n_eff=n_eff.to_dict(),
+                var_sr_estimated=False,
+                reason=(
+                    f"数学一致性失败：DSR 实现偏离/无法执行其数学定义（Mathematical Spine 门拒，"
+                    f"granted={_granted}）→ 守门估计器不可信，不给红绿、不得 promote。"
+                ),
+                verdict_phrasing=(
+                    "证据无效：守门器 DSR 与数学定义不一致（Mathematical Spine 门拒），"
+                    "裁决不可信；适用域=无；未验证=全部。"
+                ),
+                model_risk_disclosure=list(_MODEL_RISK_DISCLOSURE),
+                spine_consistency=spine_consistency,
+            )
 
     var = _var_sr_hat(returns_matrix)
     n_floor = honest_n if (honest_n is not None and honest_n > 0) else n_eff.n_observed
@@ -208,7 +266,8 @@ def run_overfit_gate(
         var_sr_estimated=var is not None,
         reason=reason, verdict_phrasing=verdict_phrasing,
         model_risk_disclosure=list(_MODEL_RISK_DISCLOSURE),
+        spine_consistency=spine_consistency,
     )
 
 
-__all__ = ["GateColor", "GateVerdict", "run_overfit_gate"]
+__all__ = ["GateColor", "GateVerdict", "run_overfit_gate", "dsr_spine_decision"]

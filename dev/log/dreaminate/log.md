@@ -302,3 +302,15 @@
 - **推进**：GOAL §6/§9 + 头号 gap #3「全链贯穿」第一个真数学点（DSR）已绑并验证漂移被门抓。
 - **残余（诚实边界）**：`verify_dsr_consistency()` 未接生产 promote 路径（run_verdict/overfit_gate/ide.promote）= 下一切片；oracle 独立性在矩计算层（scipy vs 手算），不判定义本身对错（靠 Verifier/Critic+文献）；factor/model/signal/portfolio/execution/attribution/monitor 其余数学点逐个绑后续。
 - **交付**：同 worktree `auto/math-spine`；commit/push 自管、**land main 待用户**。
+
+## 2026-06-25 · Spine 接进生产 promote 路径——overfit gate DSR 一致性核（gap #3 · 依赖 11b0a3ab）
+
+- **触发**：DSR 已绑脊柱但只孤立可证；本切片让脊柱**真正治理生产**——`run_overfit_gate`（信任层 promote 必经门）的红绿全建在 DSR 上，若 DSR 漂离定义则「证据充分」是建在坏估计器上的假绿灯。
+- **实装（扩展不替换）**：`eval/overfit_gate.py` 加 `GateVerdict.spine_consistency` 字段（默认 None）+ memoized `dsr_spine_decision()`（懒导入避 eval↔lineage 环）+ `check_spine_consistency=True` 参 + drift→降级 `insufficient_evidence`（复用既有非 promote sink）。DSR 一致（正常）→ color/numbers 不变、不破基线。
+- **codex 只读复核 2×P2（均真问题，已修，非误报）**：
+  - P2-1「生产 staleness 不可达」：`verify_dsr_consistency()` 原用当前源建 binding+当前 hash → fresh 子句恒匹配。修：加 `DSR_PINNED_FINGERPRINT=77bd7ce66bf157a9` 已审定指纹，生产用 pinned 当 binding 记录 hash、live 当 current → 改 dsr.py 即 live≠pinned → §6「实现改动未刷新 binding→拒」真触发；+ tripwire 测试 `pinned==dsr_code_fingerprint()`（dsr.py 一改即硬失败逼显式重核 + 刷新常量 = 审定动作）。
+  - P2-2「DSR 在 spine 核之前被调用」：drift 致 `deflated_sharpe_ratio` 抛错/签名变会先崩 gate（promote 报错而非 fail-closed）。修：spine 核**提到 DSR 调用之前** + try/except 包裹 → 抛错也映射成 fail-closed `insufficient_evidence`（granted=execution_error），不报坏估计器单点数字（NaN）。
+- **对抗测试**：`tests/test_spine_gate_wiring.py` **10 passed**——命门(漂移把本会 green 翻成证据无效) + 隔离(漂移是唯一改判因素) + 逃生阀(check_spine_consistency=False) + 只更严不放水(噪声不被改 green) + tripwire(pinned==源) + 生产 staleness 可达(pinned≠live→fresh 拒) + 抛错 fail-closed + 不报坏数字。
+- **全量验证**：gate+spine 组 **71 passed**、verdict/promote/gate_runner **88 passed**；全量后端真汇总见下条/本日。凭真汇总行判绿。
+- **推进**：GOAL §6/§8 + gap #3：脊柱从「孤立可证」→「真正 gate 生产 promote」（DSR 数值漂移/源 staleness/执行抛错三类都在生产门被挡）。**残余**：只接 DSR 一支，PBO/bootstrap/factor 等逐个补；spine_consistency 未在前端/RDP 展示。
+- **交付**：同 worktree `auto/math-spine`；commit/push 自管、**land main 待用户**。

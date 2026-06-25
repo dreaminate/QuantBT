@@ -80,6 +80,14 @@ _DSR_IMPL_CHAIN = (
     _dsr_mod._kurt_excess,
 )
 
+# 【已审定】DSR 实现链的固定指纹（= 本切片审过的 dsr.py 计算链 content_hash）。
+# 生产一致性核（overfit_gate）用它当 binding 的【记录】hash、用 live 指纹当 current：
+#   live == PINNED → 实现未漂移、binding 未过期 → fresh 子句过；
+#   live != PINNED → dsr.py 改了但 binding 未刷新 → §6「实现改动后未刷新 binding → 拒」真触发。
+# **改 dsr.py 后必须**：重新核对 DSR↔数学定义一致（跑 test_spine_dsr_binding）+ 把此常量更新为新指纹
+# （= 显式「刷新 TheoryImplementationBinding」的审定动作）。tripwire 测试会在不一致时硬失败提醒。
+DSR_PINNED_FINGERPRINT = "77bd7ce66bf157a9"
+
 
 def dsr_oracle(
     *,
@@ -142,13 +150,17 @@ def dsr_code_fingerprint() -> str:
     return code_fingerprint(*_DSR_IMPL_CHAIN)
 
 
-def build_dsr_binding() -> TheoryImplementationBinding:
-    """产出 DSR 的 TheoryImplementationBinding，code_content_hash = 真实现链源码指纹。"""
+def build_dsr_binding(code_content_hash: str | None = None) -> TheoryImplementationBinding:
+    """产出 DSR 的 TheoryImplementationBinding。
+
+    `code_content_hash`：binding【记录】的实现指纹。None → 用当前实现链指纹（孤立可证用）；
+    生产传 `DSR_PINNED_FINGERPRINT`（已审定指纹）→ 与 live 指纹比对才能真触发 staleness 子句。
+    """
 
     return TheoryImplementationBinding(
         theory_ref=DSR_ARTIFACT.artifact_id,
         code_ref="app/backend/app/eval/dsr.py:deflated_sharpe_ratio",
-        code_content_hash=dsr_code_fingerprint(),
+        code_content_hash=code_content_hash or dsr_code_fingerprint(),
         config_ref="eval/dsr:periods_per_year=252,var_sr_hat=optional",
         data_contract_ref="contract/backtest_returns_pit",
         implementation_spec="deflated_sharpe_ratio(returns, n_trials, periods_per_year, var_sr_hat)",
@@ -158,10 +170,13 @@ def build_dsr_binding() -> TheoryImplementationBinding:
     )
 
 
-def dsr_consistency_check(impl=_dsr_mod.deflated_sharpe_ratio, *, tolerance: float = 1e-6):
-    """impl vs 独立 oracle 在确定性 fixtures 上对账，产出 ConsistencyCheck。"""
+def dsr_consistency_check(impl=_dsr_mod.deflated_sharpe_ratio, *, tolerance: float = 1e-6, binding=None):
+    """impl vs 独立 oracle 在确定性 fixtures 上对账，产出 ConsistencyCheck。
 
-    binding = build_dsr_binding()
+    `binding`：复用调用方的 binding（保证 check.binding_id 与门裁定的 binding 一致）；None → 自建。
+    """
+
+    binding = binding if binding is not None else build_dsr_binding()
     return numerical_consistency_check(
         binding.binding_id,
         impl,
@@ -176,16 +191,19 @@ def verify_dsr_consistency(
     *,
     requested_label: str = PROOF_BACKED,
     impl=_dsr_mod.deflated_sharpe_ratio,
+    pinned_code_hash: str | None = None,
     current_code_hash: str | None = None,
 ) -> SpineDecision:
     """跑通 artifact→binding→numerical check→门 全链，返回 DSR 的升级裁定。
 
-    `current_code_hash` 不传 → 用当前实现链指纹（实时核 staleness）。生产 promote 路径可调此函数
-    在 promote DSR-gated 结果前实时核「实现仍与定义一致」。
+    - `pinned_code_hash`：binding【记录】的已审定指纹（生产传 `DSR_PINNED_FINGERPRINT`）。None → 用当前
+      实现链指纹做 binding 记录（此时 binding 记录 == live，fresh 子句恒过——仅孤立可证用，**不查 staleness**）。
+    - `current_code_hash`：live 实现指纹。None → 实时取当前实现链指纹。
+    生产路径传 `pinned_code_hash=DSR_PINNED_FINGERPRINT`：dsr.py 改了但常量未刷新 → live≠pinned → fresh 子句拒。
     """
 
-    binding = build_dsr_binding()
-    check = dsr_consistency_check(impl)
+    binding = build_dsr_binding(code_content_hash=pinned_code_hash)
+    check = dsr_consistency_check(impl, binding=binding)
     code_hash = current_code_hash if current_code_hash is not None else dsr_code_fingerprint()
     return evaluate_promotion(
         DSR_ARTIFACT,
