@@ -19,6 +19,7 @@ from __future__ import annotations
 
 import hashlib
 import json
+import re
 import time
 from abc import ABC, abstractmethod
 from dataclasses import dataclass, field
@@ -31,7 +32,29 @@ import polars as pl
 class DatasetWriteIntegrityError(ValueError):
     """写时强约束失败（W3 · B-VERSION-1）：登记/落库前 FetchResult 缺 dataset_version
     必备身份（dataset_id / fetched_at_utc）、缺 checksum，或 checksum 与 frame 内容
-    不匹配（篡改）→ 拒绝写入。绝不静默落账退化结果。"""
+    不匹配（篡改）→ 拒绝写入。绝不静默落账退化结果。
+
+    W3 余（B-VERSION-1 余）扩展：secret_ref 非引用形（疑明文 key）、或开启
+    ``require_provenance`` 时缺 ingestion_skill_version / secret_ref → 同样拒。"""
+
+
+# secret_ref 必须是【引用】(带 scheme 的 URI/handle)，不是明文 key。
+# 形如 keyring://… / ref:… / env:VAR / vault:path / kms:arn:…。裸 key（无 scheme）一律判否。
+# 红线（RULES.project 安全不变量 / GOAL §11 Secret 管理）：实盘 key/secret 绝不落明文，
+# 数据更新记录只存对凭据的【引用】，引用值不进日志 / 导出。
+_SECRET_REF_SCHEME = re.compile(r"^[a-z][a-z0-9+.\-]*:")
+
+
+def is_secret_reference(value: str | None) -> bool:
+    """secret_ref 是否为合法【引用】(带 scheme)。空 / 无 scheme（裸 key）→ False。
+
+    诚实边界：这是【形态】护栏（挡掉无 scheme 的裸明文 key 直接落库），**不**校验该引用
+    背后凭据真存在 / 真有权限——那是 Secrets 后端的活。本函数只保证「落进数据记录的是引用、
+    不是 key 本身」。"""
+
+    if not value:
+        return False
+    return bool(_SECRET_REF_SCHEME.match(str(value).strip()))
 
 
 AssetClassTag = Literal[
@@ -147,7 +170,13 @@ class FetchRequest:
 
 @dataclass
 class FetchResult:
-    """`fetch` 返回的标准结果，便于 data_quality.py 直接登记。"""
+    """`fetch` 返回的标准结果，便于 data_quality.py 直接登记。
+
+    W3 余（B-VERSION-1 余）：补 GOAL §11「每次数据更新记录」信封中由【源/采集侧】携带的
+    字段——source_ref / ingestion_skill_version / secret_ref / known_at / effective_at。
+    全部 **optional·默认空**：① 既有构造方（`make_fetch_result` / `make_wide_fetch_result`）
+    与 `dataclasses.replace` 一律不受影响；② version_id / checksum 只由 frame 内容 + fetched_at
+    决定，**绝不**读这些信封字段 → 既有合法写入身份字节不变（向后兼容）。"""
 
     frame: pl.DataFrame
     source_name: str
@@ -156,9 +185,15 @@ class FetchResult:
     coverage_start_utc: str | None
     coverage_end_utc: str | None
     sha256: str
+    # —— DataUpdate 信封·源/采集侧字段（GOAL §11）——
+    source_ref: str | None = None            # 源身份/URL/endpoint 引用（≠ source_name 这个展示标签）
+    ingestion_skill_version: str | None = None  # 产出本结果的 IngestionSkill / connector 版本
+    secret_ref: str | None = None            # 用到的凭据的【引用】(keyring://…)，绝不明文 key
+    known_at_utc: str | None = None          # PIT：本数据「何时可知」
+    effective_at_utc: str | None = None      # PIT：本数据「何时生效」
 
     def to_meta(self) -> dict[str, Any]:
-        return {
+        meta = {
             "source_name": self.source_name,
             "fetched_at_utc": self.fetched_at_utc,
             "row_count": self.row_count,
@@ -166,18 +201,30 @@ class FetchResult:
             "coverage_end_utc": self.coverage_end_utc,
             "sha256": self.sha256,
         }
+        # 信封字段只在【非空】时附带（保证既有调用方拿到的 dict 形状不变）。
+        for k in ("source_ref", "ingestion_skill_version", "secret_ref", "known_at_utc", "effective_at_utc"):
+            v = getattr(self, k)
+            if v is not None:
+                meta[k] = v
+        return meta
 
-    def validate_for_write(self, *, dataset_id: str | None = None) -> None:
+    def validate_for_write(self, *, dataset_id: str | None = None, require_provenance: bool = False) -> None:
         """写时强约束（W3 · B-VERSION-1）：登记/落库前核验本结果可被不可变寻址。
 
-        拒绝三类退化写入（正路径——`make_fetch_result` / `make_wide_fetch_result`
-        产出——恒过，向后兼容：合法写入落账字节不变）：
+        拒绝以下退化写入（正路径——`make_fetch_result` / `make_wide_fetch_result`
+        产出——恒过，向后兼容：合法写入落账身份字节不变）：
 
         1. 缺 dataset_version 必备身份：`dataset_id` 空 / `fetched_at_utc` 空。
            version_id = ``make_version_id(fetched_at_utc, sha256)``，缺其一即无法成形，
            日后 RDP「缺 DatasetVersion 引用→拒」（GOAL §17）也就无从追溯。
         2. 缺 checksum：`sha256` 空 / 非 64 位 hex。
         3. checksum 不可信：声明的 `sha256` 与对 `frame` 重算的校验和不匹配（篡改检测）。
+        4. secret_ref 形态不安全：一旦提供 `secret_ref`，它必须是【引用】(scheme:…)，
+           不能是明文 key——挡掉裸 key 直接落库（红线：实盘 key/secret 不落明文）。
+           **这条与 `require_provenance` 无关，只要 secret_ref 非空就强制**。
+        5. （可选）`require_provenance=True` 时：缺 `ingestion_skill_version` / `secret_ref` → 拒。
+           **默认 False** —— 是否把「来源凭据」提级为必备是口径/方法学选择（拍板项），
+           交由调用方/中心拍；默认关 → 既有写入（intake 等不带这两字段的合法调用）不受影响。
 
         校验和重算复用既有单源 ``_sha256_of_frame``（与构造期同一函数），**绝不另造哈希**。
         这是 **写时（register）** 闸门，不在构造期 ``__post_init__`` 拦截——FetchResult 仍可
@@ -208,9 +255,24 @@ class FetchResult:
                     f"checksum 与 frame 内容不匹配（声明 {sha[:8]}.. 实算 {actual[:8]}..）—— 疑被篡改"
                 )
 
+        # secret_ref 安全护栏（提供即强制·与 require_provenance 无关）：禁明文 key 落库。
+        # 注意：诊断信息绝不回显 secret_ref 原值（哪怕它是裸 key），只报「形态非引用」。
+        if self.secret_ref is not None and str(self.secret_ref).strip():
+            if not is_secret_reference(self.secret_ref):
+                problems.append(
+                    "secret_ref 必须是引用形（如 keyring://… / ref:… / env:VAR），"
+                    "检出疑似明文凭据 → 拒（红线：实盘 key/secret 不落明文）"
+                )
+
+        if require_provenance:
+            if not (self.ingestion_skill_version and str(self.ingestion_skill_version).strip()):
+                problems.append("require_provenance：缺 ingestion_skill_version（采集来源无版本身份）")
+            if not (self.secret_ref and str(self.secret_ref).strip()):
+                problems.append("require_provenance：缺 secret_ref（数据来源凭据引用）")
+
         if problems:
             raise DatasetWriteIntegrityError(
-                "数据写入被拒（缺 dataset_version/checksum 或 checksum 不可信）: "
+                "数据写入被拒（写时强约束：dataset_version / checksum / secret_ref / provenance）: "
                 + "; ".join(problems)
             )
 
@@ -416,6 +478,7 @@ __all__ = [
     "UNIFIED_OHLCV_COLUMNS",
     "UNIFIED_OHLCV_SCHEMA",
     "enforce_unified_schema",
+    "is_secret_reference",
     "make_fetch_result",
     "make_wide_fetch_result",
     "registry",

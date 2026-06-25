@@ -7,6 +7,14 @@ canonical_json 只在 `ids.py` 定义一次，01 内核与 03 谱系总线、05 
 
 from __future__ import annotations
 
+from .data_lineage import (
+    DATA_FACTOR_EDGE_PREFIX,
+    DATA_LINEAGE_PREFIX,
+    DataToFactorEdge,
+    DatasetLineageNode,
+    derive_dataset_lineage,
+    trace_dataset_to_factors,
+)
 from .ids import (
     CONFIG_HASH_PREFIX,
     FIXTURE_PREFIX,
@@ -54,6 +62,13 @@ __all__ = [
     "node_id",
     "normalize_factor_ast",
     "strip_fixture_prefix",
+    # data 级谱系（dataset 来源指纹 + dataset→factor 可追溯 · 卡 B-VERSION-1 余）
+    "DATA_FACTOR_EDGE_PREFIX",
+    "DATA_LINEAGE_PREFIX",
+    "DataToFactorEdge",
+    "DatasetLineageNode",
+    "derive_dataset_lineage",
+    "trace_dataset_to_factors",
     # Mathematical Spine（数学贯穿 + 理论实现一致性硬门 · 决策 D-MATH-SPINE）
     "MathematicalArtifact",
     "TheoryImplementationBinding",
