@@ -6,6 +6,9 @@
 
 | uuid8 | 标题 | status | area | 位置 |
 |---|---|---|---|---|
+| 26c795c1 | Governed Compiler——canonical command+IR→deterministic run→evidence verdict（A-COMPILER·§1 链 capstone） | in_progress | compiler | active |
+| 554cdcf2 | 监控绩效轴真闭环——4 个 drift 检测器接 run_weekly_monitor_pass + per-factor IC 真源 + 观测落盘（审计残余） | in_progress | monitor | active |
+| ccb4f333 | artifact enforce 覆盖自由代码子进程路——submit_code/train_now_code 子进程也过信任门（§15 残余） | in_progress | model-governance | active |
 | 0430cd78 | 数据更新写时强约束——dataset_version/checksum/lineage 升 block 门（B-VERSION-1） | done | data-pit | done |
 | 05d6f511 | 单人 self-approve 仅非真钱通道(冷却+留痕)，真钱硬双人 | done | approval | done |
 | 0781bb13 | RDP 聚合器——从真血统装配 RDP（DatasetVersion/LLMCallRecord/honest-N/verdict 真填）（D-RDP-2） | done | delivery | done |
@@ -125,7 +128,6 @@
 | uuid8 | 标题 | status | area |
 |---|---|---|---|
 | 31289338 | 冷启动 gate/UI 接 MinTRL：DSR=N/A + PSR + "需 N 期"渐进披露（R25/R27 呈现层） | todo | eval-methodology |
-| 554cdcf2 | 监控绩效轴真闭环——4 个 drift 检测器接 run_weekly_monitor_pass + per-factor IC 真源 + 观测落盘（审计残余） | todo | monitor |
 | 861182e6 | CPCV 接 promote/overfit gate + cv_scheme 双轨 report（价值闭环） | todo | eval-methodology |
 | 92a2182f | conformal 区间消费侧接线——模型台/信号层预测附校准区间 + abstain UI 呈现 | todo | eval-methodology |
 | aa13c3b0 | 因子机构级度量接 lifecycle 状态机/sizing 生产路径 | todo | factor-lifecycle |
@@ -166,6 +168,7 @@
 | backend | b106177f · done | dreaminate |
 | backend | e069d820 · done | dreaminate |
 | canonical-command | 8abde88e · done | dreaminate |
+| compiler | 26c795c1 · in_progress | dreaminate |
 | config | 8ab894cd · done | dreaminate |
 | data-connectors | e1a98c41 · done | dreaminate |
 | data-pit | 0430cd78 · done | dreaminate |
@@ -224,11 +227,13 @@
 | math-spine | a00b3956 · done | dreaminate |
 | math-spine | b85e34cc · done | dreaminate |
 | math-spine | c86be35e · done | dreaminate |
+| model-governance | ccb4f333 · in_progress | dreaminate |
 | model-governance | 36f88f6b · done | dreaminate |
 | model-governance | 6144bd61 · done | dreaminate |
 | models-methodology | 2da39479 · done | dreaminate |
 | models-methodology | 74f93771 · done | dreaminate |
 | models-methodology | c43c6301 · done | dreaminate |
+| monitor | 554cdcf2 · in_progress | dreaminate |
 | monitor | 698a3c60 · done | dreaminate |
 | monitor | d0e5d208 · done | dreaminate |
 | monitor | d718d5c5 · done | dreaminate |

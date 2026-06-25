@@ -1,10 +1,9 @@
 ---
 uuid: 554cdcf251804a19bfb81dbbebbdf5f1
 title: 监控绩效轴真闭环——4 个 drift 检测器接 run_weekly_monitor_pass + per-factor IC 真源 + 观测落盘（审计残余）
-status: todo
-owner: wait
-assigned_by:
-review_status: 0
+status: in_progress
+owner: dreaminate
+assigned_by: dreaminatereview_status: 0
 priority: P2
 area: monitor
 source: audit-finding
