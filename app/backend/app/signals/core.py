@@ -138,6 +138,47 @@ def conformal_abstain_gate(
     )
 
 
+def compose_signal_pipeline(
+    predictions: pl.DataFrame,
+    *,
+    regimes: pl.DataFrame | None = None,
+    score_col: str = "score",
+    direction_threshold: float = 0.0,
+    long_only: bool = False,
+    min_confidence: float = 0.55,
+    conformal_band: float = 0.0,
+    regime_rules: dict[str, Iterable[str]] | None = None,
+) -> pl.DataFrame:
+    """信号层【唯一规范组合器】：fuse → regime gating → confidence filter → conformal abstain 按序施加全部安全门。
+
+    **为何需要它（不假信号）**：四个 transform 各自单测齐全、各自导出，但**无任何强制**调用方按序全跑——
+    任意调用方可只挑 `fuse_signals` 就直发方向信号、跳过 regime 关停 / 低置信打平 / 区间跨阈弃权（=对噪声下单）。
+    本组合器是那条**不可绕过的安全路径**：任何要把模型分变可交易信号的生产路径都应走它，而非自己拼 transform。
+
+    **顺序无关于最终结果、但固定规范顺序便于审计**：下游每个门只把信号**降级为 flat/magnitude=0**（绝不升级
+    方向），且各门作用于**稳定输入列**（regime/confidence/score）、flat 为吸收态——故 `direction=flat ⟺
+    任一门触发`，与施加顺序无关；magnitude=0 ⟺ 任一门触发。本组合器固定 fuse→regime→confidence→abstain。
+
+    参数（松紧=用户方法学·本组合器只串接不强加阈值）：
+    - `regimes=None`（默认）→ 跳过 regime gating（无 regime 数据不臆造）；给则按 `regime_rules`（缺用默认规则）关停。
+    - `min_confidence`（默认 0.55，沿用 `confidence_threshold_filter` 口径）：低于则 flat/mag=0。
+    - `conformal_band ≤ 0`（默认）→ **不弃权**（向后兼容）；>0 时为模型残差 (1−α) 区间半宽 q̂（量纲同 score），
+      `|score−threshold| ≤ q̂` 的样本方向不可辨 → 弃权。q̂ 来源（应取自 `model_eval.conformal_prediction_band`）/α=用户方法学。
+    返回带 `direction/magnitude/confidence/abstained` 的 DataFrame（additive，不破输入列）。
+    """
+
+    df = fuse_signals(
+        predictions, score_col=score_col, direction_threshold=direction_threshold, long_only=long_only,
+    )
+    if regimes is not None:
+        df = apply_regime_gating(df, regimes, rules=regime_rules)
+    df = confidence_threshold_filter(df, min_confidence=min_confidence)
+    df = conformal_abstain_gate(
+        df, conformal_band=conformal_band, score_col=score_col, direction_threshold=direction_threshold,
+    )
+    return df
+
+
 def calibrate_confidence(
     scores: np.ndarray,
     outcomes: np.ndarray,
@@ -162,6 +203,8 @@ __all__ = [
     "SignalDirection",
     "apply_regime_gating",
     "calibrate_confidence",
+    "compose_signal_pipeline",
     "confidence_threshold_filter",
+    "conformal_abstain_gate",
     "fuse_signals",
 ]

@@ -8,6 +8,7 @@
 |---|---|---|---|---|
 | 05d6f511 | 单人 self-approve 仅非真钱通道(冷却+留痕)，真钱硬双人 | done | approval | done |
 | 07b10903 | DS-6 装机收口——跨平台一键启动 + mkdir（可缓·docker compose 兜底） | done | onboarding-docs | done |
+| 0f8ec248 | 信号层规范组合器 compose_signal_pipeline——不可绕过的安全门顺序（不假信号） | done | signals | done |
 | 180a341e | 核验 agent tool_call 前端派发是否旁路受控翻译门（R11 前端缺口审计） | done | verification | done |
 | 1b83a5c5 | IC 持久性 AR(1) 半衰期接进 lifecycle 状态机（perf 轴·advisory） | done | factor-lifecycle | done |
 | 1e0e65b4 | 组合消费者——agent 可调组合三角 gate（SEQ-CONSUMER=A · C full-fat 触发器） | done | agent | done |
@@ -204,6 +205,7 @@
 | review | 3d4a872e · done | dreaminate |
 | security-invariant | 381b6c18 · done | dreaminate |
 | security-invariant | 6e4eee54 · done | dreaminate |
+| signals | 0f8ec248 · done | dreaminate |
 | signals | 87ad21fc · done | dreaminate |
 | signals-methodology | ee3b8dbd · done | dreaminate |
 | verification | 180a341e · done | dreaminate |

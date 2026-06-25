@@ -6,6 +6,14 @@
 ## <日期> · <标题>
 - 建/改了什么 + 命门  - 验收：<对抗测试 + 变异 + 全量数字>  - 下一步：<…> -->
 
+## 2026-06-25 · 信号层规范组合器 compose_signal_pipeline——不可绕过的安全门顺序（卡 0f8ec248 · D-SIGNAL-COMPOSE）
+
+- **缘起**：autonomous-loop（ultracode）。correctness 审计 workflow（wm8x329vn）#6：信号层四 transform（fuse/regime/confidence/conformal_abstain）无规范组合器→可只跑 fuse 跳过安全门=对噪声下单假信号；且 conformal_abstain_gate 在 core.py __all__ 漏导出（包 __init__ 已导）。
+- **数学/顺序先行**：证「各门只把信号降级 flat/mag=0（绝不升级方向）+ 触发条件作用于稳定输入列（regime/confidence/原始 score）+ flat 吸收态 ⇒ 最终 direction=flat ⟺ 任一门触发、与施加顺序无关」；固定规范序 fuse→regime→confidence→abstain 仅为审计清晰（`compose==手工逐步`测试钉死语义等价）。conformal 弃权用原始 score 非 sigmoid confidence（沿用既有契约）。
+- **实现（additive）**：`compose_signal_pipeline`（regimes=None 跳过 regime·conformal_band=0 不弃权·min_confidence 默认 0.55——全向后兼容）+ 修 core.py/__init__ 两处 __all__。**护栏=修 correctness 不假信号、非新设硬门**；阈值/q̂ 来源/α=用户方法学不强加。
+- **验收**：5 测试（全门施加 + compose==手工等价 + band=0 不弃权 + regimes=None 跳过 + 导出面）。MUT-1（丢 abstain 步）→ 弃权/等价/无 abstained 列 3 测红；MUT-2（丢 regime 步）→ bear 下 long 未 flat 红。**全量后端 1640 passed / 13 skipped / 0 failed / 133s**（基线 1635，净 +5）。已知 flaky test_effect_ledger_concurrent_same_key 本 session 负载下复发 2 次触 120s 兜底（隔离 1.09s 绿·改动只碰 signals 证非回归·复跑转闲全绿·并发硬化残余非本切片）。
+- **下一步**：92a2182f 信号 abstain UI + 生产路径（回测/交付端点）改用组合器池卡留；分支续 land-ready，commit+push 自动。
+
 ## 2026-06-25 · 因子收益归因消费侧——per-period 因子收益 provider + ts 对齐器（卡 8f9d79fd · D-ATTRIB-PROVIDER）
 
 - **缘起**：autonomous-loop（ultracode）。correctness 审计 workflow（wm8x329vn）#2（lev 7）：attribution.py 纯岛、factor_returns 必手搓 → 命门恒等式对任意输入恒真、产『绿』归因但 β 对应合成因子收益=输入假绿灯。verifier 确认物料已存在（layered 分位权重 + ic.py forward returns）。
