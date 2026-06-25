@@ -1,8 +1,8 @@
 ---
 uuid: 640b66a0cfb44c3295b2fa8cf57a3568
 title: LLM Gateway——唯一调用入口 + ModelRoutingPolicy(混合自适应) + CredentialPool + LLMCallRecord（A-AGENT-GW）
-status: todo
-owner: wait
+status: in_progress
+owner: dreaminate
 assigned_by: dreaminate
 review_status: 0
 priority: P0

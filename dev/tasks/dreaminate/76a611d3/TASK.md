@@ -1,8 +1,8 @@
 ---
 uuid: 76a611d3d26c42f495a7d7a29d5e5319
 title: ResearchGraph IR——QRO 节点 typed 图 + 各台 typed projection + 单一真相源（A-GRAPH-1）
-status: todo
-owner: wait
+status: in_progress
+owner: dreaminate
 assigned_by: dreaminate
 review_status: 0
 priority: P0
