@@ -27,7 +27,7 @@ import pandas as pd
 from ..experiments.store import ExperimentStore, ModelRegistry, RunStore
 from ..models.catalog import get_model_card
 from ..models.training import ModelSpec, train_model
-from .codegen import spec_to_code
+from .codegen import load_pit_panel, spec_to_code
 from .lib import predict_with
 from .runner import run_code
 from .store import TrainingJob, TrainingJobStore, _gen_id
@@ -79,6 +79,11 @@ class TrainingRequest:
     # 同一切点互补）。None=用全程数据训练（默认，与历史行为一致）。
     train_fraction: float | None = None
     experiment_name: str | None = None
+    # R28 双时态 PIT 点查（堵 look-ahead）：训练只见「截至 as_of_known 已知」的行（重述 as-of），
+    # 晚于该知识时点的未来重述/未来行被挡在训练之外。ISO 日期/时间字符串。
+    # None=全知视图（默认·additive·向后兼容·逐字现状不变）。透传链：to_dict() → spec →
+    # codegen `load_pit_panel`（DL/脚本路·子进程）；ML 进程内路经 `_pit_view` 走同一单一源折叠。
+    as_of_known: str | None = None
     # 模型组合：用已训练模型的输出当输入特征。
     # 每项 {"artifact_path": "...", "feature_cols": [...], "as_col": "model_x_pred"}
     input_models: list[dict[str, Any]] = field(default_factory=list)
@@ -308,9 +313,43 @@ class TrainingService:
         # ML：进程内直接训练（不需 torch，省一次 subprocess 开销）
         return self._train_ml(request, panel, job_dir)
 
+    def _pit_view(self, request: TrainingRequest, panel: pd.DataFrame) -> pd.DataFrame:
+        """ML 进程内路的 R28 双时态 PIT 点查（堵 look-ahead）。
+
+        DL/脚本路在子进程里经生成脚本的 ``load_pit_panel`` 折叠（``to_dict`` 透传 ``as_of_known``
+        → ``spec_to_code``）；ML 进程内路不渲染脚本、直接 ``train_model``，故此处把同一份 panel 经
+        **同一单一源** ``codegen.load_pit_panel`` 折叠后再训练——两路 as-of 语义对齐、不另造平行
+        PIT 逻辑（复用 ``resolver.as_of_bound`` + 镜像 ``catalog._materialize_sub`` 折叠，单一源）。
+
+        - ``as_of_known=None`` → **逐字原 panel**：向后兼容·additive·绝不改既有 ML 训练（无 round-trip）。
+        - ``as_of_known`` 给定 → 经 ``load_pit_panel`` 按 ``known_at<=as_of_known`` 折叠点查：
+          晚于该知识时点的未来重述 / 未来行必被挡在训练之外（重述 as-of）。
+        - 无 ``known_at`` 列 → ``load_pit_panel`` 内部 mirror ``_materialize_sub`` 原样返回
+          （无知识轴可过滤·不假装过滤·不报错）。
+
+        诚实边界：``load_pit_panel`` 是 path-based 单一源（消费 parquet）；进程内路 panel 是内存
+        DataFrame → 落一份**临时** parquet 当传输、走同一源折叠后即清理（不在 job_dir 留未过滤快照、
+        与 ML 进程内路本就不持久化训练面板一致），绝不在 service 层另造折叠逻辑。
+        """
+        if request.as_of_known is None:
+            return panel  # 逐字现状·向后兼容（既有 ML 训练一字不变，无 round-trip 开销）
+        import tempfile
+
+        with tempfile.TemporaryDirectory(prefix="quantbt_pit_") as td:
+            pit_path = Path(td) / "panel.parquet"
+            panel.to_parquet(pit_path)
+            return load_pit_panel(  # load_pit_panel 全量读进内存后返回，临时目录可随即清理
+                str(pit_path),
+                as_of_known=request.as_of_known,
+                ts_col=request.ts_col,
+                symbol_col=request.symbol_col,
+            )
+
     def _train_ml(
         self, request: TrainingRequest, panel: pd.DataFrame, job_dir: Path
     ) -> dict[str, Any]:
+        # R28 双时态 PIT：进程内路同样无前视（panel 经单一源 load_pit_panel 折叠点查）。
+        panel = self._pit_view(request, panel)
         spec = ModelSpec(
             task=request.task,  # type: ignore[arg-type]
             model=request.model,  # type: ignore[arg-type]
