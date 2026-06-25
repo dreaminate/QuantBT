@@ -9,6 +9,7 @@ from .core import (
     apply_regime_gating,
     calibrate_confidence,
     confidence_threshold_filter,
+    conformal_abstain_gate,
     fuse_signals,
 )
 
@@ -19,5 +20,6 @@ __all__ = [
     "apply_regime_gating",
     "calibrate_confidence",
     "confidence_threshold_filter",
+    "conformal_abstain_gate",
     "fuse_signals",
 ]

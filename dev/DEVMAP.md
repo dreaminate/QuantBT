@@ -83,6 +83,7 @@
 | e2de3d32 | 前端测试设施基建 — vitest + React Testing Library + 对抗测试 harness | done | frontend-foundation | done |
 | ecbd0eab | GOAL §7 文档对齐(M10 已接 run 闸门)+ 可证伪性/模式 教学文案 | done | docs | done |
 | edc1e326 | 主对话入口接 AgentRuntime + 无副作用工具 + 权限三态(ask/auto/bypass) | done | agent | done |
+| ee3b8dbd | conformal 校准区间接进信号层弃权（消费侧·不对噪声下单） | done | signals-methodology | done |
 | f6bb5e8e | DS-1 run_id 脊梁——agent backtest 接真引擎写 RUN_ROOT + run_id 贯穿（Fork3=A） | done | agent-backend | done |
 
 ## pool · 待分配
@@ -174,6 +175,7 @@
 | security-invariant | 381b6c18 · done | dreaminate |
 | security-invariant | 6e4eee54 · done | dreaminate |
 | signals | 87ad21fc · done | dreaminate |
+| signals-methodology | ee3b8dbd · done | dreaminate |
 | verification | 180a341e · done | dreaminate |
 | verification | 6403b9bf · done | dreaminate |
 | 数据 | 3a8b2360 · done | dreaminate |

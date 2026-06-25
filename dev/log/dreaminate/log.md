@@ -405,3 +405,11 @@
 - **meta 教训应用 + 验证**：单一源测试初版只测 ρ=0.6 一点 → MUT-S 逃逸（「测单点 happy-path 不扫判别区间」盲区）→ 强化为 ρ∈{0.3,0.6,0.9,0.97}+reversal 扫描后必抓。
 - **验证**：`test_lifecycle_decay_advisory.py` 5 + test_alpha_lite_and_lifecycle 7 passed；**全量后端 1579 passed / 13 skipped / 0 failed / 180s**（基线 1574，净 +5）。aa13c3b0 ② 容量/拥挤→sizing 留池（方法学决策）。
 - **本轮 loop「commit 和 push 自动进行」→ 本地 commit + push 分支 worktree-autopolish-w1**（land main 仍仅用户）。
+
+## 2026-06-25 · conformal 接信号层弃权 + 并发测试负载 flaky 根治（done 卡 ee3b8dbd / 92a2182f ①）
+- **价值闭环**：`signals.conformal_abstain_gate` 后处理器——预测区间 [score±q̂] 跨决策阈值（|score−thr|≤q̂）→ 方向不可辨 → 弃权（flat/magnitude=0/abstained=True），诚实「不对噪声下单」。q̂ 用 model_eval `conformal_prediction_band` 的 band_half_width（同一 q̂ 命门交叉校验）。量纲正确：缺 score_col raise、绝不用 confidence sigmoid/magnitude clip 失真值代。band≤0 向后兼容。
+- **门有牙**：MUT-conf1（≤→< 漏边界）→边界测试抓；MUT-conf2（反转弃权条件）→跨阈值测试抓。
+- **附带根治并发测试负载 flaky**：`test_effect_ledger_concurrent_same_key`（8 连接争 SQLite 锁）重负载下各等满 5s busy_timeout 被饿死、撞 pytest.ini 全局 timeout=120 fail（**全局兜底按设计 fail-fast、未再挂 7-9h**）。根因治：`EffectLedger` 加可配 `busy_timeout_ms`（默认 5000=生产不变·additive），测试用 1000 → loser 快速失败、5.4s→1.1s、3/3 稳；不变量 at-most-one 不受影响。套件 271s→164s。
+- **CPCV→gate（861182e6）勘察**：判为需独立 Plan（train_model 单路径 OOS→组合多路径重构跨 3 层 + 成本×C(N,k)；**CPCV paths≠cscv_pbo 跨策略矩阵、不可误喂**），scope 已落卡供后续。
+- **验证**：`test_conformal_abstain_signal.py` 6 + test_signals 7 + test_dag_kernel 25 passed；**全量后端 1585 passed / 13 skipped / 0 failed / 164s**（基线 1579，净 +6）。
+- **本轮 loop「commit 和 push 自动进行」→ 本地 commit + push 分支 worktree-autopolish-w1**（land main 仍仅用户）。

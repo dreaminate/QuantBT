@@ -102,6 +102,38 @@ def confidence_threshold_filter(signals: pl.DataFrame, min_confidence: float = 0
     )
 
 
+def conformal_abstain_gate(
+    signals: pl.DataFrame,
+    *,
+    conformal_band: float,
+    score_col: str = "score",
+    direction_threshold: float = 0.0,
+) -> pl.DataFrame:
+    """R23 conformal 弃权门：预测区间 [score±q̂] 跨决策阈值 → 方向不可辨 → **弃权**（flat/magnitude=0）。
+
+    **理论（split-conformal 消费侧）**：q̂=`conformal_band` 是模型残差 (1−α) 预测区间半宽（来自
+    `model_eval.conformal_prediction_band` 的 `band_half_width`，同一 q̂ 命门），故真值 ∈ [score−q̂, score+q̂]
+    覆盖≥1−α。当 |score − direction_threshold| ≤ q̂ 时该区间**含阈值** → 在 1−α 置信下无法判定真值落阈值哪侧
+    → 方向纯属噪声、**弃权**（direction=flat、magnitude=0、`abstained=True`）。诚实「不对噪声下单」、不假信号。
+
+    `conformal_band` ≤ 0 → 不弃权（abstained 全 False，向后兼容）；缺 `score_col` → raise（不静默放过：弃权
+    判定必须用**原始 score** 量纲与阈值比，confidence 的 sigmoid 已失真不可代）。`abstained` 列 additive。
+    """
+    if conformal_band <= 0.0:
+        return signals.with_columns(pl.lit(False).alias("abstained"))
+    if score_col not in signals.columns:
+        raise ValueError(
+            f"signals 缺少列 {score_col!r}：conformal 弃权需原始 score（与阈值同量纲）判预测区间是否跨阈值，"
+            "绝不用 confidence/magnitude 代（sigmoid/clip 已失真）。"
+        )
+    abstain = (pl.col(score_col) - direction_threshold).abs() <= conformal_band
+    return signals.with_columns(
+        abstain.alias("abstained"),
+        pl.when(abstain).then(pl.lit("flat")).otherwise(pl.col("direction")).alias("direction"),
+        pl.when(abstain).then(0.0).otherwise(pl.col("magnitude")).alias("magnitude"),
+    )
+
+
 def calibrate_confidence(
     scores: np.ndarray,
     outcomes: np.ndarray,

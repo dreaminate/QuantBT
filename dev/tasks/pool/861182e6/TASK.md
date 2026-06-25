@@ -14,6 +14,8 @@ depends_on: [41ea6e357df24045ad4427f85afc1a7a]
 
 # CPCV 接 promote/overfit gate + cv_scheme 双轨 report
 
+> **scope 勘察（2026-06-25·autonomous-loop 摸过、判为「需独立 Plan、不宜单轮塞」）**：`train_model`（models/training.py:174）现为**单路径 OOS**——`_make_splits` 按 cv_scheme 分派 purged_kfold/walk_forward，逐 fold 把 test 预测 concatenate 成一条 OOS 序列。CPCV 要**组合式多路径重构**：cpcv_splits(C(N,k) 组合)→每组合 fit→assemble_cpcv_paths→cpcv_metric_distribution（路径 Sharpe 分布）。即改动跨 **3 层**（① train_model 核心循环产 per-path 指标 + 结果 schema 加 path 分布字段；② verdict/gate 消费保守分位；③ 训练成本×C(N,k)）。**关键 correctness 警示**：CPCV 路径 ≠ cscv_pbo 的「跨策略矩阵」——绝不可把 CPCV paths 直接喂 `cscv_pbo`（语义误用：路径一致性≠跨策略过拟合）；正确用法是路径分布的保守分位喂 PSR/DSR + 脆弱度（路径方差）报告。建议拆：先「① cpcv 作 cv_scheme 产 path 分布诊断（report_only）」一卡，再「② 保守分位接 gate（用户选 gate_policy）」一卡。
+
 ## Scope [必填]
 R4 CPCV 库（`models/cpcv.py`）已建并验证（φ 多路径分布 + 保守分位 + 防泄露 + 命门），但**纯孤岛**——
 未注册为 cv_scheme、未接 promote/overfit gate、无双轨 report。本卡合拢价值闭环：

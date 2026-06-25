@@ -404,7 +404,9 @@ def test_effect_ledger_concurrent_same_key(tmp_path):
     lock = threading.Lock()
 
     def worker():
-        led = EffectLedger(tmp_path)   # 各自独立连接，模拟真并发
+        # busy_timeout=1000ms（非生产默认 5000）：高争用下 loser 快速失败而非各等满 5s 被负载饿死
+        # （worst case 8×1s≪120s 全局兜底）；不变量 at-most-one 不受影响（只改 loser 是 OperationalError/IntegrityError）。
+        led = EffectLedger(tmp_path, busy_timeout_ms=1000)   # 各自独立连接，模拟真并发
         barrier.wait()
         try:
             led.record("k", "nid")
