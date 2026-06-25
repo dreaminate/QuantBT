@@ -1522,6 +1522,7 @@ def training_submit(payload: dict = Body(...)) -> dict:
             hyperparams=payload.get("hyperparams") or {},
             input_models=payload.get("input_models") or [],
             detail=payload.get("detail") or {},  # 动机/设计富文档（持久化进 job，作业台动机卡用）
+            as_of_known=payload.get("as_of_known"),  # B-PIT-1 全链：PIT 双时态知识时点透传进 service（None=现状·向后兼容）
         )
         job = TRAINING_SERVICE.submit(req, panel)
     except (KeyError, ValueError) as exc:
