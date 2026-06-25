@@ -28,6 +28,12 @@ from typing import Any, Literal, Protocol
 import polars as pl
 
 
+class DatasetWriteIntegrityError(ValueError):
+    """写时强约束失败（W3 · B-VERSION-1）：登记/落库前 FetchResult 缺 dataset_version
+    必备身份（dataset_id / fetched_at_utc）、缺 checksum，或 checksum 与 frame 内容
+    不匹配（篡改）→ 拒绝写入。绝不静默落账退化结果。"""
+
+
 AssetClassTag = Literal[
     "equity_cn",
     "crypto_spot",
@@ -160,6 +166,53 @@ class FetchResult:
             "coverage_end_utc": self.coverage_end_utc,
             "sha256": self.sha256,
         }
+
+    def validate_for_write(self, *, dataset_id: str | None = None) -> None:
+        """写时强约束（W3 · B-VERSION-1）：登记/落库前核验本结果可被不可变寻址。
+
+        拒绝三类退化写入（正路径——`make_fetch_result` / `make_wide_fetch_result`
+        产出——恒过，向后兼容：合法写入落账字节不变）：
+
+        1. 缺 dataset_version 必备身份：`dataset_id` 空 / `fetched_at_utc` 空。
+           version_id = ``make_version_id(fetched_at_utc, sha256)``，缺其一即无法成形，
+           日后 RDP「缺 DatasetVersion 引用→拒」（GOAL §17）也就无从追溯。
+        2. 缺 checksum：`sha256` 空 / 非 64 位 hex。
+        3. checksum 不可信：声明的 `sha256` 与对 `frame` 重算的校验和不匹配（篡改检测）。
+
+        校验和重算复用既有单源 ``_sha256_of_frame``（与构造期同一函数），**绝不另造哈希**。
+        这是 **写时（register）** 闸门，不在构造期 ``__post_init__`` 拦截——FetchResult 仍可
+        被自由构造用于预览/只读，只有真正持久化/登记时才强约束。
+
+        触发任一缺陷即 raise ``DatasetWriteIntegrityError``。
+        """
+
+        problems: list[str] = []
+
+        if dataset_id is not None and not str(dataset_id).strip():
+            problems.append("dataset_id 为空（数据集无身份，无法登记 DatasetVersion）")
+
+        if not (self.fetched_at_utc and str(self.fetched_at_utc).strip()):
+            problems.append("fetched_at_utc 缺失（dataset_version 无法成形）")
+
+        sha = (self.sha256 or "").strip().lower()
+        if not sha:
+            problems.append("checksum(sha256) 缺失")
+        elif len(sha) != 64 or any(c not in "0123456789abcdef" for c in sha):
+            problems.append(f"checksum(sha256) 非法格式（应为 64 位 hex）: {self.sha256!r}")
+        elif not isinstance(self.frame, pl.DataFrame):
+            problems.append("frame 缺失，无法核验 checksum")
+        else:
+            actual = _sha256_of_frame(self.frame)
+            if actual != sha:
+                problems.append(
+                    f"checksum 与 frame 内容不匹配（声明 {sha[:8]}.. 实算 {actual[:8]}..）—— 疑被篡改"
+                )
+
+        if problems:
+            raise DatasetWriteIntegrityError(
+                "数据写入被拒（缺 dataset_version/checksum 或 checksum 不可信）: "
+                + "; ".join(problems)
+            )
 
 
 def make_fetch_result(frame: pl.DataFrame, source_name: str) -> FetchResult:
@@ -357,6 +410,7 @@ __all__ = [
     "ConnectorHealth",
     "ConnectorRegistry",
     "DataConnector",
+    "DatasetWriteIntegrityError",
     "FetchRequest",
     "FetchResult",
     "UNIFIED_OHLCV_COLUMNS",
