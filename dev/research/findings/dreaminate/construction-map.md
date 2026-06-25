@@ -31,14 +31,15 @@
 
 ## 2. 波次计划（中心动态补派·活的任务池）
 
-**第一波就绪前沿**（依赖已就绪 ∩ 文件不交叠 · 不依赖未建的 QRO/Gateway 地基）：
-- **W1 C-MODELGOV-1 artifact 安全** —— **止血部分已由中心 done（commit 7311c6b：RestrictedUnpickler + weights_only=True，8 对抗测试）**；完整 producer-run+hash 信任门 + allowlist + safetensors = 卡 `C-MODELGOV-1-full` 待派。
-- **W2 B-PIT-1** 回测引擎消费 `load_panel(as_of_known)`（`training/codegen.py:25` raw parquet → PIT 点查·纯接线）。
-- **W3 B-VERSION-1** 数据写时强约束（缺 dataset_version/checksum→拒·先实证写时是 gate 还是 advisory）。
-- **W4 D-RDP-1** RDP schema + manifest（§17 全字段开放格式 + optional 槽）。
-- **W5 D-EXEC-3**（已有卡 `de764e1c` active）生产监控调度 + 因子观测管道。
+> **前沿实证刷新（2026-06-26 中心 loop）**：① **LINE-0 已完成**——`auto/math-spine` 已 land 进 main（origin/main 严格领先 origin/auto/math-spine 7 提交、spine 分支 0 unique commit），Mathematical Spine 全套 + 验证纵深（cpcv/conformal/drift/attribution/mintrl/impact/lifecycle）已是 main 基线、spine-dependent 验收对照已就位。② **W5 D-EXEC-3（`de764e1c`）已 done**（在 `tasks/dreaminate/done/`）。③ 基线 = origin/main，全量 **1734 tests collected**。
 
-**第二波起**（LINE-A 出契约后扇出）：QRO/Graph/Compiler/Command、LLM Gateway、Document、StrategyBook/Forecast/方法学控制面、RDP 聚合器、发版门禁。中心每完成一卡从更新后就绪前沿补派，保持 ≤5 满载。
+**第一波就绪前沿——已 mint+派发（2026-06-26·4 条 deep-opus 在飞，文件领地不交叠）**：
+- **W1 C-MODELGOV-1-full**（uuid `2b65a76e`·分支 `wave1/w1-artifact-trust`）——止血已 done（`training/lib.py` RestrictedUnpickler+weights_only）；完整 producer-run+hash 信任门 + allowlist + safetensors。领地 `training/lib.py`(+新 `training/artifact_trust.py`)。
+- **W2 B-PIT-1**（uuid `fe46991c`·分支 `wave1/w2-pit-wiring`）——`training/codegen.py:25` raw parquet → 消费 `load_panel(as_of_known)`（catalog.py:197 已就绪）堵 look-ahead。领地 `training/codegen.py`。
+- **W3 B-VERSION-1**（uuid `5745c2c3`·分支 `wave1/w3-dataset-write-gate`）——不可变门已建（`data_hash/dataset_hash.py`），真 gap=接进实际 ingest 写路径强制缺 version/checksum→拒。领地 `data_hash/`+`connectors/base.py`+`data_quality.py`。
+- **W4 D-RDP-1**（uuid `0e7bbc13`·分支 `wave1/w4-rdp-schema`）——greenfield `delivery/` RDP schema+manifest+§17 四拒绝门。领地 新 `delivery/`。
+
+**第二波起**（LINE-A 出契约后扇出·当前最强上游瓶颈）：QRO/Graph/Compiler/Command、LLM Gateway/Registry/Routing、Document Intelligence、StrategyBook/Forecast/方法学控制面、RDP 聚合器接 promote、发版门禁。**LINE-A（对象脊柱）是几乎全部下游的依赖**——wave-1 land 后中心宜开 LINE-A 线（greenfield `qro/graph/command/compiler`·收编 ids/kernel/ledger 不重造）。中心每完成一卡从更新后就绪前沿补派，保持 ≤5 满载。
 
 ## 3. 拍板项清单（opus 绝不擅自做·点名）
 
