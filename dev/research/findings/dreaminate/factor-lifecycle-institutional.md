@@ -15,7 +15,8 @@
 
 **① 衰减半衰期（AR(1) 持久性，默认）**
 $$IC_t-\mu=\rho(IC_{t-1}-\mu)+\varepsilon_t\ \Rightarrow\ \text{冲击 }k\text{ 期后残留}=\rho^k\ \Rightarrow\ \rho^h=0.5\ \Rightarrow\ h=\frac{\ln 0.5}{\ln\rho}$$
-- 边界（**绝不 clip ρ**）：0<ρ<1→有限正半衰期；ρ→1⁻→h→∞（no_decay）；ρ≥1→undefined（爆炸/非平稳）；ρ=0→h→0（no_persistence）；−1<ρ<0→反向震荡（正向持久半衰期 undefined，可另报幅度半衰期 ln0.5/ln|ρ|）；ρ≤−1→undefined。
+- 边界（**绝不 clip ρ**）：0<ρ<1→有限正半衰期；ρ→1⁻→h→∞（no_decay）；ρ≥1→undefined（爆炸/非平稳）；ρ≤−1→undefined。
+- **−1<ρ≤0 按显著性诚实分（评审纠偏·不过claim 反转）**：仅 ρ̂ **显著<0**（95% CI 上界<0）才判 `reversal`（实质反持久/震荡结论）；ρ̂≤0 但 **CI 含 0**（与 0 不可辨，含 ρ̂≈0 白噪 IC）→ `no_persistence`（IC 无显著自相关=无持久性、**非反转非持久**），半衰期不适用。绝不把噪声级弱负 ρ̂ over-claim 成「反转」。
 - insufficient/unstable：配对样本 <min_periods（诊断≥30、sizing/退役≥60）/ lagged IC 方差≈0 / ρ 置信区间跨 0 或 1（unstable，不作硬退役依据）。
 - 指数法 log|IC_t|=a−λt OLS、h=ln2/λ 作辅证（IC=0 炸、ε-floor 引偏，要求时间原点有意义）。小样本 OLS 偏 ρ 向下（codex）。
 

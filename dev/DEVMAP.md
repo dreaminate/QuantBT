@@ -61,6 +61,7 @@
 | b12de4f5 | §3 因子机构级生命周期度量（衰减半衰期/容量/因子族/拥挤）+ 命门 | done | factor-lifecycle | done |
 | b1e4efdf | 冷启动 MinTRL 接进 run /overfit 投影（价值闭环·呈现层不动治理） | done | eval-methodology | done |
 | b2682edc | Model台前端 P0 — 4 子台像素还原 + mock(作业/注册表/构建draw.io/研究) | done | frontend | done |
+| b762da53 | ic_decay 诚实 status 精修——ρ̂≈0 弱负判 no_persistence 而非过claim reversal | done | factor-lifecycle | done |
 | b961f08b | Agent 后端工具补全 — 4 schema+handler + stream 结构化事件 + handoff | done | agent | done |
 | b9af7c82 | 共享画布引擎 — GraphCanvas / NodeCard / EdgeLayer / MiniMap（pan·zoom·连线·框选） | done | frontend-foundation | done |
 | ba59fb7b | 组合 promote production 端点——组合三角 gate record=True 真记 honest-N | done | portfolio | done |
@@ -151,6 +152,7 @@
 | execution-cost | d9bf88b1 · done | dreaminate |
 | factor-lifecycle | 1b83a5c5 · done | dreaminate |
 | factor-lifecycle | b12de4f5 · done | dreaminate |
+| factor-lifecycle | b762da53 · done | dreaminate |
 | frontend | 3d95e0f6 · done | dreaminate |
 | frontend | 5e47b82f · done | dreaminate |
 | frontend | 82120b9c · done | dreaminate |

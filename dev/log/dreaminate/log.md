@@ -457,3 +457,9 @@
 - **教训**：in-code 文档不得声称代码里不存在的跨件 wiring——即便 dev/state 另有诚实追踪，维护者先读 in-code 文档=不假绿灯雷。
 - **验证**：受影响 33 测 + **全量后端 1604 passed / 13 skipped / 0 failed / 123s**（基线 1603，净 +1）。
 - **本轮 loop「commit 和 push 自动进行」→ 本地 commit + push 分支 worktree-autopolish-w1。判定 land-ready，待用户授权合并 main。**
+
+## 2026-06-25 · ic_decay 诚实 status 精修 no_persistence（done 卡 b762da53 · 清评审 low 残余）
+- **诚实 status**：ic_decay_half_life 原 ρ̂≤0 一律 reversal，但 ρ̂≈0 白噪 IC 是无持久性非反转（reversal=anti-persistent 须 ρ 显著<0）。改按 95% CI 上界：ci_hi<0→reversal、CI 含 0→no_persistence（无显著自相关·非反转非持久）。对齐不假绿灯/honest-status（不把噪声弱负 over-claim 成反转）。
+- **MUT 验证有牙**：还原「ρ≤0 全 reversal 过claim」→ 弱负（ρ=-0.2 n=45 CI 含 0）测试红。低 ripple（显著负仍 reversal、random walk 不碰、near-constant insufficient、decay_diagnostic advisory 传播不变）。
+- **验证**：test_factor_lifecycle_metrics 31 + test_lifecycle_decay_advisory 全 passed；**全量后端 1605 passed / 13 skipped / 0 failed / 124s**（基线 1604，净 +1）。
+- **本轮 loop「commit 和 push 自动进行」→ 本地 commit + push 分支 worktree-autopolish-w1。分支续 land-ready。**

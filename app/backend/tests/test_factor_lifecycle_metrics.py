@@ -57,9 +57,20 @@ def test_decay_rho_not_clipped_explosive_is_no_decay():
 
 
 def test_decay_reversal_and_insufficient():
-    assert ic_decay_half_life(_ar1(-0.6, n=2000)).status == "reversal"   # ρ≤0 反转
+    assert ic_decay_half_life(_ar1(-0.6, n=2000)).status == "reversal"   # ρ 显著<0 → 反转
     assert ic_decay_half_life(np.random.default_rng(0).standard_normal(20)).status == "insufficient"
     assert ic_decay_half_life(np.ones(200)).status == "insufficient"      # 方差≈0
+
+
+def test_decay_weak_negative_is_no_persistence_not_reversal():
+    """**诚实 status（评审纠偏）**：ρ̂≤0 但 95% CI 含 0（不显著负）→ `no_persistence`（IC 无显著自相关=无持久性，
+    **非反转**）；仅 CI 上界<0（显著负）才 `reversal`。绝不把 ρ̂≈0 的弱负噪声 over-claim 成「反转」结论。"""
+    weak = ic_decay_half_life(_ar1(-0.2, n=45, seed=2))     # ρ̂≈-0.215 但小样本 se 大、95% CI 含 0
+    assert weak.status == "no_persistence" and not math.isfinite(weak.half_life), \
+        f"弱负不显著应 no_persistence、半衰期 NaN，得 {weak.status}(ρ̂={weak.rho:.3f})"
+    assert ic_decay_half_life(_ar1(-0.6, n=2000)).status == "reversal"   # 显著负仍 reversal（不被新分支吞）
+    noise = ic_decay_half_life(np.random.default_rng(3).standard_normal(60) * 0.05)
+    assert noise.status in ("no_persistence", "unstable")   # 纯白噪：无持久性，绝不 reversal/ok
 
 
 def test_decay_random_walk_rarely_fake_ok_multiseed():

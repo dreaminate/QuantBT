@@ -48,7 +48,7 @@ _CROWD_WATCH_CORR = 0.4
 class DecayEstimate:
     rho: float                  # AR(1) 持久性系数（NaN=不可估）
     half_life: float            # ln(0.5)/ln(ρ)；inf=不衰减；NaN=undefined/反转
-    status: Literal["ok", "no_decay", "reversal", "undefined", "unstable", "insufficient"]
+    status: Literal["ok", "no_decay", "reversal", "no_persistence", "undefined", "unstable", "insufficient"]
     n_obs: int                  # 估计用的 AR(1) 配对样本数（=有限 IC 滞后对数，跨 NaN 缺口的对已丢）
     method: str = "ar1"
     warnings: tuple[str, ...] = ()
@@ -90,11 +90,18 @@ def ic_decay_half_life(ic_series: np.ndarray, *, min_periods: int = 30) -> Decay
         return DecayEstimate(rho, float("inf"), "no_decay", n_pairs,
                              warnings=("ρ≥1：非平稳/爆炸，无有限衰减半衰期",))
     if rho <= 0.0:
-        if rho > -1.0:
-            return DecayEstimate(rho, float("nan"), "reversal", n_pairs,
-                                 warnings=(f"ρ={rho:.3f}≤0：反向震荡，正向持久半衰期不适用",))
-        return DecayEstimate(rho, float("nan"), "undefined", n_pairs,
-                             warnings=(f"ρ={rho:.3f}≤−1：非平稳震荡",))
+        if rho <= -1.0:
+            return DecayEstimate(rho, float("nan"), "undefined", n_pairs,
+                                 warnings=(f"ρ={rho:.3f}≤−1：非平稳震荡",))
+        # −1<ρ≤0：仅当 ρ̂ **显著**<0（CI 整体 <0）才判 reversal（反持久/震荡）；CI 含 0 → ρ̂ 与 0 不可辨 →
+        # **no_persistence**（IC 无显著自相关=不可由自身过去预测，**非反转、非持久**）。诚实：绝不把 ρ̂≈0 的
+        # 白噪 IC 过claim 成「反转」（reversal 是 anti-persistent 的实质结论、须显著负方可下）。
+        if ci_hi >= 0.0:
+            return DecayEstimate(rho, float("nan"), "no_persistence", n_pairs,
+                                 warnings=(f"ρ̂={rho:.3f}（95% CI [{ci_lo:.3f},{ci_hi:.3f}] 含 0）：IC 无显著自相关、"
+                                           "无持久性（非反转/非持久），半衰期不适用",))
+        return DecayEstimate(rho, float("nan"), "reversal", n_pairs,
+                             warnings=(f"ρ̂={rho:.3f}（CI 上界 {ci_hi:.3f}<0）：显著反持久/震荡，正向持久半衰期不适用",))
     # 0<ρ<1：有限半衰期
     h = math.log(0.5) / math.log(rho)
     status: str = "ok"
