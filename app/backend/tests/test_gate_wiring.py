@@ -149,3 +149,51 @@ def test_asset_class_mapping():
     assert asset_class_of("stocks_cn") == "a_share"
     assert asset_class_of("crypto_perp") == "crypto"
     assert asset_class_of("crypto_spot") == "crypto"
+
+
+# ── T-GW-6 CPCV q05→gate 透传：evaluate_overfit_gate 把 cpcv_distribution/cpcv_policy 转发 run_overfit_gate ─
+def _strong_returns(seed: int = 1):
+    """强正信号收益（dsr_conservative 高），配 allow_pbo_absent_green=True（组合层 A2）→ green。"""
+    rng = np.random.default_rng(seed)
+    return [float(rng.normal(0.0020, 0.007)) for _ in range(340)]
+
+
+def test_gate_runner_forwards_cpcv_report_only_default(tmp_path: Path):
+    """**默认 report_only**：带 fragile CPCV 经 gate_runner → 裁决与不带逐位一致（不替方法学拍板），但 verdict.cpcv 已附。
+
+    这证 `cpcv_distribution` 真经 evaluate_overfit_gate 转发到 run_overfit_gate（mutation：丢掉转发 → cpcv 恒 None，断言崩）。
+    """
+    led = Ledger(tmp_path / "l")
+    store = _MemStore()
+    r = _strong_returns()
+    common = dict(returns=r, factor="a", universe="u", dataset_version="ds", freq="1d",
+                  strategy_goal_ref="tg_cpcv", asset_class="crypto", ledger=led, returns_store=store,
+                  allow_pbo_absent_green=True)
+    base = evaluate_overfit_gate(**common, record=True)
+    assert base.verdict.color == "green" and base.verdict.cpcv is None  # 不传 CPCV → None（不编造）
+    frag = {"status": "ok", "metric": "r2", "baseline": 0.0, "q05": -0.12, "n_paths": 5}
+    ro = evaluate_overfit_gate(**common, record=False, cpcv_distribution=frag)
+    assert ro.verdict.color == "green"                                  # report_only 默认不改裁决
+    assert ro.verdict.cpcv is not None and ro.verdict.cpcv["fragile"] is True  # 报告已附（转发活）
+    assert "downgraded_green_to_yellow" not in ro.verdict.cpcv          # 但未降级（守不替拍板）
+
+
+def test_gate_runner_forwards_cpcv_conservative_policy(tmp_path: Path):
+    """**cpcv_policy 转发有牙**：显式 cpcv_conservative + 脆弱 → green 经 gate_runner 降级 yellow；robust 保 green。
+
+    mutation：若 evaluate_overfit_gate 硬写 report_only/丢 cpcv_policy → 此降级不发生，断言崩。
+    """
+    led = Ledger(tmp_path / "l")
+    store = _MemStore()
+    r = _strong_returns()
+    common = dict(returns=r, factor="a", universe="u", dataset_version="ds", freq="1d",
+                  strategy_goal_ref="tg_cons", asset_class="crypto", ledger=led, returns_store=store,
+                  allow_pbo_absent_green=True)
+    evaluate_overfit_gate(**common, record=True)                        # 先建主题（green 前置）
+    frag = {"status": "ok", "metric": "r2", "baseline": 0.0, "q05": -0.12, "n_paths": 5}
+    rob = {"status": "ok", "metric": "r2", "baseline": 0.0, "q05": 0.35, "n_paths": 5}
+    cons_frag = evaluate_overfit_gate(**common, record=False, cpcv_distribution=frag, cpcv_policy="cpcv_conservative")
+    assert cons_frag.verdict.color == "yellow"                          # 脆弱 → 降级（policy 转发活）
+    assert cons_frag.verdict.cpcv["downgraded_green_to_yellow"] is True
+    cons_rob = evaluate_overfit_gate(**common, record=False, cpcv_distribution=rob, cpcv_policy="cpcv_conservative")
+    assert cons_rob.verdict.color == "green" and cons_rob.verdict.cpcv["fragile"] is False  # 稳健 → 不降级

@@ -62,6 +62,9 @@ class GateVerdict:
     reason: str
     verdict_phrasing: str
     model_risk_disclosure: list[str]
+    # R4 CPCV 路径稳健性（report-only·正交于 PBO/DSR/CI 三角）：q05<无技能基线=过拟合/切分脆弱（advisory）。
+    # None=未提供 CPCV 或样本不足。cpcv_conservative policy 下脆弱可 green→yellow（绝不硬 red，守 R2 单点不承重）。
+    cpcv: dict | None = None
 
     def to_dict(self) -> dict:
         d = asdict(self)
@@ -145,6 +148,8 @@ def run_overfit_gate(
     asset_class: str = "crypto",
     periods_per_year: int = 252,
     allow_pbo_absent_green: bool = False,
+    cpcv_distribution: dict | None = None,
+    cpcv_policy: Literal["report_only", "cpcv_conservative"] = "report_only",
 ) -> GateVerdict:
     """多证据三角裁决。`returns`=本策略逐期净收益；`returns_matrix`=同主题历史试验矩阵（PBO 用）。
 
@@ -180,6 +185,23 @@ def run_overfit_gate(
     ci_t = ci.to_tuple()
 
     color, all_agree = _decide(dsr_cons, pbo, ci_t[0], ci_t[1], allow_pbo_absent_green=allow_pbo_absent_green)
+
+    # R4 CPCV 路径稳健性接入（正交第四视角·绝不单点承重）：q05<无技能基线 = 相当比例组合路径 OOS 无优于随机
+    # = 过拟合/切分脆弱。**report_only（默认）**：只附报告、绝不改裁决（守「不替方法学拍板」）。
+    # **cpcv_conservative**（用户 opt-in）：脆弱**仅** green→yellow（advisory concern），**绝不硬 red、绝不升级**
+    # （R2：单支不承重、red 只由 strong_neg 兜底；CPCV 是降级提醒非熔断）。
+    cpcv_report: dict | None = None
+    if isinstance(cpcv_distribution, dict) and cpcv_distribution.get("status") == "ok":
+        q05 = cpcv_distribution.get("q05")
+        baseline = cpcv_distribution.get("baseline", 0.0)
+        fragile = isinstance(q05, (int, float)) and math.isfinite(q05) and isinstance(baseline, (int, float)) and q05 < baseline
+        cpcv_report = {
+            "metric": cpcv_distribution.get("metric"), "q05": q05, "baseline": baseline,
+            "n_paths": cpcv_distribution.get("n_paths"), "fragile": bool(fragile), "policy": cpcv_policy,
+        }
+        if cpcv_policy == "cpcv_conservative" and fragile and color == "green":
+            color = "yellow"                 # advisory 降级：脆弱不给完整放行（绝不 red、绝不升级）
+            cpcv_report["downgraded_green_to_yellow"] = True
     if color == "red":
         phr = "证据不足以支持：至少一支证据强负（DSR 保守端低 / Sharpe CI 上界≤0 / PBO 偏高）。"
     elif color == "green" and pbo is None:
@@ -194,10 +216,20 @@ def run_overfit_gate(
     domain = f"适用域=该样本期/该资产({asset_class})/honest_n={n_floor}、过闸通缩试验数∈[{n_low},{n_high}]"
     unverified = "未验证=交易成本/容量/拥挤/regime 漂移/样本外持续性"
     var_note = "" if var is not None else "；V 未独立估计(退化旧近似)，通缩可能不足"
-    verdict_phrasing = f"{phr} {domain}；{unverified}{var_note}。"
+    # CPCV 注（report-only 仅陈述脆弱度；cpcv_conservative 降级时点明 advisory 来由）。
+    cpcv_note = ""
+    if cpcv_report is not None:
+        if cpcv_report.get("downgraded_green_to_yellow"):
+            cpcv_note = f"；CPCV 路径脆弱(q05={cpcv_report['q05']:.3g}<基线{cpcv_report['baseline']})→advisory 降 yellow(非熔断)"
+        elif cpcv_report["fragile"]:
+            cpcv_note = f"；CPCV 路径脆弱(q05={cpcv_report['q05']:.3g}<基线{cpcv_report['baseline']}·report-only 未改裁决)"
+        else:
+            cpcv_note = f"；CPCV 路径稳健(q05={cpcv_report['q05']:.3g}≥基线{cpcv_report['baseline']})"
+    verdict_phrasing = f"{phr} {domain}；{unverified}{var_note}{cpcv_note}。"
     reason = (
         f"DSR[{dsr_opt:.2f}~{dsr_cons:.2f}] PBO={'n/a' if pbo is None else f'{pbo:.2f}'} "
-        f"BootstrapCI=[{ci_t[0]:.2f},{ci_t[1]:.2f}]({ci.method}) → {color}"
+        f"BootstrapCI=[{ci_t[0]:.2f},{ci_t[1]:.2f}]({ci.method})"
+        f"{'' if cpcv_report is None else f' CPCV-q05={cpcv_report['q05']}'} → {color}"
     )
 
     return GateVerdict(
@@ -208,6 +240,7 @@ def run_overfit_gate(
         var_sr_estimated=var is not None,
         reason=reason, verdict_phrasing=verdict_phrasing,
         model_risk_disclosure=list(_MODEL_RISK_DISCLOSURE),
+        cpcv=cpcv_report,
     )
 
 

@@ -80,10 +80,11 @@ $$\text{剔除 iff}\quad \exists j:\ t0_i\le t1_j\ \wedge\ t1_i\ge t0_j$$
 - **R4=B caveat**：CPCV 真实市场优越性未确立 → 双轨呈现、不自动判赢（已入 API/文案设计）。
 - **CPCV 只隔离索引**：scaler/特征选择/target encoding/调参必须每折内 fit，否则路径重建再对也是把泄露预测拼漂亮（R5 用法 caveat，docstring 披露）。
 - **embargo 语义**：定为 AFML test-后；与 purged_kfold 两侧不同（已标注、非 bug）。
-- **path-metric→gate 接线**：本切片给分布 + 保守分位 helper；接进 promote gate 的生产路径属后续（建议 mint）。
+- ~~**path-metric→gate 接线**：本切片给分布 + 保守分位 helper；接进 promote gate 的生产路径属后续（建议 mint）。~~ **✅ done（2026-06-25·done 卡 89e7be1e）**：q05 保守分位接进 `run_overfit_gate` + `gate_runner.evaluate_overfit_gate`（promote 生产路径）。**护栏铁律**：默认 `report_only` 绝不改裁决（守不替方法学拍板）；`cpcv_conservative` 用户 opt-in 才 green→yellow advisory；**q05 是多证据三角[PBO/DSR/CI]外第四类弱证据 → 绝不硬 red、绝不升级**（守 R2 单支不承重·路径稳≠策略好·**CPCV 路径绝不喂 cscv_pbo** 跨策略红线）。MUT-A/B/C 三变异验证有牙。**③ 残**：cv_scheme UI 选项 + 双轨 report 不自动判赢 + Sharpe/DSR prediction→收益转换（用户方法学·池卡 861182e6 ③）。
 
 ## → 拆成的任务（mint uuid 入 tasks/pool/）[必填]
 | uuid8 | 验收一句话 | 优先级 | 依赖(uuid) |
 |---|---|---|---|
 | (本切片) | CPCV splits+路径重建+分布数学对齐理论、φ/覆盖/purge 不变量守门、PBO 红线、爆炸/边界拒、双轨 caveat | P1 | — |
-| (建议后续) | CPCV 多路径保守 DSR 接进 promote gate（双轨 report + cpcv_conservative 策略） | P2 | 本切片 |
+| 89e7be1e ✅done | CPCV q05 保守分位接进 overfit gate（report_only 默认 / cpcv_conservative opt-in·绝不硬 red/不升级·守不替拍板） | P2 | 本切片 |
+| 861182e6 ③ 池卡留 | cv_scheme UI 选项 + 双轨 report 不自动判赢 + Sharpe/DSR prediction→收益转换（用户方法学） | P2 | 89e7be1e |

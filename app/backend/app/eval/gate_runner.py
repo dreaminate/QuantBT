@@ -15,6 +15,7 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
+from typing import Literal
 
 import numpy as np
 
@@ -101,11 +102,18 @@ def evaluate_overfit_gate(
     ledger: Ledger | None = None,
     returns_store=None,
     allow_pbo_absent_green: bool = False,
+    cpcv_distribution: dict | None = None,
+    cpcv_policy: Literal["report_only", "cpcv_conservative"] = "report_only",
     record: bool,
 ) -> GateRunResult:
     """跑一次三角 gate。`record=True`（promote）记账 + 存快照；`record=False`（preview）只读。
 
     `allow_pbo_absent_green`（组合层 A2，D-WAVE1A）：透传给 run_overfit_gate；默认 False 单策略不变。
+
+    `cpcv_distribution` / `cpcv_policy`（CPCV q05→gate 接线）：透传给 run_overfit_gate。默认
+    `report_only`（只附报告·绝不改裁决·守「方法学松紧=用户拍板」），调用方显式传 `cpcv_conservative`
+    才允许 q05<基线的脆弱分布把 green 降级为 yellow（advisory·绝不硬 red、绝不升级）。默认 None →
+    行为与接线前逐位一致（不假绿灯：未传 CPCV ≠ 编造）。
     """
 
     chash = _config_hash(
@@ -142,6 +150,7 @@ def evaluate_overfit_gate(
         ret_list, n_eff=neff, honest_n=honest_n, returns_matrix=matrix,
         asset_class=asset_class, periods_per_year=periods_per_year,
         allow_pbo_absent_green=allow_pbo_absent_green,
+        cpcv_distribution=cpcv_distribution, cpcv_policy=cpcv_policy,
     )
     return GateRunResult(verdict=verdict, config_hash=chash, honest_n=honest_n)
 

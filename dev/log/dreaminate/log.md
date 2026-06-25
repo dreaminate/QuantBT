@@ -6,6 +6,14 @@
 ## <日期> · <标题>
 - 建/改了什么 + 命门  - 验收：<对抗测试 + 变异 + 全量数字>  - 下一步：<…> -->
 
+## 2026-06-25 · CPCV 路径稳健性 q05 接进 overfit gate（report-only 默认 / cpcv_conservative opt-in · 卡 89e7be1e · D-CPCV-GATE）
+
+- **缘起**：autonomous-loop。池卡 861182e6 ② 残项「q05 接 promote/overfit gate」——CPCV per-path 分布此前只到 UI（done 876a0c11·report-only），未接 gate。
+- **数学先行**：q05=路径分布 5% 分位=保守端；q05<无技能基线（r2:0/auc:0.5）=部分路径无优于随机=过拟合脆弱信号。取**保守分位非均值**（守「均值掩盖差路径」）。q05 是 PBO/DSR/Bootstrap-CI 多证据三角外的**第四类弱证据**（路径一致性≠跨策略过拟合 PBO，绝不喂 cscv_pbo）→ 最多 advisory 降一档（守 R2 单支不承重），**绝不硬 red、绝不升级**（路径稳≠策略好，不洗假绿灯）。
+- **实现（additive·两层）**：① `overfit_gate.py` GateVerdict +`cpcv` 字段、run_overfit_gate +`cpcv_distribution`/`cpcv_policy`（report_only 默认/cpcv_conservative）+ 降级逻辑（仅 fragile∧green→yellow）+ verdict_phrasing/reason 三分支注；② `gate_runner.evaluate_overfit_gate` 透传两参数（**promote 生产路径接通**）。默认 None/report_only → 行为逐位不变（守不替方法学拍板）。缺/status≠ok→cpcv=None（未算≠已算）。
+- **验收**：单元 `test_overfit_gate_cpcv` 6 + `test_gate_wiring` 透传 2（T-GW-6）。**变异（牙坐实）**：MUT-A（report_only 也降级）/MUT-B（降级成 red）/MUT-C（gate_runner 丢转发）三变异全抓——定点反向 edit 后还原（**绝不 git checkout 带未提交改动**）。green 可达走组合层 A2 allow_pbo_absent_green。**全量后端 1619 passed / 13 skipped / 0 failed / 183s**（基线 1611，净 +8）。
+- **下一步**：861182e6 ③剩（cv_scheme UI 选项 + 双轨 report 不自动判赢 + Sharpe/DSR prediction→收益转换，用户方法学）池卡留；分支续 land-ready，commit+push 自动。
+
 ## 2026-06-25 · conformal 校准区间接进 model_eval——第二个价值闭环（卡 d4a324ae · D-CONFORMAL-MODELEVAL）
 
 - **缘起**：autonomous-loop。继续合拢价值闭环——选最大未接数学件 conformal（R23）接进模型台。
