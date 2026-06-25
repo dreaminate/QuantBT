@@ -428,3 +428,10 @@
 - **门有牙**：MUT-cf（单次覆盖渲成功绿）→「不假绿灯①」FAIL。
 - **验证**：tsc 无错；`ConformalIntervalCard.test` 5 passed；**全前端 293 passed / 24 文件**（基线 288，净 +5）；vite build ✓。
 - **本轮 loop「commit 和 push 自动进行」→ 本地 commit + push 分支 worktree-autopolish-w1**（land main 仍仅用户）。
+
+## 2026-06-25 · 因子收益归因建库（done 卡 ff286f80 · 北极星「归因」阶段填缺）
+- **填 pipeline 缺口**：grep 实证北极星「归因」阶段无独立模块 → 建 `eval/attribution.py` `factor_return_attribution`。组合实现收益 OLS 时序回归到因子收益、分解各因子贡献（contrib_k=β̂_k·ΣF_k）+ 特异（specific=Tα̂+Σε̂）。数学先行 finding「因子收益归因」。
+- **命门加总恒等式有真牙**：Σcontrib+specific≡Σr 逐位；contrib（β̂·ΣF）与 specific（Tα̂+Σε̂）独立公式 → 非构造性 tautology。MUT-attr（contrib 用 mean 代 sum）→ test_attribution 恒等式 + methodology 恒等式 + 已知 β 恢复三测全红。
+- **不假绿灯**：T<K+2→insufficient 不出 β；rank<K+1→collinear 不报不可识别 β；近共线→ok+warn（β 不稳）；非有限行剔除披露；低 R² 如实报（收益多由特异驱动≠已归因）。
+- **验证**：`test_attribution.py` 8 + `test_methodology_invariants::test_attribution_sum_identity_invariant` 1 passed；**全量后端 1594 passed / 13 skipped / 0 failed / 151s**（基线 1585，净 +9）。消费侧（组合台/归因报告 UI·因子集/口径=用户方法学决策）mint 卡 e4496023。
+- **本轮 loop「commit 和 push 自动进行」→ 本地 commit + push 分支 worktree-autopolish-w1**（land main 仍仅用户）。

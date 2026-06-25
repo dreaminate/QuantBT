@@ -1016,3 +1016,32 @@ def _skew_local(arr):
 def _kurt_local(arr):
     from app.eval.dsr import _kurt_excess
     return _kurt_excess(arr)
+
+
+# ===========================================================================
+# 归因 · 因子收益归因加总恒等式（北极星「归因」阶段）
+#   设计/推导：dev/research/findings/dreaminate/factor-return-attribution.md
+# ===========================================================================
+
+
+def test_attribution_sum_identity_invariant():
+    """**命门**：Σ factor_contrib + specific ≡ Σ组合收益（逐位）∀ 随机合法参数。
+
+    定理：r_t=α̂+Σβ̂_k F_{k,t}+ε̂_t 逐期求和 ⇒ Σr = Tα̂+Σβ̂_kΣF_k+Σε̂ = Σcontrib + specific。
+    contrib（β̂·ΣF）与 specific（Tα̂+Σε̂）是**独立公式**——其和等于 total 仅当回归代数正确；
+    contrib 用错聚合/漏截距 → 本测变红（非构造性 tautology）。
+    """
+    from app.eval.attribution import factor_return_attribution
+
+    for s in range(60):
+        rng = np.random.default_rng(50_000 + s)
+        n = int(rng.integers(30, 400))
+        k = int(rng.integers(1, 6))
+        fac = {f"f{i}": (rng.standard_normal(n) * rng.uniform(0.005, 0.05)).tolist() for i in range(k)}
+        y = (rng.standard_normal(n) * rng.uniform(0.01, 0.06)).tolist()
+        r = factor_return_attribution(y, fac)
+        if r.status != "ok":
+            continue
+        lhs = sum(r.factor_contributions.values()) + r.specific_contribution
+        assert abs(lhs - r.total_return) <= 1e-9 * max(1.0, abs(r.total_return)) + 1e-12, \
+            f"seed={s} 归因加总恒等式破：{lhs} ≠ {r.total_return}"

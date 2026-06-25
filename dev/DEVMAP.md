@@ -87,6 +87,7 @@
 | edc1e326 | 主对话入口接 AgentRuntime + 无副作用工具 + 权限三态(ask/auto/bypass) | done | agent | done |
 | ee3b8dbd | conformal 校准区间接进信号层弃权（消费侧·不对噪声下单） | done | signals-methodology | done |
 | f6bb5e8e | DS-1 run_id 脊梁——agent backtest 接真引擎写 RUN_ROOT + run_id 贯穿（Fork3=A） | done | agent-backend | done |
+| ff286f80 | 因子收益归因（returns-based attribution）—— 北极星「归因」阶段建库 | done | eval-methodology | done |
 
 ## pool · 待分配
 
@@ -97,6 +98,7 @@
 | 92a2182f | conformal 区间消费侧接线——模型台/信号层预测附校准区间 + abstain UI 呈现 | todo | eval-methodology |
 | aa13c3b0 | 因子机构级度量接 lifecycle 状态机/sizing 生产路径 | todo | factor-lifecycle |
 | e2afc5c2 | 三档成本预设接 sqrt-impact 默认 + 成交报告 impact 成本归因拆字段 | todo | execution-cost |
+| e4496023 | 因子收益归因接消费侧（组合台/归因报告 + UI 呈现） | todo | eval-methodology |
 
 ## 按 area 功能索引
 
@@ -139,6 +141,7 @@
 | eval-methodology | 6acbb499 · done | dreaminate |
 | eval-methodology | b1e4efdf · done | dreaminate |
 | eval-methodology | d4a324ae · done | dreaminate |
+| eval-methodology | ff286f80 · done | dreaminate |
 | execution-cost | 6e264c59 · done | dreaminate |
 | execution-cost | 7179ba36 · done | dreaminate |
 | execution-cost | d9bf88b1 · done | dreaminate |
