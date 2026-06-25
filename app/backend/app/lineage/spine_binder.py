@@ -110,3 +110,36 @@ def numerical_consistency_check(
         affected_assets=affected_assets,
         verifier_ref=verifier_ref,
     )
+
+
+def property_consistency_check(
+    binding_id: str,
+    properties: Sequence[tuple[str, bool, str]],
+    *,
+    check_type: str = "property",
+    verifier_ref: str = "",
+    affected_assets: tuple[str, ...] = (),
+) -> ConsistencyCheck:
+    """从数学定义推出的【必要性质】对账（用于难做闭式独立 oracle 的实现，如 CSCV-PBO / bootstrap）。
+
+    `properties`: (性质名, 是否成立, 观测明细) 列表——调用方跑实现、判每条性质。任一不满足 →
+    result=fail（实现偏离定义）。**诚实边界**：性质是【必要非充分】，抓不到「全性质满足但数值细微偏离」
+    的 bug——那需更强 oracle/Verifier；故 check_type="property" 标明弱于 numerical 对账。
+    """
+
+    if not properties:
+        raise ValueError("property_consistency_check 需要至少一条性质")
+    failed = [(n, o) for (n, ok, o) in properties if not ok]
+    return ConsistencyCheck(
+        binding_id=binding_id,
+        check_type=check_type,
+        result="pass" if not failed else "fail",
+        expected_property="∀ property 成立（从数学定义推出的必要性质）",
+        observed_property="; ".join(f"{n}={'✓' if ok else '✗'}({o})" for (n, ok, o) in properties),
+        failure_reason=(
+            "" if not failed
+            else "违反必要性质 → 实现偏离定义: " + "; ".join(f"{n}({o})" for n, o in failed)
+        ),
+        affected_assets=affected_assets,
+        verifier_ref=verifier_ref,
+    )

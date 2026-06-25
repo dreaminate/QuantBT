@@ -549,3 +549,13 @@
 - **处置**：先备份 `auto/math-spine-prerebase`；rebase 因 dev/ 共享文档在 3 提交各冲突太碎 → 改 **merge origin/main 进分支**（冲突一次解完）。解 5 冲突：`overfit_gate.py`（整合 main CPCV q05 + 我的 spine 接线，GateVerdict `cpcv`+`spine_consistency` 双字段、run_overfit_gate 双套参数共存、早返回 fail-closed 与 CPCV 块并存）；`state.md`/`DEVMAP`/`_NAV` 取 main 权威版（spine 进展 prepend + regenerate）；`log.md` 保双方条目。
 - **验证**：merge 后 spine+gate+cpcv **76 passed**；`origin/main 现为 HEAD 祖先`=分支已同步；DSR pinned 指纹对 main 的 dsr.py 仍有效（main 只新增 PSR/MinTRL 函数，未动我指纹的 5 链函数）。**全量后端 1673 passed / 13 deselected / 1 已知并发 flake**（`test_effect_ledger_concurrent_same_key` 负载下 timeout、隔离单跑 1.13s 绿、非回归）。
 - **结果**：spine 3 切片（门核心 + DSR 绑定 + 接生产 gate）现建立在 main 真·当前代码上、一致性门对当前估计器验。下一切片绑 PBO/bootstrap 在同步后分支上做。commit/push 自管、**land main 待用户**。
+
+## 2026-06-25 · 信任层三角补齐——PBO+Bootstrap 经脊柱绑定 + 三支接生产 gate（gap #3 · 依赖 4458ff54）
+
+- **触发**：DSR 已接生产 gate 但 gate 红绿建在 DSR/PBO/bootstrap **三支**上，只核一支不够；本切片补齐三角（先 git fetch 确认仍同步 main 无新提交）。
+- **理论先行**：finding `spine-consistency-gate/02`——PBO(CSCV)/bootstrap 难做闭式独立 oracle → 用 **property-based 一致性**（从定义推出必要性质）。PBO：范围∈[0,1]/纯噪声≈0.5(CSCV 定理)/真信号低 pbo/pbo↔λ 符号一致。bootstrap：lower≤upper/estimate==sharpe(同源)/可复现/真信号 lower>0/噪声跨0。
+- **实装（扩展不替换·复用范式）**：`lineage/spine_binder.py` +`property_consistency_check`（§6 check_type=property，诚实标必要非充分弱于 numerical）；`eval/spine_bindings.py` +PBO/bootstrap proof_backed artifact + 性质集 + binding + verify + pinned 指纹（PBO `8a7179e0db1006b3`/bootstrap `fc9f5c540e5834b8`，实测性质全过：noise_pbo=0.514≈0.5、skill_pbo=0.000、bootstrap 5 性质成立）；`overfit_gate.py` +`pbo_spine_decision`/`bootstrap_spine_decision` + spine 块**泛化成三支循环**（任一不一致/抛错 fail-closed，reason 点名哪支）。
+- **对抗测试**：`tests/test_spine_pbo_bootstrap_binding.py` **17 passed**——PBO sign 反转→P4/P5 fail→门拒；bootstrap lower/upper 交换→B1 fail→门拒；tripwire(pinned==源)；staleness(pinned≠live→fresh 拒)；生产 gate 三支全核(spine_consistency 三键)、PBO/bootstrap 任一漂移→fail-closed insufficient_evidence。
+- **全量验证**：spine+gate 组 **93 passed**；**全量后端 1691 passed / 13 deselected / 0 failed / 125s**（merge 真基线 1674 + 本 17，未破基线）。凭真汇总行判绿。
+- **推进**：GOAL §6/§9 + gap #3：信任层多证据三角**三支全上脊柱**、生产 gate 三支任一漂离定义 fail-closed。**残余**：conformal/attribution/MinTRL/drift（main 新增）等其余数学点逐个绑后续；property 必要非充分（弱于 DSR numerical oracle）。
+- **交付**：worktree `auto/math-spine`（已同步 main）；commit/push 自管、**land main 待用户**。

@@ -69,6 +69,7 @@
 | b1e4efdf | 冷启动 MinTRL 接进 run /overfit 投影（价值闭环·呈现层不动治理） | done | eval-methodology | done |
 | b2682edc | Model台前端 P0 — 4 子台像素还原 + mock(作业/注册表/构建draw.io/研究) | done | frontend | done |
 | b762da53 | ic_decay 诚实 status 精修——ρ̂≈0 弱负判 no_persistence 而非过claim reversal | done | factor-lifecycle | done |
+| b85e34cc | 信任层三角补齐——PBO + Bootstrap 经脊柱 property-based 绑定 + 接生产 gate | done | math-spine | done |
 | b961f08b | Agent 后端工具补全 — 4 schema+handler + stream 结构化事件 + handoff | done | agent | done |
 | b9af7c82 | 共享画布引擎 — GraphCanvas / NodeCard / EdgeLayer / MiniMap（pan·zoom·连线·框选） | done | frontend-foundation | done |
 | ba59fb7b | 组合 promote production 端点——组合三角 gate record=True 真记 honest-N | done | portfolio | done |
@@ -192,6 +193,7 @@
 | math-spine | 11b0a3ab · done | dreaminate |
 | math-spine | 4458ff54 · done | dreaminate |
 | math-spine | a00b3956 · done | dreaminate |
+| math-spine | b85e34cc · done | dreaminate |
 | models-methodology | 2da39479 · done | dreaminate |
 | models-methodology | 74f93771 · done | dreaminate |
 | models-methodology | c43c6301 · done | dreaminate |

@@ -26,9 +26,15 @@ from ..lineage.spine import (
     MathematicalArtifact,
     TheoryImplementationBinding,
 )
-from ..lineage.spine_binder import code_fingerprint, numerical_consistency_check
+from ..lineage.spine_binder import (
+    code_fingerprint,
+    numerical_consistency_check,
+    property_consistency_check,
+)
 from ..lineage.spine_gate import SpineDecision, evaluate_promotion
+from . import bootstrap as _bootstrap_mod
 from . import dsr as _dsr_mod
+from . import pbo as _pbo_mod
 
 _EULER = 0.5772156649
 
@@ -212,4 +218,188 @@ def verify_dsr_consistency(
         requested_label=requested_label,
         current_code_hash=code_hash,
         data_contract=DSR_DATA_CONTRACT,
+    )
+
+
+# ════════════════════════ PBO (CSCV) 绑定（property-based）════════════════════
+# 难做闭式独立 oracle（组合算法）→ 用从定义推出的【必要性质】对账（finding 02）。
+
+PBO_ARTIFACT = MathematicalArtifact(
+    artifact_type=ARTIFACT_STATISTICAL_TEST,
+    statement="PBO = frac_combos(logit(ω̄)<0)：CSCV 对称组合 C(S,S/2)，IS-argmax 在 OOS 排名落 median 下的频率",
+    notation="S=时间块数(偶); ω̄=OOS 相对排名∈(0,1); λ=logit(ω̄); PBO∈[0,1]",
+    assumptions=("返回序列 PIT 正确（无 look-ahead）", "策略数 N≥min（少策略估计噪声大）", "S 偶数对称分割"),
+    definition="Probability of Backtest Overfitting（López de Prado 2014 CSCV）：策略选择程序 OOS 退化概率",
+    derivation="分 S 块、组合选 S/2 训练 S/2 测试，IS-argmax 的 OOS 相对排名分布 → PBO=P(排名<median)",
+    proof_sketch="纯噪声下 IS-best 的 OOS 排名均匀 → E[PBO]=0.5；过拟合 IS-best OOS 系统性差 → PBO→1",
+    counterexamples=("少策略/S 奇 → 估计无意义（strict 拒/非 strict 返 NaN）",),
+    units="无量纲概率 ∈ [0,1]",
+    applicability="N≥10 策略、S≥4 偶数、T≥2S",
+    failure_conditions=("单策略 PBO 无意义", "组合爆炸 cap 采样 → 非全枚举近似"),
+    proof_status=PROOF_BACKED,
+    implementation_ref="app/backend/app/eval/pbo.py:cscv_pbo",
+    test_ref="app/backend/tests/test_spine_pbo_bootstrap_binding.py",
+    validation_ref="app/backend/tests/test_overfit_gate.py",
+)
+PBO_DATA_CONTRACT = {
+    "known_at": "trial_return_date",
+    "effective_at": "trial_return_date",
+    "desc": "PBO 输入历史试验返回矩阵按实现日 PIT 戳记，无 look-ahead",
+}
+_PBO_IMPL_CHAIN = (_pbo_mod.cscv_pbo, _pbo_mod._sharpe_per_period)
+PBO_PINNED_FINGERPRINT = "8a7179e0db1006b3"
+
+
+def pbo_code_fingerprint() -> str:
+    return code_fingerprint(*_PBO_IMPL_CHAIN)
+
+
+def build_pbo_binding(code_content_hash: str | None = None) -> TheoryImplementationBinding:
+    return TheoryImplementationBinding(
+        theory_ref=PBO_ARTIFACT.artifact_id,
+        code_ref="app/backend/app/eval/pbo.py:cscv_pbo",
+        code_content_hash=code_content_hash or pbo_code_fingerprint(),
+        config_ref="eval/pbo:s_blocks=8,min_n_strategies=10",
+        data_contract_ref="contract/trial_returns_pit",
+        implementation_spec="cscv_pbo(returns_matrix, s_blocks, max_combinations)",
+        test_refs=("app/backend/tests/test_spine_pbo_bootstrap_binding.py",),
+        dimension_check="无量纲概率 [0,1]",
+    )
+
+
+def _pbo_properties(impl=_pbo_mod.cscv_pbo) -> list[tuple[str, bool, str]]:
+    """从 PBO 数学定义推出的必要性质（确定性 fixtures）。"""
+
+    import math as _m
+
+    noise = np.random.default_rng(12345).normal(size=(480, 20)) * 0.01
+    r_noise = impl(noise, s_blocks=8, enumerate_all=True)
+    skill = np.random.default_rng(777).normal(size=(480, 20)) * 0.01
+    skill[:, 0] = skill[:, 0] + 0.01  # 一列恒强 alpha → IS-best 也 OOS-best
+    r_skill = impl(skill, s_blocks=8, enumerate_all=True)
+
+    sign_ok = True
+    if _m.isfinite(r_noise.lambda_logit_mean):
+        sign_ok = (r_noise.pbo >= 0.5) == (r_noise.lambda_logit_mean <= 0)
+    return [
+        ("P1_range", 0.0 <= r_noise.pbo <= 1.0, f"noise_pbo={r_noise.pbo:.3f}"),
+        ("P2_noise≈0.5", 0.3 <= r_noise.pbo <= 0.7, f"noise_pbo={r_noise.pbo:.3f}"),
+        ("P5_sign一致", sign_ok, f"pbo={r_noise.pbo:.3f},λ={r_noise.lambda_logit_mean:.3f}"),
+        ("P4_真信号低pbo", r_skill.pbo <= 0.4, f"skill_pbo={r_skill.pbo:.3f}"),
+    ]
+
+
+def pbo_consistency_check(impl=_pbo_mod.cscv_pbo, *, binding=None):
+    binding = binding if binding is not None else build_pbo_binding()
+    return property_consistency_check(
+        binding.binding_id,
+        _pbo_properties(impl),
+        affected_assets=("PBO", "overfit_gate", "run_verdict"),
+    )
+
+
+def verify_pbo_consistency(
+    *,
+    requested_label: str = PROOF_BACKED,
+    impl=_pbo_mod.cscv_pbo,
+    pinned_code_hash: str | None = None,
+    current_code_hash: str | None = None,
+) -> SpineDecision:
+    binding = build_pbo_binding(code_content_hash=pinned_code_hash)
+    check = pbo_consistency_check(impl, binding=binding)
+    code_hash = current_code_hash if current_code_hash is not None else pbo_code_fingerprint()
+    return evaluate_promotion(
+        PBO_ARTIFACT, binding, [check],
+        requested_label=requested_label, current_code_hash=code_hash, data_contract=PBO_DATA_CONTRACT,
+    )
+
+
+# ════════════════════════ Bootstrap Sharpe CI 绑定（property-based）═══════════
+
+BOOTSTRAP_ARTIFACT = MathematicalArtifact(
+    artifact_type=ARTIFACT_STATISTICAL_TEST,
+    statement="Bootstrap percentile CI：[Q_{α/2}, Q_{1−α/2}] of {Sharpe(resample_b)}_{b=1..B}；moving-block 保序列相关",
+    notation="B=重抽次数; α=1−confidence; Q=经验分位; block_size=块长",
+    assumptions=("返回序列 PIT 正确（无 look-ahead）", "（近似）平稳", "block 重抽保留自相关"),
+    definition="Sharpe 比率的 bootstrap 置信区间（GOAL §6.1）：重抽分布的经验分位",
+    derivation="对收益序列 moving-block 重抽 B 次、各算 Sharpe → 经验分布 → 取 α/2 与 1−α/2 分位为 CI",
+    proof_sketch="bootstrap 一致性：经验分位收敛到真分位（平稳/弱相关下）；block 保自相关 → CI 不低估方差",
+    counterexamples=("iid 重抽抹掉序列相关 → 低估方差 CI 过窄", "block≥T → 零宽伪精确 CI"),
+    units="Sharpe 单位（年化）区间",
+    applicability="T≥5；block_size≥1 启用 moving-block",
+    failure_conditions=("非平稳 regime 漂移下覆盖失真", "重抽分布偏态 → percentile CI 偏"),
+    proof_status=PROOF_BACKED,
+    implementation_ref="app/backend/app/eval/bootstrap.py:bootstrap_sharpe_ci",
+    test_ref="app/backend/tests/test_spine_pbo_bootstrap_binding.py",
+    validation_ref="app/backend/tests/test_overfit_gate.py",
+)
+BOOTSTRAP_DATA_CONTRACT = {
+    "known_at": "return_realization_date",
+    "effective_at": "return_realization_date",
+    "desc": "bootstrap 输入回测返回序列按实现日 PIT 戳记，无 look-ahead",
+}
+_BOOTSTRAP_IMPL_CHAIN = (
+    _bootstrap_mod.bootstrap_sharpe_ci,
+    _bootstrap_mod._moving_block_sample,
+    _dsr_mod.sharpe_ratio,
+)
+BOOTSTRAP_PINNED_FINGERPRINT = "fc9f5c540e5834b8"
+
+
+def bootstrap_code_fingerprint() -> str:
+    return code_fingerprint(*_BOOTSTRAP_IMPL_CHAIN)
+
+
+def build_bootstrap_binding(code_content_hash: str | None = None) -> TheoryImplementationBinding:
+    return TheoryImplementationBinding(
+        theory_ref=BOOTSTRAP_ARTIFACT.artifact_id,
+        code_ref="app/backend/app/eval/bootstrap.py:bootstrap_sharpe_ci",
+        code_content_hash=code_content_hash or bootstrap_code_fingerprint(),
+        config_ref="eval/bootstrap:n_boot=1000,confidence=0.95,seed=42",
+        data_contract_ref="contract/backtest_returns_pit",
+        implementation_spec="bootstrap_sharpe_ci(returns, n_boot, confidence, seed, block_size)",
+        test_refs=("app/backend/tests/test_spine_pbo_bootstrap_binding.py",),
+        dimension_check="Sharpe 区间 lower≤upper",
+    )
+
+
+def _bootstrap_properties(impl=_bootstrap_mod.bootstrap_sharpe_ci) -> list[tuple[str, bool, str]]:
+    """从 bootstrap percentile CI 定义推出的必要性质（seed 固定 → 确定可复现）。"""
+
+    strong = np.linspace(0.0005, 0.0015, 300)  # 恒正 → 强 Sharpe
+    ci = impl(strong, n_boot=500, block_size=10)
+    ci2 = impl(strong, n_boot=500, block_size=10)
+    noise = 0.01 * np.sin(np.linspace(0.0, 20.0 * np.pi, 300))  # 零均值振荡 → Sharpe≈0
+    cin = impl(noise, n_boot=500, block_size=10)
+    return [
+        ("B1_lower≤upper", ci.lower <= ci.upper, f"[{ci.lower:.3f},{ci.upper:.3f}]"),
+        ("B2_estimate==sharpe", abs(ci.estimate - _dsr_mod.sharpe_ratio(strong)) < 1e-9, f"est={ci.estimate:.4f}"),
+        ("B3_可复现", (ci.lower == ci2.lower and ci.upper == ci2.upper), "同 seed→同 CI"),
+        ("B4_真信号lower>0", ci.lower > 0, f"lower={ci.lower:.3f}"),
+        ("B5_噪声跨0", cin.lower < 0 < cin.upper, f"[{cin.lower:.3f},{cin.upper:.3f}]"),
+    ]
+
+
+def bootstrap_consistency_check(impl=_bootstrap_mod.bootstrap_sharpe_ci, *, binding=None):
+    binding = binding if binding is not None else build_bootstrap_binding()
+    return property_consistency_check(
+        binding.binding_id,
+        _bootstrap_properties(impl),
+        affected_assets=("Bootstrap", "overfit_gate", "run_verdict"),
+    )
+
+
+def verify_bootstrap_consistency(
+    *,
+    requested_label: str = PROOF_BACKED,
+    impl=_bootstrap_mod.bootstrap_sharpe_ci,
+    pinned_code_hash: str | None = None,
+    current_code_hash: str | None = None,
+) -> SpineDecision:
+    binding = build_bootstrap_binding(code_content_hash=pinned_code_hash)
+    check = bootstrap_consistency_check(impl, binding=binding)
+    code_hash = current_code_hash if current_code_hash is not None else bootstrap_code_fingerprint()
+    return evaluate_promotion(
+        BOOTSTRAP_ARTIFACT, binding, [check],
+        requested_label=requested_label, current_code_hash=code_hash, data_contract=BOOTSTRAP_DATA_CONTRACT,
     )

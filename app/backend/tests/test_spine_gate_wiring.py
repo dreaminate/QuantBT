@@ -134,7 +134,7 @@ def test_gate_fail_closed_when_dsr_spine_check_raises(monkeypatch):
     assert v.color == "insufficient_evidence"  # 抛错也 fail-closed，不让 promote 报错
     assert v.spine_consistency["dsr"]["promotable"] is False
     assert v.spine_consistency["dsr"]["granted_label"] == "execution_error"
-    assert "DSR 执行失败" in v.spine_consistency["dsr"]["violations"][0]
+    assert "执行失败" in v.spine_consistency["dsr"]["violations"][0]
 
 
 def test_drift_verdict_does_not_report_dsr_numbers(monkeypatch):

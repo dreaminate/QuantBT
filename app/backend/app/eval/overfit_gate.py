@@ -157,6 +157,24 @@ def dsr_spine_decision():
     return verify_dsr_consistency(pinned_code_hash=DSR_PINNED_FINGERPRINT)
 
 
+@lru_cache(maxsize=1)
+def pbo_spine_decision():
+    """PBO(CSCV) 实现↔定义一致性裁定（property-based + pinned 指纹·memoized）。"""
+
+    from .spine_bindings import PBO_PINNED_FINGERPRINT, verify_pbo_consistency
+
+    return verify_pbo_consistency(pinned_code_hash=PBO_PINNED_FINGERPRINT)
+
+
+@lru_cache(maxsize=1)
+def bootstrap_spine_decision():
+    """Bootstrap CI 实现↔定义一致性裁定（property-based + pinned 指纹·memoized）。"""
+
+    from .spine_bindings import BOOTSTRAP_PINNED_FINGERPRINT, verify_bootstrap_consistency
+
+    return verify_bootstrap_consistency(pinned_code_hash=BOOTSTRAP_PINNED_FINGERPRINT)
+
+
 def run_overfit_gate(
     returns,
     *,
@@ -183,26 +201,32 @@ def run_overfit_gate(
     if t < min_t:
         return _insufficient(t, min_t, n_eff)
 
-    # ── Mathematical Spine 一致性核（决策 D-MATH-SPINE）—— 必须在【用 DSR 之前】fail-closed ──
-    # 本裁决的红绿全建在 DSR 估计器上。先核 DSR 实现↔数学定义一致（数值漂移 + staleness：pinned vs live
-    # 指纹），再用它。不一致【或 DSR 执行/签名漂移致抛错】→ 降级 insufficient_evidence（复用既有非
-    # promote sink），不报 DSR 单点数字（估计器不可信），绝不静默放行、绝不让坏估计器把整个 gate 炸成
-    # 异常。正常路径（DSR 一致）只记录 promotable=True、继续原裁决 → color/numbers 不变、不破基线。
+    # ── Mathematical Spine 一致性核（决策 D-MATH-SPINE）—— 必须在【用三角估计器之前】fail-closed ──
+    # 本裁决的红绿全建在 DSR/PBO/Bootstrap 三支估计器上。先核三支实现↔数学定义一致（DSR 数值漂移
+    # + 各支 staleness：pinned vs live 指纹 + PBO/Bootstrap 必要性质），再用它们。任一不一致【或执行/
+    # 签名漂移致抛错】→ 降级 insufficient_evidence（复用既有非 promote sink），不报单点数字（估计器
+    # 不可信），绝不静默放行、绝不让坏估计器把整个 gate 炸成异常。正常路径（三支一致）只记录
+    # promotable=True、继续原裁决 → color/numbers 不变、不破基线。
     spine_consistency: dict | None = None
     if check_spine_consistency:
-        try:
-            _dec = dsr_spine_decision()
-            _promotable = _dec.promotable
-            _granted = _dec.granted_label
-            _violations = list(_dec.violations)
-        except Exception as exc:  # DSR 漂移致执行/签名错 → 同样 fail-closed，不让 promote 报错
-            _promotable = False
-            _granted = "execution_error"
-            _violations = [f"DSR 执行失败：{type(exc).__name__}: {exc}"]
-        spine_consistency = {
-            "dsr": {"promotable": _promotable, "granted_label": _granted, "violations": _violations}
-        }
-        if not _promotable:
+        _estimators = (
+            ("dsr", dsr_spine_decision),
+            ("pbo", pbo_spine_decision),
+            ("bootstrap", bootstrap_spine_decision),
+        )
+        spine_consistency = {}
+        _bad: tuple[str, str] | None = None
+        for _name, _fn in _estimators:
+            try:
+                _dec = _fn()
+                _p, _g, _v = _dec.promotable, _dec.granted_label, list(_dec.violations)
+            except Exception as exc:  # 漂移致执行/签名错 → 同样 fail-closed，不让 promote 报错
+                _p, _g, _v = False, "execution_error", [f"{_name} 执行失败：{type(exc).__name__}: {exc}"]
+            spine_consistency[_name] = {"promotable": _p, "granted_label": _g, "violations": _v}
+            if not _p and _bad is None:
+                _bad = (_name, _g)
+        if _bad is not None:
+            _name, _granted = _bad
             _nan = float("nan")
             return GateVerdict(
                 color="insufficient_evidence",
@@ -211,11 +235,11 @@ def run_overfit_gate(
                 all_agree_positive=False, n_observed=n_eff.n_observed, n_eff=n_eff.to_dict(),
                 var_sr_estimated=False,
                 reason=(
-                    f"数学一致性失败：DSR 实现偏离/无法执行其数学定义（Mathematical Spine 门拒，"
+                    f"数学一致性失败：守门估计器 {_name} 偏离/无法执行其数学定义（Mathematical Spine 门拒，"
                     f"granted={_granted}）→ 守门估计器不可信，不给红绿、不得 promote。"
                 ),
                 verdict_phrasing=(
-                    "证据无效：守门器 DSR 与数学定义不一致（Mathematical Spine 门拒），"
+                    f"证据无效：守门器 {_name} 与数学定义不一致（Mathematical Spine 门拒），"
                     "裁决不可信；适用域=无；未验证=全部。"
                 ),
                 model_risk_disclosure=list(_MODEL_RISK_DISCLOSURE),
@@ -303,4 +327,7 @@ def run_overfit_gate(
     )
 
 
-__all__ = ["GateColor", "GateVerdict", "run_overfit_gate", "dsr_spine_decision"]
+__all__ = [
+    "GateColor", "GateVerdict", "run_overfit_gate",
+    "dsr_spine_decision", "pbo_spine_decision", "bootstrap_spine_decision",
+]
