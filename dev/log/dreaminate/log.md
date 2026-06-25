@@ -541,3 +541,11 @@
 - **worktree 坑（已避污染）**：symlink node_modules 一度成真目录（gitignored·主仓库未污染·已确认 141 项完好）→ rm -rf 安全清理；git status 仅 4 源文件无 node_modules 泄漏。
 - **验证**：`CpcvRobustnessCard.test` 5 + `test_model_eval_conformal` 10（+1 cpcv 透传）passed；**全前端 298 / 25 文件 + tsc + build ✓**；**全量后端 1611 passed / 13 skipped / 0 failed**（基线 1610，净 +1）。861182e6 ②剩 q05→gate（阈值=用户方法学）池卡留。
 - **本轮 loop「commit 和 push 自动进行」→ 本地 commit + push 分支 worktree-autopolish-w1。分支续 land-ready。**
+
+## 2026-06-25 · 同步 main——spine 分支 merge origin/main（用户拍板「同步到 main 后再继续」）
+
+- **触发**：本轮 loop 准备绑 PBO/bootstrap 前，git fetch 发现 `auto/math-spine` 基于的 `fix-u2-synth` **落后 origin/main 47 提交**（用户在 main 并行 loop 推进 CPCV q05/conformal/attribution/MinTRL/drift/lifecycle…，main 全量 1626 passed）；main 的 CPCV q05 改了 `overfit_gate.py`、与我的 spine 接线冲突。HANDOFF「main 有触及你路径的新提交先看 diff 再动手」+ correctness（一致性门须对真·当前代码验，非陈旧快照）→ 停下问用户。
+- **用户拍板**：AskUserQuestion「分支对齐」→ **同步到 main 后再继续**。
+- **处置**：先备份 `auto/math-spine-prerebase`；rebase 因 dev/ 共享文档在 3 提交各冲突太碎 → 改 **merge origin/main 进分支**（冲突一次解完）。解 5 冲突：`overfit_gate.py`（整合 main CPCV q05 + 我的 spine 接线，GateVerdict `cpcv`+`spine_consistency` 双字段、run_overfit_gate 双套参数共存、早返回 fail-closed 与 CPCV 块并存）；`state.md`/`DEVMAP`/`_NAV` 取 main 权威版（spine 进展 prepend + regenerate）；`log.md` 保双方条目。
+- **验证**：merge 后 spine+gate+cpcv **76 passed**；`origin/main 现为 HEAD 祖先`=分支已同步；DSR pinned 指纹对 main 的 dsr.py 仍有效（main 只新增 PSR/MinTRL 函数，未动我指纹的 5 链函数）。**全量后端 1673 passed / 13 deselected / 1 已知并发 flake**（`test_effect_ledger_concurrent_same_key` 负载下 timeout、隔离单跑 1.13s 绿、非回归）。
+- **结果**：spine 3 切片（门核心 + DSR 绑定 + 接生产 gate）现建立在 main 真·当前代码上、一致性门对当前估计器验。下一切片绑 PBO/bootstrap 在同步后分支上做。commit/push 自管、**land main 待用户**。

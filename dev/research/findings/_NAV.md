@@ -21,6 +21,8 @@
 - `dreaminate/factor-lifecycle-institutional.md` — FINDING · §3 因子机构级生命周期度量（衰减半衰期 / 容量 / 因子族 / 拥挤）
 - `dreaminate/factor-return-attribution.md` — FINDING · 因子收益归因（returns-based factor attribution · 北极星「归因」阶
 - `dreaminate/mintrl-cold-start.md` — FINDING · R27 冷启动 MinTRL（最小业绩期长度）+ 诚实"证据不足"
+- `dreaminate/spine-consistency-gate/00-consistency-gate-theory.md` — FINDING · Mathematical Spine 一致性门 — 形式化模型与必要性证明
+- `dreaminate/spine-consistency-gate/01-dsr-theory-binding.md` — FINDING · DSR（Deflated Sharpe Ratio）理论 + Spine 绑定（全链贯穿第一段）
 - `dreaminate/spine-designs/00-contracts-and-coherence.md` — 00 · 脊柱跨部件契约一致性 + 测试真实性复核
 - `dreaminate/spine-designs/01-deterministic-kernel.md` — 01 · 确定性 DAG 内核 + checkpoint/replay/fork/rollback + 交易副作用不可幂
 - `dreaminate/spine-designs/02-llm-record-replay.md` — 02 · LLM 节点 record/replay 确定性 + 受控翻译层
