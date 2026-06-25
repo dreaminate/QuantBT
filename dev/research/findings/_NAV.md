@@ -25,6 +25,7 @@
 - `dreaminate/spine-consistency-gate/01-dsr-theory-binding.md` — FINDING · DSR（Deflated Sharpe Ratio）理论 + Spine 绑定（全链贯穿第一段）
 - `dreaminate/spine-consistency-gate/02-pbo-bootstrap-binding.md` — FINDING · PBO + Bootstrap CI 经脊柱绑定（property-based 一致性·三角补齐）
 - `dreaminate/spine-consistency-gate/03-mintrl-psr-binding.md` — FINDING · MinTRL + PSR 经脊柱绑定（交叉校验恒等式·接 run verdict cold_star
+- `dreaminate/spine-consistency-gate/04-conformal-binding.md` — FINDING · Conformal 预测区间经脊柱绑定（覆盖定理 property）+ 接 model_eval b
 - `dreaminate/spine-designs/00-contracts-and-coherence.md` — 00 · 脊柱跨部件契约一致性 + 测试真实性复核
 - `dreaminate/spine-designs/01-deterministic-kernel.md` — 01 · 确定性 DAG 内核 + checkpoint/replay/fork/rollback + 交易副作用不可幂
 - `dreaminate/spine-designs/02-llm-record-replay.md` — 02 · LLM 节点 record/replay 确定性 + 受控翻译层

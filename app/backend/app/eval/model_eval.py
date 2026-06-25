@@ -14,11 +14,31 @@
 
 from __future__ import annotations
 
+from functools import lru_cache
 from typing import Any
 
 import numpy as np
 
 from .conformal import split_conformal_interval
+
+
+@lru_cache(maxsize=1)
+def _conformal_spine_status() -> dict[str, Any]:
+    """conformal 实现↔覆盖定理一致性的脊柱裁定（memoized·懒导入避环·决策 D-MATH-SPINE）。
+
+    conformal band 的覆盖承诺建在 `split_conformal_interval` 上；若实现漂离覆盖定理（MC 留出覆盖掉
+    1−α 下 / staleness / 抛错）→ band 不可信。呈现层 fail-soft：标 abstained + note（坏 conformal 无法
+    认证覆盖→不给 band，不假绿灯）。
+    """
+
+    try:
+        from .spine_bindings import CONFORMAL_PINNED_FINGERPRINT, verify_conformal_consistency
+
+        d = verify_conformal_consistency(pinned_code_hash=CONFORMAL_PINNED_FINGERPRINT)
+        return {"promotable": d.promotable, "granted_label": d.granted_label, "violations": list(d.violations)}
+    except Exception as exc:  # 漂移致执行/签名错 → fail-soft，不让评价图渲染崩
+        return {"promotable": False, "granted_label": "execution_error",
+                "violations": [f"conformal 执行失败：{type(exc).__name__}: {exc}"]}
 
 
 def _bar(id_: str, title: str, labels: list[str], values: list[float]) -> dict[str, Any]:
@@ -75,9 +95,18 @@ def conformal_prediction_band(result: dict[str, Any], alpha: float = 0.1) -> dic
     n = int(resid.size)
     mid = n // 2
     calib, test = resid[:mid], resid[mid:]      # 时间序：前半校准、后半留出（leak-free）
-    iv = split_conformal_interval(calib, 0.0, alpha)
     base = {"alpha": alpha, "target_coverage": round(1.0 - alpha, 4),
             "n_calib": int(calib.size), "n_test": int(test.size)}
+    # Mathematical Spine 一致性核（决策 D-MATH-SPINE）：band 的覆盖承诺建在 conformal 实现上。
+    # 实现漂离覆盖定理（MC 留出覆盖掉 1−α 下/staleness/抛错）→ 覆盖承诺无效，呈现层 fail-soft 标
+    # abstained + note（坏 conformal 不给假覆盖的 band；正常一致 → band 逐位不变、不破基线）。
+    spine = _conformal_spine_status()
+    base = {**base, "spine_consistency": {"conformal": spine}}
+    if not spine["promotable"]:
+        return {**base, "abstained": True, "band_half_width": None, "empirical_coverage": None,
+                "note": ("数学一致性失败：conformal 实现偏离覆盖定理（Mathematical Spine 门拒，"
+                         f"granted={spine['granted_label']}）→ 覆盖承诺无效、不给校准区间，以 spine_consistency 字段为准。")}
+    iv = split_conformal_interval(calib, 0.0, alpha)
     if iv.abstained:
         return {**base, "abstained": True, "band_half_width": None, "empirical_coverage": None,
                 "note": f"OOS 校准集不足（n_calib={int(calib.size)}）：证据不足、不给校准区间（{iv.reason}）。"}

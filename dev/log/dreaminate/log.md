@@ -569,3 +569,13 @@
 - **全量验证**：spine 组 **75 passed**、run_verdict/cold_start **35 passed**；**全量后端 1702 passed / 13 deselected / 1 已知并发 flake**（test_effect_ledger_concurrent_same_key 负载 timeout·隔离 1.09s 绿·非回归；1702+flake=1703=基线 1701+P2 回归 2）。凭真汇总行判绿。
 - **推进**：GOAL §6/§4 + gap #3：脊柱覆盖从信任层三角扩到 MinTRL/PSR + **第二个生产消费点（run verdict cold_start）**治理。**残余**：conformal/attribution/drift 等其余数学点逐个绑；attribution 待其生产消费侧（卡 e4496023）落地再绑。
 - **交付**：worktree `auto/math-spine`（已同步 main）；commit/push 自管、**land main 待用户**。
+
+## 2026-06-25 · Conformal 预测区间经脊柱绑定（覆盖定理）+ 接 model_eval band（gap #3/#7 · 依赖 c86be35e）
+
+- **触发**：脊柱已治理 overfit gate + run verdict cold_start 两消费点；选验证纵深 conformal（覆盖定理可机器证伪 + model_eval band 生产消费点）。先 git fetch 确认仍同步 main。
+- **理论先行**：finding `spine-consistency-gate/04`——split conformal 覆盖定理 P(Y∈C)≥1−α（分布无关·有限样本·边际，秩 k=⌈(n+1)(1−α)⌉ 含 +1 校正）。
+- **实装（扩展不替换·复用范式）**：`eval/spine_bindings.py` +conformal proof_backed artifact + 覆盖性质（C1 固定 seed N(0,1) 留出 MC 覆盖≥1−α·实测 α=0.1→0.898/0.05→0.956 / C2 abstain 诚实 n<⌈1/α⌉−1 / C3 区间合法）+ pinned `be82f9471f557ab8` + verify_conformal_consistency；`model_eval.py` +memoized `_conformal_spine_status`（懒导入避环）+ `conformal_prediction_band` 注入 spine_consistency + **漂移 fail-soft abstained**（坏 conformal 不给假覆盖的 band·note 避 R7 禁词「可信」）。
+- **对抗测试**：`tests/test_spine_conformal_binding.py` **10 passed**（含 codex P2 回归：split 漂移成 [finite,+inf] 经 C3 双端点有限封死）——种区间砍半漂移→欠覆盖→C1 覆盖定理 property 破→门拒；tripwire；staleness 可达；band 一致→正常出、漂移→abstained=True+数学一致性失败 note（断言无禁词「可信」）。
+- **全量验证**：spine 组 **58 passed**、model_eval/conformal **62 passed**；**全量后端 1713 passed / 13 deselected / 0 failed**（flake 本次通过；1713=真基线 1712+inf-upper 回归 1）。凭真汇总行判绿。
+- **推进**：GOAL §4 + gap #3/#7：脊柱覆盖从信任层三角 + MinTRL 扩到**验证纵深 conformal** + **第三个生产消费点**（model_eval band）。**残余**：cqr/aci/drift/attribution 等其余数学点逐个绑。
+- **交付**：worktree `auto/math-spine`（已同步 main）；commit/push 自管、**land main 待用户**。

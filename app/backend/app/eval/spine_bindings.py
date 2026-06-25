@@ -33,6 +33,7 @@ from ..lineage.spine_binder import (
 )
 from ..lineage.spine_gate import SpineDecision, evaluate_promotion
 from . import bootstrap as _bootstrap_mod
+from . import conformal as _conformal_mod
 from . import dsr as _dsr_mod
 from . import pbo as _pbo_mod
 
@@ -535,4 +536,112 @@ def verify_mintrl_consistency(
     return evaluate_promotion(
         MINTRL_ARTIFACT, binding, [check],
         requested_label=requested_label, current_code_hash=code_hash, data_contract=MINTRL_DATA_CONTRACT,
+    )
+
+
+# ════════════════════ Conformal 预测区间绑定（覆盖定理 property）═════════════
+# split conformal 有可机器证伪的覆盖定理 P(Y∈C)≥1−α；property = MC 留出覆盖率≈1−α（finding 04）。
+
+CONFORMAL_ARTIFACT = MathematicalArtifact(
+    artifact_type=ARTIFACT_STATISTICAL_TEST,
+    statement="split conformal：q̂=|残差|第 k=⌈(n+1)(1−α)⌉ 阶；区间[μ̂−q̂,μ̂+q̂]；P(Y∈C)≥1−α（分布无关·有限样本·边际）",
+    notation="α=miscoverage; n=校准数; k=秩(含+1校正); q̂=conformal 分位; C=预测区间",
+    assumptions=("exchangeability（可交换）", "校准集与训练集分离（否则破坏覆盖）", "残差 PIT 正确（calib 早 test 晚 leak-free）"),
+    definition="Split Conformal Prediction（Vovk; Lei et al. 2018）：分布无关有限样本边际覆盖预测区间",
+    derivation="|残差| 排序、取第 ⌈(n+1)(1−α)⌉ 阶为 q̂（+1 校正防小 n 欠覆盖）→ 由可交换性 P(Y∈[μ̂±q̂])≥1−α",
+    proof_sketch="可交换下测试残差秩在 1..n+1 均匀 → P(rank≤k)=k/(n+1)≥1−α（López/Lei 覆盖定理）",
+    counterexamples=("丢 +1 校正 → 小 n 欠覆盖", "时序非平稳违反可交换 → 实测偏离（用 ACI/abstain）"),
+    units="预测目标单位的区间",
+    applicability="n_cal≥⌈1/α⌉−1、可交换、回归残差",
+    failure_conditions=("非平稳 regime drift 偏离边际覆盖", "只保边际不保 per-x 条件覆盖"),
+    proof_status=PROOF_BACKED,
+    implementation_ref="app/backend/app/eval/conformal.py:split_conformal_interval",
+    test_ref="app/backend/tests/test_spine_conformal_binding.py",
+    validation_ref="app/backend/app/eval/model_eval.py:conformal_prediction_band",
+)
+CONFORMAL_DATA_CONTRACT = {
+    "known_at": "residual_realization_date",
+    "effective_at": "residual_realization_date",
+    "desc": "conformal 输入校准残差按实现日 PIT 戳记（calib 早 test 晚 leak-free），无 look-ahead",
+}
+_CONFORMAL_IMPL_CHAIN = (
+    _conformal_mod.split_conformal_interval,
+    _conformal_mod.SplitConformalCalibrator,
+    _conformal_mod._conformal_rank_quantile,
+    _conformal_mod._min_calib_for,
+)
+CONFORMAL_PINNED_FINGERPRINT = "be82f9471f557ab8"
+
+
+def conformal_code_fingerprint() -> str:
+    return code_fingerprint(*_CONFORMAL_IMPL_CHAIN)
+
+
+def build_conformal_binding(code_content_hash: str | None = None) -> TheoryImplementationBinding:
+    return TheoryImplementationBinding(
+        theory_ref=CONFORMAL_ARTIFACT.artifact_id,
+        code_ref="app/backend/app/eval/conformal.py:split_conformal_interval",
+        code_content_hash=code_content_hash or conformal_code_fingerprint(),
+        config_ref="eval/conformal:alpha=caller,rank=⌈(n+1)(1−α)⌉",
+        data_contract_ref="contract/conformal_residuals_pit",
+        implementation_spec="split_conformal_interval(calib_residuals, prediction, alpha, max_width)",
+        test_refs=("app/backend/tests/test_spine_conformal_binding.py",),
+        dimension_check="区间 lower≤upper / abstain NaN",
+    )
+
+
+def _conformal_properties(impl=_conformal_mod.split_conformal_interval) -> list[tuple[str, bool, str]]:
+    """从 conformal 覆盖定理推出的必要性质（固定 seed·确定性 MC 留出覆盖）。"""
+
+    rng = np.random.default_rng(2024)
+    calib = rng.normal(0.0, 1.0, 500)
+    test = rng.normal(0.0, 1.0, 4000)  # 预测=0 → Y=残差
+    props: list[tuple[str, bool, str]] = []
+    for alpha in (0.1, 0.05):
+        iv = impl(calib, 0.0, alpha)
+        if iv.abstained:
+            props.append((f"C1_cover@{alpha}", False, "正常校准集却 abstain（实现坏）"))
+            continue
+        # C1 覆盖定理：固定留出集经验覆盖 ≥ 1−α（减 MC 二项抽样松弛 0.025）。
+        cov = float(np.mean((iv.lower <= test) & (test <= iv.upper)))
+        props.append((f"C1_cover@{alpha}", cov >= (1.0 - alpha) - 0.025, f"cov={cov:.3f}≥{1 - alpha}"))
+    # C2 abstain 诚实：n < ⌈1/α⌉−1 → abstained。
+    small = calib[:5]  # n=5 < min_calib_for(0.1)=9
+    iv_small = impl(small, 0.0, 0.1)
+    props.append(("C2_abstain", iv_small.abstained, f"n=5 abstained={iv_small.abstained}"))
+    # C3 区间合法：非 abstain → lower≤upper 且【双端点】均有限（codex P2 修：split 本该 finite-or-abstain，
+    # 漂移成 [finite, +inf] 会让 C1 蒙混 100% 覆盖 + band 吐 inf 半宽；查双端点封死此假阴性）。
+    iv_ok = impl(calib, 0.0, 0.1)
+    c3 = (
+        (not iv_ok.abstained)
+        and iv_ok.lower <= iv_ok.upper
+        and math.isfinite(iv_ok.lower)
+        and math.isfinite(iv_ok.upper)
+    )
+    props.append(("C3_区间合法", c3, f"[{iv_ok.lower:.3f},{iv_ok.upper:.3f}]"))
+    return props
+
+
+def conformal_consistency_check(impl=_conformal_mod.split_conformal_interval, *, binding=None):
+    binding = binding if binding is not None else build_conformal_binding()
+    return property_consistency_check(
+        binding.binding_id,
+        _conformal_properties(impl),
+        affected_assets=("Conformal", "model_eval.conformal_prediction_band", "signals.conformal_abstain_gate"),
+    )
+
+
+def verify_conformal_consistency(
+    *,
+    requested_label: str = PROOF_BACKED,
+    impl=_conformal_mod.split_conformal_interval,
+    pinned_code_hash: str | None = None,
+    current_code_hash: str | None = None,
+) -> SpineDecision:
+    binding = build_conformal_binding(code_content_hash=pinned_code_hash)
+    check = conformal_consistency_check(impl, binding=binding)
+    code_hash = current_code_hash if current_code_hash is not None else conformal_code_fingerprint()
+    return evaluate_promotion(
+        CONFORMAL_ARTIFACT, binding, [check],
+        requested_label=requested_label, current_code_hash=code_hash, data_contract=CONFORMAL_DATA_CONTRACT,
     )
