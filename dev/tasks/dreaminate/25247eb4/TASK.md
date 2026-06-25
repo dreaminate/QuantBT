@@ -1,8 +1,8 @@
 ---
 uuid: 25247eb4d21f43ec89249d1de7a86328
 title: confirmatory 计算路径强制 PIT/注册数据门——无 PIT 语义数据进 confirmatory→拒（B-PIT-CONFIRMATORY）
-status: todo
-owner: wait
+status: in_progress
+owner: dreaminate
 assigned_by: dreaminate
 review_status: 0
 priority: P1

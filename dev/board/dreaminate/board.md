@@ -4,4 +4,4 @@
 
 | uuid8 | 标题 | status | area | 优先级 | 依赖(uuid8) |
 |---|---|---|---|---|---|
-| _（名下无 active 卡）_ | | | | | |
+| 25247eb4 | confirmatory 计算路径强制 PIT/注册数据门——无 PIT 语义数据进 confirmatory→拒（B-PIT-CONFIRMATORY） | in_progress | data-pit | P1 | e01bf12f 6a8752ab 0430cd78 |
