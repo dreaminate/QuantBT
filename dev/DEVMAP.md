@@ -35,6 +35,7 @@
 | 79ebe273 | 模拟台后端接线 — /api/paper/* 整层 + 晋级审批门 + 风险门冻结哈希链 | done | backend | done |
 | 7ac5a0fe | BacktestVenue.cost_summary —— per-fill 成本归因收口到 run 级 | done | execution-cost | done |
 | 82120b9c | agent 窗口前端核心（Web）——对话流 + 工具可视化 + 权限模式切换 | done | frontend | done |
+| 876a0c11 | CPCV 路径稳健性分布呈现到模型台 UI（能信·report-only·CPCV→用户闭环收尾） | done | frontend-trust | done |
 | 87ad21fc | R18 stacking 控制项 N/A 标注 + 实现时 OOF 约束（T-033 核验 gap） | done | signals | done |
 | 8ab894cd | 审批 SLA 与 leverage_cap 可配置；杠杆不设硬上限；真钱超时永远 default_reject | done | config | done |
 | 9a497bde | 交付门 e2e 集成测试——陌生人 chat→backtest→裁决→paper 全后端路径真 | done | integration-test | done |
@@ -175,6 +176,7 @@
 | frontend-foundation | d5ea778c · done | dreaminate |
 | frontend-foundation | e2de3d32 · done | dreaminate |
 | frontend-trust | 29258b77 · done | dreaminate |
+| frontend-trust | 876a0c11 · done | dreaminate |
 | frontend-trust | c5960022 · done | dreaminate |
 | governance-ui | c631817e · done | dreaminate |
 | integration-test | 9a497bde · done | dreaminate |

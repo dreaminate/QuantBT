@@ -4,6 +4,10 @@ import {
   ConformalIntervalCard,
   type ConformalIntervalData,
 } from "../../components/charts/ConformalIntervalCard";
+import {
+  CpcvRobustnessCard,
+  type CpcvDistributionData,
+} from "../../components/charts/CpcvRobustnessCard";
 
 /**
  * 模型中心 · 训练台（Claude Code 风）
@@ -84,6 +88,8 @@ export function TrainingBenchPage() {
   const [evalCharts, setEvalCharts] = useState<ChartData[]>([]);
   // R23 conformal 校准区间（OOS 真留出覆盖）；null=非回归/无 OOS/calib 不足 → 不渲染（不假绿灯）。
   const [conformal, setConformal] = useState<ConformalIntervalData | null>(null);
+  // R4 CPCV 路径稳健性分布；null=未开 compute_cpcv → 不渲染（不假绿灯：未算≠已算）。
+  const [cpcv, setCpcv] = useState<CpcvDistributionData | null>(null);
   const [evalLoading, setEvalLoading] = useState(false);
   const [evalError, setEvalError] = useState("");
   const [tbBusy, setTbBusy] = useState(false);
@@ -100,6 +106,7 @@ export function TrainingBenchPage() {
     setEvalLoading(true);
     setEvalCharts([]);
     setConformal(null);
+    setCpcv(null);
     setEvalError("");
     setBtResult(null);
     fetch(`/api/training/jobs/${j.job_id}/eval`)
@@ -114,6 +121,7 @@ export function TrainingBenchPage() {
       .then((body) => {
         setEvalCharts(body.charts ?? []);
         setConformal(body.conformal_interval ?? null);  // R23 OOS 留出覆盖（缺/null→不渲染）
+        setCpcv(body.cpcv_distribution ?? null);         // R4 CPCV 路径稳健性（缺/null→不渲染）
       })
       .catch((e) => setEvalError(e instanceof Error ? e.message : "加载评价图失败"))
       .finally(() => setEvalLoading(false));
@@ -549,6 +557,12 @@ export function TrainingBenchPage() {
               {conformal && (
                 <div style={{ marginBottom: 10 }}>
                   <ConformalIntervalCard interval={conformal} />
+                </div>
+              )}
+              {/* R4 CPCV 路径稳健性（opt-in compute_cpcv；null→不渲染，不假绿灯）。 */}
+              {cpcv && (
+                <div style={{ marginBottom: 10 }}>
+                  <CpcvRobustnessCard dist={cpcv} />
                 </div>
               )}
               <EvalCharts charts={evalCharts} />

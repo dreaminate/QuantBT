@@ -147,3 +147,27 @@ def test_training_job_eval_includes_conformal_interval(tmp_path, monkeypatch):
     assert out["conformal_interval"]["empirical_coverage"] is not None
     assert "charts" in out and "metrics" in out        # additive 不破原字段
     json.dumps(out)
+
+
+def test_training_job_eval_passes_cpcv_distribution(tmp_path, monkeypatch):
+    """集成（R4 闭环）：training_job_eval 透传 result.json 的 cpcv_distribution；无则 None（不假绿灯：未算≠已算）。"""
+    from app import main
+    from types import SimpleNamespace
+
+    # result 含 cpcv_distribution → 透传
+    art = tmp_path / "art"
+    art.mkdir()
+    cpcv = {"status": "ok", "metric": "r2", "baseline": 0.0, "n_paths": 5, "q05": 0.4}
+    (art / "result.json").write_text(json.dumps({**_reg(400, seed=0), "cpcv_distribution": cpcv}), encoding="utf-8")
+    job = SimpleNamespace(status="succeeded", model="ridge", family="linear", artifact_dir=str(art), metrics={})
+    monkeypatch.setattr(main.TRAINING_SERVICE, "get_job", lambda jid: job)
+    out = main.training_job_eval("j1")
+    assert out["cpcv_distribution"] == cpcv
+
+    # result 无 cpcv_distribution（默认关）→ None（不编造）
+    art2 = tmp_path / "art2"
+    art2.mkdir()
+    (art2 / "result.json").write_text(json.dumps(_reg(400, seed=0)), encoding="utf-8")
+    job2 = SimpleNamespace(status="succeeded", model="ridge", family="linear", artifact_dir=str(art2), metrics={})
+    monkeypatch.setattr(main.TRAINING_SERVICE, "get_job", lambda jid: job2)
+    assert main.training_job_eval("j2")["cpcv_distribution"] is None

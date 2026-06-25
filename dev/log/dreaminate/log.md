@@ -475,3 +475,10 @@
 - **additive 零回归**：ModelSpec/TrainResult 加 default 字段向后兼容、train_model 默认关分支行为不变；49 训练测试 + 全量套件绿。
 - **验证**：`test_cpcv_oos_distribution.py` 12 passed（+1 opt-in：默认关→None、开启→分布·asdict JSON-safe）；**全量后端 1610 passed / 13 skipped / 0 failed / 124s**（基线 1609，净 +1）。follow-on（861182e6 ②）：cpcv_distribution→verdict/UI + q05 接 gate（阈值=用户方法学）池卡留。
 - **本轮 loop「commit 和 push 自动进行」→ 本地 commit + push 分支 worktree-autopolish-w1。分支续 land-ready。**
+
+## 2026-06-25 · CPCV 路径稳健性分布呈现到模型台 UI（done 卡 876a0c11 · CPCV→用户闭环收尾）
+- **闭环收尾**：cpcv_distribution（卡 74f93771）→ training_job_eval 透传 → `CpcvRobustnessCard`（模型台·report-only）。CPCV 全链：库→消费(regression+二分类)→train_model opt-in→result.json→eval→UI。
+- **不假绿灯在 UI**：未算/缺→不渲染、status≠ok→不造假分布、q05<无技能基线(r2:0/auc:0.5)→脆弱警示色非绿、q05≥基线中性非绿（路径稳≠策略好）。report-only 不接 gate。
+- **worktree 坑（已避污染）**：symlink node_modules 一度成真目录（gitignored·主仓库未污染·已确认 141 项完好）→ rm -rf 安全清理；git status 仅 4 源文件无 node_modules 泄漏。
+- **验证**：`CpcvRobustnessCard.test` 5 + `test_model_eval_conformal` 10（+1 cpcv 透传）passed；**全前端 298 / 25 文件 + tsc + build ✓**；**全量后端 1611 passed / 13 skipped / 0 failed**（基线 1610，净 +1）。861182e6 ②剩 q05→gate（阈值=用户方法学）池卡留。
+- **本轮 loop「commit 和 push 自动进行」→ 本地 commit + push 分支 worktree-autopolish-w1。分支续 land-ready。**

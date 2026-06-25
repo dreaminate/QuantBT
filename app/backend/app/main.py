@@ -1298,6 +1298,8 @@ def training_job_eval(job_id: str) -> dict:
         "metrics": summarize_metrics(result),
         # R23 闭环：回归 OOS 的 split-conformal 校准区间 + 真留出覆盖率（None=分类/无 OOS，不适用）。
         "conformal_interval": conformal_prediction_band(result),
+        # R4 闭环：CPCV 路径稳健性分布（q05/路径方差=过拟合脆弱度）。None=未开 compute_cpcv（不假绿灯：未算≠已算）。
+        "cpcv_distribution": result.get("cpcv_distribution"),
     }
 
 
