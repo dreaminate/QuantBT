@@ -18,6 +18,7 @@
 | 381b6c18 | 实盘因子血统门——未过检验因子上真钱线 → 警告+知情确认 | done | security-invariant | done |
 | 3a8b2360 | R28 全库双时态（known_at 轴 + as-of 重述基本面）（T-033 核验 gap） | done | 数据 | done |
 | 3bb62d7d | 无副作用业务工具接真引擎（agent 一句话真跑回测）——T-027 残余 | done | agent | done |
+| 3c9c3732 | 补未披露 unauthed 数据泄露端点——copy_trade signals/executions 鉴权+归属 + data export 鉴权（安全审计 pass3 #2/#4） | done | security | done |
 | 3d4a872e | 分支 land-readiness 整体评审 + 修 3 发现（2 文档过claim + σ 边界牙缝） | done | review | done |
 | 3d95e0f6 | agent 窗口弹窗 + 教学文案（整合 T-028/T-032/T-034 前端残余） | done | frontend | done |
 | 3f5ed0b8 | agent 客户端窗口 epic(仿 Claude Code)——权限模式切换 + 工具可视化 + 审批弹窗 | done | frontend-epic | done |
@@ -113,6 +114,7 @@
 | 03b1cf47 | 组合优化诚实化 + risk_summary 单支证据对齐三角（命名 theory↔impl / 静默回退 / 单支承重） | todo | eval-methodology |
 | 31289338 | 冷启动 gate/UI 接 MinTRL：DSR=N/A + PSR + "需 N 期"渐进披露（R25/R27 呈现层） | todo | eval-methodology |
 | 554cdcf2 | 监控绩效轴真闭环——4 个 drift 检测器接 run_weekly_monitor_pass + per-factor IC 真源 + 观测落盘（审计残余） | todo | monitor |
+| 5bfb5202 | ⚠P0 ide 策略沙箱 OS 级隔离——堵 posix_spawn/ctypes RCE 逃逸 + open/glob 读宿主机文件（安全审计 pass3 #1/#3） | todo | security |
 | 861182e6 | CPCV 接 promote/overfit gate + cv_scheme 双轨 report（价值闭环） | todo | eval-methodology |
 | 92a2182f | conformal 区间消费侧接线——模型台/信号层预测附校准区间 + abstain UI 呈现 | todo | eval-methodology |
 | aa13c3b0 | 因子机构级度量接 lifecycle 状态机/sizing 生产路径 | todo | factor-lifecycle |
@@ -215,6 +217,7 @@
 | portfolio | 46f1cb3c · done | dreaminate |
 | portfolio | ba59fb7b · done | dreaminate |
 | review | 3d4a872e · done | dreaminate |
+| security | 3c9c3732 · done | dreaminate |
 | security-invariant | 381b6c18 · done | dreaminate |
 | security-invariant | 6e4eee54 · done | dreaminate |
 | signals | 0f8ec248 · done | dreaminate |

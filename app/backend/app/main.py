@@ -1960,12 +1960,13 @@ def stream_job_events(job_id: str):
 
 
 @app.get("/api/data/export/size")
-def data_export_size() -> dict:
+def data_export_size(user=Depends(require_user_dependency)) -> dict:
     return estimate_export_size(DATA_ROOT)
 
 
 @app.get("/api/data/export")
-def data_export():
+def data_export(user=Depends(require_user_dependency)):
+    # 鉴权（安全审计 pass3 #4）：导出整个 DATA_ROOT 研究数据，绝不允许未登录全量拖走（hosted 模式跨用户泄露）。
     fname = f"quantbt-export-{__import__('datetime').datetime.now().strftime('%Y%m%d-%H%M%S')}.tar.gz"
     return StreamingResponse(
         export_tar_gz_stream(DATA_ROOT),
@@ -2856,16 +2857,52 @@ def ct_cancel_signal(signal_id: str, user=Depends(require_user_dependency)) -> d
 
 
 @app.get("/api/copy_trade/signals")
-def ct_list_signals(master_id: str | None = None, limit: int = 100) -> list[dict[str, Any]]:
-    return [s.to_dict() for s in COPY_TRADE_SERVICE.list_signals(master_id=master_id, limit=limit)]
+def ct_list_signals(
+    master_id: str | None = None, limit: int = 100, user=Depends(require_user_dependency)
+) -> list[dict[str, Any]]:
+    """鉴权 + 归属过滤（安全审计 pass3 #2）：信号=完整下单意图(标的/方向/量/限价/杠杆/止盈止损/note)，
+    绝不向匿名/无关租户回显。仅可见 caller **自家 master** 或 **已订阅 master** 的信号。"""
+    allowed: set[str] = set()
+    own = COPY_TRADE_SERVICE.get_master_by_user(user.user_id)
+    if own is not None:
+        allowed.add(own.master_id)
+    allowed.update(sub.master_id for sub in COPY_TRADE_SERVICE.list_subscriptions(user.user_id))
+    if master_id is not None:
+        if master_id not in allowed:
+            raise HTTPException(403, "无权查看该 master 的信号")
+        scope = [master_id]
+    else:
+        scope = list(allowed)
+    out: list[dict[str, Any]] = []
+    for mid in scope:
+        out.extend(s.to_dict() for s in COPY_TRADE_SERVICE.list_signals(master_id=mid, limit=limit))
+    return out[:limit]
 
 
 @app.get("/api/copy_trade/executions")
-def ct_list_executions(signal_id: str | None = None, follower_id: str | None = None, limit: int = 200) -> list[dict[str, Any]]:
-    return [
+def ct_list_executions(
+    signal_id: str | None = None, follower_id: str | None = None, limit: int = 200,
+    user=Depends(require_user_dependency),
+) -> list[dict[str, Any]]:
+    """鉴权 + 归属过滤（安全审计 pass3 #2）：仅可见 caller **自己 follower** 的执行 + caller **自家 master 的
+    follower** 的执行（绝不向匿名/无关租户回显跨租户执行记录）。follower_id 由服务端按归属校验、不信任自报。"""
+    allowed_fids: set[str] = set()
+    own = COPY_TRADE_SERVICE.get_master_by_user(user.user_id)
+    if own is not None:
+        allowed_fids.update(f.follower_id for f in COPY_TRADE_SERVICE.list_followers(own.master_id, active_only=False))
+    allowed_fids.update(sub.follower_id for sub in COPY_TRADE_SERVICE.list_subscriptions(user.user_id))
+    if follower_id is not None:
+        if follower_id not in allowed_fids:
+            raise HTTPException(403, "无权查看该 follower 的执行")
+        fids_scope: set[str] = {follower_id}
+    else:
+        fids_scope = allowed_fids
+    out = [
         e.to_dict()
-        for e in COPY_TRADE_SERVICE.list_executions(signal_id=signal_id, follower_id=follower_id, limit=limit)
+        for e in COPY_TRADE_SERVICE.list_executions(signal_id=signal_id, limit=limit)
+        if e.follower_id in fids_scope
     ]
+    return out[:limit]
 
 
 # -------- P3.5 setup 向导状态 --------

@@ -6,6 +6,15 @@
 ## <日期> · <标题>
 - 建/改了什么 + 命门  - 验收：<对抗测试 + 变异 + 全量数字>  - 下一步：<…> -->
 
+## 2026-06-25 · 补未披露 unauthed 数据泄露端点 + 第三轮安全审计命中 RCE（卡 3c9c3732 · D-ENDPOINT-AUTH）
+
+- **缘起**：autonomous-loop（ultracode）。第三轮**安全聚焦审计**（workflow w5jwdr2ec·copy_trade/ide.sandbox/paper-key/agent side_effect/data_export·16 agent）排 10 真缺口。
+- **⚠ CRITICAL（已报告·P0 卡 5bfb5202）**：ide.sandbox posix_spawn/ctypes 逃逸 RCE（#1·实测 exit 0）+ open/glob 读宿主机 keystore/auth DB（#3）。Python 黑名单不可救·真修=OS 级隔离（bwrap/nsjail/sandbox-exec·只读挂载·网络命名空间）·deployment-mode 用户拍（单机 best-effort 已披露可接受 / hosted=CRITICAL）。**未自作主张改沙箱**（架构+部署决策属用户）·prominently 报告。
+- **本切片做（未披露真漏洞·先清）#2/#4**：4 端点无鉴权（copy_trade signals=全部 master 下单意图+note·executions=跨租户·data export=未登录全量 DATA_ROOT）→ 匿名可拉。读 main.py 复核坐实（邻居均鉴权=真漏网）。
+- **实现（additive 端点层）**：4 端点 +Depends(require_user_dependency)；copy_trade 按 get_master_by_user/list_subscriptions/list_followers 归属过滤（signals=自家∪订阅 master·executions=自家 master 的 follower∪自己订阅·越权 query 403·服务端解析归属不信自报）；data export 加鉴权。护栏=安全数据泄露红线非方法学。
+- **验收**：3 测试（匿名→401·跨租户播种 A 看不到 B+越权 403·executions 无关空集）。MUT（ct_list_signals 退回无鉴权无归属）→ 匿名门(200)+跨租户门(A 看到 B) 双红。**全量后端 1660 passed / 13 skipped / 0 failed / 197s**（基线 1657，净 +3）；data_export 既有测试测函数非端点不受影响。
+- **下一步**：分支续 land-ready，commit+push 自动；P0 sandbox（5bfb5202）止血/OS 隔离待用户 deployment-mode 拍板；其余 pass3 残（agent side_effect/paper-key 经证伪或低·见审计输出）。
+
 ## 2026-06-25 · 生产 HRP 走审计安全版——奇异协方差 fallback ladder 接进 optimize_portfolio（卡 d4151cac · D-HRP-SAFE）
 
 - **缘起**：autonomous-loop（ultracode）。第二轮审计 #7（lev 5·岛→消费）：optimize_hrp_safe（奇异检测+Ledoit-Wolf 收缩+fallback 阶梯）仅测试消费、生产 hrp 用裸 hrp_weights（近奇异协方差→corr≈1→distance≈0→linkage 树退化→权重 NaN/极端集中）。
