@@ -627,3 +627,12 @@
 - **子系统**：Research Graph IR ✅(地基)·LLM Gateway ✅(核+路由+凭据池+调用账·secret 不进 LLM/日志/导出双扫)·confirmatory-PIT 库层门 ✅。
 - **诚实残余**：A-COMPILER/A-CMD(§1 链续)·Agent Orchestrator+12 role+23 事件(§7)·Gateway 接 main.py/AgentRuntime·confirmatory 端点激活(待上游注册一致)。
 - **land**：3 线整批 land main（用户授权）。推进 GOAL §1/§7/§16。**下一步**：A-COMPILER/A-CMD·Agent Orchestrator·A-QRO-2/D-RDP-2。
+
+## 2026-06-26 · 第四波 3 线并行整合 land（CanonicalCommand + Agent Orchestrator + RDP 聚合器·GOAL-first）
+
+- **派 3 deep-opus 主力**（各 GOAL-first·领地不交叠 command/ ‖ agent/orchestrator/ ‖ delivery/）：A-CMD CanonicalCommand(`8abde88e`·§1/§2) / Agent Orchestrator(`437e94bd`·§7) / D-RDP-2 RDP 聚合器(`0781bb13`·§17)。
+- **验收**：批次全量 **2125 passed / 13 skipped / 0 failed / 125s**（基线 2010+128 新对抗测试全绿·flake 未触发·collect 2138 精确吻合）+ validate PASS。MUT 钉死：A-CMD×12(绕过通道/actor 四类/目标台/内容寻址/payload) / Agent Orchestrator×6(绕过 DAG/Gateway/Verifier 独立性/Agent 替拍方法学/完成门/可见性) / D-RDP-2×3(缺真 DatasetVersion 门拒/真血统不编造/secret 扫描)。
+- **GOAL-锚定成效**：3 线**全无停工拍板**——A-CMD actor 面表锚 §2/§0(可逆)、Agent Orchestrator **24 事件按 GOAL §7 实列**(opus 信 GOAL 而非我卡面写错的 23·GOAL-FIRST 完美生效)、D-RDP-2 锚 D-SCOPE-CONSERVATIVE(没擅自常开 require_rdp)。
+- **里程碑**：**QRO→ResearchGraph→CanonicalCommand 三段对象脊柱通** + **LINE-A-AGENT(LLM Gateway+Orchestrator)通** + **§17 RDP 真血统聚合通**。role agent 不读 key·role 节点 kind=pure 不动钱·实盘 key 不进 RDP。
+- **诚实残余**：A-COMPILER(消费命令→Run→Verdict·完成 §1 链)·Orchestrator/Gateway 接 main.py+前端·record/replay store·RDP 端到端常开(待用户)·命名对象 typed 化。
+- **land**：3 线整批 land main（用户授权）。推进 GOAL §1/§2/§7/§17。**下一步**：A-COMPILER(完成 QRO→Graph→Command→Compiler→Run→Verdict 整脊柱)·A-QRO-2·各残余接线。

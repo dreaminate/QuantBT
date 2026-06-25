@@ -6,11 +6,9 @@
 
 | uuid8 | 标题 | status | area | 位置 |
 |---|---|---|---|---|
-| 0781bb13 | RDP 聚合器——从真血统装配 RDP（DatasetVersion/LLMCallRecord/honest-N/verdict 真填）（D-RDP-2） | in_progress | delivery | active |
-| 437e94bd | Agent Orchestrator——role agent 调度 + 23 事件投影 + Plan/ReAct/Review/Replay/Repair（A-AGENT-ORCH） | in_progress | agent-orchestrator | active |
-| 8abde88e | CanonicalCommand——typed 命令层 + 语义翻译 + 全入口落同一 audit/lineage（A-CMD） | in_progress | canonical-command | active |
 | 0430cd78 | 数据更新写时强约束——dataset_version/checksum/lineage 升 block 门（B-VERSION-1） | done | data-pit | done |
 | 05d6f511 | 单人 self-approve 仅非真钱通道(冷却+留痕)，真钱硬双人 | done | approval | done |
+| 0781bb13 | RDP 聚合器——从真血统装配 RDP（DatasetVersion/LLMCallRecord/honest-N/verdict 真填）（D-RDP-2） | done | delivery | done |
 | 07b10903 | DS-6 装机收口——跨平台一键启动 + mkdir（可缓·docker compose 兜底） | done | onboarding-docs | done |
 | 11b0a3ab | Spine 全链贯穿第一段——DSR 估计器经 Mathematical Spine 真实绑定 + 漂移对账门 | done | math-spine | done |
 | 180a341e | 核验 agent tool_call 前端派发是否旁路受控翻译门（R11 前端缺口审计） | done | verification | done |
@@ -27,6 +25,7 @@
 | 3d95e0f6 | agent 窗口弹窗 + 教学文案（整合 T-028/T-032/T-034 前端残余） | done | frontend | done |
 | 3f5ed0b8 | agent 客户端窗口 epic(仿 Claude Code)——权限模式切换 + 工具可视化 + 审批弹窗 | done | frontend-epic | done |
 | 41ea6e35 | R4 CPCV（Combinatorial Purged CV）多路径回测 + 组合学/防泄露命门 | done | eval-methodology | done |
+| 437e94bd | Agent Orchestrator——role agent 调度 + 24 事件投影 + Plan/ReAct/Review/Replay/Repair（A-AGENT-ORCH） | done | agent-orchestrator | done |
 | 4458ff54 | Spine 接进生产 promote 路径——overfit gate DSR 一致性核（漂移→降级 insufficient） | done | math-spine | done |
 | 4562d903 | Model台后端接线 — JobDetail/IoSpec/walkforward/promote字段/图codegen/研究判定 | done | backend | done |
 | 46f1cb3c | 组合层 M8 多证据三角守门（T-033 核验 gap 升级） | done | portfolio | done |
@@ -54,6 +53,7 @@
 | 87ad21fc | R18 stacking 控制项 N/A 标注 + 实现时 OOF 约束（T-033 核验 gap） | done | signals | done |
 | 89e7be1e | CPCV 路径稳健性 q05 接进 overfit gate（report-only 默认 / cpcv_conservative opt-in·守不替方法学拍板） | done | eval-methodology | done |
 | 8ab894cd | 审批 SLA 与 leverage_cap 可配置；杠杆不设硬上限；真钱超时永远 default_reject | done | config | done |
+| 8abde88e | CanonicalCommand 全栈——typed 命令通道 + 语义翻译 + 全栈校验 + provenance（全入口落同一 audit/lineage·A-CMD） | done | canonical-command | done |
 | 9a497bde | 交付门 e2e 集成测试——陌生人 chat→backtest→裁决→paper 全后端路径真 | done | integration-test | done |
 | 9d5405ce | 模拟台前端 P0 — 5 视图 + PaperBoardCard(运行/持仓成交/风险门/复盘/晋升) | done | frontend | done |
 | 9d593481 | RDP 开放格式 schema + manifest 规范（fail-closed 导出器·D-RDP-1） | done | delivery | done |
@@ -157,7 +157,7 @@
 | agent | edc1e326 · done | dreaminate |
 | agent-backend | f6bb5e8e · done | dreaminate |
 | agent-frontend | defe660c · done | dreaminate |
-| agent-orchestrator | 437e94bd · in_progress | dreaminate |
+| agent-orchestrator | 437e94bd · done | dreaminate |
 | approval | 05d6f511 · done | dreaminate |
 | backend | 4562d903 · done | dreaminate |
 | backend | 51271d38 · done | dreaminate |
@@ -165,7 +165,7 @@
 | backend | 9fd4f1a6 · done | dreaminate |
 | backend | b106177f · done | dreaminate |
 | backend | e069d820 · done | dreaminate |
-| canonical-command | 8abde88e · in_progress | dreaminate |
+| canonical-command | 8abde88e · done | dreaminate |
 | config | 8ab894cd · done | dreaminate |
 | data-connectors | e1a98c41 · done | dreaminate |
 | data-pit | 0430cd78 · done | dreaminate |
@@ -173,7 +173,7 @@
 | data-pit | 6a8752ab · done | dreaminate |
 | data-pit | e01bf12f · done | dreaminate |
 | data-pit | ec7a7d9a · done | dreaminate |
-| delivery | 0781bb13 · in_progress | dreaminate |
+| delivery | 0781bb13 · done | dreaminate |
 | delivery | 67b42025 · done | dreaminate |
 | delivery | 9d593481 · done | dreaminate |
 | desktop | bc21c7c1 · done | dreaminate |
