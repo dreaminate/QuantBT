@@ -174,3 +174,33 @@ def test_optimize_portfolio_flags_mvo_nonconvergence(monkeypatch):
     res = opt.optimize_portfolio("mean_variance", mu, cov)
     assert "mvo_not_converged" in res.constraint_violations           # 透明标记（非静默）=核心牙
     assert len(res.weights) == 3 and res.optimizer == "mean_variance"  # 回退仍出权重（不崩）
+
+
+# ============================================================
+# HRP 生产路径走审计安全版（奇异检测+收缩 fallback·审计 pass2 #7）
+# ============================================================
+
+
+def _singular_cov() -> pd.DataFrame:
+    """奇异协方差：3 资产完全共线（corr=1·min_eig=0）→ is_near_singular 必判奇异（裸 HRP 距离矩阵退化）。"""
+    base = np.ones((3, 3)) * 0.04           # 完全共线 → 秩 1 → min_eig=0
+    return pd.DataFrame(base, index=list("ABC"), columns=list("ABC"))
+
+
+def test_optimize_portfolio_hrp_uses_safe_ladder_on_singular_cov():
+    """**鲁棒性门**：近奇异协方差经 optimize_portfolio('hrp') → 走审计 fallback ladder 出有限权重 + 透明标 hrp_fallback。
+
+    MUT（hrp 分支退回裸 hrp_weights）→ 近奇异下权重 NaN/极端或无 fallback 标记 → 本测红。
+    """
+    res = optimize_portfolio("hrp", None, _singular_cov(), PortfolioConstraints(single_pos_max=1.0))
+    assert all(np.isfinite(v) for v in res.weights.values())          # 不出 NaN/Inf（审计安全版兜住）
+    assert sum(res.weights.values()) == pytest.approx(1.0, abs=1e-6)  # 合法权重
+    assert any(v.startswith("hrp_fallback:") for v in res.constraint_violations), \
+        "近奇异协方差却无 hrp_fallback 透明标记（疑用了裸 hrp_weights 无防御阶梯）"
+
+
+def test_optimize_portfolio_hrp_healthy_cov_no_fallback():
+    """非奇异协方差 → 走原 HRP、无 fallback 标记（向后兼容·不误标）。"""
+    res = optimize_portfolio("hrp", None, _toy_cov(), PortfolioConstraints(single_pos_max=0.6))
+    assert all(np.isfinite(v) for v in res.weights.values())
+    assert not any(v.startswith("hrp_fallback:") for v in res.constraint_violations)

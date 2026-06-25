@@ -6,6 +6,15 @@
 ## <日期> · <标题>
 - 建/改了什么 + 命门  - 验收：<对抗测试 + 变异 + 全量数字>  - 下一步：<…> -->
 
+## 2026-06-25 · 生产 HRP 走审计安全版——奇异协方差 fallback ladder 接进 optimize_portfolio（卡 d4151cac · D-HRP-SAFE）
+
+- **缘起**：autonomous-loop（ultracode）。第二轮审计 #7（lev 5·岛→消费）：optimize_hrp_safe（奇异检测+Ledoit-Wolf 收缩+fallback 阶梯）仅测试消费、生产 hrp 用裸 hrp_weights（近奇异协方差→corr≈1→distance≈0→linkage 树退化→权重 NaN/极端集中）。
+- **数学先行**：is_near_singular 相对判据→奇异则 Ledoit-Wolf 收缩 cov_shrunk=(1−α)Σ+α·tr/N·I（α=0.3）再 HRP→risk_parity→equal 阶梯兜。透明：fallback_used≠hrp 标 hrp_fallback:* 进 violations（同 MVO 透明原则）。
+- **实现（抽取+wire）**：抽 `_safe_hrp_from_cov`（从 optimize_hrp_safe 的 cov-ladder·行为保持·两处共用）；optimize_portfolio hrp 分支喂 covariance.values 走安全版+标 violation；n≤1 退等权。扩展不替换（裸 hrp_weights 保留向后兼容）。
+- **测试纠偏教训**：初版 _singular_cov corr=0.99999 未触发——is_near_singular 是相对判据（min_eig<threshold·max_eig），0.99999 的 min_eig/max_eig≈1.3e-6 不够；改用完全共线（corr=1·min_eig=0→min_eig≤0 必判奇异）。
+- **验收**：+2 测试（奇异 cov→有限权重+sum≈1+hrp_fallback 标记 / 健康 cov 不误标）。MUT（退回裸 hrp_weights）→ 奇异 cov 无 fallback 标记红。**全量后端 1657 passed / 13 skipped / 0 failed / 186s**（基线 1655，净 +2）；抽取行为保持（academic_audit+dispatch 测试绿）。
+- **下一步**：分支续 land-ready，commit+push 自动；后端清晰 correctness 缺口基本收口——下轮评估再审计补缺 vs 收尾（候选 fc79b911 ②③ 停牌/涨跌停[孤儿过早]、e4496023 归因端点、#6[待用户拍]）。
+
 ## 2026-06-25 · risk_summary DSR 别名单一源——消除 flags⊥trust_level 自相矛盾（卡 1b886c2e · D-DSR-ALIAS）
 
 - **缘起**：autonomous-loop（ultracode）。第二轮审计 #8（lev 5）：DSR 别名三处手抄不一致——_rule_dsr(104)/rule_metric_aliases(237) 含 dsr_confidence、has_dsr 守门(248) 漏 → {sharpe, dsr_confidence=0.1} 触 low_dsr_confidence HIGH flag 但 has_dsr=False 早返 insufficient_data（携 flag）= flags[high]⊥trust_level[insufficient] 自相矛盾。

@@ -85,6 +85,7 @@
 | cfb7d950 | DS-4 paper 接真——submit→register_run + POST 端点 + 真 provider 产净值 | done | paper-fullstack | done |
 | d0e5d208 | 监控→自动降级/退役/问责 尾部闭环接线（T-033 核验 gap 升级） | done | monitor | done |
 | d11d1426 | 暗色台地基 — desk 壳件 + design tokens + per-desk accent + 路由边界 | done | frontend-foundation | done |
+| d4151cac | 生产 HRP 走审计安全版——奇异协方差 fallback ladder 接进 optimize_portfolio（岛→消费·透明降级） | done | eval-methodology | done |
 | d41b167d | Agent 窗口 D-PERM 反例 UI + self-approve 二次确认 | done | frontend | done |
 | d4a324ae | conformal 校准区间接进 model_eval（价值闭环·OOS 真留出覆盖率） | done | eval-methodology | done |
 | d4cb88f4 | DS-3 裁决接真——run_id 贯穿真裁决卡 + Bootstrap 第三腿前端补全 | done | frontend | done |
@@ -165,6 +166,7 @@
 | eval-methodology | 89e7be1e · done | dreaminate |
 | eval-methodology | 8f9d79fd · done | dreaminate |
 | eval-methodology | b1e4efdf · done | dreaminate |
+| eval-methodology | d4151cac · done | dreaminate |
 | eval-methodology | d4a324ae · done | dreaminate |
 | eval-methodology | f1bd08f2 · done | dreaminate |
 | eval-methodology | ff286f80 · done | dreaminate |

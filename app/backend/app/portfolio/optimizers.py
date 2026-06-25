@@ -191,6 +191,7 @@ def optimize_portfolio(
 ) -> PortfolioResult:
     constraints = constraints or PortfolioConstraints()
     mvo_fallback = False
+    hrp_fallback_note: str | None = None
     if optimizer == "equal_weight":
         weights = equal_weight(list(covariance.columns))
     elif optimizer == "mean_variance":
@@ -209,7 +210,17 @@ def optimize_portfolio(
     elif optimizer == "risk_parity":
         weights = risk_parity(covariance)
     elif optimizer == "hrp":
-        weights = hrp_weights(covariance)
+        # 生产 HRP 走**审计过的 fallback ladder**（奇异检测+Ledoit-Wolf 收缩+risk_parity/equal 兜底），
+        # 不再用裸 hrp_weights（近奇异协方差 → 距离矩阵退化、权重 NaN/极端集中）。fallback 透明标进 violations。
+        from .hrp_audit import _safe_hrp_from_cov
+        syms_hrp = list(covariance.columns)
+        if len(syms_hrp) <= 1:
+            weights = equal_weight(syms_hrp)
+        else:
+            hrp_res = _safe_hrp_from_cov(covariance.loc[syms_hrp, syms_hrp].values.astype(float), syms_hrp)
+            weights = hrp_res.weights
+            if hrp_res.fallback_used != "hrp":
+                hrp_fallback_note = f"hrp_fallback:{hrp_res.fallback_used}"  # 透明：近奇异协方差已降级
     else:
         raise ValueError(f"未知优化器: {optimizer}")
     final = apply_constraints(weights, constraints)
@@ -221,6 +232,8 @@ def optimize_portfolio(
     violations: list[str] = []
     if mvo_fallback:
         violations.append("mvo_not_converged")   # SLSQP 未收敛已透明回退等权（非静默）
+    if hrp_fallback_note:
+        violations.append(hrp_fallback_note)     # HRP 近奇异协方差已透明降级（非静默 NaN/极端集中）
     gross = sum(abs(v) for v in final.values())
     if gross > constraints.leverage_max + 1e-6:
         violations.append(f"gross_leverage {gross:.4f} > {constraints.leverage_max}")

@@ -127,6 +127,26 @@ def optimize_hrp_safe(
             warning=f"cov 计算失败: {exc}",
         )
 
+    return _safe_hrp_from_cov(
+        cov, symbols,
+        enable_shrinkage_fallback=enable_shrinkage_fallback,
+        singularity_threshold=singularity_threshold,
+    )
+
+
+def _safe_hrp_from_cov(
+    cov: np.ndarray,
+    symbols: list[str],
+    *,
+    enable_shrinkage_fallback: bool = True,
+    singularity_threshold: float = 1e-6,
+) -> HRPResult:
+    """从**协方差**跑 HRP fallback ladder（HRP→HRP+Ledoit-Wolf shrinkage→risk_parity→equal_weight）。
+
+    `optimize_hrp_safe`（returns→cov 后）与 `optimizers.optimize_portfolio`（已有 cov）**共用本函数**——
+    生产 hrp 分支不再用裸 `hrp_weights`（无奇异检测/收缩 → 近奇异协方差出 NaN/极端集中），共享同一审计过的防御阶梯。
+    """
+
     singular, min_eig, cond = is_near_singular(cov, singularity_threshold)
 
     if singular:
