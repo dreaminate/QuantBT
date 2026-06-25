@@ -59,6 +59,12 @@ class ModelSpec:
     walk_forward_embargo: int = 5
     hyperparams: dict[str, Any] = field(default_factory=dict)
     group_col: str | None = None  # for lambdarank
+    # R4 CPCV 路径稳健性（report-only·opt-in 默认关）：开启则训练后额外跑组合式多路径、产 OOS 指标分布
+    # （q05/路径方差=过拟合脆弱度）写进 TrainResult.cpcv_distribution。**默认关**=不改既有训练成本/行为；
+    # 开启代价：额外 C(N,k) 次拟合（用户自负）。阈值/接 gate 属用户方法学（见卡 861182e6），本字段只产报告。
+    compute_cpcv: bool = False
+    cpcv_n_groups: int = 6
+    cpcv_k_test: int = 2
 
 
 @dataclass
@@ -82,6 +88,8 @@ class TrainResult:
     oos_predictions: dict[str, Any] | None = None
     # 学习曲线（DL 路径填 train/val loss；树模型一般为空）。
     curves: dict[str, list[float]] = field(default_factory=dict)
+    # R4 CPCV 路径稳健性分布（report-only）；仅 spec.compute_cpcv=True 时填、否则 None（不假绿灯：未算≠已算）。
+    cpcv_distribution: dict[str, Any] | None = None
 
     def to_dict(self) -> dict[str, Any]:
         return asdict(self)
@@ -229,6 +237,11 @@ def train_model(
         with target.open("wb") as fh:
             pickle.dump(last_model, fh)
         artifact_path = str(target)
+    # R4 CPCV 路径稳健性（opt-in·默认关 → None，不改既有成本/行为）；开启额外 C(N,k) 次拟合产 report-only 分布。
+    cpcv_distribution = (
+        cpcv_oos_metric_distribution(spec, panel, n_groups=spec.cpcv_n_groups, k_test_groups=spec.cpcv_k_test)
+        if spec.compute_cpcv else None
+    )
     return TrainResult(
         spec=asdict(spec),
         oos_metrics=oos_metrics,
@@ -237,6 +250,7 @@ def train_model(
         artifact_path=artifact_path,
         elapsed_seconds=time.perf_counter() - t0,
         oos_predictions=oos_predictions,
+        cpcv_distribution=cpcv_distribution,
     )
 
 

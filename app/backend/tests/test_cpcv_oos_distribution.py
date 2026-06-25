@@ -122,6 +122,30 @@ def test_cpcv_regression_baseline_is_zero():
     assert d["baseline"] == 0.0 and d["metric"] == "r2"
 
 
+def test_train_model_cpcv_optin_default_off_and_on():
+    """**opt-in 集成·默认关不改行为**：compute_cpcv 默认 False → TrainResult.cpcv_distribution=None；
+    True → 产 report-only 分布写进结果（随 result.json 流到 verdict/UI）。asdict JSON-safe。"""
+    from dataclasses import asdict as _asdict
+    import json as _json
+
+    from app.models.training import train_model
+
+    r_off = train_model(
+        ModelSpec(task="regression", model="ridge", feature_cols=["f1", "f2"], label_col="label", n_splits=4),
+        _panel(),
+    )
+    assert r_off.cpcv_distribution is None                       # 默认关：不算、不假绿灯
+    r_on = train_model(
+        ModelSpec(task="regression", model="ridge", feature_cols=["f1", "f2"], label_col="label",
+                  n_splits=4, compute_cpcv=True, cpcv_n_groups=5, cpcv_k_test=2),
+        _panel(),
+    )
+    assert r_on.cpcv_distribution is not None
+    assert r_on.cpcv_distribution["status"] == "ok" and r_on.cpcv_distribution["metric"] == "r2"
+    assert r_on.cpcv_distribution["n_paths"] == n_cpcv_paths(5, 2)
+    _json.dumps(_asdict(r_on))                                   # 结果整体 JSON-safe（含 cpcv_distribution）
+
+
 def test_cpcv_deterministic_and_json_safe():
     d1 = cpcv_oos_metric_distribution(_spec(), _panel(seed=1), n_groups=6, k_test_groups=2)
     d2 = cpcv_oos_metric_distribution(_spec(), _panel(seed=1), n_groups=6, k_test_groups=2)

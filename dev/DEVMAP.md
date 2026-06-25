@@ -31,6 +31,7 @@
 | 6e264c59 | 回测成本逐成分诚实归因（impact 单列不混入 commission） | done | execution-cost | done |
 | 6e4eee54 | 入口×必经门覆盖矩阵回归 + 所有 venue 经 OrderGuard.wrap 的 CI 静态检查 | done | security-invariant | done |
 | 7179ba36 | R18 平方根市场冲击 回测成本项（size-aware）+ 容量交叉校验命门 | done | execution-cost | done |
+| 74f93771 | CPCV 路径分布 opt-in 集成进 train_model（cpcv_distribution 入 TrainResult·report-only） | done | models-methodology | done |
 | 79ebe273 | 模拟台后端接线 — /api/paper/* 整层 + 晋级审批门 + 风险门冻结哈希链 | done | backend | done |
 | 7ac5a0fe | BacktestVenue.cost_summary —— per-fill 成本归因收口到 run 级 | done | execution-cost | done |
 | 82120b9c | agent 窗口前端核心（Web）——对话流 + 工具可视化 + 权限模式切换 | done | frontend | done |
@@ -178,6 +179,7 @@
 | governance-ui | c631817e · done | dreaminate |
 | integration-test | 9a497bde · done | dreaminate |
 | models-methodology | 2da39479 · done | dreaminate |
+| models-methodology | 74f93771 · done | dreaminate |
 | models-methodology | c43c6301 · done | dreaminate |
 | monitor | d0e5d208 · done | dreaminate |
 | monitor | d718d5c5 · done | dreaminate |

@@ -469,3 +469,9 @@
 - **判别器有牙**：MUT「proba misalign」→ 强分类器 auc 崩 0.4999 → 强信号高 auc + 强 vs 噪声判别器双红（证 proba 重组对齐正确）。additive（regression 路径不变 baseline=0.0）、report-only 不接 gate。
 - **验证**：`test_cpcv_oos_distribution.py` 11 passed（+4 分类）；**全量后端 1609 passed / 13 skipped / 0 failed / 124s**（基线 1605，净 +4）。
 - **本轮 loop「commit 和 push 自动进行」→ 本地 commit + push 分支 worktree-autopolish-w1。分支续 land-ready。**
+
+## 2026-06-25 · CPCV 路径分布 opt-in 集成进 train_model（done 卡 74f93771）
+- **集成进训练生命周期**：CPCV 消费函数（done 2da39479/c43c6301）从孤立可调 → opt-in 集成进 train_model（ModelSpec +compute_cpcv 默认关 + cpcv_n_groups/k_test；TrainResult +cpcv_distribution；开启则训练后产分布随 result.json 流到 verdict/UI）。默认关=零行为/成本变更（护栏：不替方法学拍板、开启=用户自负 C(N,k) 拟合）。
+- **additive 零回归**：ModelSpec/TrainResult 加 default 字段向后兼容、train_model 默认关分支行为不变；49 训练测试 + 全量套件绿。
+- **验证**：`test_cpcv_oos_distribution.py` 12 passed（+1 opt-in：默认关→None、开启→分布·asdict JSON-safe）；**全量后端 1610 passed / 13 skipped / 0 failed / 124s**（基线 1609，净 +1）。follow-on（861182e6 ②）：cpcv_distribution→verdict/UI + q05 接 gate（阈值=用户方法学）池卡留。
+- **本轮 loop「commit 和 push 自动进行」→ 本地 commit + push 分支 worktree-autopolish-w1。分支续 land-ready。**
