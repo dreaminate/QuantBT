@@ -1,5 +1,9 @@
 import { useCallback, useEffect, useMemo, useState } from "react";
 import { EvalCharts, type ChartData } from "../../components/charts/EvalCharts";
+import {
+  ConformalIntervalCard,
+  type ConformalIntervalData,
+} from "../../components/charts/ConformalIntervalCard";
 
 /**
  * 模型中心 · 训练台（Claude Code 风）
@@ -78,6 +82,8 @@ export function TrainingBenchPage() {
   const [selectedModel, setSelectedModel] = useState("");
   const [selectedIsDl, setSelectedIsDl] = useState(false);
   const [evalCharts, setEvalCharts] = useState<ChartData[]>([]);
+  // R23 conformal 校准区间（OOS 真留出覆盖）；null=非回归/无 OOS/calib 不足 → 不渲染（不假绿灯）。
+  const [conformal, setConformal] = useState<ConformalIntervalData | null>(null);
   const [evalLoading, setEvalLoading] = useState(false);
   const [evalError, setEvalError] = useState("");
   const [tbBusy, setTbBusy] = useState(false);
@@ -93,6 +99,7 @@ export function TrainingBenchPage() {
     setSelectedIsDl(!!j.tensorboard);
     setEvalLoading(true);
     setEvalCharts([]);
+    setConformal(null);
     setEvalError("");
     setBtResult(null);
     fetch(`/api/training/jobs/${j.job_id}/eval`)
@@ -104,7 +111,10 @@ export function TrainingBenchPage() {
         }
         return r.json();
       })
-      .then((body) => setEvalCharts(body.charts ?? []))
+      .then((body) => {
+        setEvalCharts(body.charts ?? []);
+        setConformal(body.conformal_interval ?? null);  // R23 OOS 留出覆盖（缺/null→不渲染）
+      })
       .catch((e) => setEvalError(e instanceof Error ? e.message : "加载评价图失败"))
       .finally(() => setEvalLoading(false));
   }, []);
@@ -534,7 +544,15 @@ export function TrainingBenchPage() {
           ) : evalError ? (
             <div style={{ fontSize: 12, color: "var(--cc-danger)" }}>{evalError}</div>
           ) : (
-            <EvalCharts charts={evalCharts} />
+            <>
+              {/* R23 conformal 校准区间（仅回归 OOS；null→不渲染，不假绿灯）。 */}
+              {conformal && (
+                <div style={{ marginBottom: 10 }}>
+                  <ConformalIntervalCard interval={conformal} />
+                </div>
+              )}
+              <EvalCharts charts={evalCharts} />
+            </>
           )}
         </div>
       )}

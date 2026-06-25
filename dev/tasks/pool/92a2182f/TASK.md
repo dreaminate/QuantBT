@@ -14,7 +14,7 @@ depends_on: [69e1cb16765a4326a11252a1d598574e]
 
 # conformal 区间消费侧接线
 
-> **状态（2026-06-25）**：**① 模型台 ✅ done**（done 卡 d4a324ae·`model_eval.conformal_prediction_band` OOS 真留出覆盖）；**① 信号层弃权 ✅ done**（done 卡 ee3b8dbd·`signals.conformal_abstain_gate` 区间跨阈值→弃权、与 model_eval band 同 q̂ 命门）。**② 前端渐进披露区间 + abstain UI 留池**（前端呈现·能信层）；**③ 时序 ACI 在线维覆盖 留池**（live 场景）。
+> **状态（2026-06-25）**：**① 模型台 ✅ done**（done 卡 d4a324ae·`model_eval.conformal_prediction_band` OOS 真留出覆盖）；**① 信号层弃权 ✅ done**（done 卡 ee3b8dbd·`signals.conformal_abstain_gate` 区间跨阈值→弃权、与 model_eval band 同 q̂ 命门）。**② 模型台 conformal 区间 UI ✅ done**（done 卡 29258b77·`ConformalIntervalCard` + TrainingBenchPage 真闭环·OOS 留出覆盖+abstain·不假绿灯·MUT-cf 有牙）——剩信号层 abstain 的 UI 呈现留池；**③ 时序 ACI 在线维覆盖 留池**（live 场景）。
 
 ## Scope [必填]
 R23 conformal 库（`eval/conformal.py`）已建并验证（分布无关覆盖 + abstain + 不锁 α），但**暂无消费侧**——

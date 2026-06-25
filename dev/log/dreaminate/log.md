@@ -421,3 +421,10 @@
 - **worktree 前端验证**：worktree 无 node_modules（git worktree 不带 gitignored）→ symlink 主仓库 app/frontend/node_modules 跑 tsc/vitest/build，验后清理（symlink+dist 不入库）。
 - **验证**：tsc 无类型错；`RunVerdictCard.test` 28 + `LiveRunVerdictCard.test` 15 passed；**全前端 288 passed / 23 文件**（基线 280，净 +8）；vite build ✓。
 - **本轮 loop「commit 和 push 自动进行」→ 本地 commit + push 分支 worktree-autopolish-w1**（land main 仍仅用户）。
+
+## 2026-06-25 · conformal 校准区间接模型台 UI（done 卡 29258b77 / 92a2182f ② · 能信）
+- **价值闭环**：conformal_interval（卡 d4a324ae 建于 model_eval·OOS 真留出覆盖、UI 零呈现）→ `ConformalIntervalCard` 纯组件（--cc-* token）+ TrainingBenchPage openEval 真映射（读 body.conformal_interval → 渲染）。用户看见「±半宽·目标覆盖·留出实测覆盖 + caveat」或「证据不足」。
+- **不假绿灯在 UI**：abstained（calib 不足）→「证据不足」警示色、绝不造假区间/假覆盖；单次留出覆盖率**中性色非成功绿**（带噪估计、跨多次取均值方判校准——后端 note 已述）；interval 缺/null→不渲染（不编造）。合规说明走后端 note 单一源、原样渲染。
+- **门有牙**：MUT-cf（单次覆盖渲成功绿）→「不假绿灯①」FAIL。
+- **验证**：tsc 无错；`ConformalIntervalCard.test` 5 passed；**全前端 293 passed / 24 文件**（基线 288，净 +5）；vite build ✓。
+- **本轮 loop「commit 和 push 自动进行」→ 本地 commit + push 分支 worktree-autopolish-w1**（land main 仍仅用户）。
