@@ -6,6 +6,7 @@
 
 | uuid8 | 标题 | status | area | 位置 |
 |---|---|---|---|---|
+| 0430cd78 | 数据更新写时强约束——dataset_version/checksum/lineage 升 block 门（B-VERSION-1） | done | data-pit | done |
 | 05d6f511 | 单人 self-approve 仅非真钱通道(冷却+留痕)，真钱硬双人 | done | approval | done |
 | 07b10903 | DS-6 装机收口——跨平台一键启动 + mkdir（可缓·docker compose 兜底） | done | onboarding-docs | done |
 | 11b0a3ab | Spine 全链贯穿第一段——DSR 估计器经 Mathematical Spine 真实绑定 + 漂移对账门 | done | math-spine | done |
@@ -14,6 +15,7 @@
 | 1e0e65b4 | 组合消费者——agent 可调组合三角 gate（SEQ-CONSUMER=A · C full-fat 触发器） | done | agent | done |
 | 29258b77 | conformal 校准区间 + OOS 真留出覆盖接进模型台 UI（能信·不假绿灯） | done | frontend-trust | done |
 | 2da39479 | CPCV 作 cv_scheme 产 per-path OOS 指标分布（report-only · 命门最深件 ①） | done | models-methodology | done |
+| 36f88f6b | 模型 artifact 安全完整门——producer-run + hash 绑定 + allowlist + safetensors（C-MODELGOV-1 full） | done | model-governance | done |
 | 381b6c18 | 实盘因子血统门——未过检验因子上真钱线 → 警告+知情确认 | done | security-invariant | done |
 | 3a8b2360 | R28 全库双时态（known_at 轴 + as-of 重述基本面）（T-033 核验 gap） | done | 数据 | done |
 | 3bb62d7d | 无副作用业务工具接真引擎（agent 一句话真跑回测）——T-027 残余 | done | agent | done |
@@ -45,6 +47,7 @@
 | 8ab894cd | 审批 SLA 与 leverage_cap 可配置；杠杆不设硬上限；真钱超时永远 default_reject | done | config | done |
 | 9a497bde | 交付门 e2e 集成测试——陌生人 chat→backtest→裁决→paper 全后端路径真 | done | integration-test | done |
 | 9d5405ce | 模拟台前端 P0 — 5 视图 + PaperBoardCard(运行/持仓成交/风险门/复盘/晋升) | done | frontend | done |
+| 9d593481 | RDP 开放格式 schema + manifest 规范（fail-closed 导出器·D-RDP-1） | done | delivery | done |
 | 9fd4f1a6 | 策略台后端接线 — validate/版本/策略级fork/Live只读 端点 + 前端接真 | done | backend | done |
 | T-001 | T-001 | ? | - | done |
 | T-012 | T-012 | ? | - | done |
@@ -95,6 +98,7 @@
 | d9bf88b1 | sqrt-impact 自估 ADV/σ 扩张窗 as-of 无泄露（根治回测前视泄露） | done | execution-cost | done |
 | de764e1c | 监控生产调度 + 因子观测记录管道——让 monitor_tick 在生产真跑 | done | monitor | done |
 | defe660c | DS-2 造站接真——Agent台默认接真 + 无key slot-filling 真落库 + Hermes 预设（Fork1=C+Hermes） | done | agent-frontend | done |
+| e01bf12f | 回测/训练引擎消费 as_of_known——PIT 双时态全域闭合第一段（B-PIT-1） | done | data-pit | done |
 | e069d820 | 裁决卡后端接线 — verdict/overfit/cost-sensitivity/promote/热力 端点 + 措辞合规 | done | backend | done |
 | e1a98c41 | binance_vision_pull reload-merge schema bug 修——多日同年 try_parse_dates 崩 | done | data-connectors | done |
 | e2de3d32 | 前端测试设施基建 — vitest + React Testing Library + 对抗测试 harness | done | frontend-foundation | done |
@@ -109,17 +113,17 @@
 
 | uuid8 | 标题 | status | area |
 |---|---|---|---|
-| 0430cd78 | 数据更新写时强约束——dataset_version/checksum/lineage 升 block 门（B-VERSION-1） | todo | data-pit |
 | 31289338 | 冷启动 gate/UI 接 MinTRL：DSR=N/A + PSR + "需 N 期"渐进披露（R25/R27 呈现层） | todo | eval-methodology |
-| 36f88f6b | 模型 artifact 安全完整门——producer-run + hash 绑定 + allowlist + safetensors（C-MODELGOV-1 full） | todo | model-governance |
 | 554cdcf2 | 监控绩效轴真闭环——4 个 drift 检测器接 run_weekly_monitor_pass + per-factor IC 真源 + 观测落盘（审计残余） | todo | monitor |
+| 6144bd61 | artifact 信任门生产激活——producer 落盘接 register + 翻 enforce + safetensors 入依赖（C-MODELGOV-1 activate） | todo | model-governance |
+| 67b42025 | RDP 接线——接现导出器 6 字段 + 接真 promote 路径 require_valid_rdp（D-RDP-1 wire） | todo | delivery |
+| 6a8752ab | PIT 训练全链激活——TrainingService train_now/submit 透传 as_of_known（B-PIT-1 activate） | todo | data-pit |
 | 861182e6 | CPCV 接 promote/overfit gate + cv_scheme 双轨 report（价值闭环） | todo | eval-methodology |
 | 92a2182f | conformal 区间消费侧接线——模型台/信号层预测附校准区间 + abstain UI 呈现 | todo | eval-methodology |
-| 9d593481 | RDP 开放格式 schema + manifest 规范（fail-closed 导出器·D-RDP-1） | todo | delivery |
 | aa13c3b0 | 因子机构级度量接 lifecycle 状态机/sizing 生产路径 | todo | factor-lifecycle |
-| e01bf12f | 回测/训练引擎消费 as_of_known——PIT 双时态全域闭合第一段（B-PIT-1） | todo | data-pit |
 | e2afc5c2 | 三档成本预设接 sqrt-impact 默认 + 成交报告 impact 成本归因拆字段 | todo | execution-cost |
 | e4496023 | 因子收益归因接消费侧（组合台/归因报告 + UI 呈现） | todo | eval-methodology |
+| ec7a7d9a | 数据写门 scope 余项——11 字段 + data 级 lineage + on-disk manifest 自动接线（B-VERSION-1 余） | todo | data-pit |
 | f19c5c19 | QRO 统一对象信封 + 状态四/五轴——对象脊柱地基（A-QRO-1） | todo | qro |
 
 ## 按 area 功能索引
@@ -156,6 +160,9 @@
 | backend | e069d820 · done | dreaminate |
 | config | 8ab894cd · done | dreaminate |
 | data-connectors | e1a98c41 · done | dreaminate |
+| data-pit | 0430cd78 · done | dreaminate |
+| data-pit | e01bf12f · done | dreaminate |
+| delivery | 9d593481 · done | dreaminate |
 | desktop | bc21c7c1 · done | dreaminate |
 | docs | ecbd0eab · done | dreaminate |
 | eval-methodology | 41ea6e35 · done | dreaminate |
@@ -203,6 +210,7 @@
 | math-spine | a00b3956 · done | dreaminate |
 | math-spine | b85e34cc · done | dreaminate |
 | math-spine | c86be35e · done | dreaminate |
+| model-governance | 36f88f6b · done | dreaminate |
 | models-methodology | 2da39479 · done | dreaminate |
 | models-methodology | 74f93771 · done | dreaminate |
 | models-methodology | c43c6301 · done | dreaminate |

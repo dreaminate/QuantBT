@@ -1,10 +1,10 @@
 ---
 uuid: 9d593481fd674978930926f541f2b7b3
 title: RDP 开放格式 schema + manifest 规范（fail-closed 导出器·D-RDP-1）
-status: todo
-owner: wait
+status: done
+owner: dreaminate
 assigned_by: dreaminate
-review_status: 0
+review_status: 1
 priority: P0
 area: delivery
 source: goal
@@ -41,3 +41,9 @@ RunDetailPage 收益概述页冻结 · no template false success · 缺字段诚
 
 ## 非目标 [按需]
 不做 RDP 聚合器（D-RDP-2 另卡·依赖 A LLMCallRecord + B DatasetVersion）；schema 字段先留 optional 槽、不阻塞等上游。
+
+## 完成记录（2026-06-26·第一波整合 land·中心 orchestrator）
+- 实现 commit `f96b34b`（分支 `wave1/w4-rdp-schema`）→ 中心 merge `ac85710`。
+- greenfield `delivery/`：`rdp.py`（§17 ~25 字段 RDPManifest + DatasetVersionRef + PromotionClaim + 开放 JSON 往返·rdp_id 复用 lineage.ids.content_hash·from_dict 重算 id 防伪造追溯）+ `rdp_gate.py`（§17 四拒绝门 + RDPRejected + assemble/validate/require_valid_rdp）。
+- 对抗：`test_rdp_gate.py` 22 passed·4 门各 MUT（缺 manifest/hash/repro→拒·缺 DatasetVersion/IngestionSkill→拒·缺未验证残余→拒·晋级追溯错配→拒）。开放 JSON 第三方可解析。
+- **诚实状态：schema + 4 拒绝门 ✅；本卡 scope 余项 🟡 = follow-on P2**——① 接现导出器 `run_detail_research_export.py:227`（已有 6 字段透传）未做（本卡建独立 delivery/ 模块·未接旧导出器）② 接真 promote 路径（approval.gate/paper.desk 调 require_valid_rdp）③ 3 命名对象（LLMCallRecord/ResponsibilityDisclosureRecord/TheorySpec）按 string ref·待类建好收紧 typed。RDP 聚合器 = D-RDP-2 另卡（依赖 LINE-A）。

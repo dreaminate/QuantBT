@@ -592,3 +592,11 @@
 - **74 文件前端 sweep 并入 main（3064fad）**：fix-u2-synth 前端术语 relabel + 文档整波 3-way merge 进 main（68 文件自动合 + `LiveRunVerdictCard.test.tsx` 1 冲突解：保 main 新增 2 对抗测试 pbo:null/dsr 全缺→N/A + 应用 sweep 措辞）。dev/ OS 文件刻意排除（vs main 集成态陈旧）。验证 tsc EXIT=0 + vitest 25 文件/298 测试全过。
 - **codex 顾问处置（2 P2）**：① README sync 声称=**误报驳回**（全 dev/ grep「README 同步」0 命中，DECISIONS.md 仅 299 行·codex 引 :317 越界；README「A股+加密」是诚实现状、GOAL「所有公开二级市场」是终态，二者本应不同）。② D-MATH-SPINE 未锚 GOAL=**真问题修**（该决策被 7 done 卡+6 finding+state 引为控制决策，GOAL 9 处 footer 却只引 D-QRO-CANVAS）→ 锚进 GOAL 6 处（来源行 + §0/§6/§8/§10/§17 footer，镜像 D-QRO-CANVAS 锚法·扩展不替换）。**未伪造正式 DECISIONS 记录**（D-QRO-CANVAS/D-MATH-SPINE 均无正式登记体·pre-existing gap·留用户/campaign 形式化，不假「用户拍板」provenance）。validate_dev PASS。
 - **下一步**：用户新开会话用新版 loop 提示词（中心+5并发·活的任务池·可新开卡/线）驱动 fleet。
+
+## 2026-06-26 · 第一波 4 线并行整合 land（中心 orchestrator·一中心+5 并发范式首跑）
+
+- **派 4 deep-opus 并行线**（各隔离 worktree·文件领地不交叠）+ 中心轻量集成线：W1 artifact 安全完整门(`36f88f6b`) / W2 PIT 训练接线(`e01bf12f`) / W3 数据写时门(`0430cd78`) / W4 RDP schema(`9d593481`)；逐条 fetch+merge 进集成分支 worktree-center-integ。
+- **验收**：批次全量 **1784 passed / 13 skipped / 0 真失败**（基线 1734 collected + 64 新对抗测试；唯一失败 `test_effect_ledger_concurrent_same_key` 隔离单跑 1.12s 绿=已知负载 flake 非回归·4 线零碰 dag/kernel/ledger 并发代码实证）+ validate_dev PASS + 中心亲审 W1 lib.py 安全 diff（红线零裸危险加载·grep 实证）。各线 MUT 种坏门必抓（W1×4 / W2×2 / W3×2 / W4×4 门）。
+- **诚实状态**：4 卡核心 seam/机制 ✅+对抗验证齐；全 scope wiring 据实标 🟡（W1 生产激活 / W2 service 全链 / W3 字段+data lineage / W4 接导出器+真 promote）→ mint 4 follow-on P2（`6144bd61`/`6a8752ab`/`ec7a7d9a`/`67b42025`·depends_on 各 canonical）。
+- **dev/ reconcile**：最初在旧分支 fix-u2-synth（pool 空）误判 → 用新 uuid 建了重复卡；纠正=删中心自建的 4 重复·canonical pool 卡(`36f88f6b` 等)移 done + 补完成记录·施工图 uuid 对齐 → 无双重记账。
+- **land**：4 线整批 land main（用户授权·能回滚兜底）。**下一步**：开 LINE-A 对象脊柱（QRO/Graph/Compiler/Command·最强上游瓶颈·阻塞几乎全部下游）。

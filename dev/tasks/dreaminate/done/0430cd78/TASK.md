@@ -1,10 +1,10 @@
 ---
 uuid: 0430cd78e7a944db83f3644451fd42ae
 title: 数据更新写时强约束——dataset_version/checksum/lineage 升 block 门（B-VERSION-1）
-status: todo
-owner: wait
+status: done
+owner: dreaminate
 assigned_by: dreaminate
-review_status: 0
+review_status: 1
 priority: P0
 area: data-pit
 source: goal
@@ -40,3 +40,9 @@ depends_on: []
 
 ## 非目标 [按需]
 不做 IngestionSkill 生命周期（B-SKILL 另卡）；不改 PIT resolver。
+
+## 完成记录（2026-06-26·第一波整合 land·中心 orchestrator）
+- 实现 commit `d1d69a9`（分支 `wave1/w3-dataset-write-gate`）→ 中心 merge `6ea6097`。
+- 写路径实证 = 唯一登记单点 `DatasetRegistry.register()`（data_quality.py）原为 advisory（算 version_id 直接 append·零校验）；接 `FetchResult.validate_for_write`（缺 dataset_version / 缺 checksum / checksum 重算篡改→拒），复用 `_sha256_of_frame` 单源·绝不另造哈希·不碰 field_catalog。**advisory→block 门已立**。
+- 对抗：`test_dataset_write_gate.py` 11 passed·MUT-A（register 接线）7 红 / MUT-B（篡改分支）2 红双抓·向后兼容（含空 frame）不误伤。✅
+- **诚实状态：核心写时 block 门（缺 version/checksum→拒）✅；本卡 scope 余项 🟡 = follow-on P2**——① `data_pull.py` 写路径直接接线（本卡选 register 单点已覆盖 intake 等全部写路径）② 11 字段补全（skill_version/secret_ref/effective_at）③ data 级 lineage ④ on-disk manifest（dataset_hash.write_manifest）自动接线 均未做。核心红线门已强制。

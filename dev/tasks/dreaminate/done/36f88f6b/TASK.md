@@ -1,10 +1,10 @@
 ---
 uuid: 36f88f6b97ca4a4f980fb162f9d76009
 title: 模型 artifact 安全完整门——producer-run + hash 绑定 + allowlist + safetensors（C-MODELGOV-1 full）
-status: todo
-owner: wait
+status: done
+owner: dreaminate
 assigned_by: dreaminate
-review_status: 0
+review_status: 1
 priority: P0
 area: model-governance
 source: goal
@@ -42,3 +42,9 @@ depends_on: []
 
 ## 非目标 [按需]
 不重做止血已堵的直球 RCE；不改训练算法、只改加载/保存安全层。
+
+## 完成记录（2026-06-26·第一波整合 land·中心 orchestrator）
+- 实现 commit `15b06d2`（分支 `wave1/w1-artifact-trust`·deep-opus 隔离 worktree）→ 中心 merge `3191b44`。
+- 新 `training/artifact_trust.py`（ArtifactTrustStore append-only 链 + TrustPolicy + DL safe loading + safetensors loader）+ `lib.py` 扩展（止血 `_RestrictedUnpickler` 一行未删·`_AllowlistUnpickler` 继承=白名单先过 + blocklist 防御纵深·load_model/predict_with 加 `trust=` keyword·DL 走 load_dl_checkpoint·torch weights_only=True no-fallback）。复用 lineage.ids.content_hash 单一身份源。
+- 对抗：`test_artifact_trust_gate.py` 20 passed·MUT#1-4 全抓（未登记拒 / 白名单非黑名单 / DL no-fallback / 正路径不误伤）。中心亲审 lib.py 安全 diff（红线零裸危险加载·grep 实证）。
+- **诚实状态 🟡（机制完整+验证齐·生产未激活）**：本卡建机制（allowlist + 信任门 + safetensors loader）；但 ① producer 侧落盘（`models/training.py`/`models/dl/trainer.py`）未接 register() ② 默认 enforce=False（翻则破基线·须先做①）③ safetensors 未入 requirements（importorskip 兜）。三项 = **follow-on P2**。止血部分仍 always-on（✅）。

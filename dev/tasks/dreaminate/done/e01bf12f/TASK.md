@@ -1,10 +1,10 @@
 ---
 uuid: e01bf12fcac34eadb1bd048e218cbe45
 title: 回测/训练引擎消费 as_of_known——PIT 双时态全域闭合第一段（B-PIT-1）
-status: todo
-owner: wait
+status: done
+owner: dreaminate
 assigned_by: dreaminate
-review_status: 0
+review_status: 1
 priority: P0
 area: data-pit
 source: goal
@@ -40,3 +40,9 @@ look-ahead 泄露/未复权价喂成交层即停 · 扩展不替换 · 单一 PI
 
 ## 非目标 [按需]
 不改 PIT resolver 机制（已 done）；不做多资产 InstrumentSpec（B-INST 另卡）。
+
+## 完成记录（2026-06-26·第一波整合 land·中心 orchestrator）
+- 实现 commit `49f8f0b`（分支 `wave1/w2-pit-wiring`）→ 中心 merge `b5cc396`。
+- `training/codegen.py` 新 load_pit_panel + 透传 as_of_known 进生成训练脚本（ML/DL 两路），复用 `resolver.as_of_bound` 单一边界·镜像 catalog 折叠语义；向后兼容 None/列缺失 = 逐字裸读。
+- 对抗：`test_training_pit_wiring.py` 11 passed·MUT-1（旁路 as-of 守卫退裸读）/MUT-2（不透传 as_of_known）双抓泄露·e2e 真子进程证 codegen→脚本→loader 全链。
+- **诚实状态：codegen + POST /codegen 路 ✅；service 层全链 🟡**——本卡接线点列的 `service.py`/`main.py:1279` 全链激活未做（`TrainingRequest` 缺 as_of_known 字段·`_train_ml` 进程内路 PIT 由调用方建 panel 解决）= **follow-on P2**。核心 PIT 消费 seam 已通且对抗证明无泄露。
