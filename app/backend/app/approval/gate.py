@@ -11,6 +11,7 @@ import uuid
 from datetime import UTC, datetime, timedelta
 from typing import Any, Callable
 
+from ..delivery import PromotionClaim, RDPManifest, require_promotion_rdp
 from .channels import classify_channel, sla_seconds, timeout_default
 from .schema import (
     MONEY_ACTIONS,
@@ -164,10 +165,17 @@ class ApprovalGateService:
     # ── 审批 / 拒绝 ──
     def approve(self, gate_id: str, *, approver: str, reason: str, risk_restated: str | None = None,
                 self_approve: bool = False, acknowledged: bool = False, cooling_seconds: int = 0,
-                execute_fn: Callable[[ApprovalGate], str] | None = None) -> ApprovalGate:
+                execute_fn: Callable[[ApprovalGate], str] | None = None,
+                rdp: RDPManifest | None = None, promotion_claim: PromotionClaim | None = None,
+                require_rdp: bool = False) -> ApprovalGate:
         gate = self._store.get(gate_id)
         if gate.decision != "pending":
             raise GateStateError(f"非 pending 不可批准: {gate.decision}")
+        # §17 RDP 追溯接线（D-RDP-1 wire）：在【翻态 / 动副作用之前】把交付包过 §17 拒绝门。
+        # 残缺 RDP（缺 manifest/hash/repro/DatasetVersion/未验证残余）或追溯断裂 → raise RDPRejected，
+        # 此时 gate 尚未任何 mutation（fail-closed：不进 approved、不跑 execute_fn）。
+        # 默认 rdp=None+require_rdp=False = 向后兼容 no-op（既有晋级不破基线；全量强制待 D-RDP-2 聚合器供 RDP）。
+        require_promotion_rdp(rdp, promotion_claim, require_rdp=require_rdp)
         # 复核 #7：归一后比较，大小写/空白差异不能绕过 approver≠creator。
         is_self = (approver or "").strip().casefold() == (gate.created_by or "").strip().casefold()
         if is_self:

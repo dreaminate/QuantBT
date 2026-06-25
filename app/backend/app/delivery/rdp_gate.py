@@ -208,6 +208,46 @@ def assemble_rdp(**fields: object) -> RDPManifest:
     return require_valid_rdp(rdp)
 
 
+def require_promotion_rdp(
+    rdp: RDPManifest | None,
+    promotion: PromotionClaim | None = None,
+    *,
+    require_rdp: bool = False,
+) -> RDPManifest | None:
+    """晋级路径【接线闸】：把 §17 RDP 追溯接进真实 promote 之前调用（D-RDP-1 wire）。
+
+    这是 approval.gate.ApprovalGateService.approve / paper.desk.PaperDeskService.approve_promotion
+    在【翻态/动副作用之前】调的那一脚。语义全部复用已建 4 门（**不改门语义**），只做接线分流：
+
+      · `rdp` 给出 → 调 `require_valid_rdp(rdp, promotion=promotion)`：门1-3 恒跑（manifest/血统/残余），
+        门4 仅当 `promotion` 给出时跑（追溯断言）。任一门缺字段 → raise RDPRejected（晋级被拒），
+        缺口诚实进 `RDPRejected.validation.missing`，绝不静默放行残缺 RDP（§17 可证伪验收）。
+
+      · `rdp is None`：
+          - `require_rdp=False`（默认 · 向后兼容）→ 返 None 放行。
+            诚实边界：§17「任何正式晋级必须能追溯到一套 RDP」的【全量强制】要等 D-RDP-2 聚合器
+            （依赖 LINE-A LLMCallRecord + B DatasetVersion）把真血统装进 RDP 再供给 promote 路径；
+            在那之前默认不挡未带 RDP 的既有晋级（不破基线），但接线已就位 + 真能拒（见下分支）。
+          - `require_rdp=True` → raise RDPRejected（§17：晋级资产无法追溯 RDP → 拒）。
+            这条让调用方/产品一旦把开关打开（或 D-RDP-2 供 RDP）即【真·不绕】，对抗测试据此种坏门必抓。
+
+    种坏门契约（RULES §2）：把本闸改弱（吞掉 RDPRejected / 不调本函数 / 残缺也放行）→ 接线对抗测试
+    `test_rdp_wire.py` 立刻红——晋级带残缺 RDP 却成功翻态即证门是纸做的。
+    """
+
+    if rdp is None:
+        if not require_rdp:
+            return None  # 向后兼容：未启用强制 + 未带 RDP → 不挡（§17 全量强制待 D-RDP-2 聚合器供 RDP）
+        outcome = RDPGateOutcome(
+            GATE_PROMOTION_TRACEABILITY,
+            False,
+            ("rdp",),
+            "require_rdp=True 但晋级未提供任何 RDP → 拒（§17：晋级资产无法追溯 RDP）",
+        )
+        raise RDPRejected(RDPValidation(ok=False, outcomes=(outcome,)))
+    return require_valid_rdp(rdp, promotion=promotion)
+
+
 __all__ = [
     "GATE_MANIFEST",
     "GATE_DATASET_LINEAGE",
@@ -223,4 +263,5 @@ __all__ = [
     "validate_rdp",
     "require_valid_rdp",
     "assemble_rdp",
+    "require_promotion_rdp",
 ]
