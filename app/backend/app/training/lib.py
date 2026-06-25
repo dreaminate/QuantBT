@@ -21,6 +21,57 @@ import pandas as pd
 from .emit import format_emit
 
 
+# ── Artifact 安全加载（GOAL §15「外来 pickle 默认 block / torch weights_only」· 致命红线）──
+# 裸 pickle.load / torch.load(weights_only=False) = 反序列化任意代码执行（外来 artifact 可 RCE）。
+# 本次止血：① pickle 经 RestrictedUnpickler 拦已知 RCE gadget 模块 ② torch weights_only=True。
+#
+# **诚实边界（codex xhigh 复核确认·写硬）**：blocklist【根本不是 safe-pickle】——它只拦一批全局符号
+# 解析，拦不住「允许模块内部再 import/exec」「__setstate__/BUILD 状态恢复逻辑」「operator/functools/
+# copyreg 组合 gadget」「允许模块的 import-time 副作用」。**唯一可证安全 = 不反序列化外来 artifact**：
+# producer-run + artifact hash 命中的【系统自产】artifact 才许加载 + allowlist（非 blocklist）+ DL 走
+# safetensors + JSON config。这套（外来默认拒 / hash 信任门 / allowlist / safetensors）= C-MODELGOV-1
+# 全卡（已 mint 进 pool）。本止血只降攻击面、堵直球 RCE，绝不声称已完整兑现 §15。绝不静默回落 weights_only=False。
+_PICKLE_DANGER_MODULES = frozenset({
+    # 直接 RCE / 进程 / 文件 / 动态导入
+    "os", "posix", "nt", "subprocess", "sys", "socket", "_socket", "_posixsubprocess",
+    "shutil", "importlib", "ctypes", "pty", "commands", "popen2", "platform",
+    "runpy", "multiprocessing", "signal", "asyncio", "threading",
+    # 传字符串内部 compile/exec 的解释/调试/计时 gadget（codex 补）
+    "pydoc", "_pyrepl", "bdb", "pdb", "code", "codeop", "trace", "profile",
+    "cProfile", "timeit", "doctest", "webbrowser", "antigravity",
+    # marshal=反序列化 code object → 绕模块 blocklist 的码对象 gadget（codex 补·legit 极罕用）
+    "marshal",
+    # 刻意【不】拦 operator/functools/types/io/codecs：legit sklearn/numpy pickle 会用、误伤面大；
+    # 且它们要造成 RCE 仍须经被拦的危险模块/marshal——残余风险由信任门（C-MODELGOV-1）兜，不靠 blocklist。
+})
+_PICKLE_DANGER_BUILTINS = frozenset({
+    "eval", "exec", "compile", "__import__", "open", "input", "breakpoint",
+    "getattr", "setattr", "delattr", "globals", "vars", "memoryview",
+})
+
+
+class _RestrictedUnpickler(pickle.Unpickler):
+    """阻断外来 pickle 的代码执行向量（os.system / subprocess / eval / exec …）。
+
+    合法模型类（sklearn/numpy/pandas/lightgbm/xgboost/scipy）照常放行；危险模块/内建一律拒。
+    """
+
+    def find_class(self, module: str, name: str) -> Any:  # noqa: D401
+        root = module.split(".")[0]
+        if root in _PICKLE_DANGER_MODULES:
+            raise pickle.UnpicklingError(
+                f"artifact 安全门:禁止反序列化 {module}.{name}(外来 pickle 代码执行风险·§15)"
+            )
+        if module == "builtins" and name in _PICKLE_DANGER_BUILTINS:
+            raise pickle.UnpicklingError(f"artifact 安全门:禁止 builtins.{name}(代码执行风险·§15)")
+        return super().find_class(module, name)
+
+
+def _safe_pickle_load(fh: Any) -> Any:
+    """受限反序列化（替代裸 pickle.load）——堵外来 artifact 的 RCE。"""
+    return _RestrictedUnpickler(fh).load()
+
+
 def emit(payload: dict[str, Any]) -> None:
     """训练脚本最后一行调用：把结构化结果打到 stdout，runner 解析。"""
     print(format_emit(payload), flush=True)
@@ -56,7 +107,7 @@ def load_model(artifact_path: str | Path) -> Any:
     p = Path(artifact_path)
     if p.suffix in (".pkl", ".joblib"):
         with p.open("rb") as fh:
-            return pickle.load(fh)
+            return _safe_pickle_load(fh)   # 受限反序列化·堵外来 pickle RCE（§15·原 pickle.load 是致命洞）
     raise ValueError(f"load_model 仅支持 .pkl/.joblib（DL .pt 请用 predict_with）: {p.suffix}（{p}）")
 
 
@@ -93,7 +144,9 @@ def _predict_dl(artifact_path: Path, panel: pd.DataFrame, feature_cols: list[str
 
     from ..models.dl.architectures import build_network
 
-    ckpt = torch.load(artifact_path, map_location="cpu", weights_only=False)
+    # weights_only=True 堵 .pt 反序列化代码执行（§15）；ckpt 仅 config(dict)/arch(str)/state_dict(tensors)
+    # 均 weights_only 安全类型。绝不静默回落 False；若真 ckpt 含非安全类型，须显式 add_safe_globals 审定。
+    ckpt = torch.load(artifact_path, map_location="cpu", weights_only=True)
     cfg = ckpt["config"]
     arch = ckpt["arch"]
     lookback = int(cfg["lookback"])
