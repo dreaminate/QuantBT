@@ -463,3 +463,9 @@
 - **MUT 验证有牙**：还原「ρ≤0 全 reversal 过claim」→ 弱负（ρ=-0.2 n=45 CI 含 0）测试红。低 ripple（显著负仍 reversal、random walk 不碰、near-constant insufficient、decay_diagnostic advisory 传播不变）。
 - **验证**：test_factor_lifecycle_metrics 31 + test_lifecycle_decay_advisory 全 passed；**全量后端 1605 passed / 13 skipped / 0 failed / 124s**（基线 1604，净 +1）。
 - **本轮 loop「commit 和 push 自动进行」→ 本地 commit + push 分支 worktree-autopolish-w1。分支续 land-ready。**
+
+## 2026-06-25 · CPCV per-path 分布扩二分类 roc_auc（done 卡 c43c6301 · 扩 2da39479）
+- **任务扩展**：cpcv_oos_metric_distribution 从 regression-only(r2) additive 扩二分类(roc_auc·重组 proba 路径)。任务白名单：regression→r2(baseline 0)、二分类→roc_auc(baseline 0.5)、多分类/lambdarank/无 predict_proba→unsupported_task 诚实。proba 路径用 assemble_cpcv_paths 重组（与 pred 同机制）。
+- **判别器有牙**：MUT「proba misalign」→ 强分类器 auc 崩 0.4999 → 强信号高 auc + 强 vs 噪声判别器双红（证 proba 重组对齐正确）。additive（regression 路径不变 baseline=0.0）、report-only 不接 gate。
+- **验证**：`test_cpcv_oos_distribution.py` 11 passed（+4 分类）；**全量后端 1609 passed / 13 skipped / 0 failed / 124s**（基线 1605，净 +4）。
+- **本轮 loop「commit 和 push 自动进行」→ 本地 commit + push 分支 worktree-autopolish-w1。分支续 land-ready。**

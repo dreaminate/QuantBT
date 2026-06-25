@@ -76,6 +76,52 @@ def test_cpcv_insufficient_samples_abstains():
     assert d["status"] == "insufficient" and not math.isfinite(d["mean"])
 
 
+def _panel_clf(n: int = 360, seed: int = 0, signal: bool = True) -> pd.DataFrame:
+    rng = np.random.default_rng(seed)
+    f1 = rng.normal(size=n)
+    f2 = rng.normal(size=n)
+    if signal:
+        p = 1.0 / (1.0 + np.exp(-(3.0 * f1 - 2.0 * f2)))      # 可分：label 由特征驱动
+        y = (rng.uniform(size=n) < p).astype(int)
+    else:
+        y = rng.integers(0, 2, size=n)                        # 噪声：label 独立于特征
+    base = datetime(2024, 1, 1, tzinfo=UTC)
+    return pd.DataFrame({"ts": [base + timedelta(days=i) for i in range(n)], "f1": f1, "f2": f2, "label": y})
+
+
+def _spec_clf() -> ModelSpec:
+    return ModelSpec(task="classification", model="sklearn_logreg", feature_cols=["f1", "f2"], label_col="label")
+
+
+def test_cpcv_classification_strong_high_auc_and_baseline():
+    """二分类 CPCV：强分类器 → roc_auc 路径分布高（mean 高、q05 高、min≥baseline=0.5）；metric/baseline 正确。"""
+    d = cpcv_oos_metric_distribution(_spec_clf(), _panel_clf(signal=True), n_groups=6, k_test_groups=2)
+    assert d["status"] == "ok" and d["metric"] == "roc_auc" and d["baseline"] == 0.5
+    assert d["n_paths"] == n_cpcv_paths(6, 2)
+    assert d["mean"] > 0.8 and d["q05"] > 0.65 and d["min"] >= 0.5 and d["max"] <= 1.0
+
+
+def test_cpcv_classification_noise_near_half_discriminates():
+    """**判别器**：噪声 label（独立于特征）→ roc_auc≈0.5（无判别力）；强 ≫ 噪声（proba 路径重组对齐才成立）。"""
+    noise = cpcv_oos_metric_distribution(_spec_clf(), _panel_clf(signal=False), n_groups=6, k_test_groups=2)
+    strong = cpcv_oos_metric_distribution(_spec_clf(), _panel_clf(signal=True), n_groups=6, k_test_groups=2)
+    assert noise["status"] == "ok" and abs(noise["mean"] - 0.5) < 0.12     # 噪声 auc 围绕 0.5
+    assert strong["mean"] - noise["mean"] > 0.25                            # 真判别（proba 重组错位→强 auc 崩→此挂）
+
+
+def test_cpcv_multiclass_unsupported_honest():
+    """多分类（>2 类）→ unsupported_task（roc_auc 需二分类·绝不发假指标）。"""
+    p = _panel_clf(signal=True)
+    p = p.assign(label=np.tile([0, 1, 2], len(p) // 3 + 1)[: len(p)])      # 3 类
+    d = cpcv_oos_metric_distribution(_spec_clf(), p, n_groups=6, k_test_groups=2)
+    assert d["status"] == "unsupported_task" and not math.isfinite(d["q05"])
+
+
+def test_cpcv_regression_baseline_is_zero():
+    d = cpcv_oos_metric_distribution(_spec(), _panel(), n_groups=6, k_test_groups=2)
+    assert d["baseline"] == 0.0 and d["metric"] == "r2"
+
+
 def test_cpcv_deterministic_and_json_safe():
     d1 = cpcv_oos_metric_distribution(_spec(), _panel(seed=1), n_groups=6, k_test_groups=2)
     d2 = cpcv_oos_metric_distribution(_spec(), _panel(seed=1), n_groups=6, k_test_groups=2)

@@ -46,7 +46,8 @@ $$\text{剔除 iff}\quad \exists j:\ t0_i\le t1_j\ \wedge\ t1_i\ge t0_j$$
 
 ### 消费侧 ① · per-path 模型 OOS 指标分布（2026-06-25 落地·report-only）
 `models/training.py::cpcv_oos_metric_distribution`：每条 φ 路径覆盖全样本一次 → 对每路径算模型 OOS 主指标
-（**regression-only=r2**；预测→r2 无需 proba/group）→ 分布 mean/std/**q05**/min/median/max/frac_below_0。
+（regression→**r2**[baseline 0]；二分类→**roc_auc**[baseline 0.5·重组 proba 路径]；多分类/lambdarank/无 proba
+→ unsupported_task 诚实）→ 分布 mean/std/**q05**/min/median/max/frac_below_0。
 **q05/路径方差 = 过拟合脆弱度**：q05≪mean 或方差大 = OOS 表现高度依赖切分（split-fragile）。复用
 `_fit_predict_fold`（从 train_model 抽出·行为不变·与训练同口径）+ cpcv.py 的 cpcv_splits/assemble_cpcv_paths。
 **report-only**：不接 gate、不替方法学拍板。判别器命门：强信号→r2 高稳、噪声→r2≈0/负（MUT「预测 misalign」→

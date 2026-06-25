@@ -296,27 +296,39 @@ def cpcv_oos_metric_distribution(
     （split-fragile，过拟合嫌疑）。**report-only**：不接 gate、不替方法学拍板（接 gate 的阈值/口径属用户，见卡 861182e6）。
 
     诚实（不假绿灯）：样本/组数不足 → status='insufficient'、不出分布；非有限路径指标剔除并披露。
-    **Sharpe/DSR 口径**需 prediction→收益转换（=用户方法学决策），属 follow-on、本件用模型自身 OOS 指标避开。
-    复用 `_fit_predict_fold`（与 train_model 同口径）+ cpcv.py 的 splits/assemble（已验证）。
+    **任务白名单**：regression→**r2**（无需 proba）；二分类→**roc_auc**（重组 proba 路径）；多分类/lambdarank/
+    无 predict_proba 模型 → unsupported_task（绝不发假指标）。`baseline`=无技能参照（r2:0 / auc:0.5），q05/median 对
+    baseline 判脆弱。**Sharpe/DSR 口径**需 prediction→收益转换（=用户方法学决策）属 follow-on，本件用模型自身 OOS 指标避开。
+    **report-only**：不接 gate、不替方法学拍板（接 gate 的阈值/口径属用户，见卡 861182e6）。复用 `_fit_predict_fold`
+    （与 train_model 同口径）+ cpcv.py 的 splits/assemble（已验证）。
     """
-    metric_key = "r2"          # regression-only（见下守卫）：r2 在 OOS 预测上清晰可算、无需 proba/group
-    base = {"status": "ok", "n_paths": 0, "metric": metric_key, "n_groups": n_groups,
-            "k_test_groups": k_test_groups}
+    task = spec.task
+    if task == "regression":
+        metric_key, baseline = "r2", 0.0
+    elif task == "classification":
+        metric_key, baseline = "roc_auc", 0.5
+    else:
+        return {"status": "unsupported_task", "metric": None, "n_paths": 0, "n_groups": n_groups,
+                "k_test_groups": k_test_groups, "reason": f"CPCV 路径分布暂不支持 task={task}（lambdarank 排序需 group 重组）",
+                **{k: float("nan") for k in ("mean", "std", "q05", "min", "median", "max", "frac_below_0", "baseline")}}
+    base = {"status": "ok", "n_paths": 0, "metric": metric_key, "baseline": baseline,
+            "n_groups": n_groups, "k_test_groups": k_test_groups}
     _NAN = {k: float("nan") for k in ("mean", "std", "q05", "min", "median", "max", "frac_below_0")}
 
     def _insufficient(reason: str) -> dict[str, Any]:
         return {**base, "status": "insufficient", "reason": reason, **_NAN}
 
-    # **白名单 regression-only**：分类(roc_auc 需 proba)/lambdarank(排序需 group) 的路径指标重组口径不同——
-    # 绝不对它们用 r2 发假信号；非回归如实标 unsupported_task（不假绿灯）。Sharpe/DSR 口径见 docstring follow-on。
-    if spec.task != "regression":
-        return {**base, "status": "unsupported_task", "reason": f"CPCV 路径分布暂仅回归（task={spec.task}）", **_NAN}
+    def _unsupported(reason: str) -> dict[str, Any]:
+        return {**base, "status": "unsupported_task", "reason": reason, **_NAN}
 
     df = panel.copy().sort_values("ts").reset_index(drop=True)
     X = df[spec.feature_cols]
     y = df[spec.label_col].values
     times = df["ts"]
     n = len(df)
+    is_clf = task == "classification"
+    if is_clf and len(np.unique(y[np.isfinite(np.asarray(y, dtype=float))])) != 2:
+        return _unsupported("分类 CPCV 仅二分类（roc_auc 需 2 类）；多分类不支持")
 
     if n_groups < 2 or not (1 <= k_test_groups < n_groups):
         return _insufficient(f"非法分组 n_groups={n_groups} k={k_test_groups}")
@@ -328,21 +340,31 @@ def cpcv_oos_metric_distribution(
     except ValueError as exc:
         return _insufficient(f"CPCV split 失败：{exc}")
 
-    # 每组合：在其 test 段 fit→predict，填入全长数组（test 处填预测、其余 NaN）供路径重组。
+    # 每组合：在其 test 段 fit→predict，填入全长数组（test 处填值、其余 NaN）供路径重组。
+    # 分类用 proba（roc_auc 输入），回归用 pred；分类同时留 pred 供 _evaluate_split 二类校验。
     per_combo_pred: list[np.ndarray] = []
+    per_combo_proba: list[np.ndarray] = []
     for sp in splits:
-        full = np.full(n, np.nan, dtype=float)
-        _, y_pred, _ = _fit_predict_fold(spec, df, X, y, sp.train_idx, sp.test_idx)
-        full[sp.test_idx] = np.asarray(y_pred, dtype=float)
-        per_combo_pred.append(full)
+        _, y_pred, y_proba = _fit_predict_fold(spec, df, X, y, sp.train_idx, sp.test_idx)
+        if is_clf and y_proba is None:
+            return _unsupported("模型无 predict_proba、无法算 roc_auc 路径分布")
+        fp = np.full(n, np.nan, dtype=float)
+        fp[sp.test_idx] = np.asarray(y_pred, dtype=float)
+        per_combo_pred.append(fp)
+        if is_clf:
+            fpr = np.full(n, np.nan, dtype=float)
+            fpr[sp.test_idx] = np.asarray(y_proba, dtype=float)
+            per_combo_proba.append(fpr)
 
-    paths = assemble_cpcv_paths(per_combo_pred, n, n_groups, k_test_groups)
-    # 每路径覆盖全样本一次 → 对全样本 y_true 算 OOS 主指标。
+    pred_paths = assemble_cpcv_paths(per_combo_pred, n, n_groups, k_test_groups)
+    proba_paths = (assemble_cpcv_paths(per_combo_proba, n, n_groups, k_test_groups)
+                   if is_clf else [None] * len(pred_paths))
+    # 每路径覆盖全样本一次 → 对全样本 y_true 算 OOS 主指标（分类传 proba 路径算 roc_auc）。
     path_metrics: list[float] = []
-    for path_pred in paths:
+    for path_pred, path_proba in zip(pred_paths, proba_paths):
         if not np.all(np.isfinite(path_pred)):
             continue                                    # 理论上路径全覆盖；防御：非有限路径剔除
-        m = _evaluate_split(spec, y, path_pred, None)
+        m = _evaluate_split(spec, y, path_pred, path_proba)
         v = m.get(metric_key)
         if isinstance(v, (int, float)) and math.isfinite(v):
             path_metrics.append(float(v))
@@ -350,11 +372,11 @@ def cpcv_oos_metric_distribution(
     if arr.size == 0:
         return _insufficient("无有效路径指标（全非有限）")
     return {
-        **base, "status": "ok", "n_paths": int(arr.size), "n_paths_total": len(paths),
+        **base, "status": "ok", "n_paths": int(arr.size), "n_paths_total": len(pred_paths),
         "mean": float(np.mean(arr)), "std": float(np.std(arr, ddof=1) if arr.size > 1 else 0.0),
         "q05": float(np.quantile(arr, 0.05)), "min": float(np.min(arr)),
         "median": float(np.median(arr)), "max": float(np.max(arr)),
-        "frac_below_0": float(np.mean(arr < 0.0)),
+        "frac_below_0": float(np.mean(arr < 0.0)),          # r2<0=劣于均值；auc 用 baseline=0.5 判（见 q05/median）
     }
 
 

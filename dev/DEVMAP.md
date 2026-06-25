@@ -67,6 +67,7 @@
 | ba59fb7b | 组合 promote production 端点——组合三角 gate record=True 真记 honest-N | done | portfolio | done |
 | bc21c7c1 | agent 窗口 Tauri 桌面挂载（一套组件两处挂载） | done | desktop | done |
 | be3dc598 | 策略台前端 P0 — DAG 编排工作台像素还原 + mock 交互 | done | frontend | done |
+| c43c6301 | CPCV per-path 分布扩到二分类（roc_auc · proba 路径重组） | done | models-methodology | done |
 | c5960022 | 冷启动 MinTRL 业绩期证据接进裁决卡 UI（能信·不假绿灯在前端） | done | frontend-trust | done |
 | c631817e | 防绿灯错觉——三角裁决按权限模式分层呈现 + 工具真实状态标注 | done | governance-ui | done |
 | ca3ab3ec | Agent 窗口里程碑进度线 + 跨台台 switcher | done | frontend | done |
@@ -177,6 +178,7 @@
 | governance-ui | c631817e · done | dreaminate |
 | integration-test | 9a497bde · done | dreaminate |
 | models-methodology | 2da39479 · done | dreaminate |
+| models-methodology | c43c6301 · done | dreaminate |
 | monitor | d0e5d208 · done | dreaminate |
 | monitor | d718d5c5 · done | dreaminate |
 | monitor | de764e1c · done | dreaminate |
