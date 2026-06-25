@@ -6,6 +6,9 @@
 
 | uuid8 | 标题 | status | area | 位置 |
 |---|---|---|---|---|
+| 0781bb13 | RDP 聚合器——从真血统装配 RDP（DatasetVersion/LLMCallRecord/honest-N/verdict 真填）（D-RDP-2） | in_progress | delivery | active |
+| 437e94bd | Agent Orchestrator——role agent 调度 + 23 事件投影 + Plan/ReAct/Review/Replay/Repair（A-AGENT-ORCH） | in_progress | agent-orchestrator | active |
+| 8abde88e | CanonicalCommand——typed 命令层 + 语义翻译 + 全入口落同一 audit/lineage（A-CMD） | in_progress | canonical-command | active |
 | 0430cd78 | 数据更新写时强约束——dataset_version/checksum/lineage 升 block 门（B-VERSION-1） | done | data-pit | done |
 | 05d6f511 | 单人 self-approve 仅非真钱通道(冷却+留痕)，真钱硬双人 | done | approval | done |
 | 07b10903 | DS-6 装机收口——跨平台一键启动 + mkdir（可缓·docker compose 兜底） | done | onboarding-docs | done |
@@ -154,6 +157,7 @@
 | agent | edc1e326 · done | dreaminate |
 | agent-backend | f6bb5e8e · done | dreaminate |
 | agent-frontend | defe660c · done | dreaminate |
+| agent-orchestrator | 437e94bd · in_progress | dreaminate |
 | approval | 05d6f511 · done | dreaminate |
 | backend | 4562d903 · done | dreaminate |
 | backend | 51271d38 · done | dreaminate |
@@ -161,6 +165,7 @@
 | backend | 9fd4f1a6 · done | dreaminate |
 | backend | b106177f · done | dreaminate |
 | backend | e069d820 · done | dreaminate |
+| canonical-command | 8abde88e · in_progress | dreaminate |
 | config | 8ab894cd · done | dreaminate |
 | data-connectors | e1a98c41 · done | dreaminate |
 | data-pit | 0430cd78 · done | dreaminate |
@@ -168,6 +173,7 @@
 | data-pit | 6a8752ab · done | dreaminate |
 | data-pit | e01bf12f · done | dreaminate |
 | data-pit | ec7a7d9a · done | dreaminate |
+| delivery | 0781bb13 · in_progress | dreaminate |
 | delivery | 67b42025 · done | dreaminate |
 | delivery | 9d593481 · done | dreaminate |
 | desktop | bc21c7c1 · done | dreaminate |
