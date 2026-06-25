@@ -19,6 +19,9 @@ import numpy as np
 import pandas as pd
 
 from .emit import format_emit
+# 完整信任门(producer-run + hash binding / 白名单 / safe tensors)。artifact_trust 模块级零 torch
+# (torch 只在其 DL loader 内惰性 import),故主进程 import lib 仍不加载 torch。
+from . import artifact_trust
 
 
 # ── Artifact 安全加载（GOAL §15「外来 pickle 默认 block / torch weights_only」· 致命红线）──
@@ -72,6 +75,48 @@ def _safe_pickle_load(fh: Any) -> Any:
     return _RestrictedUnpickler(fh).load()
 
 
+# ── 完整信任门·pickle 类【白名单】(C-MODELGOV-1 验收 #2:白名单非黑名单) ──────────
+# 止血的 _RestrictedUnpickler 是 blocklist(拦【已知坏】,漏【未知新 gadget】);信任门要白名单
+# (只放【已知好】可信库根,新类一律默认拒)。**扩展不替换**:_AllowlistUnpickler 继承
+# _RestrictedUnpickler → 先过白名单、再过 blocklist(防御纵深,两道并存,止血一行不删)。
+# root 粒度【可信库根】白名单;经验探针(真实 sklearn/lightgbm/numpy/scipy 模型 pickle)确证所需 root。
+_PICKLE_ALLOWED_MODULE_ROOTS = frozenset({
+    "numpy", "scipy", "pandas", "sklearn", "lightgbm", "xgboost",
+    "joblib", "collections", "copyreg",
+})
+# builtins 里【安全】的容器/标量重建符(危险 builtins 仍由继承的 blocklist 拦,见 _PICKLE_DANGER_BUILTINS)。
+_PICKLE_ALLOWED_BUILTINS = frozenset({
+    "object", "list", "dict", "tuple", "set", "frozenset",
+    "bytearray", "bytes", "complex", "int", "float", "str", "bool",
+    "type", "slice", "range",
+})
+
+
+class _AllowlistUnpickler(_RestrictedUnpickler):
+    """白名单受限反序列化(信任门 enforce 路径)——只放可信库根的类,不在白名单的新类一律拒。
+
+    证明【非靠 blocklist 漏新 gadget】:即便某个类不在 blocklist(blocklist 抓不到),只要它的
+    module root 不在白名单 → 仍被拒。继承 _RestrictedUnpickler:白名单放行后仍过 blocklist
+    (两道并存·扩展不替换)。
+    """
+
+    def find_class(self, module: str, name: str) -> Any:  # noqa: D401
+        root = module.split(".")[0]
+        permitted = (root in _PICKLE_ALLOWED_MODULE_ROOTS) or (
+            module == "builtins" and name in _PICKLE_ALLOWED_BUILTINS
+        )
+        if not permitted:
+            raise pickle.UnpicklingError(
+                f"artifact 信任门·白名单未收录 {module}.{name} → 拒(§15·白名单非黑名单,新类默认拒)"
+            )
+        return super().find_class(module, name)  # 再过 _RestrictedUnpickler blocklist(防御纵深)
+
+
+def _allowlist_pickle_load(fh: Any) -> Any:
+    """白名单反序列化(信任门 enforce 时用)——堵外来 + 只放可信库类。"""
+    return _AllowlistUnpickler(fh).load()
+
+
 def emit(payload: dict[str, Any]) -> None:
     """训练脚本最后一行调用：把结构化结果打到 stdout，runner 解析。"""
     print(format_emit(payload), flush=True)
@@ -99,15 +144,24 @@ def pick_device(prefer: str | None = None) -> str:
     return "cpu"
 
 
-def load_model(artifact_path: str | Path) -> Any:
+def load_model(artifact_path: str | Path, *, trust: Any = None) -> Any:
     """加载训练好的 ML artifact（`.pkl`/`.joblib` → pickle，树/线性模型）。
 
     DL 的 `.pt` 不在此加载（需重建网络）；走 `predict_with` 的 DL 分支。
+
+    `trust`（完整信任门，C-MODELGOV-1）：
+    - None（默认·向后兼容）→ 只过止血 `_RestrictedUnpickler`（blocklist），不查登记；
+    - `ArtifactTrustStore` / `TrustPolicy(enforce=True)` → 来源门开：先 `assert_ok`（未登记 artifact
+      直接 raise·验收 #1），再走 `_AllowlistUnpickler`（白名单·验收 #2）。
     """
     p = Path(artifact_path)
     if p.suffix in (".pkl", ".joblib"):
+        policy = artifact_trust.resolve_policy(trust)
+        policy.assert_ok(p)  # enforce：未登记 / sha256 不命中 → raise（验收 #1）
+        loader = _allowlist_pickle_load if policy.enforce else _safe_pickle_load
         with p.open("rb") as fh:
-            return _safe_pickle_load(fh)   # 受限反序列化·堵外来 pickle RCE（§15·原 pickle.load 是致命洞）
+            # enforce → 白名单（#2，新类默认拒）；默认 → 止血 blocklist（向后兼容，行为不变）。
+            return loader(fh)   # 受限反序列化·堵外来 pickle RCE（§15·原 pickle.load 是致命洞）
     raise ValueError(f"load_model 仅支持 .pkl/.joblib（DL .pt 请用 predict_with）: {p.suffix}（{p}）")
 
 
@@ -115,38 +169,46 @@ def predict_with(
     artifact_path: str | Path,
     panel: pd.DataFrame,
     feature_cols: list[str],
+    *,
+    trust: Any = None,
 ) -> np.ndarray:
     """**模型组合原语**：拿一个已训练模型对 panel 推理，输出可作为新模型的输入特征。
 
-    支持任意 ML（.pkl）与 DL（.pt）模型，兑现"已训练 ml/dl 模型输出可作新训练输入"：
+    支持任意 ML（.pkl）与 DL（.pt / .safetensors）模型，兑现"已训练 ml/dl 模型输出可作新训练输入"：
         panel["model_a_pred"] = predict_with(a_artifact, panel, a_features)
 
     返回长度恒等于 len(panel)、与 panel 行对齐的一维数组：
     - ML：逐行 predict。
-    - DL：按 .pt 内保存的 lookback/symbol_col 逐标的滑窗预测，每个标的的前 lookback 行
+    - DL：按 ckpt 内保存的 lookback/symbol_col 逐标的滑窗预测，每个标的的前 lookback 行
       （无完整窗口）填 NaN，其余按窗口末步对齐到该行。
+
+    `trust`：见 `load_model`（DL 分支同样过信任门：enforce 时未登记 artifact 直接 raise）。
     """
     p = Path(artifact_path)
-    if p.suffix == ".pt":
-        return _predict_dl(p, panel, feature_cols)
-    model = load_model(p)
+    if p.suffix in (".pt", ".safetensors"):
+        return _predict_dl(p, panel, feature_cols, trust=trust)
+    model = load_model(p, trust=trust)
     X = panel[feature_cols]
     return np.asarray(model.predict(X))
 
 
-def _predict_dl(artifact_path: Path, panel: pd.DataFrame, feature_cols: list[str]) -> np.ndarray:
-    """DL .pt 推理，输出对齐到 panel 行（warmup 行 NaN）。
+def _predict_dl(
+    artifact_path: Path, panel: pd.DataFrame, feature_cols: list[str], *, trust: Any = None
+) -> np.ndarray:
+    """DL .pt/.safetensors 推理，输出对齐到 panel 行（warmup 行 NaN）。
 
-    惰性 import torch（只在真遇到 .pt 时）；先设 KMP_DUPLICATE_LIB_OK 防御 OMP 冲突。
+    惰性 import torch（只在真遇到 DL 时）；先设 KMP_DUPLICATE_LIB_OK 防御 OMP 冲突。
     """
     os.environ.setdefault("KMP_DUPLICATE_LIB_OK", "TRUE")
     import torch
 
     from ..models.dl.architectures import build_network
 
-    # weights_only=True 堵 .pt 反序列化代码执行（§15）；ckpt 仅 config(dict)/arch(str)/state_dict(tensors)
-    # 均 weights_only 安全类型。绝不静默回落 False；若真 ckpt 含非安全类型，须显式 add_safe_globals 审定。
-    ckpt = torch.load(artifact_path, map_location="cpu", weights_only=True)
+    artifact_trust.resolve_policy(trust).assert_ok(artifact_path)  # enforce：未登记 → raise（验收 #1·DL）
+    # DL 安全加载（验收 #3）：safe tensors(+JSON config) 优先；.pt 走 weights_only=True 且
+    # **绝不静默回落 weights_only=False**（含非安全类型 → 显式 raise，见 artifact_trust.load_torch_checkpoint）。
+    # ckpt 仅 config(dict)/arch(str)/state_dict(tensors)，均 weights_only 安全类型。
+    ckpt = artifact_trust.load_dl_checkpoint(artifact_path)
     cfg = ckpt["config"]
     arch = ckpt["arch"]
     lookback = int(cfg["lookback"])
