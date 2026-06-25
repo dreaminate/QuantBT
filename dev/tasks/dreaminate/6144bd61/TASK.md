@@ -1,8 +1,8 @@
 ---
 uuid: 6144bd614e874b1491dc5271fbff8116
 title: artifact 信任门生产激活——producer 落盘接 register + 翻 enforce + safetensors 入依赖（C-MODELGOV-1 activate）
-status: todo
-owner: wait
+status: in_progress
+owner: dreaminate
 assigned_by: dreaminate
 review_status: 0
 priority: P2

@@ -6,6 +6,7 @@
 
 | uuid8 | 标题 | status | area | 位置 |
 |---|---|---|---|---|
+| 6144bd61 | artifact 信任门生产激活——producer 落盘接 register + 翻 enforce + safetensors 入依赖（C-MODELGOV-1 activate） | in_progress | model-governance | active |
 | 0430cd78 | 数据更新写时强约束——dataset_version/checksum/lineage 升 block 门（B-VERSION-1） | done | data-pit | done |
 | 05d6f511 | 单人 self-approve 仅非真钱通道(冷却+留痕)，真钱硬双人 | done | approval | done |
 | 07b10903 | DS-6 装机收口——跨平台一键启动 + mkdir（可缓·docker compose 兜底） | done | onboarding-docs | done |
@@ -119,7 +120,6 @@
 |---|---|---|---|
 | 31289338 | 冷启动 gate/UI 接 MinTRL：DSR=N/A + PSR + "需 N 期"渐进披露（R25/R27 呈现层） | todo | eval-methodology |
 | 554cdcf2 | 监控绩效轴真闭环——4 个 drift 检测器接 run_weekly_monitor_pass + per-factor IC 真源 + 观测落盘（审计残余） | todo | monitor |
-| 6144bd61 | artifact 信任门生产激活——producer 落盘接 register + 翻 enforce + safetensors 入依赖（C-MODELGOV-1 activate） | todo | model-governance |
 | 861182e6 | CPCV 接 promote/overfit gate + cv_scheme 双轨 report（价值闭环） | todo | eval-methodology |
 | 92a2182f | conformal 区间消费侧接线——模型台/信号层预测附校准区间 + abstain UI 呈现 | todo | eval-methodology |
 | aa13c3b0 | 因子机构级度量接 lifecycle 状态机/sizing 生产路径 | todo | factor-lifecycle |
@@ -213,6 +213,7 @@
 | math-spine | a00b3956 · done | dreaminate |
 | math-spine | b85e34cc · done | dreaminate |
 | math-spine | c86be35e · done | dreaminate |
+| model-governance | 6144bd61 · in_progress | dreaminate |
 | model-governance | 36f88f6b · done | dreaminate |
 | models-methodology | 2da39479 · done | dreaminate |
 | models-methodology | 74f93771 · done | dreaminate |
