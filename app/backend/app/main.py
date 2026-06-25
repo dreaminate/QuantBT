@@ -352,6 +352,12 @@ KILL_SWITCH = KillSwitch([])  # 实盘 venue 启用时由 settings 注入
 # （绝不静默不 tick = paper-true）。调用方在 loop 里周期 tick；本进程级 holder 供运维/测试取句柄。
 PRODUCTION_SCHEDULER: "Scheduler | None" = None
 
+# M driver（接线缺口修复）：`_start_production_monitor_scheduler` 只**注册** weekly DAG，engine.py 明载
+# 「调用方在 loop 里 every N seconds 调 tick()」——但此前生产**无任何 driver** 去 tick → cron=0 9 * * 1
+# 永不到点触发、退役闭环空转（log「已启动」是假绿灯）。本 daemon 线程即那个缺失的生产调用方。
+_MONITOR_DRIVER_THREAD: "threading.Thread | None" = None
+_MONITOR_DRIVER_STOP = threading.Event()
+
 AGENT_SLOT_FILLER = StrategyGoalSlotFiller()
 CODE_REPLICATOR = CodeReplicator()
 # DS-2（造站接真 · blocker #2）：strategy_goal.create 校验落库产真 goal_id（被 DS-1 backtest 消费）。
@@ -458,14 +464,82 @@ def _start_production_monitor_scheduler() -> "Scheduler":
     scheduler = Scheduler(strict=True)  # 缺 croniter → 此处响亮失败
     scheduler.add(build_weekly_monitor_dag())  # 周一早 9 点跑监控扫描（monitor_tick 生产真跑）
     PRODUCTION_SCHEDULER = scheduler
-    _main_logger.info("生产监控调度已启动：weekly_factor_monitor cron=0 9 * * 1")
+    _main_logger.info("生产监控调度已注册：weekly_factor_monitor cron=0 9 * * 1（待 driver 周期 tick）")
     return scheduler
+
+
+def _monitor_driver_loop(interval_seconds: float) -> None:
+    """后台 driver：every `interval_seconds` 调 `PRODUCTION_SCHEDULER.tick()`，让注册的 weekly cron 真到点 fire。
+
+    `Scheduler.tick()` 是轮询式（`scheduled_at<=now` 才 fire，见 dag/engine.py），其 docstring 明载
+    「调用方在 loop 里 every N seconds 调 tick()」——本 loop 就是那个生产调用方。补上后 weekly_factor_monitor
+    cron 才真触发（此前空转=假绿灯：log 称已启动、实则无人 tick）。
+    daemon 线程：不阻塞进程退出；`_MONITOR_DRIVER_STOP` 可停（shutdown/测试隔离）；单次 tick 异常吞掉续跑
+    （一次失败不杀 driver，下周期重试）。每次 tick 读全局 `PRODUCTION_SCHEDULER`（startup 重建则跟随最新句柄）。
+    """
+
+    while not _MONITOR_DRIVER_STOP.wait(interval_seconds):
+        sched = PRODUCTION_SCHEDULER
+        if sched is None:
+            continue
+        try:
+            sched.tick()
+        except Exception:  # noqa: BLE001  单次 tick 失败不杀 driver（下周期重试）
+            _main_logger.exception("监控调度 driver tick 失败（driver 续跑）")
+
+
+def _start_monitor_driver() -> "threading.Thread | None":
+    """启动监控调度 driver（幂等 · env 可关 · daemon）。返回线程句柄；env 关时返 None。
+
+    - `QUANTBT_MONITOR_DRIVER`（默认开）：设 0/false/off/no → 不起 driver（scheduler 仍注册但不自动 tick，
+      由运维外部 cron 调 `run_production_monitor_cycle`；不替用户拍「是否自动跑」松紧）。
+    - `QUANTBT_MONITOR_TICK_SECONDS`（默认 60）：tick 周期。daemon + 默认 60s ⇒ 秒级测试永不误触发 weekly op。
+    - 幂等：startup 可能被多次触发（多 TestClient），已有活线程则复用、绝不重复起。
+    """
+
+    global _MONITOR_DRIVER_THREAD
+    if os.getenv("QUANTBT_MONITOR_DRIVER", "1").strip().lower() in ("0", "false", "off", "no"):
+        _main_logger.info("监控调度 driver 按 env QUANTBT_MONITOR_DRIVER 关闭（scheduler 注册但不自动 tick）")
+        return None
+    if _MONITOR_DRIVER_THREAD is not None and _MONITOR_DRIVER_THREAD.is_alive():
+        return _MONITOR_DRIVER_THREAD  # 幂等：不重复起线程
+    try:
+        interval = float(os.getenv("QUANTBT_MONITOR_TICK_SECONDS", "60"))
+    except ValueError:
+        interval = 60.0
+    interval = max(0.001, interval)
+    _MONITOR_DRIVER_STOP.clear()
+    thread = threading.Thread(
+        target=_monitor_driver_loop, args=(interval,),
+        name="monitor-scheduler-driver", daemon=True,
+    )
+    thread.start()
+    _MONITOR_DRIVER_THREAD = thread
+    _main_logger.info("监控调度 driver 已启动：every %.3gs 调 PRODUCTION_SCHEDULER.tick()（weekly cron 真 fire）", interval)
+    return thread
+
+
+def stop_monitor_driver() -> None:
+    """停 driver（shutdown/测试隔离）：set stop + join。daemon 本不阻塞退出，显式停便于测试干净复位。"""
+
+    global _MONITOR_DRIVER_THREAD
+    _MONITOR_DRIVER_STOP.set()
+    thread = _MONITOR_DRIVER_THREAD
+    if thread is not None and thread.is_alive():
+        thread.join(timeout=2.0)
+    _MONITOR_DRIVER_THREAD = None
 
 
 @app.on_event("startup")
 def startup_event() -> None:
     ensure_runtime_dirs()
     _start_production_monitor_scheduler()
+    _start_monitor_driver()  # 补缺失的生产调用方：周期 tick 让 weekly cron 真 fire（否则闭环空转）
+
+
+@app.on_event("shutdown")
+def shutdown_event() -> None:
+    stop_monitor_driver()
 
 
 @app.get("/api/health")

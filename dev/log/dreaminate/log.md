@@ -6,6 +6,17 @@
 ## <日期> · <标题>
 - 建/改了什么 + 命门  - 验收：<对抗测试 + 变异 + 全量数字>  - 下一步：<…> -->
 
+## 2026-06-25 · 监控调度 driver 接线——补缺失生产 tick loop 让 weekly cron 真 fire（卡 698a3c60 · D-MONITOR-DRIVER）
+
+- **缘起 + 选片**：autonomous-loop（ultracode on）。先跑只读 correctness 审计 workflow（wm8x329vn·7 方法学域并行+对抗证伪·24 agent·全程 graphify+Read 不跑 pytest，不违「套件不叠跑」红线），排出 16 真缺口；取 #1（lev 8·不卡用户·最清晰假绿灯）。
+- **缺口（端到端假绿灯）**：`main._start_production_monitor_scheduler` 注册 weekly DAG（cron 0 9 * * 1）+ log「已启动」，但 `Scheduler.tick()` 是轮询式（engine.py:302 docstring「调用方 loop 里 every N s 调 tick」）、生产**无 driver** → cron 永不到点 fire、退役闭环空转。端到端测试靠手动 tick+拨表 2000 年强制到期绕过 cron 门+绕过「谁 tick」，运维误以为周一自动退役实则 scheduler 静止。
+- **活性先行**：注册的 cron 必有驱动器使其 scheduled_at≤now 时 fire；轮询器不被周期调用=cron 形同虚设。weekly op 是 kind=pure（不触券商/资金、只改 registry+PROV）→ driver 让它 fire 不涉动钱；A1 退役只接绩效/成本轴红线不碰。
+- **实现（additive·daemon 线程）**：`_monitor_driver_loop`（`_MONITOR_DRIVER_STOP.wait(interval)` 周期 tick·异常吞续跑·读全局句柄）+ `_start_monitor_driver`（幂等·env QUANTBT_MONITOR_DRIVER 可关·TICK_SECONDS 周期）+ `stop_monitor_driver`；startup 接 driver、新增 shutdown 停。daemon+默认 60s ⇒ 秒级测试永不误触发。**护栏=不替用户拍「是否自动跑」**（env 可关）、修复 correctness 活性假绿灯非新设门。
+- **验收**：`test_monitor_driver` 4 测试。MUT-1（driver 不 tick）→ 真-tick 测试超时红；MUT-2（startup 不接 driver）→ 接线测试红；双变异定点反向 edit 后还原。**全量后端 1623 passed / 13 skipped / 0 failed / 180s**（基线 1619，净 +4）。
+- **诚实残余 → follow-on 卡 554cdcf2**：绩效轴真退役还差 ① 4 个 drift 检测器接 run_weekly_monitor_pass 的 perf_drift（审计 #3·lev 7）② per-factor IC 真源 ③ 观测落盘。driver 只解「scheduler 静止」这层。
+- **审计其余高分发现（留池/已覆盖，供后续选片）**：#2 attribution 无 per-factor 收益 provider（lev 7·物化纯工程、选因子集=用户）；#4 信号弃权门 q̂ 不自动喂（lev 6·用户方法学）；#5 gate.color 无执行牙（lev 5·=用户「放行不设卡」哲学、非 bug）；#6 无规范信号组合器；#7 capacity 未接 sizing（无 sizing 层）；#8 cpcv→promote 真实路径残口（promote_ide_run 调 gate 时 cpcv=None）。被证伪：DSR/Bootstrap-CI 每支恒活、PBO 单策略恒 None（矩阵<10 列·三角退化双证据+yellow 天花板）。
+- **下一步**：分支续 land-ready，commit+push 自动；候选下一切片见审计残余 + 池卡。
+
 ## 2026-06-25 · CPCV 路径稳健性 q05 接进 overfit gate（report-only 默认 / cpcv_conservative opt-in · 卡 89e7be1e · D-CPCV-GATE）
 
 - **缘起**：autonomous-loop。池卡 861182e6 ② 残项「q05 接 promote/overfit gate」——CPCV per-path 分布此前只到 UI（done 876a0c11·report-only），未接 gate。
