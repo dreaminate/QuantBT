@@ -1,0 +1,108 @@
+"""Research Graph IR（GOAL §1 统一对象链 · §2 多台工作系统）——QRO 与 Compiler 之间的 typed 图。
+
+A-QRO-1（`qro/`）已出统一信封；本包建链里 QRO→Compiler 之间的 IR：typed 图持有 QRO 节点 + 边
+（lineage/dependency/DeskHandoff）+ 各台 typed projection + 单一真相源门 + canonical command 落点。
+详见 `research_graph.py` 模块 docstring。**收编只读** qro/envelope（节点）、lineage/ids（身份）。
+对外只暴露 research_graph 的公共 API。
+"""
+
+from __future__ import annotations
+
+from .research_graph import (
+    CMD_ADD_EDGE,
+    CMD_CREATE_NODE,
+    CMD_OPEN_HANDOFF,
+    CMD_RESOLVE_HANDOFF,
+    CMD_UPDATE_NODE,
+    COMMAND_TYPES,
+    DESK_BACKTEST,
+    DESK_DATA,
+    DESK_EXECUTION,
+    DESK_FACTOR,
+    DESK_MODEL,
+    DESK_RESEARCH,
+    DESK_SETTINGS,
+    DESK_SIGNAL,
+    DESK_STRATEGY,
+    DESKS,
+    EDGE_DEPENDENCY,
+    EDGE_DESK_HANDOFF,
+    EDGE_LINEAGE,
+    EDGE_TYPES,
+    HANDOFF_IN_PROGRESS,
+    HANDOFF_OPEN,
+    HANDOFF_REJECTED,
+    HANDOFF_RESOLVED,
+    HANDOFF_STATES,
+    HOME_DESK_OF,
+    CanonicalCommand,
+    CanonicalCommandViolation,
+    DeskHandoff,
+    DeskProjection,
+    EdgeView,
+    GraphEdge,
+    GraphIntegrityError,
+    GraphNode,
+    HandoffIncompleteError,
+    NodeAdmissionError,
+    NodeView,
+    ProjectionError,
+    ResearchGraph,
+    ResearchGraphError,
+    SingleSourceViolation,
+    WriteAuthorityViolation,
+    assert_institutional_projection,
+    home_desk_of,
+)
+
+__all__ = [
+    # 台
+    "DESK_DATA",
+    "DESK_FACTOR",
+    "DESK_MODEL",
+    "DESK_SIGNAL",
+    "DESK_STRATEGY",
+    "DESK_BACKTEST",
+    "DESK_EXECUTION",
+    "DESK_RESEARCH",
+    "DESK_SETTINGS",
+    "DESKS",
+    "HOME_DESK_OF",
+    "home_desk_of",
+    # 边 / 交接 / 命令 词汇
+    "EDGE_LINEAGE",
+    "EDGE_DEPENDENCY",
+    "EDGE_DESK_HANDOFF",
+    "EDGE_TYPES",
+    "HANDOFF_OPEN",
+    "HANDOFF_IN_PROGRESS",
+    "HANDOFF_RESOLVED",
+    "HANDOFF_REJECTED",
+    "HANDOFF_STATES",
+    "CMD_CREATE_NODE",
+    "CMD_UPDATE_NODE",
+    "CMD_ADD_EDGE",
+    "CMD_OPEN_HANDOFF",
+    "CMD_RESOLVE_HANDOFF",
+    "COMMAND_TYPES",
+    # 数据类
+    "DeskHandoff",
+    "GraphNode",
+    "GraphEdge",
+    "CanonicalCommand",
+    "NodeView",
+    "EdgeView",
+    "DeskProjection",
+    "ResearchGraph",
+    # 门
+    "assert_institutional_projection",
+    # 异常
+    "ResearchGraphError",
+    "SingleSourceViolation",
+    "NodeAdmissionError",
+    "CanonicalCommandViolation",
+    "HandoffIncompleteError",
+    "WriteAuthorityViolation",
+    "ProjectionError",
+    "GraphIntegrityError",
+]
