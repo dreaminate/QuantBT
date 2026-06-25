@@ -62,6 +62,7 @@ def promote_ide_run(
     ledger: Any = None,
     returns_store: Any = None,
     extra_metadata: dict[str, Any] | None = None,
+    registry: Any = None,
 ) -> PromotedRun:
     """把 IDE 沙箱结果落到 runs/<id>/，跑 metrics，返回新 run_id。
 
@@ -104,6 +105,7 @@ def promote_ide_run(
         gate_verdict = _run_overfit_gate(
             rows=rows, result=result, metadata=metadata, strategy_name=strategy_name,
             strategy_code=strategy_code, metrics=metrics, ledger=ledger, returns_store=returns_store,
+            registry=registry,
         )
 
     manifest = {
@@ -139,8 +141,12 @@ def promote_ide_run(
 
 def _run_overfit_gate(
     *, rows, result, metadata, strategy_name, strategy_code, metrics, ledger, returns_store,
+    registry=None,
 ) -> dict:
-    """记账 + 跑三角 gate + 把 dsr/pbo/bootstrap 注入 metrics（就地改 metrics dict）。"""
+    """记账 + 跑三角 gate + 把 dsr/pbo/bootstrap 注入 metrics（就地改 metrics dict）。
+
+    `registry`（B-PIT-CONFIRMATORY）：透传给 evaluate_overfit_gate 的 confirmatory 数据身份门
+    （record=True 入账前校验 dataset_version 注册身份 + PIT）；None=不强制（向后兼容）。"""
 
     from ..eval.gate_runner import asset_class_of, evaluate_overfit_gate, freq_to_ppy
 
@@ -174,6 +180,7 @@ def _run_overfit_gate(
         cpcv_distribution=cpcv_distribution,
         cpcv_policy=cpcv_policy,
         record=True,
+        registry=registry,
     )
     v = gr.verdict
     # 注入 → risk_summary._rule_dsr/_rule_pbo 真生效（活性证明）。insufficient 时不注入误导单点。

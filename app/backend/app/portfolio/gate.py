@@ -13,7 +13,12 @@
 
 from __future__ import annotations
 
+from typing import TYPE_CHECKING
+
 from ..eval.gate_runner import GateRunResult, asset_class_of, evaluate_overfit_gate, freq_to_ppy
+
+if TYPE_CHECKING:
+    from ..data_quality import DatasetRegistry
 
 
 def portfolio_net_returns(
@@ -68,12 +73,17 @@ def gate_portfolio(
     ledger=None,
     returns_store=None,
     record: bool,
+    registry: "DatasetRegistry | None" = None,
 ) -> GateRunResult:
     """组合层多证据三角守门（C full-fat）。
 
     复用 evaluate_overfit_gate（单一源）；A2 放行 + 独立命名空间 + 最严 min_T + 反作弊 config_hash。
     验收（已重写，非「必红」假命题）：组合层过拟合 → 三角**不达 green**（red 仅当 DSR<0.2/CI 上界≤0/
     PBO>0.7 等 strong_neg）；冷启动 N<10 → PBO N/A，A2 下凭 DSR+CI 双正放行、过拟合仍被 strong_neg red。
+
+    `registry`（B-PIT-CONFIRMATORY）：透传给 evaluate_overfit_gate 的 confirmatory 数据身份门——
+    传 `DatasetRegistry` 单一源时 record=True 入账前校验 dataset_version 必带注册身份 + PIT；
+    None=不强制（向后兼容·组合 record=False 预览永不触发）。供 main.py 端点接 DATASET_REGISTRY 激活。
     """
 
     net = portfolio_net_returns(weights, asset_returns)
@@ -92,6 +102,7 @@ def gate_portfolio(
         returns_store=returns_store,
         allow_pbo_absent_green=True,
         record=record,
+        registry=registry,
     )
 
 

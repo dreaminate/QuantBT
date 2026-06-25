@@ -15,14 +15,21 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
-from typing import Literal
+from typing import TYPE_CHECKING, Literal
 
 import numpy as np
 
 from ..lineage import config_hash as _config_hash, content_hash as _content_hash
 from ..lineage.ledger import Ledger, LedgerEntry
+from .confirmatory_data_gate import (
+    ENFORCE_CONFIRMATORY_PIT_DEFAULT,
+    require_confirmatory_data,
+)
 from .n_eff import n_eff_from_matrix
 from .overfit_gate import GateVerdict, run_overfit_gate
+
+if TYPE_CHECKING:
+    from ..data_quality import DatasetRegistry
 
 
 @dataclass
@@ -105,6 +112,8 @@ def evaluate_overfit_gate(
     cpcv_distribution: dict | None = None,
     cpcv_policy: Literal["report_only", "cpcv_conservative"] = "report_only",
     record: bool,
+    registry: "DatasetRegistry | None" = None,
+    enforce_confirmatory_pit: bool = ENFORCE_CONFIRMATORY_PIT_DEFAULT,
 ) -> GateRunResult:
     """跑一次三角 gate。`record=True`（promote）记账 + 存快照；`record=False`（preview）只读。
 
@@ -114,6 +123,12 @@ def evaluate_overfit_gate(
     `report_only`（只附报告·绝不改裁决·守「方法学松紧=用户拍板」），调用方显式传 `cpcv_conservative`
     才允许 q05<基线的脆弱分布把 green 降级为 yellow（advisory·绝不硬 red、绝不升级）。默认 None →
     行为与接线前逐位一致（不假绿灯：未传 CPCV ≠ 编造）。
+
+    `registry`（B-PIT-CONFIRMATORY · confirmatory 数据身份门，GOAL §16 line1759/§6 line1112）：
+    传入 `DatasetRegistry` 单一源时，`record=True`（=confirmatory 记账）在【入账前】校验
+    `dataset_version` 必须解析到一条【已注册且带 known_at(PIT)】的 version，否则 raise
+    `ConfirmatoryDataRejected`（无 PIT/无注册数据进 confirmatory = 前视，拒）。**registry=None →
+    不强制**（既有无 registry 调用逐字不变·向后兼容·exploratory record=False 永不触发）。
     """
 
     chash = _config_hash(
@@ -123,6 +138,15 @@ def evaluate_overfit_gate(
     ret_list = [float(x) for x in returns]
     # 收益快照【内容寻址】（复核 low-note）：不同收益 → 不同 ref，杜绝 config_hash 撞键时静默共享。
     returns_ref = _content_hash(ret_list)
+
+    # B-PIT-CONFIRMATORY: confirmatory(record=True) 数据身份门——在【任何记账副作用之前】校验。
+    # 拒则 raise、绝不入账（append-only 一本账不可撤；non-PIT confirmatory 进账 = 前视污染 honest-N）。
+    # registry=None → 跳过（无单一源不假装过滤·向后兼容）；record=False（exploratory/preview）永不触发。
+    if record and registry is not None:
+        require_confirmatory_data(
+            dataset_version, registry=registry, enforce=enforce_confirmatory_pit,
+            context=f"confirmatory gate · {strategy_goal_ref}",
+        )
 
     if record and ledger is not None:
         entry = LedgerEntry.create(
