@@ -415,7 +415,10 @@ def test_effect_ledger_concurrent_same_key(tmp_path):
         except sqlite3.OperationalError:
             pass                       # 极端争用下锁超时=「未记账」（caller 须当 reconcile，非双记）
 
-    threads = [threading.Thread(target=worker) for _ in range(8)]
+    # daemon=True：极端锁争用下若某 worker 卡在 SQLite C 调用，进程仍能退出（非 daemon 残留线程会挡解释器
+    # 退出 → 即使 pytest-timeout 已 fail 本测、进程仍空挂数小时，正是 2026-06-25 7-9h 事件的退出期根源）。
+    # 挂死本身由 pytest.ini 全局 timeout 在主线程 join 处经 SIGALRM 中断、fail-fast（不再无限期 wedge 整套）。
+    threads = [threading.Thread(target=worker, daemon=True) for _ in range(8)]
     for t in threads:
         t.start()
     for t in threads:
