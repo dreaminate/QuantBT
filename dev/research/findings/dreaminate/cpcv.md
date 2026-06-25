@@ -44,6 +44,16 @@ $$\text{剔除 iff}\quad \exists j:\ t0_i\le t1_j\ \wedge\ t1_i\ge t0_j$$
 - **DSR**：逐路径算 DSR，gate 取 **q05 或 min** 作保守 DSR（不取均值/最优）。
 - **PBO 红线**：CScV-PBO 的列必须是 **distinct strategy/config**；单策略即便 φ≥10 路径，**PBO 恒 N/A**——绝不用路径数凑策略数（范畴错误，类比 §5 rolling-PSR≠DSR）。多策略时可对每 path_id 跑 PBO、报 PBO 分布取 q95/max（PBO 越高越坏）。
 
+### 消费侧 ① · per-path 模型 OOS 指标分布（2026-06-25 落地·report-only）
+`models/training.py::cpcv_oos_metric_distribution`：每条 φ 路径覆盖全样本一次 → 对每路径算模型 OOS 主指标
+（**regression-only=r2**；预测→r2 无需 proba/group）→ 分布 mean/std/**q05**/min/median/max/frac_below_0。
+**q05/路径方差 = 过拟合脆弱度**：q05≪mean 或方差大 = OOS 表现高度依赖切分（split-fragile）。复用
+`_fit_predict_fold`（从 train_model 抽出·行为不变·与训练同口径）+ cpcv.py 的 cpcv_splits/assemble_cpcv_paths。
+**report-only**：不接 gate、不替方法学拍板。判别器命门：强信号→r2 高稳、噪声→r2≈0/负（MUT「预测 misalign」→
+强信号 r2 崩到 -0.87→判别器红，证路径重组对齐正确）。
+**未落（follow-on·用户方法学）**：② q05 接 promote/overfit gate 的阈值/口径 + ③ Sharpe/DSR 口径需
+**prediction→收益转换**（=用户方法学决策，本件用模型自身 r2 避开）+ 分类/排序任务（proba/group 路径重组）。
+
 ## 接线点（本项目 file:line）[必填]
 | 文件 | 位置 | 接什么(扩展不替换) |
 |---|---|---|

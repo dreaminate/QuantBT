@@ -9,6 +9,7 @@
 from __future__ import annotations
 
 import json
+import math
 import pickle
 import time
 from dataclasses import asdict, dataclass, field
@@ -25,6 +26,7 @@ from sklearn.metrics import (
     roc_auc_score,
 )
 
+from .cpcv import assemble_cpcv_paths, cpcv_splits
 from .purged_cv import FoldSplit, purged_kfold, walk_forward
 
 
@@ -197,24 +199,7 @@ def train_model(
     feature_imp_sum: np.ndarray | None = None
     last_model: Any = None
     for split in splitter:
-        model = _make_model(spec, len(split.train_idx))
-        fit_kwargs: dict[str, Any] = {}
-        if spec.task == "lambdarank" and spec.group_col and spec.group_col in df.columns:
-            group_train = df.iloc[split.train_idx].groupby(spec.group_col).size().tolist()
-            fit_kwargs["group"] = group_train
-        X_train = X.iloc[split.train_idx]
-        X_test = X.iloc[split.test_idx]
-        model.fit(X_train, y[split.train_idx], **fit_kwargs)
-        if spec.task == "classification":
-            y_pred = model.predict(X_test)
-            y_proba = (
-                model.predict_proba(X_test)[:, 1]
-                if hasattr(model, "predict_proba")
-                else None
-            )
-        else:
-            y_pred = model.predict(X_test)
-            y_proba = None
+        model, y_pred, y_proba = _fit_predict_fold(spec, df, X, y, split.train_idx, split.test_idx)
         metrics = _evaluate_split(spec, y[split.test_idx], y_pred, y_proba)
         folds.append(FoldMetrics(split.fold_index, len(split.train_idx), len(split.test_idx), metrics))
         accumulated_pred.append(y_pred)
@@ -268,4 +253,109 @@ def _split_iter(spec: ModelSpec, n_samples: int, times: pd.Series):
     raise ValueError(f"未知 cv_scheme: {spec.cv_scheme}")
 
 
-__all__ = ["FoldMetrics", "ModelSpec", "TrainResult", "train_model"]
+def _fit_predict_fold(
+    spec: ModelSpec,
+    df: pd.DataFrame,
+    X: pd.DataFrame,
+    y: np.ndarray,
+    train_idx: np.ndarray,
+    test_idx: np.ndarray,
+) -> tuple[Any, np.ndarray, np.ndarray | None]:
+    """单折 fit→predict（从 train_model 主循环抽出·行为不变）。返回 (model, y_pred, y_proba)。
+
+    lambdarank 的 group + classification 的 proba 分支原样保留——train_model 与 CPCV 评估共用此原语，
+    保证两路 fit/predict 口径单一源、不漂。
+    """
+    model = _make_model(spec, len(train_idx))
+    fit_kwargs: dict[str, Any] = {}
+    if spec.task == "lambdarank" and spec.group_col and spec.group_col in df.columns:
+        fit_kwargs["group"] = df.iloc[train_idx].groupby(spec.group_col).size().tolist()
+    model.fit(X.iloc[train_idx], y[train_idx], **fit_kwargs)
+    X_test = X.iloc[test_idx]
+    if spec.task == "classification":
+        y_pred = model.predict(X_test)
+        y_proba = model.predict_proba(X_test)[:, 1] if hasattr(model, "predict_proba") else None
+    else:
+        y_pred = model.predict(X_test)
+        y_proba = None
+    return model, y_pred, y_proba
+
+
+def cpcv_oos_metric_distribution(
+    spec: ModelSpec,
+    panel: pd.DataFrame,
+    *,
+    n_groups: int = 6,
+    k_test_groups: int = 2,
+    embargo_pct: float = 0.01,
+) -> dict[str, Any]:
+    """R4 CPCV 消费：模型 OOS 主指标在 φ 条组合路径上的**分布**（路径稳健性·report-only）。
+
+    每条 CPCV 路径覆盖全样本一次 → 对每路径算模型 OOS 主指标 → 分布（mean/std/保守分位 q05/min/median/max/
+    frac_below_0）。**保守分位/路径方差 = 过拟合脆弱度信号**：q05≪mean 或方差大 = OOS 表现高度依赖具体切分
+    （split-fragile，过拟合嫌疑）。**report-only**：不接 gate、不替方法学拍板（接 gate 的阈值/口径属用户，见卡 861182e6）。
+
+    诚实（不假绿灯）：样本/组数不足 → status='insufficient'、不出分布；非有限路径指标剔除并披露。
+    **Sharpe/DSR 口径**需 prediction→收益转换（=用户方法学决策），属 follow-on、本件用模型自身 OOS 指标避开。
+    复用 `_fit_predict_fold`（与 train_model 同口径）+ cpcv.py 的 splits/assemble（已验证）。
+    """
+    metric_key = "r2"          # regression-only（见下守卫）：r2 在 OOS 预测上清晰可算、无需 proba/group
+    base = {"status": "ok", "n_paths": 0, "metric": metric_key, "n_groups": n_groups,
+            "k_test_groups": k_test_groups}
+    _NAN = {k: float("nan") for k in ("mean", "std", "q05", "min", "median", "max", "frac_below_0")}
+
+    def _insufficient(reason: str) -> dict[str, Any]:
+        return {**base, "status": "insufficient", "reason": reason, **_NAN}
+
+    # **白名单 regression-only**：分类(roc_auc 需 proba)/lambdarank(排序需 group) 的路径指标重组口径不同——
+    # 绝不对它们用 r2 发假信号；非回归如实标 unsupported_task（不假绿灯）。Sharpe/DSR 口径见 docstring follow-on。
+    if spec.task != "regression":
+        return {**base, "status": "unsupported_task", "reason": f"CPCV 路径分布暂仅回归（task={spec.task}）", **_NAN}
+
+    df = panel.copy().sort_values("ts").reset_index(drop=True)
+    X = df[spec.feature_cols]
+    y = df[spec.label_col].values
+    times = df["ts"]
+    n = len(df)
+
+    if n_groups < 2 or not (1 <= k_test_groups < n_groups):
+        return _insufficient(f"非法分组 n_groups={n_groups} k={k_test_groups}")
+    if n < n_groups * 3:
+        return _insufficient(f"样本不足 n={n} < n_groups*3={n_groups * 3}（每组至少几个样本才可拟合/评估）")
+
+    try:
+        splits = cpcv_splits(times, n_groups=n_groups, k_test_groups=k_test_groups, embargo_pct=embargo_pct)
+    except ValueError as exc:
+        return _insufficient(f"CPCV split 失败：{exc}")
+
+    # 每组合：在其 test 段 fit→predict，填入全长数组（test 处填预测、其余 NaN）供路径重组。
+    per_combo_pred: list[np.ndarray] = []
+    for sp in splits:
+        full = np.full(n, np.nan, dtype=float)
+        _, y_pred, _ = _fit_predict_fold(spec, df, X, y, sp.train_idx, sp.test_idx)
+        full[sp.test_idx] = np.asarray(y_pred, dtype=float)
+        per_combo_pred.append(full)
+
+    paths = assemble_cpcv_paths(per_combo_pred, n, n_groups, k_test_groups)
+    # 每路径覆盖全样本一次 → 对全样本 y_true 算 OOS 主指标。
+    path_metrics: list[float] = []
+    for path_pred in paths:
+        if not np.all(np.isfinite(path_pred)):
+            continue                                    # 理论上路径全覆盖；防御：非有限路径剔除
+        m = _evaluate_split(spec, y, path_pred, None)
+        v = m.get(metric_key)
+        if isinstance(v, (int, float)) and math.isfinite(v):
+            path_metrics.append(float(v))
+    arr = np.asarray(path_metrics, dtype=float)
+    if arr.size == 0:
+        return _insufficient("无有效路径指标（全非有限）")
+    return {
+        **base, "status": "ok", "n_paths": int(arr.size), "n_paths_total": len(paths),
+        "mean": float(np.mean(arr)), "std": float(np.std(arr, ddof=1) if arr.size > 1 else 0.0),
+        "q05": float(np.quantile(arr, 0.05)), "min": float(np.min(arr)),
+        "median": float(np.median(arr)), "max": float(np.max(arr)),
+        "frac_below_0": float(np.mean(arr < 0.0)),
+    }
+
+
+__all__ = ["FoldMetrics", "ModelSpec", "TrainResult", "cpcv_oos_metric_distribution", "train_model"]

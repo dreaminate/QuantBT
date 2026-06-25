@@ -14,6 +14,8 @@ depends_on: [41ea6e357df24045ad4427f85afc1a7a]
 
 # CPCV 接 promote/overfit gate + cv_scheme 双轨 report
 
+> **状态（2026-06-25）**：**① cpcv 作 cv_scheme 产 per-path OOS 指标分布（report-only）✅ done**（done 卡 2da39479·`cpcv_oos_metric_distribution`：φ 路径各覆盖全样本一次→每路径模型 OOS r2→mean/std/q05/min/median/max/frac_below_0；regression-only；复用 train_model 抽出的 `_fit_predict_fold`[行为不变]+cpcv.py splits/assemble；判别器命门 MUT「预测 misalign」验证有牙）。**剩 follow-on（用户方法学）**：② q05 接 promote/overfit gate（阈值/gate_policy=用户拍）+ ③ Sharpe/DSR 口径需 prediction→收益转换（用户方法学）+ 分类/排序任务（proba/group 路径重组）。
+>
 > **scope 勘察（2026-06-25·autonomous-loop 摸过、判为「需独立 Plan、不宜单轮塞」）**：`train_model`（models/training.py:174）现为**单路径 OOS**——`_make_splits` 按 cv_scheme 分派 purged_kfold/walk_forward，逐 fold 把 test 预测 concatenate 成一条 OOS 序列。CPCV 要**组合式多路径重构**：cpcv_splits(C(N,k) 组合)→每组合 fit→assemble_cpcv_paths→cpcv_metric_distribution（路径 Sharpe 分布）。即改动跨 **3 层**（① train_model 核心循环产 per-path 指标 + 结果 schema 加 path 分布字段；② verdict/gate 消费保守分位；③ 训练成本×C(N,k)）。**关键 correctness 警示**：CPCV 路径 ≠ cscv_pbo 的「跨策略矩阵」——绝不可把 CPCV paths 直接喂 `cscv_pbo`（语义误用：路径一致性≠跨策略过拟合）；正确用法是路径分布的保守分位喂 PSR/DSR + 脆弱度（路径方差）报告。建议拆：先「① cpcv 作 cv_scheme 产 path 分布诊断（report_only）」一卡，再「② 保守分位接 gate（用户选 gate_policy）」一卡。
 
 ## Scope [必填]

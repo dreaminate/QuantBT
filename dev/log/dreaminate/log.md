@@ -442,3 +442,11 @@
 - **验证**：`test_sqrt_impact_cost.py` 25 passed（+2 cost_summary）；**全量后端 1596 passed / 13 skipped / 0 failed / 128s**（基线 1594，净 +2）。
 - **follow-on**：backtest→manifest 把 venue.cost_summary() 落 manifest.cost_breakdown 的 producer wiring 待接（IDE sandbox 回测是否产 per-fill 待确认）——本卡提供可用聚合 API、wiring 建后续 mint。
 - **本轮 loop「commit 和 push 自动进行」→ 本地 commit + push 分支 worktree-autopolish-w1**（land main 仍仅用户）。
+
+## 2026-06-25 · CPCV 作消费产 per-path OOS 指标分布（done 卡 2da39479 / 861182e6 ① · 最深命门件）
+- **啃下前 3 轮延后的 CPCV**：经勘察（assemble_cpcv_paths 通用、组合序一致）后落地消费侧 ①。`models/training.py::cpcv_oos_metric_distribution`——φ=C(N-1,k-1) 路径各覆盖全样本一次→每路径模型 OOS r2→分布（mean/std/q05/min/median/max/frac_below_0；q05/路径方差=过拟合脆弱度）。report-only、regression-only。
+- **行为不变抽 `_fit_predict_fold`**：从 train_model 主循环抽出（lambdarank group + classification proba 分支原样），train_model 与 CPCV 共用=fit/predict 单一源；31 训练测试 + 全量套件绿（行为保持）。
+- **判别器命门有真牙**：强信号→r2 高稳、噪声→r2≈0/负；MUT「预测 test 段内反序(misalign)」→强信号 r2 崩 -0.87→判别器+强信号测试双红（证 assemble_cpcv_paths 路径重组对齐正确，非纸糊）。
+- **避方法学纠缠**：用模型自身 r2（非 Sharpe/DSR——后者需 prediction→收益转换=用户方法学决策）→ report-only、非回归 unsupported_task 诚实、不替拍板。
+- **验证**：`test_cpcv_oos_distribution.py` 7 + 训练 31 passed；**全量后端 1603 passed / 13 skipped / 0 failed / 124s**（基线 1596，净 +7）。follow-on（861182e6 ②③ q05→gate/Sharpe-DSR/分类排序）池卡留。
+- **本轮 loop「commit 和 push 自动进行」→ 本地 commit + push 分支 worktree-autopolish-w1**（land main 仍仅用户）。

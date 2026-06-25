@@ -12,6 +12,7 @@
 | 1b83a5c5 | IC 持久性 AR(1) 半衰期接进 lifecycle 状态机（perf 轴·advisory） | done | factor-lifecycle | done |
 | 1e0e65b4 | 组合消费者——agent 可调组合三角 gate（SEQ-CONSUMER=A · C full-fat 触发器） | done | agent | done |
 | 29258b77 | conformal 校准区间 + OOS 真留出覆盖接进模型台 UI（能信·不假绿灯） | done | frontend-trust | done |
+| 2da39479 | CPCV 作 cv_scheme 产 per-path OOS 指标分布（report-only · 命门最深件 ①） | done | models-methodology | done |
 | 381b6c18 | 实盘因子血统门——未过检验因子上真钱线 → 警告+知情确认 | done | security-invariant | done |
 | 3a8b2360 | R28 全库双时态（known_at 轴 + as-of 重述基本面）（T-033 核验 gap） | done | 数据 | done |
 | 3bb62d7d | 无副作用业务工具接真引擎（agent 一句话真跑回测）——T-027 残余 | done | agent | done |
@@ -172,6 +173,7 @@
 | frontend-trust | c5960022 · done | dreaminate |
 | governance-ui | c631817e · done | dreaminate |
 | integration-test | 9a497bde · done | dreaminate |
+| models-methodology | 2da39479 · done | dreaminate |
 | monitor | d0e5d208 · done | dreaminate |
 | monitor | d718d5c5 · done | dreaminate |
 | monitor | de764e1c · done | dreaminate |
