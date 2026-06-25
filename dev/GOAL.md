@@ -1,7 +1,7 @@
 # GOAL · 项目完整最终形态（目标台）
 
 > 终态契约。所有实现、任务、状态、验证都对照本文。
-> 来源：原始 GOAL、现有 dossier、`decisions/`（R1-R29/S1-S4/D-QRO-CANVAS），以及新目标：所有公开二级市场、Agent-native 多台 OS、Research Asset RAG、全资产生命周期、市场联动、数据接入、Ingestion Skill 生命周期、LLM Provider/Auth/Gateway、Mathematical Spine、Theory-to-Implementation Consistency、用户方法学放权。
+> 来源：原始 GOAL、现有 dossier、`decisions/`（R1-R29/S1-S4/D-QRO-CANVAS/D-MATH-SPINE），以及新目标：所有公开二级市场、Agent-native 多台 OS、Research Asset RAG、全资产生命周期、市场联动、数据接入、Ingestion Skill 生命周期、LLM Provider/Auth/Gateway、Mathematical Spine、Theory-to-Implementation Consistency、用户方法学放权。
 > 每节新增或改动后，同步 `research/TRACE.md`，保留对应 finding、decision、task、验收关系。
 > `RunDetailPage` 继续冻结：只允许排版、显示逻辑、加字段。
 
@@ -44,7 +44,7 @@ scheduled_agent
 能监控、降级、回滚、退役
 ```
 
-**决策**：R1-R29 / S1-S4 / D-QRO-CANVAS。
+**决策**：R1-R29 / S1-S4 / D-QRO-CANVAS / D-MATH-SPINE。
 
 **可证伪验收**：
 
@@ -1099,7 +1099,7 @@ MathRAG 检索：
 验证记录
 ```
 
-**决策**：R1/R2/R5/R7/R11/R12/R16/R23/R24-R28。
+**决策**：R1/R2/R5/R7/R11/R12/R16/R23/R24-R28 + D-MATH-SPINE。
 
 **可证伪验收**：
 
@@ -1434,7 +1434,7 @@ Replay 未命中状态显式记录，生产路径使用明确配置的 live LLM 
 下一步验证缺口
 ```
 
-**决策**：R1/R2/R5/R7/R8/R9/R11/R12 + S1-S4 + D-QRO-CANVAS。
+**决策**：R1/R2/R5/R7/R8/R9/R11/R12 + S1-S4 + D-QRO-CANVAS + D-MATH-SPINE。
 
 **可证伪验收**：
 
@@ -1594,7 +1594,7 @@ commodities: storage / delivery / contract spec
 
 PBO/DSR 作为选择偏差、多重检验、样本风险工具，结果绑定输入、N、数据和假设。
 
-**决策**：R1-R5/R16/R18/R23。
+**决策**：R1-R5/R16/R18/R23 + D-MATH-SPINE。
 
 **可证伪验收**：
 
@@ -2064,7 +2064,7 @@ Deployment / monitor / rollback / retire 清单
 
 任何正式因子、模型、信号、StrategyBook 晋级，都必须能追溯到这套交付物。
 
-**决策**：R1-R29 / S1-S4 / D-QRO-CANVAS。
+**决策**：R1-R29 / S1-S4 / D-QRO-CANVAS / D-MATH-SPINE。
 
 **可证伪验收**：
 

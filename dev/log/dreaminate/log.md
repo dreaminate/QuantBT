@@ -589,4 +589,6 @@
 - **第一波 pool 卡 mint**：`36f88f6b`(C-MODELGOV-1 完整门) `e01bf12f`(B-PIT-1 回测消费 as_of_known) `0430cd78`(B-VERSION-1 数据写门) `9d593481`(D-RDP-1 RDP schema) `f19c5c19`(A-QRO-1 对象信封地基)；W5=已有 `de764e1c`。各带文件领地 + 对抗验收 + depends_on。validate PASS（DAG 无环）。
 - **集成 land**：auto/math-spine（spine 全套 + GOAL + 红线修·9 ahead·origin/main 祖先=ff）land 进 main（用户授权）。fix-u2-synth(47d79a9) 已是 main 祖先无需 land。
 - **land 前终验**：全量后端 **1721 passed / 0 failed / 13 deselected**（1713 + 红线 8·flake 本次通过）。
+- **74 文件前端 sweep 并入 main（3064fad）**：fix-u2-synth 前端术语 relabel + 文档整波 3-way merge 进 main（68 文件自动合 + `LiveRunVerdictCard.test.tsx` 1 冲突解：保 main 新增 2 对抗测试 pbo:null/dsr 全缺→N/A + 应用 sweep 措辞）。dev/ OS 文件刻意排除（vs main 集成态陈旧）。验证 tsc EXIT=0 + vitest 25 文件/298 测试全过。
+- **codex 顾问处置（2 P2）**：① README sync 声称=**误报驳回**（全 dev/ grep「README 同步」0 命中，DECISIONS.md 仅 299 行·codex 引 :317 越界；README「A股+加密」是诚实现状、GOAL「所有公开二级市场」是终态，二者本应不同）。② D-MATH-SPINE 未锚 GOAL=**真问题修**（该决策被 7 done 卡+6 finding+state 引为控制决策，GOAL 9 处 footer 却只引 D-QRO-CANVAS）→ 锚进 GOAL 6 处（来源行 + §0/§6/§8/§10/§17 footer，镜像 D-QRO-CANVAS 锚法·扩展不替换）。**未伪造正式 DECISIONS 记录**（D-QRO-CANVAS/D-MATH-SPINE 均无正式登记体·pre-existing gap·留用户/campaign 形式化，不假「用户拍板」provenance）。validate_dev PASS。
 - **下一步**：用户新开会话用新版 loop 提示词（中心+5并发·活的任务池·可新开卡/线）驱动 fleet。
