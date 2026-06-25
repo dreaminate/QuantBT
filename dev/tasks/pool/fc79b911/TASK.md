@@ -16,6 +16,11 @@ depends_on: []
 
 > **⚠ RULES.project 红线级·潜伏地雷**：当前回测/IC 走 `panel_source.load_sample` 合成已复权样本、**未消费** Tushare runtime bars
 > → 今日潜伏（非活跃假绿灯）；**接真 Tushare 数据那一刻即引爆**。用户持 Tushare token（memory），真喂路打通前**必修**。
+>
+> **进度（2026-06-25）**：**① 复权 ✅ done**（done 卡 ff19c992·D-ADJ-FACTOR）：`_merge_runtime_adjustment_factor` join→真乘 qfq
+> （P_adj=P_raw·adj/adj_last·volume 反除·除权跳变归一）+ **源感知防双重复权**（`_RAW_PRICE_SOURCES` 仅原始未复权源乘 adj、
+> us_daily_adj 等已复权源不乘）+ 缺 adj raise + 覆盖不全 fill；MUT-1/2 双变异抓。**剩 ②③**：停牌 suspend_d 无消费者 + 涨跌停
+> stk_limit 孤儿（真数据可成交性轴·接 universe/panel：停牌/涨跌停日 tradable=False/价 null→跨窗 forward_return null）。
 
 ## Scope [必填]
 三条「真数据可成交性/价口径」缺口（合成样本下潜伏、真数据即活跃，建议合并为「真数据可成交性轴」一并接）：

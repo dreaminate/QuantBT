@@ -95,6 +95,9 @@ _RUNTIME_ADJ_FACTOR_CANDIDATES: dict[str, tuple[str, ...]] = {
     "stocks_hk": ("hk_adjfactor",),
     "stocks_us": ("us_adjfactor",),
 }
+# 原始**未复权**价源：必须乘 adj_factor 复权后才可落盘（否则除权跳变=假收益，违 RULES『未复权价喂成交层即停工』）。
+# 已复权源（如 us_daily_adj·名含 _adj）绝不再乘 adj_factor（否则双重复权=新 correctness bug）。
+_RAW_PRICE_SOURCES: frozenset[str] = frozenset({"daily", "pro_bar", "hk_daily", "us_daily"})
 
 
 @dataclass(frozen=True)
@@ -2134,11 +2137,48 @@ def _prepare_adjustment_factor_frame(frame: pl.DataFrame) -> pl.DataFrame:
     )
 
 
-def _merge_runtime_adjustment_factor(price_frame: pl.DataFrame, adj_frame: pl.DataFrame) -> pl.DataFrame:
-    if price_frame.is_empty() or adj_frame.is_empty():
+def _merge_runtime_adjustment_factor(
+    price_frame: pl.DataFrame,
+    adj_frame: pl.DataFrame,
+    *,
+    apply_adjustment: bool = False,
+) -> pl.DataFrame:
+    """把 adj_factor 真**乘进** OHLC（后复权连续价 qfq），杜绝『未复权价喂回测/成交层』(RULES 停工红线)。
+
+    数学（qfq·recent-preserving）：每 symbol 按 timestamp 升序，qfq(t)=adj_factor(t)/adj_factor(T)，T=该 symbol
+    最新交易日；P_adj=P_raw·qfq（open/high/low/close），volume 反向 V_adj=V_raw/qfq（守 P·V 值不变）。除权除息日的
+    价格跳变被归一消除 → IC/回测看到的收益=纯价格 alpha、不含股本结构跳变。
+
+    `apply_adjustment`（调用方据价源是否**原始未复权**[_RAW_PRICE_SOURCES]决定）：
+    - True + adj_frame 非空 → 乘 adj 复权。
+    - True + adj_frame 空 → **raise**（原始未复权源缺 adj：绝不写未复权价喂成交层·不假绿）。
+    - False（价源已复权，如 us_daily_adj）→ 原样返回，**绝不再乘 adj**（防双重复权）。
+    join 后个别行缺 adj（adj 覆盖不全）→ 该 symbol 内 forward/backward fill（adj_factor 累积、事件间稳定）。
+    """
+
+    if price_frame.is_empty():
         return price_frame
-    merged = price_frame.join(adj_frame, on=["symbol", "timestamp"], how="left")
-    return merged.sort(["symbol", "timestamp"])
+    if not apply_adjustment:
+        return price_frame.sort(["symbol", "timestamp"])
+    if adj_frame.is_empty():
+        raise ValueError(
+            "原始未复权价源缺 adj_factor：拒绝写未复权价喂回测/成交层（RULES 停工红线·未复权价即假收益）"
+        )
+    merged = price_frame.join(adj_frame, on=["symbol", "timestamp"], how="left").sort(["symbol", "timestamp"])
+    # 缺 adj 行（adj 覆盖不全）→ symbol 内前向后向填充（累积因子事件间稳定）；仍全空 symbol 极罕见 → 留 null 由下游暴露。
+    merged = merged.with_columns(
+        pl.col("adj_factor").forward_fill().backward_fill().over("symbol")
+    )
+    qfq = pl.col("adj_factor") / pl.col("adj_factor").last().over("symbol")  # 末值=最新日因子（已按 timestamp 升序）
+    adjust_exprs = [
+        (pl.col(col) * qfq).alias(col)
+        for col in ("open", "high", "low", "close")
+        if col in merged.columns
+    ]
+    if "volume" in merged.columns:
+        adjust_exprs.append((pl.col("volume") / qfq).alias("volume"))
+    merged = merged.with_columns(adjust_exprs)
+    return merged.drop("adj_factor").sort(["symbol", "timestamp"])
 
 
 def _write_runtime_market_bars(
@@ -2241,7 +2281,9 @@ def _materialize_tushare_runtime_assets(
     adj_source, adj_raw = _first_populated_dataset(paths, market, _RUNTIME_ADJ_FACTOR_CANDIDATES.get(market, ()))
     adj_frame = _filter_runtime_symbols(_prepare_adjustment_factor_frame(adj_raw), symbols)
     if not price_frame.is_empty():
-        price_frame = _merge_runtime_adjustment_factor(price_frame, adj_frame)
+        # 源感知复权：原始未复权源（_RAW_PRICE_SOURCES）必须乘 adj 复权后才落盘；已复权源绝不再乘（防双重复权）。
+        apply_adjustment = price_source in _RAW_PRICE_SOURCES
+        price_frame = _merge_runtime_adjustment_factor(price_frame, adj_frame, apply_adjustment=apply_adjustment)
         runtime["ohlcv"] = {
             "source": price_source,
             "written": _write_runtime_market_bars(paths, market=market, interval="1d", frame=price_frame),

@@ -6,6 +6,15 @@
 ## <日期> · <标题>
 - 建/改了什么 + 命门  - 验收：<对抗测试 + 变异 + 全量数字>  - 下一步：<…> -->
 
+## 2026-06-25 · 拆「未复权价喂回测/成交层」停工红线地雷——runtime 复权真乘进 OHLC（卡 ff19c992 · D-ADJ-FACTOR）
+
+- **缘起**：autonomous-loop（ultracode）。第二轮审计 #1（lev 7·RULES.project 停工红线）：`_merge_runtime_adjustment_factor` 只 join 把 adj_factor 贴成悬空列、从不乘进 OHLC + stocks_cn 首取未复权 daily → 落盘未复权连续价、除权跳变当真收益。
+- **潜伏核实（修而非停工报告）**：读 panel_source 消费链——活跃 IC/回测/layered 走 load_market_panel→load_sample（合成已复权样本·docstring「真实数据接入时本函数是唯一复权落点」），不消费 provider runtime bars → 休眠地雷、接真 Tushare 即引爆，非现行致命。
+- **数学先行**：qfq P_adj(t)=P_raw(t)·adj(t)/adj(T)（T=最新日）·volume 反除 V/qfq（守 P·V 值）；除权日 r_adj 不含纯股本跳变=纯价格 alpha。**关键 correctness 警示**：不能「有 adj 就乘」——已复权源(us_daily_adj)再乘=双重复权新 bug → **源感知**（_RAW_PRICE_SOURCES 仅原始未复权源乘 adj）。
+- **实现（行为修正+additive）**：merge join→真乘 qfq + apply_adjustment 源感知 + 缺 adj raise（原始源缺 adj 绝不写未复权）+ 覆盖不全 symbol 内 fill；caller 按 price_source∈_RAW_PRICE_SOURCES 传 apply_adjustment。
+- **验收**：6 测试（除权跳变消除+真实收益保留+sentinel·volume 反除·缺 adj raise·防双重复权·覆盖 fill·源感知集）。MUT-1（qfq=1 不复权）→ 跳变/volume 红；MUT-2（缺 adj 不 raise）→ 红线门红。**全量后端 1649 passed / 13 skipped / 0 failed / 170s**（基线 1643，净 +6）；休眠路径不破活跃测试。
+- **下一步**：fc79b911 ②③（停牌 suspend_d/涨跌停 stk_limit 可成交性轴·接 universe/panel）池卡留；分支续 land-ready，commit+push 自动。
+
 ## 2026-06-25 · risk_summary ok 门加固——仅辅助指标(零核心证据)绝不判可信（卡 4c6de2c1 · D-RISKSUMMARY-OK）
 
 - **缘起**：autonomous-loop（ultracode）。第二轮 correctness 审计 workflow（wnbmpeqiv·第一轮未覆盖子系统：数据层/组合优化/risk_summary/paper/lineage·20 agent）排 14 真缺口，取 #4（lev 7·LIVE 假绿灯·§3 不待拍）。

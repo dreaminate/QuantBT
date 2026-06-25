@@ -100,6 +100,7 @@
 | ee3b8dbd | conformal 校准区间接进信号层弃权（消费侧·不对噪声下单） | done | signals-methodology | done |
 | f1bd08f2 | CPCV q05→gate 最后一公里——promote_ide_run 真实路径读 emit cpcv 透传 gate（死接线修复） | done | eval-methodology | done |
 | f6bb5e8e | DS-1 run_id 脊梁——agent backtest 接真引擎写 RUN_ROOT + run_id 贯穿（Fork3=A） | done | agent-backend | done |
+| ff19c992 | 拆「未复权价喂回测/成交层」停工红线地雷——Tushare runtime 复权真乘进 OHLC（源感知防双重复权） | done | data-layer | done |
 | ff286f80 | 因子收益归因（returns-based attribution）—— 北极星「归因」阶段建库 | done | eval-methodology | done |
 
 ## pool · 待分配
@@ -150,6 +151,7 @@
 | backend | e069d820 · done | dreaminate |
 | config | 8ab894cd · done | dreaminate |
 | data-connectors | e1a98c41 · done | dreaminate |
+| data-layer | ff19c992 · done | dreaminate |
 | desktop | bc21c7c1 · done | dreaminate |
 | docs | ecbd0eab · done | dreaminate |
 | eval-methodology | 41ea6e35 · done | dreaminate |
