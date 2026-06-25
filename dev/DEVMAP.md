@@ -6,7 +6,6 @@
 
 | uuid8 | 标题 | status | area | 位置 |
 |---|---|---|---|---|
-| 6144bd61 | artifact 信任门生产激活——producer 落盘接 register + 翻 enforce + safetensors 入依赖（C-MODELGOV-1 activate） | in_progress | model-governance | active |
 | 0430cd78 | 数据更新写时强约束——dataset_version/checksum/lineage 升 block 门（B-VERSION-1） | done | data-pit | done |
 | 05d6f511 | 单人 self-approve 仅非真钱通道(冷却+留痕)，真钱硬双人 | done | approval | done |
 | 07b10903 | DS-6 装机收口——跨平台一键启动 + mkdir（可缓·docker compose 兜底） | done | onboarding-docs | done |
@@ -29,6 +28,7 @@
 | 46f1cb3c | 组合层 M8 多证据三角守门（T-033 核验 gap 升级） | done | portfolio | done |
 | 51271d38 | 因子台三纯库+挖掘 后端 — 信号契约 + ML/DL 登记 + 暴力遍历守门引擎 | done | backend | done |
 | 5e47b82f | 因子台前端 P0 — 5 视图像素还原 + mock(库/相关/评测/构建DSL/研究) | done | frontend | done |
+| 6144bd61 | artifact 信任门生产激活——producer 落盘接 register + 翻 enforce + safetensors 入依赖（C-MODELGOV-1 activate） | done | model-governance | done |
 | 6403b9bf | 诚实残余核验——监控尾部闭环 + 组合层三角 + D2 四残余 | done | verification | done |
 | 64717fe6 | paper provider 真回放捆绑样本——替换确定性合成游走（§3 增强） | done | paper | done |
 | 67b42025 | RDP 接线——接现导出器 6 字段 + 接真 promote 路径 require_valid_rdp（D-RDP-1 wire） | done | delivery | done |
@@ -214,8 +214,8 @@
 | math-spine | a00b3956 · done | dreaminate |
 | math-spine | b85e34cc · done | dreaminate |
 | math-spine | c86be35e · done | dreaminate |
-| model-governance | 6144bd61 · in_progress | dreaminate |
 | model-governance | 36f88f6b · done | dreaminate |
+| model-governance | 6144bd61 · done | dreaminate |
 | models-methodology | 2da39479 · done | dreaminate |
 | models-methodology | 74f93771 · done | dreaminate |
 | models-methodology | c43c6301 · done | dreaminate |

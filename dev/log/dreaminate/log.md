@@ -609,3 +609,12 @@
 - **2 拍板项停报中心（保守默认 land·非阻塞·摆代价待用户拍）**：W3 ①字段提级必备(方法学口径) ②data_pull legacy 回收(越领地·canonical intake 已覆盖)；W4 RDP 强制档常开(待 D-RDP-2)。均方法学松紧/范围·保守默认已 land·用户决定是否调紧。
 - **dev/ 整合**：4 张 assigned 卡删(opus done supersede)·done 卡 32-hex uuid 齐·f19c5c19 待拍字面量修。
 - **land**：4 线整批 land main（用户授权·能回滚兜底）。推进 GOAL §1/§11/§17。**下一步**：第三波 A-GRAPH-1 ResearchGraph IR(LINE-A 续) / LINE-A-AGENT LLM Gateway(另一最强瓶颈) / A-QRO-2 / D-RDP-2。
+
+## 2026-06-26 · W1 artifact 信任门生产激活·enforce 默认开兑现 §15（第三波先派单线·GOAL-锚定）
+
+- **派 1 deep-opus**（`6144bd61`·wave3/w1-artifact-activate）：producer 全接 register（models/training.py pickle / models/dl/trainer.py torch.save）+ service 组合消费侧 enforce + safetensors 入依赖 + artifact_trust 门语义零改。
+- **GOAL-锚定关键**：用户三次强调锚定 GOAL → 读 §15「external pickle **blocked by default**」=enforce 默认开是**终态**（opus 标 profile 松紧·但 GOAL 已决·非松紧旋钮·中心按 §15 不回退、不问用户）。修正了我此前误用「不要管太宽」想保 opt-in。
+- **验收**：全量 **1887 passed / 13 skipped / 0 failed / 131s**（基线 1892+8·enforce 默认开**零破基线**=producer 全接证·flake 未触发）+ validate PASS·8 测 MUT-1（register 落错店）/MUT-2（强 enforce=False）双抓。
+- **子系统**：artifact 信任门 🟡→✅（§15 兑现：机制+生产激活+enforce 默认开+全量验证齐）。
+- **诚实残余**：① 自由代码子进程路（submit_code）enforce 未覆盖（领地外·结构化 spec 路已 enforce）② safetensors 输出保留 .pt（须连带改 backtest auto-find+M12 跨领地）③ 全局策略未翻。
+- **land**：单线 land main（用户授权）。**下一步**：第三波主力 A-GRAPH-1 + LLM Gateway（GOAL-first prep·读 §1/§2/§7）。

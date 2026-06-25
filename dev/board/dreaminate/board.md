@@ -4,4 +4,4 @@
 
 | uuid8 | 标题 | status | area | 优先级 | 依赖(uuid8) |
 |---|---|---|---|---|---|
-| 6144bd61 | artifact 信任门生产激活——producer 落盘接 register + 翻 enforce + safetensors 入依赖（C-MODELGOV-1 activate） | in_progress | model-governance | P2 | 36f88f6b |
+| _（名下无 active 卡）_ | | | | | |
