@@ -22,6 +22,7 @@ from datetime import UTC, datetime
 from pathlib import Path
 from typing import Any, Literal
 
+from ..delivery import PromotionClaim, RDPManifest, require_promotion_rdp
 from ..execution.base import ExecutionAuditLog
 from ..execution.paper_venue import PaperVenue
 from ..lineage.ids import content_hash
@@ -546,13 +547,18 @@ class PaperDeskService:
 
     def approve_promotion(
         self, gate_id: str, *, approver: str, endorsement_ref: str | None, reason: str,
+        rdp: RDPManifest | None = None, promotion_claim: PromotionClaim | None = None,
+        require_rdp: bool = False,
     ) -> PromotionGate:
-        """人工审批晋级（INV-5 硬门）：
+        """人工审批晋级（INV-5 硬门 + §17 RDP 追溯接线）：
 
         - approver == creator → ApproverEqualsCreator（防自审，生成≠验证不可自我满足）。
         - 无 endorsement_ref（验证背书）→ EmptyReason（裸翻必拒，未验证 ≠ 已验证）。
         - 4 门未全过（eligible=False）→ GateStateError（不可跳级）。
         - 非 pending → GateStateError。
+        - §17 RDP 追溯（D-RDP-1 wire）：翻态前调 `require_promotion_rdp(rdp, promotion_claim, ...)`——
+          残缺 RDP（缺 manifest/hash/repro/DatasetVersion/未验证残余）或追溯断裂 → RDPRejected，不翻态。
+          默认 rdp=None+require_rdp=False = 向后兼容 no-op（不破基线；全量强制待 D-RDP-2 聚合器供 RDP）。
         全过才翻 promoted=True 并联动因子台状态（PROBATION→OBSERVATION 由上游 lifecycle 执行）。
         """
 
@@ -573,6 +579,8 @@ class PaperDeskService:
             if not gate.eligible:
                 gaps = [c["label"] for c in gate.checks if not c["passed"]]
                 raise GateStateError("晋级判定 4 门未全过，不可晋级（不可跳级）：" + "；".join(gaps))
+            # §17 RDP 追溯接线：fail-closed 在翻态之前（残缺/断裂 RDP raise RDPRejected，promoted 不动）。
+            require_promotion_rdp(rdp, promotion_claim, require_rdp=require_rdp)
             gate.decision = "approved"
             gate.approver = approver
             gate.endorsement_ref = endorsement_ref

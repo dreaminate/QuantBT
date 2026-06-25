@@ -33,6 +33,7 @@ from .rdp_gate import (
     gate_manifest_completeness,
     gate_promotion_traceability,
     gate_unverified_residual,
+    require_promotion_rdp,
     require_valid_rdp,
     validate_rdp,
 )
@@ -63,4 +64,5 @@ __all__ = [
     "validate_rdp",
     "require_valid_rdp",
     "assemble_rdp",
+    "require_promotion_rdp",
 ]

@@ -22,6 +22,7 @@ if str(_backend_root) not in sys.path:
     sys.path.insert(0, str(_backend_root))
 
 from app.paths import RUN_ROOT, ensure_runtime_dirs  # noqa: E402
+from app.delivery import ASSET_STRATEGYBOOK, RDPManifest  # noqa: E402  §17 RDP 接线（D-RDP-1 wire）
 
 try:
     from plotly.subplots import make_subplots
@@ -224,6 +225,101 @@ def plot_overview_three_panel_plotly(
     return fig
 
 
+def _artifact_present(value: Any) -> bool:
+    """run-bundle 字段是否真有内容：None→False；空 DataFrame→False；空/纯空白 str→False。
+
+    （DataFrame 直接 `if df:` 会抛 ValueError，故按 .empty / str.strip 分流判定。）
+    """
+
+    if value is None:
+        return False
+    empty_attr = getattr(value, "empty", None)
+    if empty_attr is not None:  # DataFrame-like
+        return not bool(empty_attr)
+    if isinstance(value, str):
+        return bool(value.strip())
+    return True
+
+
+def build_rdp_from_run_bundle(
+    run_id: str,
+    manifest: Mapping[str, Any],
+    *,
+    asset_ref: str | None = None,
+    asset_kind: str = ASSET_STRATEGYBOOK,
+    trades: pd.DataFrame | None = None,
+    positions: pd.DataFrame | None = None,
+    attribution: pd.DataFrame | None = None,
+    report_md: str | None = None,
+    strategy_py: str | None = None,
+    log_text: str | None = None,
+    **rdp_fields: Any,
+) -> RDPManifest:
+    """把现导出器 run-bundle 的 **6 字段**（trades / positions / attribution / report_md /
+    strategy_py / log_text）诚实投影进一份开放格式 `RDPManifest`（§17 · D-RDP-1 wire · 扩展不替换）。
+
+    映射（只把【真实存在】的产物落进 §17 对应槽，不存在即留空，绝不凭空补）：
+      · strategy_py  → code_refs + source_file_refs（"strategy.py"，狭义源码）
+      · report_md    → source_file_refs（"report.md"，随包带的研究报告文件）
+      · log_text     → source_file_refs（"backtest.log"，运行日志文件）
+      · trades / positions → backtest_run_refs=(run_id,)（产物来自该回测运行）
+      · attribution  → attribution（§17 归因字段，指向 "attribution.csv" 逐期归因产物）
+
+    诚实边界（§3 不假绿灯 / no template false success · RULES.project）：
+    - 【门强制】项——artifact_hash / reproducibility_command / dataset_versions /
+      ingestion_skill_refs / 未验证残余——**不在**这 6 个 run-bundle 字段里。本函数只从 `manifest`
+      已有键 + 显式 `rdp_fields` 透传，都缺 → 产出 RDP 残缺，`validate_rdp` 据实标 missing（verdict
+      blocked/missing，**绝不**美化成完整交付）。补全真血统是 D-RDP-2 聚合器（依赖 LINE-A
+      LLMCallRecord + B DatasetVersion）的活，本卡只接线投影。
+    - id 走单一身份源（RDPManifest 内部复用 lineage.ids.content_hash），本函数不另造哈希。
+
+    `rdp_fields` 显式覆盖任何同名映射（让调用方/聚合器能补齐 §17 完整字段，按内容寻址出有效 RDP）。
+    """
+
+    source_file_refs: list[str] = []
+    code_refs: list[str] = []
+    if _artifact_present(strategy_py):
+        source_file_refs.append("strategy.py")
+        code_refs.append("strategy.py")
+    if _artifact_present(report_md):
+        source_file_refs.append("report.md")
+    if _artifact_present(log_text):
+        source_file_refs.append("backtest.log")
+
+    attribution_note = ""
+    if _artifact_present(attribution):
+        attribution_note = "attribution.csv（逐期归因产物，随包带）"
+
+    # backtest_run_refs：该 run 即一次回测运行（trades/positions 是其产物）。
+    backtest_run_refs: tuple[str, ...] = (run_id,)
+
+    # manifest（run.json）里已有的 §17 键 → 透传（缺则留空，不补默认）。
+    def _m(key: str, default: Any = "") -> Any:
+        val = manifest.get(key, default)
+        return val if val is not None else default
+
+    fields: dict[str, Any] = {
+        "asset_ref": asset_ref or _m("asset_ref") or f"run:{run_id}",
+        "asset_kind": asset_kind,
+        "created_by": _m("created_by"),
+        "research_proposition": _m("research_proposition"),
+        "research_graph_ref": _m("research_graph_ref"),
+        "data_pit_semantics": _m("data_pit_semantics"),
+        "environment": _m("environment"),
+        "environment_lock": _m("environment_lock"),
+        "code_hash": _m("code_hash") or _m("config_hash"),
+        "seed": manifest.get("seed"),
+        "reproducibility_command": _m("reproducibility_command"),
+        "artifact_hash": _m("artifact_hash"),
+        "attribution": attribution_note or _m("attribution"),
+        "source_file_refs": tuple(source_file_refs),
+        "code_refs": tuple(code_refs),
+        "backtest_run_refs": backtest_run_refs,
+    }
+    fields.update(rdp_fields)  # 显式 §17 字段（dataset_versions / ingestion_skill_refs / 未验证残余…）覆盖映射
+    return RDPManifest(**fields)
+
+
 def export_run_bundle_for_detail(
     run_id: str,
     manifest: Mapping[str, Any],
@@ -236,6 +332,7 @@ def export_run_bundle_for_detail(
     report_md: str | None = None,
     strategy_py: str | None = None,
     log_text: str | None = None,
+    rdp: RDPManifest | None = None,
 ) -> Path:
     """
     写入 `{DATA_ROOT}/artifacts/experiments/{run_id}/`，供 Web / Notebook 读取。
@@ -243,6 +340,9 @@ def export_run_bundle_for_detail(
     - `manifest` 会写入 `run.json`（须含 `run_id` 或与参数 `run_id` 一致）。
     - `portfolio` 写入 `portfolio.csv`（须有后端可识别的时间列之一 + 至少 `equity` 等列，见 run_detail_core）。
     - 其余参数均可无；有则写入对应文件。
+    - `rdp`（§17 · D-RDP-1 wire · **扩展不替换 · 只加文件**）：给出则额外写开放格式 `rdp.json`
+      （`RDPManifest.to_json()`，第三方可解析），不动 run.json/portfolio.csv 等既有产物，
+      也不动前端「收益概述」页冻结口径。不给则不写（向后兼容，既有调用零行为变化）。
     """
     ensure_runtime_dirs()
     root = RUN_ROOT / run_id
@@ -270,6 +370,9 @@ def export_run_bundle_for_detail(
         (root / "strategy.py").write_text(strategy_py, encoding="utf-8")
     if log_text is not None:
         (root / "backtest.log").write_text(log_text, encoding="utf-8")
+    if rdp is not None:
+        # §17 开放格式交付包：只加文件，不触碰既有产物与冻结口径（扩展不替换）。
+        (root / "rdp.json").write_text(rdp.to_json(), encoding="utf-8")
 
     return root
 
@@ -278,6 +381,7 @@ __all__ = [
     "OverviewRow",
     "build_date_axis",
     "build_overview_rows",
+    "build_rdp_from_run_bundle",
     "export_run_bundle_for_detail",
     "filter_overview_rows",
     "normalize_benchmark_points",
