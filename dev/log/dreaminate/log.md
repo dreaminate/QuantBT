@@ -559,3 +559,13 @@
 - **全量验证**：spine+gate 组 **93 passed**；**全量后端 1691 passed / 13 deselected / 0 failed / 125s**（merge 真基线 1674 + 本 17，未破基线）。凭真汇总行判绿。
 - **推进**：GOAL §6/§9 + gap #3：信任层多证据三角**三支全上脊柱**、生产 gate 三支任一漂离定义 fail-closed。**残余**：conformal/attribution/MinTRL/drift（main 新增）等其余数学点逐个绑后续；property 必要非充分（弱于 DSR numerical oracle）。
 - **交付**：worktree `auto/math-spine`（已同步 main）；commit/push 自管、**land main 待用户**。
+
+## 2026-06-25 · MinTRL+PSR 经脊柱绑定（交叉校验恒等式）+ 接 run verdict cold_start（gap #3 · 依赖 b85e34cc）
+
+- **触发**：脊柱已治理信任层 promote 门（三角三支）；选下一个有生产消费点 + 干净一致性检查的数学点。attribution 无生产消费点（孤立可证·跳过）；MinTRL/PSR 有**两条精确交叉校验恒等式** + 生产消费点（run verdict cold_start）→ 选它（先 git fetch 确认仍同步）。
+- **理论先行**：finding `spine-consistency-gate/03`——M1 n=MinTRL→PSR(SR*)≡confidence（PSR 解析反解，代回 z=zp）；M4 PSR(r,E[max_N over V])≡DSR(r,N,V)（绑回已绑 DSR·V-path 恒等）。
+- **实装（扩展不替换·复用范式）**：`eval/spine_bindings.py` +MinTRL/PSR proof_backed artifact + 必要性质集（M1 交叉校验·独立 scipy 矩重算 PSR@n=MinTRL / M2 PSR 范围 / M3 abstain 诚实 / M4 PSR-DSR 互校验·构造 sr_pp≈0.85 N=10 落区间内 0.674 有判别力）+ pinned 指纹 `21d30c6a2b851342` + verify_mintrl_consistency；`run_verdict.py` +memoized `_mintrl_spine_status`（懒导入避环）+ `_cold_start_evidence` 注入 spine_consistency + **漂移 fail-soft**（dsr_applicable=False + 数学一致性失败 note·呈现层不动治理闸门）。
+- **对抗测试**：`tests/test_spine_mintrl_binding.py` **12 passed**（含 codex P2 回归 2：正信号误判 never_significant 必抓 / fail-soft note 无 R7 禁词）——种 MinTRL 1.5× 漂移→M1 交叉校验破→门拒；种 PSR +0.1 漂移→M4 互校验破；tripwire；staleness 可达；cold_start 一致→dsr_applicable 不变、漂移→dsr_applicable=False+note。
+- **全量验证**：spine 组 **75 passed**、run_verdict/cold_start **35 passed**；**全量后端 1702 passed / 13 deselected / 1 已知并发 flake**（test_effect_ledger_concurrent_same_key 负载 timeout·隔离 1.09s 绿·非回归；1702+flake=1703=基线 1701+P2 回归 2）。凭真汇总行判绿。
+- **推进**：GOAL §6/§4 + gap #3：脊柱覆盖从信任层三角扩到 MinTRL/PSR + **第二个生产消费点（run verdict cold_start）**治理。**残余**：conformal/attribution/drift 等其余数学点逐个绑；attribution 待其生产消费侧（卡 e4496023）落地再绑。
+- **交付**：worktree `auto/math-spine`（已同步 main）；commit/push 自管、**land main 待用户**。

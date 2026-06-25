@@ -21,6 +21,7 @@ from __future__ import annotations
 
 import math
 from collections import OrderedDict
+from functools import lru_cache
 from typing import Any
 
 from .eval.dsr import minimum_track_record_length, probabilistic_sharpe_ratio
@@ -111,6 +112,24 @@ def _metrics(run) -> dict[str, Any]:
     return m
 
 
+@lru_cache(maxsize=1)
+def _mintrl_spine_status() -> dict[str, Any]:
+    """MinTRL/PSR 实现↔数学定义一致性的脊柱裁定（memoized·懒导入避环·决策 D-MATH-SPINE）。
+
+    cold_start 的业绩期证据充分性建在 MinTRL/PSR 上；若实现漂离定义（交叉校验恒等式破 / 源
+    staleness / 抛错）→ 该判据不可信。呈现层 fail-soft：标 dsr_applicable=False + note（不动治理闸门）。
+    """
+
+    try:
+        from .eval.spine_bindings import MINTRL_PINNED_FINGERPRINT, verify_mintrl_consistency
+
+        d = verify_mintrl_consistency(pinned_code_hash=MINTRL_PINNED_FINGERPRINT)
+        return {"promotable": d.promotable, "granted_label": d.granted_label, "violations": list(d.violations)}
+    except Exception as exc:  # 漂移致执行/签名错 → fail-soft，不让裁决渲染崩
+        return {"promotable": False, "granted_label": "execution_error",
+                "violations": [f"MinTRL/PSR 执行失败：{type(exc).__name__}: {exc}"]}
+
+
 def _cold_start_evidence(net_returns: list[float], confidence: float = 0.95) -> dict[str, Any]:
     """R27 冷启动诚实「证据充分性」（呈现层·不动治理闸门 / 三态裁决）。
 
@@ -141,6 +160,20 @@ def _cold_start_evidence(net_returns: list[float], confidence: float = 0.95) -> 
         note = f"业绩期长度不足：N={n} < 按当前估计所需 {min_trl} 期（{pct} 置信）：证据不足。"
     # **runtime 措辞守门（不只靠测试）**：手拼 note 若含 R7 红线词（仅可能因未来代码改坏注入）→ 退安全兜底，
     # 生产期绝不输出禁词。静态模板正常走不到此分支（=defense-in-depth，与 fail-closed 传统一致）。
+    # Mathematical Spine 一致性核（决策 D-MATH-SPINE）：本业绩期判据建在 MinTRL/PSR 上。
+    # 实现漂离定义（交叉校验恒等式破/staleness/抛错）→ 判据无效，呈现层 fail-soft 诚实标
+    # dsr_applicable=False + note（不动治理闸门/三态裁决；正常路径一致 → 逐位不变、不破基线）。
+    spine = _mintrl_spine_status()
+    dsr_applicable = m.status == "ok"
+    if not spine["promotable"]:
+        dsr_applicable = False
+        # codex P2 修：用「判据无效」避开禁词「可信」（不可信 substring 命中），措辞守门在最后统一拦。
+        note = (
+            "数学一致性失败：MinTRL/PSR 实现偏离数学定义（Mathematical Spine 门拒，"
+            f"granted={spine['granted_label']}）→ 业绩期证据充分性判据无效，以 spine_consistency 字段为准。"
+        )
+    # **措辞守门移到最后（codex P2 修）**：守【最终】note（含 spine fail-soft 分支）——任一 R7 红线词
+    # 出现即退安全兜底串，生产期绝不输出禁词（defense-in-depth，不只靠测试）。
     if any(w in note for w in _BANNED_VERDICT_WORDS):
         note = f"业绩期 N={n}：证据充分性以 sufficient / min_trl 字段为准（本说明仅陈述业绩期长度轴）。"
     return {
@@ -149,9 +182,10 @@ def _cold_start_evidence(net_returns: list[float], confidence: float = 0.95) -> 
         "min_trl_obs": min_trl,                 # ⌈MinTRL⌉ 整数；null=never_significant/insufficient
         "min_trl_status": m.status,             # ok | never_significant | insufficient
         "sufficient": m.sufficient,             # 短业绩期=False（不假绿灯）
-        "dsr_applicable": m.status == "ok",     # 仅 ok（能估 Sharpe）才谈 DSR；N 太小/σ≈0/不超基准 = DSR 不作判据焦点
+        "dsr_applicable": dsr_applicable,       # 仅 ok 且 MinTRL/PSR 实现一致才谈 DSR
         "axis": "track_record_length",          # 本轴 ≠ 过拟合门样本充分性轴（前端归类，防两「证据不足」混读）
         "confidence": confidence,
+        "spine_consistency": {"mintrl": spine},  # MinTRL/PSR 实现↔定义一致性（脊柱治理）
         "note": note,
     }
 

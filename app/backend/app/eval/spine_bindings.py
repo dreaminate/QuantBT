@@ -403,3 +403,136 @@ def verify_bootstrap_consistency(
         BOOTSTRAP_ARTIFACT, binding, [check],
         requested_label=requested_label, current_code_hash=code_hash, data_contract=BOOTSTRAP_DATA_CONTRACT,
     )
+
+
+# ════════════════════ MinTRL + PSR 绑定（交叉校验恒等式）═════════════════════
+# 两条精确解析恒等式（强于纯统计 property）：M1 n=MinTRL→PSR≡confidence；M4 PSR(r,E[max_N])≡DSR(r,N)。
+
+MINTRL_ARTIFACT = MathematicalArtifact(
+    artifact_type=ARTIFACT_STATISTICAL_TEST,
+    statement="MinTRL = 1 + denom²·(Φ⁻¹(p)/(SR_pp−SR*))²（PSR 的解析反解）；PSR=Φ((SR_pp−SR*)√(n−1)/denom)",
+    notation="p=confidence; SR*=per-period 基准; denom=√(1−γ3·SR_pp+(γ4−3+2)/4·SR_pp²); Φ⁻¹=正态分位",
+    assumptions=("返回近 IID（自相关高估有效样本）", "SR_pp>SR*", "confidence∈(0.5,1)"),
+    definition="Minimum Track Record Length（Bailey & López de Prado 2012）：达 confidence 置信所需最小业绩期",
+    derivation="对 PSR(SR*)=confidence 解 n → MinTRL；denom² 与 PSR 同项同钳 → n=MinTRL 时 PSR≡confidence",
+    proof_sketch="代回 n=MinTRL：z=δ·√(denom²(zp/δ)²)/denom=zp → Φ(z)=Φ(Φ⁻¹(p))=p（解析恒等）",
+    counterexamples=("SR_pp≤SR* → never_significant（任何样本不显著）", "n<3 → insufficient（估不出矩）"),
+    units="业绩期数（整数 ⌈MinTRL⌉）",
+    applicability="n≥3、SR_pp>SR*、confidence∈(0.5,1)",
+    failure_conditions=("自相关下高估有效样本→MinTRL 低估（R5 披露）", "短样本自估矩噪声大"),
+    proof_status=PROOF_BACKED,
+    implementation_ref="app/backend/app/eval/dsr.py:minimum_track_record_length",
+    test_ref="app/backend/tests/test_spine_mintrl_binding.py",
+    validation_ref="app/backend/app/run_verdict.py:_cold_start_evidence",
+)
+MINTRL_DATA_CONTRACT = {
+    "known_at": "return_realization_date",
+    "effective_at": "return_realization_date",
+    "desc": "MinTRL/PSR 输入实盘业绩返回按实现日 PIT 戳记，无 look-ahead",
+}
+_MINTRL_IMPL_CHAIN = (
+    _dsr_mod.probabilistic_sharpe_ratio,
+    _dsr_mod.minimum_track_record_length,
+    _dsr_mod._skew,
+    _dsr_mod._kurt_excess,
+)
+MINTRL_PINNED_FINGERPRINT = "21d30c6a2b851342"
+
+
+def mintrl_code_fingerprint() -> str:
+    return code_fingerprint(*_MINTRL_IMPL_CHAIN)
+
+
+def build_mintrl_binding(code_content_hash: str | None = None) -> TheoryImplementationBinding:
+    return TheoryImplementationBinding(
+        theory_ref=MINTRL_ARTIFACT.artifact_id,
+        code_ref="app/backend/app/eval/dsr.py:minimum_track_record_length",
+        code_content_hash=code_content_hash or mintrl_code_fingerprint(),
+        config_ref="eval/dsr:confidence∈(0.5,1),sr_benchmark=per_period",
+        data_contract_ref="contract/track_record_returns_pit",
+        implementation_spec="minimum_track_record_length(returns, sr_benchmark, confidence) + probabilistic_sharpe_ratio(returns, sr_benchmark)",
+        test_refs=("app/backend/tests/test_spine_mintrl_binding.py",),
+        dimension_check="业绩期数（整数）",
+    )
+
+
+def _mintrl_properties(
+    psr_impl=_dsr_mod.probabilistic_sharpe_ratio,
+    mintrl_impl=_dsr_mod.minimum_track_record_length,
+) -> list[tuple[str, bool, str]]:
+    """从 MinTRL/PSR 解析恒等式推出的必要性质（精确交叉校验，确定性）。"""
+
+    fixtures = [
+        (np.linspace(0.0003, 0.0018, 250), 0.0, 0.95),
+        (np.linspace(0.0001, 0.0020, 400), 0.0, 0.99),
+        (0.0012 + 0.004 * np.sin(np.linspace(0.0, 12.0 * math.pi, 300)), 0.0, 0.90),
+    ]
+    props: list[tuple[str, bool, str]] = []
+    for r, srb, conf in fixtures:
+        m = mintrl_impl(r, sr_benchmark=srb, confidence=conf)
+        # codex P2 修：正信号 fixture【必须】判 ok——漂移成 never_significant/insufficient 即把正信号
+        # 误判成「永不显著」=假阴性 bug，绝不静默跳过 M1（否则坏 MinTRL 仅靠 M2/M3/M4 蒙混过关）。
+        status_ok = m.status == "ok"
+        props.append((f"M1status_ok@{conf}", status_ok, f"status={m.status}（正信号 fixture 应 ok）"))
+        if not status_ok:
+            continue
+        # M1：把 n=MinTRL 代回 PSR 的 z（独立 scipy 矩重算）→ 应 ≡ confidence。
+        sd = r.std(ddof=1)
+        sr_pp = r.mean() / sd
+        g3 = float(_scipy_skew(r, bias=True))
+        g4 = float(_scipy_kurt(r, fisher=True, bias=True))
+        denom = math.sqrt(max(1e-12, 1 - g3 * sr_pp + (g4 + 2) / 4.0 * sr_pp**2))
+        z = (sr_pp - srb) * math.sqrt(m.min_trl - 1) / denom
+        psr_at = float(norm.cdf(z))
+        props.append((f"M1_交叉@{conf}", abs(psr_at - conf) < 1e-6, f"PSR(n=MinTRL)={psr_at:.6f}vs{conf}"))
+
+    p0 = psr_impl(fixtures[0][0], 0.0)
+    props.append(("M2_PSR范围", 0.0 <= p0 <= 1.0, f"psr={p0:.4f}"))
+    props.append(("M3_短样本insufficient", mintrl_impl(np.array([0.01, 0.02])).status == "insufficient", "n=2"))
+    neg = np.linspace(-0.002, -0.001, 200)
+    props.append(("M3_不超基准never", mintrl_impl(neg, sr_benchmark=0.0).status == "never_significant", "SR<0"))
+    # M4：PSR(r, E[max_N over V]) ≡ DSR(r, N, var_sr_hat=V)（绑回已绑 DSR · V-path 恒等）。
+    # 构造 sr_pp≈0.85、N=10 让 PSR/DSR 落 (0,1) 区间内（≈0.67）→ 恒等式判别有真牙（不饱和到 0/1）。
+    _b = np.sin(np.linspace(0.0, 30.0, 60))
+    _b = (_b - _b.mean()) / _b.std(ddof=1)
+    r4 = _b * 0.01 + 0.85 * 0.01  # std≈0.01, mean≈0.85·0.01 → sr_pp≈0.85
+    n_trials, v = 10, 0.25
+    emax = _dsr_mod._expected_max_sr(n_trials, v)
+    psr_e = psr_impl(r4, emax)
+    dsr_e = _dsr_mod.deflated_sharpe_ratio(r4, n_trials=n_trials, var_sr_hat=v)
+    interior = 0.05 < psr_e < 0.95  # 落区间内才算判别有效
+    props.append(
+        ("M4_PSR-DSR互校验", abs(psr_e - dsr_e) < 1e-9 and interior, f"PSR={psr_e:.6f},DSR={dsr_e:.6f}")
+    )
+    return props
+
+
+def mintrl_consistency_check(
+    psr_impl=_dsr_mod.probabilistic_sharpe_ratio,
+    mintrl_impl=_dsr_mod.minimum_track_record_length,
+    *,
+    binding=None,
+):
+    binding = binding if binding is not None else build_mintrl_binding()
+    return property_consistency_check(
+        binding.binding_id,
+        _mintrl_properties(psr_impl, mintrl_impl),
+        affected_assets=("MinTRL", "PSR", "run_verdict.cold_start"),
+    )
+
+
+def verify_mintrl_consistency(
+    *,
+    requested_label: str = PROOF_BACKED,
+    psr_impl=_dsr_mod.probabilistic_sharpe_ratio,
+    mintrl_impl=_dsr_mod.minimum_track_record_length,
+    pinned_code_hash: str | None = None,
+    current_code_hash: str | None = None,
+) -> SpineDecision:
+    binding = build_mintrl_binding(code_content_hash=pinned_code_hash)
+    check = mintrl_consistency_check(psr_impl, mintrl_impl, binding=binding)
+    code_hash = current_code_hash if current_code_hash is not None else mintrl_code_fingerprint()
+    return evaluate_promotion(
+        MINTRL_ARTIFACT, binding, [check],
+        requested_label=requested_label, current_code_hash=code_hash, data_contract=MINTRL_DATA_CONTRACT,
+    )

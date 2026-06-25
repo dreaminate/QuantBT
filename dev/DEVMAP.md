@@ -78,6 +78,7 @@
 | c43c6301 | CPCV per-path 分布扩到二分类（roc_auc · proba 路径重组） | done | models-methodology | done |
 | c5960022 | 冷启动 MinTRL 业绩期证据接进裁决卡 UI（能信·不假绿灯在前端） | done | frontend-trust | done |
 | c631817e | 防绿灯错觉——三角裁决按权限模式分层呈现 + 工具真实状态标注 | done | governance-ui | done |
+| c86be35e | MinTRL+PSR 经脊柱绑定（交叉校验恒等式）+ 接 run verdict cold_start | done | math-spine | done |
 | ca3ab3ec | Agent 窗口里程碑进度线 + 跨台台 switcher | done | frontend | done |
 | cb463286 | DS-5 §3 假绿灯修——乐观假成功改诚实失败（correctness） | done | frontend | done |
 | cfb0fea9 | 整套台前端实装 epic（Claude Design handoff → React，DC→React 治理界面投影） | done | frontend-epic | done |
@@ -194,6 +195,7 @@
 | math-spine | 4458ff54 · done | dreaminate |
 | math-spine | a00b3956 · done | dreaminate |
 | math-spine | b85e34cc · done | dreaminate |
+| math-spine | c86be35e · done | dreaminate |
 | models-methodology | 2da39479 · done | dreaminate |
 | models-methodology | 74f93771 · done | dreaminate |
 | models-methodology | c43c6301 · done | dreaminate |
