@@ -6,6 +6,9 @@
 
 | uuid8 | 标题 | status | area | 位置 |
 |---|---|---|---|---|
+| 872af176 | QRO 模型↔Factor library 完整语义切分——模型本体进 Model Registry/输出进 Signal Contract/因子在 Factor Library（A-QRO-2） | in_progress | qro | active |
+| e2afc5c2 | 三档成本预设接 sqrt-impact 默认 + 成交报告 impact 成本归因拆字段 | in_progress | execution-cost | active |
+| e4496023 | 因子收益归因接消费侧（组合台/归因报告 + UI 呈现） | in_progress | eval-methodology | active |
 | 0430cd78 | 数据更新写时强约束——dataset_version/checksum/lineage 升 block 门（B-VERSION-1） | done | data-pit | done |
 | 05d6f511 | 单人 self-approve 仅非真钱通道(冷却+留痕)，真钱硬双人 | done | approval | done |
 | 0781bb13 | RDP 聚合器——从真血统装配 RDP（DatasetVersion/LLMCallRecord/honest-N/verdict 真填）（D-RDP-2） | done | delivery | done |
@@ -131,8 +134,6 @@
 | 861182e6 | CPCV 接 promote/overfit gate + cv_scheme 双轨 report（价值闭环） | todo | eval-methodology |
 | 92a2182f | conformal 区间消费侧接线——模型台/信号层预测附校准区间 + abstain UI 呈现 | todo | eval-methodology |
 | aa13c3b0 | 因子机构级度量接 lifecycle 状态机/sizing 生产路径 | todo | factor-lifecycle |
-| e2afc5c2 | 三档成本预设接 sqrt-impact 默认 + 成交报告 impact 成本归因拆字段 | todo | execution-cost |
-| e4496023 | 因子收益归因接消费侧（组合台/归因报告 + UI 呈现） | todo | eval-methodology |
 
 ## 按 area 功能索引
 
@@ -181,6 +182,7 @@
 | delivery | 9d593481 · done | dreaminate |
 | desktop | bc21c7c1 · done | dreaminate |
 | docs | ecbd0eab · done | dreaminate |
+| eval-methodology | e4496023 · in_progress | dreaminate |
 | eval-methodology | 41ea6e35 · done | dreaminate |
 | eval-methodology | 69e1cb16 · done | dreaminate |
 | eval-methodology | 6acbb499 · done | dreaminate |
@@ -189,6 +191,7 @@
 | eval-methodology | d4a324ae · done | dreaminate |
 | eval-methodology | f1bd08f2 · done | dreaminate |
 | eval-methodology | ff286f80 · done | dreaminate |
+| execution-cost | e2afc5c2 · in_progress | dreaminate |
 | execution-cost | 6e264c59 · done | dreaminate |
 | execution-cost | 7179ba36 · done | dreaminate |
 | execution-cost | 7ac5a0fe · done | dreaminate |
@@ -244,6 +247,7 @@
 | paper-fullstack | cfb7d950 · done | dreaminate |
 | portfolio | 46f1cb3c · done | dreaminate |
 | portfolio | ba59fb7b · done | dreaminate |
+| qro | 872af176 · in_progress | dreaminate |
 | qro | f19c5c19 · done | dreaminate |
 | research-graph | 76a611d3 · done | dreaminate |
 | review | 3d4a872e · done | dreaminate |

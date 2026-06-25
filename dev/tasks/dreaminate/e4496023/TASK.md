@@ -1,8 +1,8 @@
 ---
 uuid: e4496023a0994583955ef00f00d319a2
 title: 因子收益归因接消费侧（组合台/归因报告 + UI 呈现）
-status: todo
-owner: wait
+status: in_progress
+owner: dreaminate
 assigned_by: dreaminate
 review_status: 0
 priority: P2
