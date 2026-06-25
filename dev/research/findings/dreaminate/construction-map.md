@@ -41,19 +41,24 @@
 
 **第二波起**（LINE-A 出契约后扇出·当前最强上游瓶颈）：QRO/Graph/Compiler/Command、LLM Gateway/Registry/Routing、Document Intelligence、StrategyBook/Forecast/方法学控制面、RDP 聚合器接 promote、发版门禁。**LINE-A（对象脊柱）是几乎全部下游的依赖**——wave-1 land 后中心宜开 LINE-A 线（greenfield `qro/graph/command/compiler`·收编 ids/kernel/ledger 不重造）。中心每完成一卡从更新后就绪前沿补派，保持 ≤5 满载。
 
-## 3. 拍板项清单（opus 绝不擅自做·点名）
+## 3. 「拍板项」绝大多数是 GOAL 已决——读 GOAL 直接建，别当开放决策问用户
 
-1. §11 多资产范围（期权/期货/债券/FX/商品是否本期做）= 产品范围决策。
-2. 方法学控制面 6 档阈值口径 + 新档位语义。
-3. 因子退役/去重硬阈值（R21 流程已拍·数值待拍）。
-4. 模型风险分层/materiality 口径。
-5. 专家否决权 override 边界（R26 可 override「可证伪经济错觉」≠「方法学松紧」）。
-6. 用户方法学自主权流程（系统只记录 MethodologyChoiceRecord 不替决）。
-7. 生产 profile 松紧（mock/profile 边界是用户那摊·只守 no-silent-mock 红线）。
-8. PDF 解析库选型 + 文档解析能力边界。
-9. **A股 live 边界**（GOAL §12 说未来治理可开·但 RULES.project「A股永不实盘」更严·**按更严·绝不擅动**）。
-10. mainnet 100U 一周实盘（用户亲自按键·agent 绝不动钱）。
-11. LLM 默认路由策略（成本优先 vs 质量优先·只摆选项）。
+> **2026-06-26 用户纠正（多看 GOAL·有答案·不用问·直接做）**：此前把 GOAL §0-§17 已明确写死的终态当成「待拍板」列给用户 = 没好好看 GOAL。**opus 线遇到这些读 GOAL 对应节直接建，绝不问用户。**
+
+**GOAL 已决（照建·不问）**：
+1. **多资产范围 = §0(line 13-15)+§11 已决**：面向所有公开二级市场（股/指数/ETF/基金/债/利率/FX/期货/商品/期权/加密现货·永续·期权/宏观/链上/另类/自定义）；IPO/一级/私募/HFT/做市在外。§11 给每类资产语义（期权 expiry/strike/multiplier/settlement、期货 roll、债 duration、FX rollover）+ MarketCapabilityMatrix + 可证伪验收（缺 expiry/strike→拒）。
+2. **方法学控制面 6 档 = §10 已决**：strict/standard/loose/exploratory/custom/user_waived 六档命名 + 语义（系统展示代价/证据缺口/适用环境/推荐/责任边界·**user 运行时自选**·记 MethodologyChoiceRecord·按真实状态限制展示·晋级·导出·运行）。**这是系统提供的用户运行时旋钮，不是我问用户的拍板。**
+3. **因子退役/去重 = §9/§3+R21 已决**：生命周期七阶段（衰减/拥挤/容量/因子族/相似冗余/退役/跨策略复用）+ 可证伪验收「退役因子被新策略默认采用→拒」；具体数值是 §10 用户可配档。
+4. **模型风险分层/materiality = §15 已决**：model_risk_tier/materiality/intended_use/prohibited_use 是必含治理字段；高风险缺 challenger_result→拒、晋级缺 ValidationDossier→拒。
+5. **artifact 安全 enforce = §15 已决**：external pickle **blocked by default** + producer-run+hash binding + safe tensors preferred + torch weights_only + sandboxed load。**enforce 默认开是终态**（W1 接全 producer 后默认开·非永久 opt-in；opt-in 仅作 producer 未接齐时的过渡）。
+6. **用户方法学自主权 = §10/§13 已决**：系统记录 MethodologyChoiceRecord、user 选松紧/跳过、放宽不得标强证据/生产可上线。生产 profile 松紧同属 §10/§16 用户运行时档（系统提供·不问）。
+7. **LLM 默认路由 = D-LLM-ROUTING 已决**（2026-06-26 用户拍·混合自适应·可配）。
+
+**genuine 人类动作项（非设计决策·我无需拍）**：
+- **A股 live**：RULES.project「A股永不实盘」**锁死·绝不擅动**（比 GOAL §12「未来治理可开」更严·按更严）。
+- **mainnet 100U 一周实盘**：用户**亲自按键**·agent 绝不动钱。
+
+**真·开放（GOAL 留作用户运行时·非我拍）**：方法学松紧档由 user 运行时选（§10）。实现细节（如 PDF 解析库 §6）按能力边界选合理默认·不问。**总则：遇「要不要/松紧/范围」先翻 GOAL §0-§17——基本都已决；GOAL 真没写且是不可逆/动钱才点名用户。**
 
 ## 4. 红线守卫（全程·任一违反即停工）
 
