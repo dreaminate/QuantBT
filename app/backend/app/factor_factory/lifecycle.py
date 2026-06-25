@@ -16,12 +16,20 @@
 
 from __future__ import annotations
 
+import json
+import os
 from dataclasses import asdict, dataclass, field
 from datetime import UTC, datetime
-from typing import Any, Literal
+from pathlib import Path
+from typing import Any, Literal, Protocol, runtime_checkable
 
 from .lifecycle_metrics import DecayEstimate, ic_decay_half_life
 from .registry import Factor, FactorRegistry, LifecycleState
+
+# 卡 554cdcf2 残余③：观测跨重启持久化的环境开关（默认空=纯内存，与历史行为逐位一致）。
+# 生产由运维显式置此 env 指向落盘文件即开启（main.py 构造 `LifecycleManager(FACTOR_REGISTRY)`
+# 不带 store，故落盘只能经此 env 接通——绝不改 main.py）。摆代价+默认关：是否落盘=用户运营决策。
+_OBS_STORE_ENV = "QUANTBT_LIFECYCLE_OBS_STORE"
 
 
 @dataclass
@@ -120,13 +128,74 @@ def evaluate_transition(
     return state
 
 
+@runtime_checkable
+class ObservationStore(Protocol):
+    """观测落盘后端契约（卡 554cdcf2 残余③）。
+
+    `append` 追加单条观测、`load_all` 重建 `(factor_id, version) → [观测]`。
+    纯内存场景 store=None（不落盘）；落盘场景注入 `JsonlObservationStore`。
+    """
+
+    def append(self, observation: FactorObservation) -> None: ...
+
+    def load_all(self) -> dict[tuple[str, int], list[FactorObservation]]: ...
+
+
+class JsonlObservationStore:
+    """append-only JSONL 观测落盘（跨重启持久化）。
+
+    每行一条 `FactorObservation.to_dict()`；`load_all` 逐行重建历史。append-only ⇒ 与
+    in-memory append 语义同构、可跨进程重放（WARNING→RETIRED 需连续 2 周负观测：重启不再清零）。
+    复用 `FactorRegistry` 的 JSON 落盘范式（registry 自己也落 JSON），不另造存储层。
+    """
+
+    def __init__(self, path: str | Path) -> None:
+        self._path = Path(path)
+
+    @property
+    def path(self) -> Path:
+        return self._path
+
+    def append(self, observation: FactorObservation) -> None:
+        self._path.parent.mkdir(parents=True, exist_ok=True)
+        with self._path.open("a", encoding="utf-8") as fh:
+            fh.write(json.dumps(observation.to_dict(), ensure_ascii=False) + "\n")
+
+    def load_all(self) -> dict[tuple[str, int], list[FactorObservation]]:
+        result: dict[tuple[str, int], list[FactorObservation]] = {}
+        if not self._path.exists():
+            return result
+        for line in self._path.read_text(encoding="utf-8").splitlines():
+            line = line.strip()
+            if not line:
+                continue
+            obs = FactorObservation(**json.loads(line))
+            result.setdefault((obs.factor_id, obs.version), []).append(obs)
+        return result
+
+
 class LifecycleManager:
     """把状态迁移与 FactorRegistry 绑定，记录事件日志。"""
 
-    def __init__(self, registry: FactorRegistry, thresholds: LifecycleThresholds | None = None) -> None:
+    def __init__(
+        self,
+        registry: FactorRegistry,
+        thresholds: LifecycleThresholds | None = None,
+        *,
+        store: ObservationStore | None = None,
+    ) -> None:
         self._registry = registry
         self._thresholds = thresholds or LifecycleThresholds()
-        self._observations: dict[tuple[str, int], list[FactorObservation]] = {}
+        # 残余③：store 显式注入优先；否则看 env（默认空=纯内存，与历史逐位一致、不破基线）。
+        if store is None:
+            env_path = os.environ.get(_OBS_STORE_ENV, "").strip()
+            if env_path:
+                store = JsonlObservationStore(env_path)
+        self._store: ObservationStore | None = store
+        # 有 store 则从落盘重建历史（跨重启续上前几周负观测）；无则空起。
+        self._observations: dict[tuple[str, int], list[FactorObservation]] = (
+            store.load_all() if store is not None else {}
+        )
         self._events: list[LifecycleEvent] = []
 
     @property
@@ -136,6 +205,9 @@ class LifecycleManager:
     def record_observation(self, observation: FactorObservation) -> None:
         key = (observation.factor_id, observation.version)
         self._observations.setdefault(key, []).append(observation)
+        # 残余③：有 store 则同步落盘（跨重启不清零）；无 store 行为与历史一致。
+        if self._store is not None:
+            self._store.append(observation)
 
     def history(self, factor_id: str, version: int) -> list[FactorObservation]:
         return list(self._observations.get((factor_id, version), []))
@@ -187,9 +259,11 @@ class LifecycleManager:
 
 __all__ = [
     "FactorObservation",
+    "JsonlObservationStore",
     "LifecycleEvent",
     "LifecycleManager",
     "LifecycleThresholds",
+    "ObservationStore",
     "TransitionOutcome",
     "evaluate_transition",
 ]
