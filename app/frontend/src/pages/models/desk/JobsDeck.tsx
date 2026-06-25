@@ -28,7 +28,7 @@ import {
 import type { BackendJob } from "./modelApi";
 
 /**
- * 作业台（jobs · DC §A 三栏）：训练队列 + dashboard（实时曲线/算力/CV folds/动机文档）+ 训练助手。
+ * 作业台（jobs · DC §A 三栏）：训练队列 + dashboard（实时曲线/算力/CV folds/动机文档）+ 训练诊断。
  * P0：mock 数据驱动，全区块挂 MockBadge；曲线由 epoch（受控 props）派生。
  */
 
@@ -189,7 +189,7 @@ function QueuePanel({
           {jobs.length} 个
         </span>
         {isLive ? (
-          <Pill tone="info" title="训练队列来自 GET /api/training/jobs">接真</Pill>
+          <Pill tone="info" title="训练队列来自 GET /api/training/jobs">真实数据</Pill>
         ) : (
           <MockBadge />
         )}
@@ -760,7 +760,7 @@ function QueuedPlaceholder() {
   );
 }
 
-// --------------------------- 右：训练助手 ---------------------------
+// --------------------------- 右：训练诊断 ---------------------------
 
 function AssistPanel({
   open,

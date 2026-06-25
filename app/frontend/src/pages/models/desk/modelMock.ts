@@ -122,7 +122,7 @@ export const JOBS: TrainJob[] = [
     elapsed: "8.2s",
     ndcg: "0.231",
     detail: {
-      why: "为策略台 fs_core3 做排序基线——LambdaRank 直接优化截面 NDCG。先有一个可信、便宜、可解释的基准，再谈深度模型是否带来真增量。",
+      why: "为策略台 fs_core3 做排序基线——LambdaRank 直接优化截面 NDCG。先有一个证据更清楚、成本更低、可解释的基准，再谈深度模型是否带来增量。",
       data: "equity_cn 5412 标的 · 日频量价+财务+SUE · 28 个 QUALIFIED 因子",
       window: "训练 2019-01 ~ 2023-12 · OOS 留 2024 全年",
       label: "fwd_ret_5（5 日前向收益）截面排序",

@@ -3,7 +3,7 @@ import { screen } from "@testing-library/react";
 import { renderWithDesk } from "../../../test/harness";
 
 /**
- * DS-4 §3 对抗：空壳（bars_fed=0）run 的 run tab 绝不挂「LIVE 已接真」角标——
+ * DS-4 §3 对抗：空壳（bars_fed=0）run 的 run tab 绝不挂「LIVE 真实数据」角标——
  * 后端在场但未喂数据（未真跑）时不假绿灯。LIVE 角标硬绑真实 bars_fed>0。
  */
 const { equityEmpty } = vi.hoisted(() => ({ equityEmpty: vi.fn(async () => ({ equity_log: [] })) }));
@@ -48,8 +48,8 @@ describe("模拟台空壳（bars_fed=0）不假绿灯", () => {
     // 先正向断言 live 数据已 resolve（独特标记只在 live.sched 就位后渲染）——
     // 确保我们真在考核 barsFed>0 这道门，而非首帧 live=null 的退化通过。
     await screen.findByText("SHELL-LOADED-MARKER");
-    // live 已就位但 bars_fed=0：run tab 绝不出现「LIVE 已接真」——退回 MOCK 角标（诚实）
-    expect(screen.queryByText("LIVE 已接真")).toBeNull();
+    // live 已就位但 bars_fed=0：run tab 绝不出现「LIVE 真实数据」——退回 MOCK 角标（诚实）
+    expect(screen.queryByText("LIVE 真实数据")).toBeNull();
     expect(screen.getByText("MOCK 数据")).toBeInTheDocument();
   });
 });

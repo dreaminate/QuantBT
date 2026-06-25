@@ -1,7 +1,7 @@
 # 用订阅额度跑 QuantBT（Hermes 本地 OAuth 代理）
 
 如果你已经有 **Claude Code** 或 **Codex** 这类带订阅额度的工具，可以不另外买 API key——
-跑一个**本地 OAuth 代理**（如 Hermes），把订阅额度暴露成一个 OpenAI 兼容端点，
+运行一个**本地 OAuth 代理**（如 Hermes），把订阅额度暴露成一个 OpenAI 兼容端点，
 再让 QuantBT 指向它。整条链路里：
 
 - OAuth 登录 + token 刷新**全程在代理侧**，QuantBT 既不实现 OAuth、也不接触你的订阅 token；
@@ -11,10 +11,10 @@
 
 ---
 
-## 1. 跑一个本地 OAuth 代理（Hermes 等）
+## 1. 运行一个本地 OAuth 代理（Hermes 等）
 
 任选一个把订阅额度转成 OpenAI 兼容 API 的本地代理。以一个监听在 `8787` 端口的代理为例，
-它跑起来后应能提供形如下面的端点：
+它启动后应能提供形如下面的端点：
 
 ```
 http://localhost:8787/v1/chat/completions
@@ -25,7 +25,7 @@ http://localhost:8787/v1/chat/completions
   常见如 `claude-sonnet-4.5`；以代理输出为准）。
 - 自检：代理在线时，`curl http://localhost:8787/v1/models` 应能列出可用模型。
 
-代理不在线时，QuantBT 的「接真」对话会**如实报连接失败**（不会假装成功）——
+代理不在线时，QuantBT 的真实流对话会**如实报连接失败**（不会假装成功）——
 这是预期行为，把代理拉起来再试即可。
 
 ---
@@ -65,7 +65,7 @@ curl -X POST http://127.0.0.1:8000/api/llm/configure \
 
 1. 去 **设置 · 安全设置** 底部的 **「LLM Providers · 连接测试」**，对 `custom` 点 **测试连接**——
    它会真发一条 ping，把回包预览如实贴出来（失败也照实显示报错）。
-2. 回 **Agent 工作台**，确认右上是 **● LIVE · 接真**（默认就是接真），
+2. 回 **研究执行台**，确认右上是 **● LIVE · 真实流**（默认就是实时流），
    发一句「组装一个 A股周频多因子策略」。走真流时不会挂 `MOCK` 角标；
    想看脚本演示再点 **▶ 看演示（mock）**，演示态会全程挂 `MOCK` 角标，两者不会混淆。
 
@@ -75,7 +75,7 @@ curl -X POST http://127.0.0.1:8000/api/llm/configure \
 
 | 现象 | 多半原因 | 处理 |
 |---|---|---|
-| 接真对话报「流启动失败 / 连接失败」 | 代理没起 / 端口或 `/v1` 路径不对 | 先 `curl .../v1/models` 自检，再核对 Base URL |
+| 真实流对话报「流启动失败 / 连接失败」 | 代理没起 / 端口或 `/v1` 路径不对 | 先 `curl .../v1/models` 自检，再核对 Base URL |
 | 测试连接报 401 / 鉴权失败 | 代理侧 OAuth 过期或没登录 | 在代理侧重新登录授权 |
 | 回的内容明显是占位/兜底 | 没配任何 provider，落到了 DevLocalLLM | 确认 `/settings/llm` 状态里 `custom` 显示「已配置」 |
 | 模型名报不存在 | Model 别名和代理给的不一致 | 用 `/v1/models` 列出的名字 |

@@ -6,7 +6,7 @@ import { trackEvent } from "../glossary/trackEvent";
  * v0.8.5.1 · 首次 run 引导 banner
  *
  * 出现条件：localStorage 没标记 "qb-first-run-completed"
- * 5 步引导：登录 → 跑 demo → 看风险卡 → 改一个变量 → 看 Mode 2 教练
+ * 5 步引导：登录 → 跑 demo → 看风险卡 → 改一个变量 → 看诊断台
  */
 
 interface Step {
@@ -73,7 +73,7 @@ export function OnboardingBanner() {
         <div>
           <div style={{ fontWeight: 600, marginBottom: 2 }}>👋 新手 5 步引导</div>
           <div className="cc-soft" style={{ fontSize: 12 }}>
-            QuantBT 不是收益机器，是研究和风控工坊。先跑通流程，再看你能不能证明策略有效。
+            QuantBT 不是收益机器，是研究和风控工作台。先跑通流程，再看证据是否支持策略进入下一步。
           </div>
         </div>
         <button

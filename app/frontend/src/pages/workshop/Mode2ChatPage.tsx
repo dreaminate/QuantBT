@@ -3,7 +3,7 @@ import { useSearchParams } from "react-router-dom";
 import { authFetch, getStoredUser } from "../../lib/auth";
 
 /**
- * v0.8.6 · Mode 2 教学型多轮 chat (/chat)
+ * v0.8.6 · 诊断台多轮研究问答 (/chat)
  *
  * - 左：thread 列表（按 updated_at 倒序）
  * - 中：当前 thread 消息流 + RAG hit 标记
@@ -250,7 +250,7 @@ export function Mode2ChatPage() {
   if (!me) {
     return (
       <div className="cc-card cc-dim" style={{ padding: 24 }}>
-        请先登录后使用 Mode 2 研究问答。
+        请先登录后使用诊断台研究问答。
       </div>
     );
   }
@@ -259,7 +259,7 @@ export function Mode2ChatPage() {
     <>
       <div className="cc-page-header">
         <div>
-          <h1 className="cc-page-title">{"// Mode 2 · 策略研究问答"}</h1>
+          <h1 className="cc-page-title">{"// 诊断台 · 策略研究问答"}</h1>
           <div className="cc-soft">研究流程问答 + 风控复核 · 多轮对话 · 术语库检索（RAG）</div>
         </div>
         <div className="cc-page-actions">
@@ -330,7 +330,7 @@ export function Mode2ChatPage() {
               </div>
               <div style={{ flex: 1, overflow: "auto", padding: 12 }}>
                 {messages.length === 0 ? (
-                  <div className="cc-dim">空对话。提个问题开始（例：你能解释 PBO 吗？或：我这次 Sharpe 1.5 可信吗？）</div>
+                  <div className="cc-dim">空对话。提个问题开始（例：你能解释 PBO 吗？或：我这次 Sharpe 1.5 的证据够吗？）</div>
                 ) : (
                   messages.map((m) => (
                     <MessageBubble key={m.message_id} m={m} />
@@ -384,7 +384,7 @@ function MessageBubble({ m }: { m: ChatMessage }) {
         }}
       >
         <div className="cc-dim" style={{ fontSize: 10, marginBottom: 4 }}>
-          {isUser ? "你" : "Mode 2 助手"} · {m.created_at_utc.slice(11, 19)}
+          {isUser ? "你" : "诊断台"} · {m.created_at_utc.slice(11, 19)}
         </div>
         <div style={{ whiteSpace: "pre-wrap" }}>{m.content}</div>
         {m.metadata?.rag_hits && m.metadata.rag_hits.length > 0 && (

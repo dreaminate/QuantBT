@@ -1,5 +1,5 @@
 /**
- * Model台后端封装（M2 接真）。authFetch 自动带 Bearer。
+ * Model 台真实后端封装（M2）。authFetch 自动带 Bearer。
  *
  * 对接 main.py 已有/本卡新增端点：
  *  - GET  /api/training/jobs                     训练队列（含 detail 富文档透传）

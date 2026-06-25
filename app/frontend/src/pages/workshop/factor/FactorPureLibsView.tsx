@@ -55,7 +55,7 @@ export function FactorPureLibsView({ tryId, onTry }: FactorPureLibsViewProps) {
   // 本地范畴门判定 = 渲染裁决的确定性来源（离线可用、测试稳定）。
   const localAdmit = trying ? admitToFactorLib(trying.kind, trying.ref) : null;
 
-  // 接真 POST /api/factors/admit：后端范畴门复核（R17 单一守卫两端镜像）。
+  // 真实后端 POST /api/factors/admit：后端范畴门复核（R17 单一守卫两端镜像）。
   // 后端裁决到达即覆盖本地（两端口径一致，仅做服务端权威确认）；离线/未登录回落本地。
   const [serverAdmit, setServerAdmit] = useState<AdmitResult | null>(null);
   const [admitLive, setAdmitLive] = useState(false);
@@ -100,7 +100,7 @@ export function FactorPureLibsView({ tryId, onTry }: FactorPureLibsViewProps) {
       <div style={{ maxWidth: 1080, margin: "0 auto" }}>
         {/* 顶部说明：两层解耦原则 */}
         <PanelCard accentBorder style={{ marginBottom: 16 }}>
-          <SectionTitle glyph="⛬" right={<MockBadge label="MOCK 库列表 · 入库范畴门已接真 /api/factors/admit（R17）" />}>
+          <SectionTitle glyph="⛬" right={<MockBadge label="MOCK 库列表 · 入库范畴门已接入 /api/factors/admit 真实后端（R17）" />}>
             三纯库 · 两层解耦（算术 / ML / DL 互不混装）
           </SectionTitle>
           <div style={{ fontSize: 11.5, color: "var(--desk-text-dim)", lineHeight: 1.7 }}>

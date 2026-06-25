@@ -133,12 +133,12 @@ export function StrategyConsolePage() {
   const [inspTab, setInspTab] = useState<InspectorTab>("params");
   const [dockTab, setDockTab] = useState<DockTab>("preview");
 
-  // ── Agent ──
+  // ── 实现面板 ──
   const [draft, setDraft] = useState("");
   const [blocks, setBlocks] = useState<AgentBlock[]>(() => [
     { id: "b1", type: "user", text: "组装 A股周频多因子策略：超额15% / 回撤≤20%，从因子台和 Model台选资产，跑回测。" },
     { id: "b2", type: "think", text: "立题→市场&标的(独立)→数据→因子集(因子台)→Model(Registry引用)→信号→入场退出→仓位优化→PortfolioRisk→FinalRiskGate→执行→回测。" },
-    { id: "b3", type: "say", text: "已搭好完整链路（16 节点 / 19 连线），端口全兼容、Final Risk Gate 不可绕过。我还有一条改进建议 ↓（Ask 模式：先看 Ghost 预览再决定）。" },
+    { id: "b3", type: "say", text: "已生成一版研究图草稿（16 节点 / 19 连线），端口兼容性和 Final Risk Gate 仍需真实管线验证。我还有一条改进建议 ↓（Ask 模式：先看 Ghost 预览再决定）。" },
   ]);
   const [proposalLive, setProposalLive] = useState(true);
 
@@ -168,7 +168,7 @@ export function StrategyConsolePage() {
 
   // 本地（渲染期 derived）校验：常驻、即时；后端校验是权威复核（runValidate 触发）。
   const localValidation = useMemo(() => validateGraph(nodes, edges), [nodes, edges]);
-  // 后端权威校验结果（接真）；null = 尚未向后端复核过，用本地结果兜底显示。
+  // 后端权威校验结果（真实后端）；null = 尚未向后端复核过，用本地结果兜底显示。
   const [backendValidation, setBackendValidation] = useState<GraphValidation | null>(null);
   const [validateErr, setValidateErr] = useState<string | null>(null);
   // 图一变，旧的后端校验即失效（防显示过期绿灯）——回落本地常驻校验。
@@ -177,11 +177,11 @@ export function StrategyConsolePage() {
   }, [nodes, edges]);
   const validation = backendValidation ?? localValidation;
 
-  // ── 版本史（接真：GET .../versions）──
+  // ── 版本史（真实后端：GET .../versions）──
   const [versions, setVersions] = useState<BackendVersion[] | null>(null);
   const [versionsErr, setVersionsErr] = useState<string | null>(null);
 
-  // ── Live 只读快照（接真：GET .../live_snapshot；A股 live 永拒）──
+  // ── Live 只读快照（真实后端：GET .../live_snapshot；A股 live 永拒）──
   const [liveSnap, setLiveSnap] = useState<BackendLiveSnapshot | null>(null);
   const [liveErr, setLiveErr] = useState<string | null>(null);
 
@@ -261,7 +261,7 @@ export function StrategyConsolePage() {
   const onConnect = useCallback(
     (_ref: PortRef, _side: "in" | "out") => {
       if (readOnly) return;
-      // P0：连线门已在 compat() 编码；交互建边走 marquee/手势在后续轮接真，
+      // P0：连线门已在 compat() 编码；交互建边走 marquee/手势在后续轮接入真实后端，
       // 此处保留回调签名以满足 GraphCanvas 受控契约。
     },
     [readOnly],
@@ -445,7 +445,7 @@ export function StrategyConsolePage() {
     setBlocks((prev) => prev.map((b) => (b.id === id ? { ...b, reverted: true } : b)));
   }
 
-  // ── runtime 切换：清选中；live→只读 + 拉 Live 只读快照（接真）──
+  // ── runtime 切换：清选中；live→只读 + 拉 Live 只读快照（真实后端）──
   function changeRuntime(r: Runtime): void {
     setRuntime(r);
     setSelection({ nodeIds: [], edgeIds: [] });
@@ -471,7 +471,7 @@ export function StrategyConsolePage() {
     });
   }
 
-  // ── 校验（接真）：清选中 + 开右栏 + 向后端权威复核（B6 三层后端再判一次）──
+  // ── 校验（真实后端）：清选中 + 开右栏 + 向后端权威复核（B6 三层后端再判一次）──
   function runValidate(): void {
     setSelection({ nodeIds: [], edgeIds: [] });
     setRightOpen(true);
@@ -493,7 +493,7 @@ export function StrategyConsolePage() {
       .catch((e: Error) => setValidateErr(e.message)); // 不假绿灯：后端失败如实标，保留本地校验
   }
 
-  // ── Fork（live 下，接真）：后端策略级 fork（血缘锚 lineage/ids.py）→ runtime→backtest ──
+  // ── Fork（live 下，真实后端）：后端策略级 fork（血缘锚 lineage/ids.py）→ runtime→backtest ──
   function fork(): void {
     void forkStrategy(STRATEGY_NAME)
       .then((forked) => {
@@ -569,17 +569,17 @@ export function StrategyConsolePage() {
     </DeskTopBar>
   );
 
-  // ── LEFT · AgentChat ──
+  // ── LEFT · implementation chat ──
   const modeHint: Record<PermissionMode, string> = {
     ask: "Ask：先出 Ghost 提议预览，由你 accept/reject —— 不自动改图。",
     auto: "Auto：事务化直接改草稿（加节点），可整轮 Undo + Patch ID。",
     bypass: "Bypass：批量自跑 —— 但治理门（Final Gate / 发布审批 / 真钱）仍不可绕过。",
   };
   const left = (
-    <CollapsiblePanel open={leftOpen} onToggle={() => setLeftOpen((o) => !o)} side="left" width={316} label="Agent">
+    <CollapsiblePanel open={leftOpen} onToggle={() => setLeftOpen((o) => !o)} side="left" width={316} label="实现面板">
       <div style={panelHeader}>
         <span style={{ color: "var(--desk-accent)", fontWeight: 700 }}>✳</span>
-        <span style={{ fontWeight: 600 }}>Agent</span>
+        <span style={{ fontWeight: 600 }}>实现面板</span>
         <div style={{ flex: 1 }} />
         <SegmentedControl<PermissionMode>
           options={[

@@ -3,11 +3,11 @@ import { useNavigate } from "react-router-dom";
 import { authFetch, getStoredUser } from "../../lib/auth";
 
 /**
- * v0.8.2 · 聚宽风 IDE + BigQuant 风 AI 辅助
+ * v0.8.2 · 聚宽风 IDE + 代码生成/说明面板
  *
  * - 左：策略文件列表 (我的策略 + 新建)
- * - 中：代码编辑器 (textarea + 行号槽) + 顶部 toolbar(运行/保存/AI)
- * - 右：tab(运行输出 / AI 助手)
+ * - 中：代码编辑器 (textarea + 行号槽) + 顶部 toolbar(运行/保存/生成)
+ * - 右：tab(运行输出 / 代码生成)
  *
  * 用户代码协议：
  *   quantbt.emit_result({"equity_curve": [...], "trades": [...], "sharpe": 1.5, ...})
@@ -78,7 +78,7 @@ quantbt.emit_result({
 })
 `;
 
-interface AIContext {
+interface GenerationContext {
   connectors: { name: string; asset_class?: string; kind?: string }[];
   factors: { factor_id: string; lifecycle_state?: string; description?: string }[];
   operators: { name?: string }[];
@@ -102,12 +102,12 @@ export function IDEPage() {
   const [activeRun, setActiveRun] = useState<IDERun | null>(null);
   const [running, setRunning] = useState(false);
   const [saving, setSaving] = useState(false);
-  const [rightTab, setRightTab] = useState<"output" | "ai">("output");
-  const [aiPrompt, setAIPrompt] = useState("帮我写一个 RSI 双门限均值回归 + 1% 单标的上限的策略");
-  const [aiMode, setAIMode] = useState<"write" | "explain" | "fix">("write");
-  const [aiBusy, setAIBusy] = useState(false);
-  const [aiReply, setAIReply] = useState("");
-  const [aiContext, setAIContext] = useState<AIContext | null>(null);
+  const [rightTab, setRightTab] = useState<"output" | "codegen">("output");
+  const [generationPrompt, setGenerationPrompt] = useState("帮我写一个 RSI 双门限均值回归 + 1% 单标的上限的策略");
+  const [generationMode, setGenerationMode] = useState<"write" | "explain" | "fix">("write");
+  const [generationBusy, setGenerationBusy] = useState(false);
+  const [generationReply, setGenerationReply] = useState("");
+  const [generationContext, setGenerationContext] = useState<GenerationContext | null>(null);
   const [showContext, setShowContext] = useState(false);
   const [promoting, setPromoting] = useState(false);
 
@@ -133,7 +133,7 @@ export function IDEPage() {
     if (!userId) return;
     authFetch("/api/ide/ai_context")
       .then((r) => (r.ok ? r.json() : null))
-      .then((c) => c && setAIContext(c))
+      .then((c) => c && setGenerationContext(c))
       .catch(() => {/* noop */});
   }, [userId]);
 
@@ -216,27 +216,27 @@ export function IDEPage() {
     reload();
   };
 
-  const askAI = async () => {
-    if (!aiPrompt.trim()) return;
-    setAIBusy(true);
-    setAIReply("");
+  const askModel = async () => {
+    if (!generationPrompt.trim()) return;
+    setGenerationBusy(true);
+    setGenerationReply("");
     try {
       const res = await authFetch("/api/ide/ai_complete", {
         method: "POST",
         headers: { "content-type": "application/json" },
-        body: JSON.stringify({ prompt: aiPrompt, context_code: code, mode: aiMode }),
+        body: JSON.stringify({ prompt: generationPrompt, context_code: code, mode: generationMode }),
       });
       if (!res.ok) {
-        const err = await res.json().catch(() => ({ detail: "AI 调用失败" }));
-        setAIReply(`[ERROR] ${err.detail || res.status}`);
+        const err = await res.json().catch(() => ({ detail: "模型调用失败" }));
+        setGenerationReply(`[ERROR] ${err.detail || res.status}`);
         return;
       }
       const data = await res.json();
-      setAIReply(data.code || "(LLM 无内容)");
+      setGenerationReply(data.code || "(LLM 无内容)");
     } catch (err) {
-      setAIReply(`[ERROR] ${String(err)}`);
+      setGenerationReply(`[ERROR] ${String(err)}`);
     } finally {
-      setAIBusy(false);
+      setGenerationBusy(false);
     }
   };
 
@@ -265,15 +265,15 @@ export function IDEPage() {
     }
   };
 
-  const insertAIReply = () => {
-    if (!aiReply || aiReply.startsWith("[ERROR]")) return;
-    if (aiMode === "explain") {
+  const insertGenerationReply = () => {
+    if (!generationReply || generationReply.startsWith("[ERROR]")) return;
+    if (generationMode === "explain") {
       // 解释模式：作为 docstring 插到顶部
-      setCode(`"""AI 解释:\n${aiReply}\n"""\n\n${code}`);
+      setCode(`"""模型说明:\n${generationReply}\n"""\n\n${code}`);
     } else {
       // 写/修复模式：直接替换 OR 追加
       const append = confirm("追加到当前代码末尾？(取消则覆盖全部)");
-      setCode(append ? `${code}\n\n# === AI 生成 ===\n${aiReply}` : aiReply);
+      setCode(append ? `${code}\n\n# === 模型生成 ===\n${generationReply}` : generationReply);
     }
   };
 
@@ -290,7 +290,7 @@ export function IDEPage() {
       <div className="cc-page-header">
         <div>
           <h1 className="cc-page-title">{"// IDE · 策略代码工坊"}</h1>
-          <div className="cc-soft">策略代码编辑器 · 子进程沙箱运行你的策略 · 内置代码助手</div>
+          <div className="cc-soft">策略代码编辑器 · 子进程沙箱运行你的策略 · 代码生成与说明</div>
         </div>
         <div className="cc-page-actions">
           <button type="button" className="cc-btn" onClick={save} disabled={saving || running}>
@@ -392,7 +392,7 @@ export function IDEPage() {
           </div>
         </div>
 
-        {/* 右：输出 / AI */}
+        {/* 右：输出 / 代码生成 */}
         <aside className="cc-card" style={{ width: 360, padding: 0, flexShrink: 0, overflow: "hidden" }}>
           <div className="cc-tabs" style={{ marginBottom: 0, borderBottom: "1px solid var(--cc-border, rgba(255,255,255,0.08))" }}>
             <a
@@ -403,11 +403,11 @@ export function IDEPage() {
               运行输出
             </a>
             <a
-              className={`cc-tab ${rightTab === "ai" ? "active" : ""}`}
-              onClick={() => setRightTab("ai")}
+              className={`cc-tab ${rightTab === "codegen" ? "active" : ""}`}
+              onClick={() => setRightTab("codegen")}
               style={{ cursor: "pointer" }}
             >
-              代码助手
+              代码生成
             </a>
           </div>
           <div style={{ padding: 12, maxHeight: "70vh", overflow: "auto" }}>
@@ -419,16 +419,16 @@ export function IDEPage() {
                 promoting={promoting}
               />
             ) : (
-              <AIPanel
-                prompt={aiPrompt}
-                setPrompt={setAIPrompt}
-                mode={aiMode}
-                setMode={setAIMode}
-                busy={aiBusy}
-                reply={aiReply}
-                onAsk={askAI}
-                onInsert={insertAIReply}
-                context={aiContext}
+              <CodeGenerationPanel
+                prompt={generationPrompt}
+                setPrompt={setGenerationPrompt}
+                mode={generationMode}
+                setMode={setGenerationMode}
+                busy={generationBusy}
+                reply={generationReply}
+                onAsk={askModel}
+                onInsert={insertGenerationReply}
+                context={generationContext}
                 showContext={showContext}
                 onToggleContext={() => setShowContext(!showContext)}
               />
@@ -531,7 +531,7 @@ function RunOutput({ run, running, onPromote, promoting }: { run: IDERun | null;
     : riskPreview?.trust_level === "caution" ? "#c98a14"
     : riskPreview?.trust_level === "high_risk" ? "#cc3344"
     : "#888";
-  const trustLabel = riskPreview?.trust_level === "ok" ? "可信"
+  const trustLabel = riskPreview?.trust_level === "ok" ? "证据一致"
     : riskPreview?.trust_level === "caution" ? "存疑"
     : riskPreview?.trust_level === "high_risk" ? "高风险"
     : riskPreview?.trust_level === "insufficient_data" ? "信息不足"
@@ -606,7 +606,7 @@ function RunOutput({ run, running, onPromote, promoting }: { run: IDERun | null;
   );
 }
 
-function AIPanel(props: {
+function CodeGenerationPanel(props: {
   prompt: string;
   setPrompt: (v: string) => void;
   mode: "write" | "explain" | "fix";
@@ -615,7 +615,7 @@ function AIPanel(props: {
   reply: string;
   onAsk: () => void;
   onInsert: () => void;
-  context: AIContext | null;
+  context: GenerationContext | null;
   showContext: boolean;
   onToggleContext: () => void;
 }) {
@@ -623,7 +623,7 @@ function AIPanel(props: {
   return (
     <div>
       <div className="cc-row" style={{ justifyContent: "space-between", marginTop: 0 }}>
-        <div className="cc-section-title" style={{ margin: 0 }}>代码助手</div>
+        <div className="cc-section-title" style={{ margin: 0 }}>代码生成</div>
         {context && (
           <button
             type="button"

@@ -1,18 +1,20 @@
-# QuantBT · A股 + 加密的可上线全栈量化软件
+# QuantBT · A股 + 加密的机构级量化研究到执行 OS
 
-> 因子工厂 · ML 模型 (Purged k-fold) · HRP 组合 · BacktestVenue · Binance 实盘 ·
-> Agent 工坊 · 一键导出 — 一个仓库一行命令跑通。所有产物以 Parquet/CSV/JSON/MD
-> 落盘可独立审计。
+> Typed Research Canvas · Quant Research Object · 因子工厂 · ML/DL 模型 · 信号契约 ·
+> HRP/组合 · Backtest/Paper/Testnet/受限 Binance live · Research Execution Plane —
+> 一个仓库一行命令跑通。所有正式产物以开放格式落盘，进入证据、血缘、审批与审计链。
 
-终态 spec：[`dev/GOAL.md`](dev/GOAL.md)（蒸馏的终态契约）· 完整**开发 OS** 见 [`dev/`](dev/)（四台：目标/任务/研究/执行 + 决策账本 [`dev/DECISIONS.md`](dev/DECISIONS.md) append-only + 机构级治理脊柱）
+终态 spec：[`dev/GOAL.md`](dev/GOAL.md)（canvas-native / agent-implemented / governance-first 的 Research-to-Execution OS 契约）· 完整**开发 OS** 见 [`dev/`](dev/)（四台：目标/任务/研究/执行 + 决策账本 [`dev/DECISIONS.md`](dev/DECISIONS.md) append-only + 机构级治理脊柱）
 
 ---
 
 ## 架构总览
 
-从数据接入到执行的七段流水线 —— Agent 与前端用**同一套 REST + tool API** 驱动；回测阶段强制做 **PBO / DSR / Bootstrap** 过拟合体检（信任门）；**A股**最多到 Paper（不接券商），**加密**走到 Binance 实盘。
+终态主链是 `Quant Intent → Typed Canvas → QRO → Research Graph → Governed Compiler → Deterministic Run → Evidence Verdict → Promotion/Approval → Runtime → Monitor/Retire`。用户提出因子/model/signal/strategy 等研究意图，画布将其结构化；研究执行层生成数学定义、候选代码和验证计划，确定性内核、验证器、策略门、审批和账本负责控制与记录。
 
-整条流程被一条**不可绕过的机构级治理脊柱**贯穿：确定性 DAG 内核（动钱副作用设不可幂等边界，绝不重发单）+ honest-N 一本账 + 多证据三角守门 + 安全门 / 审批门 / 异模型验证官——把"零件"接成不可绕过的闸门。设计与决策见 [`dev/`](dev/) 开发 OS。
+从数据接入到执行的流水线由**同一套 REST + tool API** 驱动；回测/晋级阶段强制做 **PBO / DSR / Bootstrap** 过拟合体检（证据门）；**A股**最多到 research/backtest/paper（不接券商、不实盘），**加密**可走到 testnet 与受限 Binance live。
+
+整条流程被一条**不可绕过的机构级治理脊柱**贯穿：确定性 DAG 内核（动钱副作用设不可幂等边界，绝不重发单）+ honest-N 一本账 + 多证据三角守门 + 安全门 / 审批门 / 异模型验证官 + typed canvas/graph 命令源——把"零件"接成不可绕过的闸门。设计与决策见 [`dev/`](dev/) 开发 OS。
 
 <p align="center">
   <img src="docs/images/architecture.svg" alt="QuantBT 全流程架构：数据接入 → 特征/因子 → 模型训练 → 信号融合 → 组合优化 → 回测+过拟合体检 → 执行；A股到 Paper、加密到 Binance 实盘" width="760">
@@ -35,7 +37,7 @@ mkdir -p ~/.quantbt
 cp deploy/secrets.yaml.example ~/.quantbt/secrets.yaml && chmod 600 ~/.quantbt/secrets.yaml
 # 编辑 ~/.quantbt/secrets.yaml 填 tushare token / LLM key 等
 
-# 3. 一键起服务（前端 :5173 后端 :8000）
+# 3. 启动服务（前端 :5173 后端 :8000）
 #    npm run dev 会占用当前终端前台跑前端（后端在后台）；不是后台命令，别等它返回。
 npm run dev          # macOS / Linux / Windows 同一条命令
 
@@ -82,7 +84,7 @@ docker compose up -d
   - http://localhost:5173/runs/crypto_perp_demo （加密永续）
   - http://localhost:5173/runs/quant1-demo
 - **30 个内置 alpha_lite 因子** http://localhost:5173/factors
-- **Agent 工作台** 跟真 LLM 对话 http://localhost:5173/agent
+- **研究执行台** 使用真实模型流生成候选研究实现 http://localhost:5173/agent
 - **Binance 交易台** http://localhost:5173/trading
 - **策略索引（quantpedia 风）** http://localhost:5173/strategies
 
@@ -110,7 +112,7 @@ docker compose up -d
 ## 仓库形态
 
 - `app/backend/` — FastAPI 业务模块（connectors/factor_factory/labels/models/signals/portfolio/execution/risk/security/eval/experiments/dag/agent/observability/paper/monitor）+ **机构级治理脊柱**（lineage/hypothesis/approval/verification/security.gate — 内核 + 一本账 + 三角 gate + 安全门 + 审批门 + 验证官）
-- `app/frontend/` — Vite + React + Claude Code 风 cc-* shell + 5 个独立 workshop 页 + RunDetailPage（jq-* 冻结）
+- `app/frontend/` — Vite + React + Claude Code 风 cc-* shell + workshop/desk/typed-canvas 方向 + RunDetailPage（jq-* 冻结）；画布/对话/IDE/报告在终态只做 canonical Research Graph 的投影和命令入口
 - `dev/` — **开发 OS**（四台：目标/任务/研究/执行 + 决策本/铁律/问题登记 ISSUES/研究溯源 TRACE + 自检 `validate_dev.py`），见 [`dev/README.md`](dev/README.md)
 - `docs/` — 产品手册 + 运行时数据（glossary/model_cards 由 app 运行时读）+ 设计规格 plans/ + 发布说明
 - `examples/` — 3 个端到端 demo（A股合成 / 加密永续 / Tushare 真数据）

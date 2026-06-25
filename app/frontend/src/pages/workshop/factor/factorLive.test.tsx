@@ -10,8 +10,8 @@ import { FactorBuildView } from "./FactorBuildView";
 const factors = buildMockFactors();
 const sel = factors[0];
 
-// F2 接真：注入 live props → 视图展示后端真数据 + LIVE 角标（不再 MOCK），不假绿灯。
-describe("F2 视图接真 · live 注入覆盖 mock + 改挂 LIVE", () => {
+// F2 真实后端：注入 live props → 视图展示后端真数据 + LIVE 角标（不再 MOCK），不假绿灯。
+describe("F2 视图真实后端 · live 注入覆盖 mock + 改挂 LIVE", () => {
   it("评测台：live IC/分层注入 → LIVE 角标 + NW t 卡 + 真实样本期", () => {
     renderWithDesk(
       <FactorEvalView
@@ -39,7 +39,7 @@ describe("F2 视图接真 · live 注入覆盖 mock + 改挂 LIVE", () => {
       />,
     );
     expect(screen.getByTestId("eval-live-badge")).toBeInTheDocument();
-    // 接真：Newey-West t 卡出现（mock 路径是「胜率」）
+    // 真实后端：Newey-West t 卡出现（mock 路径是「胜率」）
     expect(screen.getByText("NW t")).toBeInTheDocument();
     // 真实样本期覆盖 mock 的 504
     expect(screen.getByText("233")).toBeInTheDocument();
@@ -151,8 +151,8 @@ describe("F2 视图接真 · live 注入覆盖 mock + 改挂 LIVE", () => {
       />,
     );
     expect(screen.getByText(/前视门未通过/)).toBeInTheDocument();
-    // 校验未过 → 不展示「LIVE · 即时 IC 接真」绿成功角标
-    expect(screen.queryByText(/LIVE · 即时 IC 接真/)).toBeNull();
+    // 校验未过 → 不展示「LIVE · 即时 IC 真实后端」绿成功角标
+    expect(screen.queryByText(/LIVE · 即时 IC 真实后端/)).toBeNull();
   });
 
   it("构建台：live 校验通过 → LIVE 即时 IC 角标 + 真实 IC", () => {

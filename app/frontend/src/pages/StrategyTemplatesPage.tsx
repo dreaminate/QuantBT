@@ -5,7 +5,7 @@ import { authFetch, getStoredUser } from "../lib/auth";
 /**
  * v0.9.3 · /templates · 策略模板广场
  *
- * 列出 3 个内置模板，一键 fork 到 IDE 名下。
+ * 列出 3 个内置模板，复制到 IDE 名下。
  */
 
 interface TemplateSummary {
@@ -65,7 +65,7 @@ export function StrategyTemplatesPage() {
         <div>
           <h1 className="cc-page-title">{"// 策略模板广场"}</h1>
           <div className="cc-soft">
-            一键 fork 模板进 IDE 修改 + 跑沙箱 · 每个模板含 expected_metrics 防过拟合参照
+            复制模板到 IDE 后修改并跑沙箱 · 每个模板含 expected_metrics 防过拟合参照
           </div>
         </div>
       </div>
@@ -109,8 +109,8 @@ export function StrategyTemplatesPage() {
         <ul className="cc-soft" style={{ fontSize: 13, paddingLeft: 18 }}>
           <li>Fork 后会自动在你 IDE 名下创建一份副本，原模板不变。</li>
           <li>沙箱 wallclock ≤ 30s，模板代码已优化在限制内跑完。</li>
-          <li>跑完后看 risk preview chip 判断可信度，PBO/DSR 不达标先别 promote。</li>
-          <li>有问题去 /chat 打开 Mode 2 对话台，会自动绑定你的 active_run 上下文。</li>
+          <li>跑完后看 risk preview chip 的证据状态，PBO/DSR 不达标先别 promote。</li>
+          <li>有问题去 /chat 打开诊断台，会自动绑定你的 active_run 上下文。</li>
         </ul>
       </div>
     </>

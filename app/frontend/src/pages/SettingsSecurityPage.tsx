@@ -334,7 +334,7 @@ export function SettingsSecurityPage() {
         </button>
       </div>
 
-      {/* === LLM Providers（自旧 Agent 工作台抢救：连接测试 + reload secrets）=== */}
+      {/* === LLM Providers（研究执行台连接测试 + reload secrets）=== */}
       <LlmProvidersPanel />
 
       {/* === 5. Audit log === */}
@@ -390,7 +390,7 @@ export function SettingsSecurityPage() {
 }
 
 /**
- * LLM Providers 面板：自旧 Agent 工作台(/agent, 已退役)抢救来的「连接测试 + reload secrets」。
+ * LLM Providers 面板：研究执行台(/agent)使用的「连接测试 + reload secrets」。
  * provider 实时状态在底部 StatusBar 也有；此处保留旧页独有的 /api/llm/test + reload_secrets 管理动作。
  */
 interface LlmProviderStatus {

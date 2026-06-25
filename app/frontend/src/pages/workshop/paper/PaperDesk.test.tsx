@@ -73,7 +73,7 @@ describe("PaperBoardCard（可复用嵌入卡）", () => {
     expect(screen.getByText("MOCK 数据")).toBeInTheDocument();
   });
 
-  it("接真后可关角标：mock=false 不渲染 MOCK 角标", () => {
+  it("接入真实后端后可关角标：mock=false 不渲染 MOCK 角标", () => {
     renderWithDesk(<PaperBoardCard mock={false} />);
     expect(screen.queryByText("MOCK 数据")).toBeNull();
   });

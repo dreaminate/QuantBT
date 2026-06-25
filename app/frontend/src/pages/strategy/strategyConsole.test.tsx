@@ -79,9 +79,9 @@ describe("S1 策略台 · 渲染骨架", () => {
     expect(edgeEls.length).toBe(19);
   });
 
-  it("左 Agent(316 可折叠) / 右 Inspector(340) / 底 Dock 默认折叠", () => {
+  it("左实现面板(316 可折叠) / 右 Inspector(340) / 底 Dock 默认折叠", () => {
     const { container } = renderPage();
-    expect(screen.getByText("Agent")).toBeInTheDocument();
+    expect(screen.getByText("实现面板")).toBeInTheDocument();
     const insp = container.querySelector("[data-inspector]") as HTMLElement;
     expect(insp.style.width).toBe("340px");
     // dock 默认折叠：出折叠条、无展开 dock

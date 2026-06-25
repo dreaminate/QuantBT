@@ -59,11 +59,11 @@ export function HomePage() {
     <>
       <OnboardingBanner />
       <section className="cc-hero">
-        <div className="cc-hero-eyebrow">v0.8.5.1 · 教学型对话工作台</div>
-        <h1 className="cc-hero-title">QuantBT · A股 + 加密的全栈量化软件</h1>
+        <div className="cc-hero-eyebrow">v0.8.5.1 · 研究、验证、风控工作台</div>
+        <h1 className="cc-hero-title">QuantBT · A股 + 加密量化研究工作台</h1>
         <p className="cc-hero-subtitle">
-          因子工厂 · ML 模型 · Purged k-fold · HRP 组合 · BacktestVenue · Binance 实盘 · Agent
-          工坊 — 一个仓库一行命令跑通。所有产物以 Parquet / CSV / JSON / MD 落盘可独立审计。
+          因子工厂 · ML 模型 · Purged k-fold · HRP 组合 · BacktestVenue · Binance 受限实盘 ·
+          研究执行台。所有正式产物以 Parquet / CSV / JSON / MD 落盘，可独立审计。
         </p>
         <div className="cc-hero-stats">
           <div className="cc-stat">
@@ -88,7 +88,7 @@ export function HomePage() {
             浏览策略索引 →
           </Link>
           <Link to="/agent" className="cc-btn cc-btn--ghost">
-            Agent 工作台
+            研究执行台
           </Link>
           <Link to="/runs" className="cc-btn cc-btn--ghost">
             回测列表

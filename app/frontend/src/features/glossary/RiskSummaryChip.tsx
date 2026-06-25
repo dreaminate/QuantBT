@@ -1,5 +1,5 @@
 /**
- * v0.8.4 Day 4 · RunDetail 顶部风险可信度 chip + popover。
+ * v0.8.4 Day 4 · RunDetail 顶部证据状态 chip + popover。
  *
  * 4 档：ok / caution / high_risk / insufficient_data
  * 只读展示；不写策略买卖建议；缺字段显示"信息不足"而非报错。
@@ -14,12 +14,12 @@ import type { RiskSummary } from "../../types";
 
 interface Props {
   riskSummary?: RiskSummary | null;
-  /** v0.8.7.1: 显示"已过学术审计"小绿勾 */
+  /** v0.8.7.1: 显示"审计覆盖"小绿勾 */
   auditedMetrics?: boolean;
 }
 
 const TRUST_PRESET = {
-  ok: { label: "可信", color: "#1f9a52", bg: "rgba(31, 154, 82, 0.12)" },
+  ok: { label: "证据一致", color: "#1f9a52", bg: "rgba(31, 154, 82, 0.12)" },
   caution: { label: "存疑", color: "#c98a14", bg: "rgba(201, 138, 20, 0.12)" },
   high_risk: { label: "高风险", color: "#cc3344", bg: "rgba(204, 51, 68, 0.12)" },
   insufficient_data: { label: "信息不足", color: "#888888", bg: "rgba(136, 136, 136, 0.12)" },
@@ -38,7 +38,7 @@ export function RiskSummaryChip({ riskSummary, auditedMetrics = true }: Props) {
     return () => document.removeEventListener("mousedown", onClick);
   }, [open]);
 
-  // mount 时触发一次"看见可信度卡片"
+  // mount 时触发一次"看见证据状态卡片"
   useEffect(() => {
     if (riskSummary) {
       trackEvent("risk_summary_shown", {
@@ -76,7 +76,7 @@ export function RiskSummaryChip({ riskSummary, auditedMetrics = true }: Props) {
           cursor: "pointer",
           fontWeight: 600,
         }}
-        aria-label={`可信度: ${preset.label}`}
+        aria-label={`证据状态: ${preset.label}`}
       >
         <span style={{ width: 6, height: 6, borderRadius: "50%", background: preset.color }} />
         {preset.label}
@@ -159,7 +159,7 @@ export function RiskSummaryChip({ riskSummary, auditedMetrics = true }: Props) {
             </div>
           )}
           <div style={{ fontSize: 10, color: "var(--cc-dim, #666)", marginTop: 6, fontStyle: "italic" }}>
-            本卡片仅辅助判断回测可信度，**不构成投资建议**
+            本卡片仅展示当前证据状态，**不构成投资建议**
           </div>
         </div>
       )}

@@ -2,7 +2,7 @@ import { type ReactNode } from "react";
 import { Pill } from "../../../components/desk";
 
 /**
- * Agent 工作台教学文案弹窗三型（T-041 残余 · agentDeck.md §⑤ 治理可见性）。
+ * 研究执行台教学文案弹窗三型（T-041 残余 · agentDeck.md §⑤ 治理可见性）。
  *
  * 与 GatePanel（A3 已建：权限确认 + self-approve 二次确认）**职责分离**——
  * 本文件只做「知情/引导」三类弹窗，全部 **硬透明 + 软决定**（绝不死挡）：
@@ -18,7 +18,7 @@ import { Pill } from "../../../components/desk";
  * 硬不变量：
  *  · 零裸 hex —— 全部 var(--desk-*)。
  *  · 治理弱点常驻展开、**不渲染折叠控件**（R25）—— 三型皆 data-weakness-expanded="true"。
- *  · 裁决措辞禁 可信/安全/排除过拟合 等绝对化词（R7）—— note 由后端供给（prop），不前端杜撰。
+ *  · 裁决措辞禁 证据一致/安全/排除过拟合 等绝对化词（R7），note 由后端供给（prop），不前端杜撰。
  *  · 软决定：确认按钮恒可点（acknowledge 后继续），不做「禁用唯一出口」式死挡。
  */
 
@@ -326,7 +326,7 @@ export interface RedVerdictAckProps {
   subject: string;
   /**
    * 验证官裁决措辞——**必须由后端 verifier._verdict_note 供给**，前端不杜撰、
-   * 不含 R7 禁词（可信/安全/排除过拟合…）。本组件原样呈现，不做绝对化包装。
+   * 不含 R7 禁词（证据一致/安全/排除过拟合…）。本组件原样呈现，不做绝对化包装。
    */
   verdictNote: string;
   /** 弱点逐条（来自后端，一等呈现，不折叠）。 */
@@ -342,7 +342,7 @@ export interface RedVerdictAckProps {
 /**
  * ③ red 裁决知情确认弹窗（R25 一等呈现 + R7 措辞 + 软决定）。
  *
- * 验证官给出 red / 弱点 → 一等呈现（醒目、常驻展开、不淡化、绝不渲染成绿/可信），
+ * 验证官给出 red / 弱点 → 一等呈现（醒目、常驻展开、不淡化、绝不渲染成绿色通过），
  * 弱点逐条列出 + 知情确认。措辞走后端 _verdict_note（prop），前端不杜撰绝对化词。
  */
 export function RedVerdictAck(props: RedVerdictAckProps) {

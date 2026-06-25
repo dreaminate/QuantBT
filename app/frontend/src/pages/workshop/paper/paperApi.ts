@@ -1,7 +1,7 @@
 /**
- * 模拟台后端接真客户端（/api/paper/*）。
+ * 模拟台真实后端客户端（/api/paper/*）。
  * 把后端响应映射成视图已用的 typed 形状（SchedRow / BookPosition / Fill / BalanceCell / PromoCheck），
- * 视图代码无需改。fetch 失败/未接处由调用方回退 mock 并保留 MockBadge（诚实不假绿灯）。
+ * 视图代码无需改。fetch 失败/未连到真实后端处由调用方回退 mock 并保留 MockBadge（诚实不假绿灯）。
  */
 import { authFetch } from "../../../lib/auth";
 import { signColor, pnlColor } from "./colors";

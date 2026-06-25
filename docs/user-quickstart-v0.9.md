@@ -9,9 +9,9 @@
 
 v0.9 提供 4 个核心闭环：
 
-1. `/runs` 看已有 run → `/runs/<id>` 看可信度 + 字段解释
+1. `/runs` 看已有 run → `/runs/<id>` 看证据状态 + 字段解释
 2. `/ide` 写自己的策略 → 沙箱跑 → promote 进正式 Run
-3. `/chat` Mode 2 教练帮你诊断 + 引导一次最小实验
+3. `/chat` 诊断台读指标、指出问题，并引导一次最小实验
 4. `/trading` SafeKey → testnet matrix → live ladder（实盘前）
 
 ## 1. 5 分钟启动
@@ -36,19 +36,19 @@ cd app/frontend && npm run dev
 3. 顶 nav → Workshop · **策略模板** → 选 "BTC 20 日动量" → "↪ Fork 到我的 IDE"
 4. 自动跳 `/ide`，左侧能看到刚 fork 的策略
 5. 点 "▶ 运行" → 沙箱 1-3 秒跑完
-6. 右侧"运行输出"看 status OK + **风险预览 chip**（可信/存疑/高风险/信息不足）
+6. 右侧"运行输出"看 status OK + **风险预览 chip**（证据一致/存疑/高风险/信息不足）
 7. 点"⤴ 提升为正式 Run" → 自动跳 `/runs/<id>` 三联图
 
-## 3. 看懂可信度（核心教学）
+## 3. 看懂证据状态（核心教学）
 
 `/runs/<id>` 顶部"收益概述"旁的彩色 chip 4 档：
 
-- 🟢 可信（PBO/DSR/MaxDD 全过）
+- 🟢 证据一致（PBO/DSR/MaxDD 全过）
 - 🟡 存疑（中等风险）
 - 🔴 高风险（PBO>0.6 / DSR<0.2 / MaxDD>25%）
 - ⚪ 信息不足（缺 PBO/DSR）
 
-🔴/🟡 时下方会有 **🎓 Mode 2 教练帮你诊断** 横幅，点了跳 `/chat?run=<id>&q=<问题>` 自动开对话 + 预填问题。
+🔴/🟡 时下方会有 **诊断入口** 横幅，点了跳 `/chat?run=<id>&q=<问题>` 自动开对话 + 预填问题。
 
 ## 4. 字段不懂就点 ⓘ（渐进披露）
 
@@ -62,14 +62,14 @@ cd app/frontend && npm run dev
 
 baseline 30 条已索引，3 条样例完整（sharpe_ratio / pbo / deflated_sharpe），其余 27 条等 GPT Pro。
 
-## 5. Mode 2 教练
+## 5. 诊断台
 
 `/chat` 三栏：左历史 thread / 中消息流 / 底输入框。
 
 - **market_mode**：A股研究 / 加密 paper / Binance testnet / Binance live
-- 每个新 thread 可绑 `active_run_id`，Agent 拿你的指标做上下文
+- 每个新 thread 可绑 `active_run_id`，诊断台会把指标带入上下文
 - **拒答红线**：A股实盘下单 / 推荐买卖点 / 绕 SafeKey / 保证收益
-- **回答 4 段**：结论（可信/存疑/高风险/信息不足）+ 证据 + 下一步实验 + Binance 安全状态
+- **回答 4 段**：证据状态（证据一致/存疑/高风险/信息不足）+ 证据 + 下一步实验 + Binance 安全状态
 
 ## 6. 用自己的数据
 
@@ -112,7 +112,7 @@ tushare:
 | 3 | PBO/DSR（如有）| 风险卡详情 |
 | 4 | 三联图（equity / drawdown / 收益对比）| RunDetail 主区 |
 | 5 | 归因 / 持仓 / 交易 | RunDetail 各 tab |
-| 6 | Coach 主动建议 | RunDetail 顶部 banner |
+| 6 | 诊断建议 | RunDetail 顶部 banner |
 | 7 | 改一个变量 | `/ide` |
 | 8 | Compare | `/compare` 2-3 个 run trust_level 对比 |
 
@@ -142,7 +142,7 @@ python scripts/release_check.py --tag v0.9.4
 
 - P1-P3.5: ✅ 数据 / 因子 / 模型 / 加密实盘准备 / 可上线门槛
 - P4: ✅ 实验 / 调度 / 监控
-- P5: ✅ Agent 工作台
+- P5: ✅ 研究执行台
 - P6: 多策略组合管理（待）
 - **P7-P11: ✅ v0.8.0-v0.9.0 全落地**
 - P12: 实盘 e2e + 第一批用户（等 testnet key + 内测）

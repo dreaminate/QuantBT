@@ -501,7 +501,7 @@ function DrillInModal({ model, onClose }: { model: RegistryModel; onClose: () =>
           <span style={{ marginLeft: "auto" }}>
             {isReal ? (
               <Pill tone="info" title="walk-forward 来自后端 result.json 逐窗">
-                walk-forward 接真
+                walk-forward 真实数据
               </Pill>
             ) : (
               <MockBadge />

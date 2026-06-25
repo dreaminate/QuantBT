@@ -1,4 +1,4 @@
-// Agent 工作台出口（策略台客户端窗口 · data-desk="agent"）。
+// 研究执行台出口（策略台客户端窗口 · data-desk="agent"）。
 export * from "./AgentWorkbenchPage";
 export * from "./agentMock";
 export * from "./permGate";

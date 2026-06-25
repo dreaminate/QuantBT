@@ -27,7 +27,7 @@ import { codegenGraph } from "./modelApi";
 
 /**
  * 构建台（build · DC §C）：draw.io 式图编辑器，用共享 GraphCanvas 引擎（不重造）。
- * 左：构建助手 chat（先确认再动手）· 中：画布（节点/连线/缩放/平移/框选）· 右：组件库 palette + 代码面板。
+ * 左：构建面板（先确认再动手）· 中：画布（节点/连线/缩放/平移/框选）· 右：组件库 palette + 代码面板。
  * 治理：代码面板显式标注「DL 走子进程，主进程不碰 torch」(M6)。P0 mock。
  */
 
@@ -72,7 +72,7 @@ export function BuildDeck(props: BuildDeckProps) {
 
   return (
     <div style={{ flex: 1, minHeight: 0, display: "flex" }}>
-      {/* 左：构建助手 chat */}
+      {/* 左：构建面板 */}
       <CollapsiblePanel
         open={props.chatOpen}
         onToggle={props.onToggleChat}
@@ -224,7 +224,7 @@ function PaletteSection({ group }: { group: PaletteGroup }) {
 /**
  * 代码面板：真 codegen 预览（图→nn.Module 字符串，POST /api/training/codegen graph 路径）。
  * 后端纯字符串拼装、主进程绝不 import torch（M6）；编译/训练走子进程属后续。
- * 接真前 / fetch 失败 → 回退 BUILD_CODE mock 并保留 MockBadge（不假绿）。
+ * 接入真实后端前 / fetch 失败 → 回退 BUILD_CODE mock 并保留 MockBadge（不假绿）。
  */
 function CodePanel({ nodes, edges }: { nodes: NodeView[]; edges: EdgeView[] }) {
   const [code, setCode] = useState<string | null>(null);

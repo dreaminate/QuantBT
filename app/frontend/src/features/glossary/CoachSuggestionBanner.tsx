@@ -5,7 +5,7 @@ import { trackEvent } from "./trackEvent";
 /**
  * v0.8.6.1 · RunDetail 顶部主动建议条
  *
- * 当 risk_summary 含 flag 时，浮出一条"Mode 2 教练帮你诊断"的入口。
+ * 当 risk_summary 含 flag 时，浮出一条诊断入口。
  * 严格隔离 inline style，绑定到冻结页前不破坏布局。
  */
 
@@ -60,7 +60,7 @@ export function CoachSuggestionBanner({ runId }: Props) {
       <div style={{ display: "flex", justifyContent: "space-between", alignItems: "flex-start" }}>
         <div style={{ flex: 1, marginRight: 12 }}>
           <div style={{ fontWeight: 600, color: preset.color, marginBottom: 4 }}>
-            🎓 {sugg.headline}
+            {sugg.headline}
           </div>
           <div style={{ color: "var(--cc-text, #e6edf3)", marginBottom: 6 }}>{sugg.detail}</div>
           {sugg.one_variable_hint && (
@@ -91,7 +91,7 @@ export function CoachSuggestionBanner({ runId }: Props) {
               className="cc-btn cc-btn--accent cc-btn--sm"
               onClick={() => trackEvent("risk_metric_expanded", { from: "coach_banner", run_id: runId })}
             >
-              💬 用 Mode 2 对话台分析此 run →
+              打开诊断台分析此 run →
             </Link>
           </div>
         </div>

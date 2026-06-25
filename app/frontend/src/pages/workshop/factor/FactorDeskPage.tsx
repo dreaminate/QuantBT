@@ -104,7 +104,7 @@ export function FactorDeskPage() {
   // 暴力遍历挖掘（R16 生成器排序键，只允许结构维度）
   const [mineSortKey, setMineSortKey] = useState<GenSortKey>("complexity");
 
-  // 因子库列表可接真后端：覆盖 mock 列表的「存在性」，详情仍 mock（后端无详情端点）。
+  // 因子库列表可接入真实后端：覆盖 mock 列表的「存在性」，详情仍 mock（后端无详情端点）。
   const [apiIds, setApiIds] = useState<Set<string> | null>(null);
   useEffect(() => {
     let cancelled = false;
@@ -133,7 +133,7 @@ export function FactorDeskPage() {
   const selected =
     factors.find((f) => f.id === selFactorId) ?? factors[0];
 
-  // 评测台接真：选中因子在后端注册表存在时，拉 IC / IC衰减 / 分层回测；
+  // 评测台真实后端：选中因子在后端注册表存在时，拉 IC / IC衰减 / 分层回测；
   // 404 / 离线 → 回落 mock + MockBadge（不假绿灯）。
   const [evalLive, setEvalLive] = useState<FactorEvalLive | null>(null);
   useEffect(() => {
@@ -185,7 +185,7 @@ export function FactorDeskPage() {
     };
   }, [apiIds, selected, market, evalHorizon]);
 
-  // 构建台接真：编辑器表达式（括号配平时）防抖后打 validate（编译/前视门 + 即时 IC）；
+  // 构建台真实后端：编辑器表达式（括号配平时）防抖后打 validate（编译/前视门 + 即时 IC）；
   // 离线/未登录 → mock + MockBadge。仅在 build 视图激活时打。
   const [buildLive, setBuildLive] = useState<FactorValidateLive | null>(null);
   useEffect(() => {
@@ -214,7 +214,7 @@ export function FactorDeskPage() {
     };
   }, [view, bdExpr, market]);
 
-  // 相关性接真：后端注册表有 ≥2 因子时拉 Spearman 矩阵；离线/不足 → mock + MockBadge。
+  // 相关性真实后端：后端注册表有 ≥2 因子时拉 Spearman 矩阵；离线/不足 → mock + MockBadge。
   const [corrLive, setCorrLive] = useState<FactorCorrLive | null>(null);
   useEffect(() => {
     let cancelled = false;
@@ -235,7 +235,7 @@ export function FactorDeskPage() {
     };
   }, [view, apiIds, market]);
 
-  // 研究台接真：选中因子在后端注册表存在时拉 alpha 审查（多证据三角）；
+  // 研究台真实后端：选中因子在后端注册表存在时拉 alpha 审查（多证据三角）；
   // 404/离线 → mock + MockBadge。仅在 research 视图激活时拉（audit 较重）。
   const [auditLive, setAuditLive] = useState<FactorAuditLive | null>(null);
   useEffect(() => {
@@ -273,7 +273,7 @@ export function FactorDeskPage() {
 
   function bdRegister(): void {
     setBdGateOpen(false);
-    // 双保险：注册按钮已按 canRegister disable，但若接真校验未过仍被触发，绝不假报注册成功。
+    // 双保险：注册按钮已按 canRegister disable，但若真实后端校验未过仍被触发，绝不假报注册成功。
     if (buildLive && !buildLive.valid) {
       setBdChat((c) => [
         ...c,

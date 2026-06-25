@@ -8,7 +8,7 @@ import {
   svgLine,
 } from "./factorData";
 
-/** 后端实测数据（接真时由容器注入；缺省=纯 mock）。 */
+/** 后端实测数据（接入真实数据时由容器注入；缺省=纯 mock）。 */
 export interface FactorEvalLive {
   /** /api/factors/{id}/ic 当前 horizon 的截面 IC 报告。 */
   ic?: {
@@ -33,7 +33,7 @@ export interface FactorEvalViewProps {
   factor: MockFactor;
   horizon: number;
   onHorizon: (h: number) => void;
-  /** 接真数据；任一字段存在则覆盖对应 mock 区块并改挂 LIVE 角标。 */
+  /** 真实后端数据；任一字段存在则覆盖对应 mock 区块并改挂 LIVE 角标。 */
   live?: FactorEvalLive | null;
 }
 
@@ -51,7 +51,7 @@ const HS = [1, 3, 5, 10, 20];
 export function FactorEvalView({ factor: sel, horizon, onHorizon, live }: FactorEvalViewProps) {
   const selH = sel.decay.find((d) => d.h === horizon) ?? sel.decay[2];
 
-  // 接真：IC 卡优先用后端实测（含 Newey-West HAC t），否则回落 mock。
+  // 真实后端：IC 卡优先用后端实测（含 Newey-West HAC t），否则回落 mock。
   const liveIc = live?.ic ?? null;
   const liveLayered = live?.layered ?? null;
   const liveDecay = live?.decay ?? null;
@@ -65,7 +65,7 @@ export function FactorEvalView({ factor: sel, horizon, onHorizon, live }: Factor
     { label: `IC@${horizon}d`, value: icVal.toFixed(3), color: icThresholdColor(icVal) },
     { label: "Rank-IC", value: rankIcVal.toFixed(3), color: "var(--desk-text-soft)" },
     { label: "IC-IR", value: icIrVal.toFixed(2), color: irThresholdColor(icIrVal) },
-    // 接真时第 4 卡换成 Newey-West HAC t（重叠窗口自相关调整后的显著性，诚实口径）。
+    // 接入真实数据时第 4 卡换成 Newey-West HAC t（重叠窗口自相关调整后的显著性，诚实口径）。
     liveIc && nwT != null
       ? { label: "NW t", value: nwT.toFixed(2), color: Math.abs(nwT) >= 3 ? "var(--desk-success)" : "var(--desk-warning)" }
       : { label: "胜率", value: `${(50 + sel.icIr * 6).toFixed(0)}%`, color: "var(--desk-text-soft)" },
@@ -80,7 +80,7 @@ export function FactorEvalView({ factor: sel, horizon, onHorizon, live }: Factor
     color: LAYER_COLORS[b],
     width: b === 0 || b === 4 ? 2.2 : 1.4,
   }));
-  // 接真：分层 legend / 多空价差用后端分位组合均收益（buckets），否则 mock 累计净值终点。
+  // 真实后端：分层 legend / 多空价差用后端分位组合均收益（buckets），否则 mock 累计净值终点。
   const legend = liveLayered
     ? liveLayered.buckets.map((bk, b) => {
         const r = bk.mean_return * 100;
@@ -104,7 +104,7 @@ export function FactorEvalView({ factor: sel, horizon, onHorizon, live }: Factor
     ? liveLayered.long_short_spread * 100
     : (sel.layers[4][39] - sel.layers[0][39]) * 100;
   const spreadTxt = `${spread >= 0 ? "+" : ""}${spread.toFixed(liveLayered ? 2 : 1)}%`;
-  // R25：弱单调/无单调 不染绿。接真时单调性用后端 monotonic 旗（不靠价差阈值猜）。
+  // R25：弱单调/无单调 不染绿。接入真实数据时单调性用后端 monotonic 旗（不靠价差阈值猜）。
   const monoOk = liveLayered ? liveLayered.monotonic && Math.abs(spread) > 0.5 : spread > 3;
   const monoWeak = liveLayered ? !monoOk && Math.abs(spread) > 0 : spread > 0;
   const mono = monoOk ? "单调性好 ✓" : monoWeak ? "弱单调 △" : "无单调性 ✕";
@@ -156,7 +156,7 @@ export function FactorEvalView({ factor: sel, horizon, onHorizon, live }: Factor
                   padding: "1px 6px",
                 }}
               >
-                LIVE · IC/分层接真
+                LIVE · IC/分层真实数据
               </span>
             ) : (
               <MockBadge label="MOCK 数据 · 分层回测合成（待接 /api/factors/{id}/layered_backtest）" />

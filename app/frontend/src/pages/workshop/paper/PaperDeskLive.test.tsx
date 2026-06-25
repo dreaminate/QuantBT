@@ -3,7 +3,7 @@ import { screen, fireEvent, waitFor } from "@testing-library/react";
 import { renderWithDesk } from "../../../test/harness";
 
 /**
- * 模拟台「接真」路径测试（mock /api/paper/* 响应）：
+ * 模拟台真实后端路径测试（mock /api/paper/* 响应）：
  * - run/book/promo tab 在 live 数据就位后挂 LIVE 角标（区别于 mock 蓝）。
  * - 调度器 KV / 持仓 / 余额 用后端值而非 mock。
  * - 人工审批走 POST /api/paper/promotion/{gate}/approve（INV-5：approver≠creator + 背书）。
@@ -52,7 +52,7 @@ vi.mock("./paperApi", async () => {
 import { PaperDeskPage } from "../PaperDeskPage";
 import { paperApi } from "./paperApi";
 
-describe("模拟台接真（/api/paper/*）", () => {
+describe("模拟台真实后端（/api/paper/*）", () => {
   beforeEach(() => {
     approveSpy.mockClear();
     localStorage.setItem("qb-auth-user", JSON.stringify({ user_id: "u1", username: "bob", display_name: "Bob" }));
@@ -61,14 +61,14 @@ describe("模拟台接真（/api/paper/*）", () => {
 
   it("run tab：live 数据就位后挂 LIVE 角标 + 调度器用后端 bars_fed", async () => {
     renderWithDesk(<PaperDeskPage />);
-    expect(await screen.findByText("LIVE 已接真")).toBeInTheDocument();
+    expect(await screen.findByText("LIVE 真实数据")).toBeInTheDocument();
     // 后端 bars_fed=4242（mock 不会产生此值）
     expect(screen.getByText("4242")).toBeInTheDocument();
   });
 
   it("book tab：持仓/余额来自后端", async () => {
     renderWithDesk(<PaperDeskPage />);
-    await screen.findByText("LIVE 已接真");
+    await screen.findByText("LIVE 真实数据");
     fireEvent.click(screen.getByText("⊞ 持仓与成交"));
     // 后端总权益 ¥1,041,200（balanceToCells 千分位格式）
     expect(await screen.findByText("¥1,041,200")).toBeInTheDocument();
@@ -76,7 +76,7 @@ describe("模拟台接真（/api/paper/*）", () => {
 
   it("promo tab：人工审批走后端 approve 端点（INV-5 · 须填背书+理由才发请求）", async () => {
     renderWithDesk(<PaperDeskPage />);
-    await screen.findByText("LIVE 已接真");
+    await screen.findByText("LIVE 真实数据");
     fireEvent.click(screen.getByText("⤴ 晋升通道"));
     const btn = await screen.findByRole("button", { name: /人工审批晋级/ });
     // 空表单 → 按钮禁用、不发请求（裸翻必拒，§3 不假绿灯）。
@@ -111,7 +111,7 @@ describe("模拟台接真（/api/paper/*）", () => {
       ),
     );
     renderWithDesk(<PaperDeskPage />);
-    await screen.findByText("LIVE 已接真");
+    await screen.findByText("LIVE 真实数据");
     fireEvent.click(screen.getByText("⤴ 晋升通道"));
     fireEvent.change(screen.getByTestId("promote-endorsement"), {
       target: { value: "verdict_8f2a" },
@@ -131,7 +131,7 @@ describe("模拟台接真（/api/paper/*）", () => {
       new Response(JSON.stringify({ detail: { reason: "缺验证背书" } }), { status: 422 }),
     );
     renderWithDesk(<PaperDeskPage />);
-    await screen.findByText("LIVE 已接真");
+    await screen.findByText("LIVE 真实数据");
     fireEvent.click(screen.getByText("⤴ 晋升通道"));
     fireEvent.change(screen.getByTestId("promote-endorsement"), {
       target: { value: "verdict_8f2a" },
@@ -148,14 +148,14 @@ describe("模拟台接真（/api/paper/*）", () => {
     expect(screen.queryByTestId("promote-error")).toBeNull();
   });
 
-  it("接真后不再渲染 MOCK 角标于已接真 tab（run）", async () => {
+  it("接入真实后端后不再渲染 MOCK 角标于真实数据 tab（run）", async () => {
     renderWithDesk(<PaperDeskPage />);
-    await screen.findByText("LIVE 已接真");
+    await screen.findByText("LIVE 真实数据");
     // run tab 头部右侧只有 LIVE，不再有 MOCK
     expect(screen.queryByText("MOCK 数据")).toBeNull();
   });
 
-  it("§3 空壳净值（bars_fed=0）：接了端点但无真数据 → 绝不盖「LIVE 已接真」绿标，回退 MOCK", async () => {
+  it("§3 空壳净值（bars_fed=0）：接了端点但无真数据 → 绝不盖「LIVE 真实数据」绿标，回退 MOCK", async () => {
     // 后端返回 0 喂入 bar（空壳）：接通端点但实质无数据。
     (paperApi.status as ReturnType<typeof vi.fn>).mockResolvedValueOnce({
       run_id: "weekly_cn_multifactor", name: "weekly_cn_multifactor", origin: "o",
@@ -170,6 +170,6 @@ describe("模拟台接真（/api/paper/*）", () => {
     );
     // bars_fed=0 → LIVE 绿标绝不出现；诚实回退 MOCK 角标。
     await waitFor(() => expect(screen.getByText("MOCK 数据")).toBeInTheDocument());
-    expect(screen.queryByText("LIVE 已接真")).toBeNull();
+    expect(screen.queryByText("LIVE 真实数据")).toBeNull();
   });
 });

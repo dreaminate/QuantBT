@@ -60,7 +60,7 @@ function preferredBrowserBucketFromMarket(market: string): DataBrowserBucketId {
 function formatJobType(jobType: string) {
   const mapping: Record<string, string> = {
     data_sync_pull: "数据拉取",
-    binance_full_pull: "加密一键全量",
+    binance_full_pull: "加密批量全量",
   };
   return mapping[jobType] ?? jobType;
 }
@@ -358,7 +358,7 @@ function JobsCenterView() {
       </div>
       <div className="list-stack">
         {jobsQuery.isLoading ? <p className="muted">加载任务列表…</p> : null}
-        {!jobsQuery.isLoading && (jobsQuery.data ?? []).length === 0 ? <p className="muted">暂无任务（含「数据拉取」与「加密一键全量」）。</p> : null}
+        {!jobsQuery.isLoading && (jobsQuery.data ?? []).length === 0 ? <p className="muted">暂无任务（含「数据拉取」与「加密批量全量」）。</p> : null}
         {(jobsQuery.data ?? []).map((job) => (
           <div key={job.job_id} className="job-list-item">
             <div className="job-list-item-row">

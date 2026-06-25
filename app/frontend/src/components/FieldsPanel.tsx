@@ -102,7 +102,7 @@ export function FieldsPanel() {
 
       <h3 style={{ margin: "0 0 4px" }}>字段映射向导</h3>
       <p style={{ color: "#666", fontSize: 13, margin: "0 0 12px" }}>
-        把用户源的原始列名对齐到 canonical（Agent 自动推荐，人工确认后写入）。粘贴列名，点「推断」，调整后「应用」。
+        把用户源的原始列名对齐到 canonical（系统给出候选映射，人工确认后写入）。粘贴列名，点「推断」，调整后「应用」。
       </p>
       <div style={{ display: "flex", gap: 8, alignItems: "center", marginBottom: 8 }}>
         <label>源名 <input value={source} onChange={(e) => setSource(e.target.value)} style={{ width: 160 }} /></label>

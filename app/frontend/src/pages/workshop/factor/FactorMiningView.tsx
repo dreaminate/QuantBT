@@ -46,7 +46,7 @@ export interface FactorMiningViewProps {
 export function FactorMiningView({ config, sortKey, onSortKey }: FactorMiningViewProps) {
   const mockCands = useMemo(() => buildMiningCandidates(), []);
 
-  // 接真 POST /api/factors/mine：生成器排序键 + 守门 + 诚实-N 全走后端（R16 解耦在后端强制）。
+  // 真实后端 POST /api/factors/mine：生成器排序键 + 守门 + 诚实-N 全走后端（R16 解耦在后端强制）。
   // 后端到达即覆盖；离线/未登录/响应非 mine 形 → 回落本地 mock。
   const [server, setServer] = useState<MineResponse | null>(null);
   const [mineLive, setMineLive] = useState(false);
@@ -257,7 +257,7 @@ export function FactorMiningView({ config, sortKey, onSortKey }: FactorMiningVie
           <MockBadge
             label={
               mineLive
-                ? "已接真 /api/factors/mine · 生成/守门后端解耦 + 诚实-N"
+                ? "已接入 /api/factors/mine 真实后端 · 生成/守门后端解耦 + 诚实-N"
                 : "MOCK 数据 · 遍历挖掘合成（离线回落 · 待接 /api/factors/mine）"
             }
           />

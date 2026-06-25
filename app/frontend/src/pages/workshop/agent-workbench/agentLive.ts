@@ -6,7 +6,7 @@ import {
 import { type MilestoneKey } from "./agentMock";
 
 /**
- * A4 · agent 工作台「接真」SSE 客户端（真 /api/agent/workbench/stream 流）。
+ * A4 · 研究执行台真实流 SSE 客户端（真 /api/agent/workbench/stream 流）。
  *
  * 把后端结构化事件（user / thinking / say / tool_start / tool_end / gate / milestone /
  * done / error）投影成前端 AgentBlock + 里程碑回调——替代 mock 剧本回放。

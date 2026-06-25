@@ -19,7 +19,7 @@ import { MockBadge } from "./desk/primitives";
  *  ④ promote 为受控回调 onPromote——前端不伪造写盘；写动作落 ide/promote.py。
  *  ⑤ 零裸 hex：一律 var(--desk-*)；rgba 叠加用 color-mix(token, transparent)。
  *
- * P0：mock 数据驱动，未接真后端端点（GET /verdict /overfit /cost-sensitivity）——
+ * P0：mock 数据驱动，未接入真实后端端点（GET /verdict /overfit /cost-sensitivity）——
  * 故全卡挂 <MockBadge/> 诚实角标，不假绿灯。
  */
 
@@ -175,8 +175,8 @@ export interface RunVerdictCardProps {
   detailHref?: string;
   /**
    * 数据来源（诚实角标）：
-   *  - "mock"（默认）：未接真后端 → header 挂 <MockBadge/>，不假绿灯。
-   *  - "live"：卡顶区块（裁决/KPI/成本/PBO·DSR/note）已接真后端
+   *  - "mock"（默认）：未接入真实后端 → header 挂 <MockBadge/>，不假绿灯。
+   *  - "live"：卡顶区块（裁决/KPI/成本/PBO·DSR/note）已接入真实后端
    *    （GET /verdict /overfit /cost-sensitivity）→ header 不再挂 mock 角标。
    * 注：detail modal 内仍有 mock 区块（持仓/部分指标）→ modal 角标恒挂，区分诚实。
    */
@@ -1393,7 +1393,7 @@ function KvRow({
 }
 
 /**
- * P0 mock 数据（诚实：未接真后端，verdictNote 用合规措辞占位）。
+ * P0 mock 数据（诚实：未接入真实后端，verdictNote 用合规措辞占位）。
  * verdict 取三态之一；note 禁绝对化措辞——落地由 verifier._verdict_note 替换。
  */
 export const MOCK_RUN_VERDICT: RunVerdictData = {

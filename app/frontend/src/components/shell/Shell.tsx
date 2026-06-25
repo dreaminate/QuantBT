@@ -24,7 +24,7 @@ const DESK_LINKS: SidebarItem[] = [
   { to: "/factors", label: "因子台", icon: "∑" },
   { to: "/models", label: "Model台", icon: "⊟" },
   { to: "/paper", label: "模拟台", icon: "$" },
-  { to: "/agent-workbench", label: "Agent台", icon: "◉" },
+  { to: "/agent-workbench", label: "研究执行台", icon: "◉" },
 ];
 
 const SIDEBAR_BY_AREA: Record<string, SidebarItem[]> = {
@@ -337,7 +337,7 @@ function UserMenu() {
       <NavLink to={`/u/${user.username}`} className="cc-btn cc-btn--ghost cc-btn--sm" title="profile">
         @{user.username}
       </NavLink>
-      <NavLink to="/settings/llm" className="cc-btn cc-btn--ghost cc-btn--sm" title="LLM 配置 (接通对话生成策略 · 含 Hermes 订阅预设)">
+      <NavLink to="/settings/llm" className="cc-btn cc-btn--ghost cc-btn--sm" title="模型连接配置（含 Hermes 订阅预设）">
         ◇ LLM
       </NavLink>
       <NavLink to="/settings/security" className="cc-btn cc-btn--ghost cc-btn--sm" title="安全设置 (mainnet 7 项防御)">
