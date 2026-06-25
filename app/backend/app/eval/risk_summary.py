@@ -274,9 +274,14 @@ def compute_risk_summary(metrics: dict[str, Any] | None) -> RiskSummary:
     elif medium_flags:
         level = "caution"
         summary = f"{len(medium_flags)} 条中等风险信号 · {medium_flags[0].message}"
-    else:
+    elif has_sharpe or has_pbo or has_dsr:
         level = "ok"
         summary = f"已检 {len(checked)} 个指标全部在合理区间"
+    else:
+        # 无风险 flag、但**零核心证据**（仅健康的辅助指标：换手/回撤/集中度等）——证据不足绝不判「可信」。
+        # 不假绿灯：辅助指标在合理区间 ≠ 策略有真 edge；「恰好没踩阈值」绝不等同「已验证可信」（北极星·§3 不待拍）。
+        level = "insufficient_data"
+        summary = "仅辅助指标（换手/回撤/集中度等）在合理区间，但无核心收益/反过拟合证据（sharpe/pbo/dsr），不足以判可信"
 
     return RiskSummary(
         trust_level=level,

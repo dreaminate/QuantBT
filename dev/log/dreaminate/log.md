@@ -6,6 +6,16 @@
 ## <日期> · <标题>
 - 建/改了什么 + 命门  - 验收：<对抗测试 + 变异 + 全量数字>  - 下一步：<…> -->
 
+## 2026-06-25 · risk_summary ok 门加固——仅辅助指标(零核心证据)绝不判可信（卡 4c6de2c1 · D-RISKSUMMARY-OK）
+
+- **缘起**：autonomous-loop（ultracode）。第二轮 correctness 审计 workflow（wnbmpeqiv·第一轮未覆盖子系统：数据层/组合优化/risk_summary/paper/lineage·20 agent）排 14 真缺口，取 #4（lev 7·LIVE 假绿灯·§3 不待拍）。
+- **缺口**：compute_risk_summary 当 metrics 仅含健康辅助指标（turnover/mdd/concentration·无 sharpe/pbo/dsr）→ insufficient 守门不触发(has_sharpe=False)、checked 非空、无 flag → 落 ok「可信」=零收益证据判可信。preview 真消费(用户 emit turnover 即踩)，违北极星「证据不足绝不给绿」。
+- **数学/不变量先行**：trust_level=ok ⟹ 至少一个核心证据 {sharpe∨pbo∨dsr} ∧ 无 flag。辅助指标描述交易行为、与是否有真 edge 正交，「恰好没踩阈值」≠「已验证可信」。守门放 flags 分级后→不健康辅助仍触 flag 浮出，只重定向「健康辅助+零核心+无 flag」真假绿灯。
+- **实现（additive 收紧）**：ok 分支拆 `elif has_sharpe or has_pbo or has_dsr: ok` / `else: insufficient_data`。**护栏=纯 correctness（DISPLAY 不假绿灯·advisory 不阻断晋级订单）非设卡**；刻意不动 #6（sharpe+dsr→ok 与既有测试意图冲突=display 宽松度=用户方法学·池卡留）。
+- **验收**：+3 测试（仅辅助→insufficient·不误伤核心→ok·不吞风险 flag[excessive_turnover]）。MUT（还原 ok 不要求核心证据）→ 仅 turnover→ok 假绿灯复现红。**全量后端 1643 passed / 13 skipped / 0 failed / 161s**（基线 1640，净 +3）；test_gate_brings_risk_summary_alive 仍绿（#6 未动）。
+- **第二轮审计其余真缺口 → mint 池卡**：fc79b911（P1·数据层真数据可成交性+复权轴·复权未乘入[RULES 停工红线]/停牌/涨跌停孤儿·真喂 Tushare 前必修·现潜伏）；03b1cf47（P2·组合优化诚实化·risk_parity 实为逆波动命名/MVO 不收敛静默回退/risk_summary #6 单支对齐三角）。
+- **下一步**：分支续 land-ready，commit+push 自动；候选 fc79b911（真数据前必修地雷）/ 03b1cf47 / e4496023 归因端点。
+
 ## 2026-06-25 · 信号层规范组合器 compose_signal_pipeline——不可绕过的安全门顺序（卡 0f8ec248 · D-SIGNAL-COMPOSE）
 
 - **缘起**：autonomous-loop（ultracode）。correctness 审计 workflow（wm8x329vn）#6：信号层四 transform（fuse/regime/confidence/conformal_abstain）无规范组合器→可只跑 fuse 跳过安全门=对噪声下单假信号；且 conformal_abstain_gate 在 core.py __all__ 漏导出（包 __init__ 已导）。

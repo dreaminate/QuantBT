@@ -23,6 +23,7 @@
 | 41ea6e35 | R4 CPCV（Combinatorial Purged CV）多路径回测 + 组合学/防泄露命门 | done | eval-methodology | done |
 | 4562d903 | Model台后端接线 — JobDetail/IoSpec/walkforward/promote字段/图codegen/研究判定 | done | backend | done |
 | 46f1cb3c | 组合层 M8 多证据三角守门（T-033 核验 gap 升级） | done | portfolio | done |
+| 4c6de2c1 | risk_summary ok 门加固——仅辅助指标(零核心证据)绝不判可信(修 LIVE 假绿灯) | done | eval-methodology | done |
 | 51271d38 | 因子台三纯库+挖掘 后端 — 信号契约 + ML/DL 登记 + 暴力遍历守门引擎 | done | backend | done |
 | 5e47b82f | 因子台前端 P0 — 5 视图像素还原 + mock(库/相关/评测/构建DSL/研究) | done | frontend | done |
 | 6403b9bf | 诚实残余核验——监控尾部闭环 + 组合层三角 + D2 四残余 | done | verification | done |
@@ -105,6 +106,7 @@
 
 | uuid8 | 标题 | status | area |
 |---|---|---|---|
+| 03b1cf47 | 组合优化诚实化 + risk_summary 单支证据对齐三角（命名 theory↔impl / 静默回退 / 单支承重） | todo | eval-methodology |
 | 31289338 | 冷启动 gate/UI 接 MinTRL：DSR=N/A + PSR + "需 N 期"渐进披露（R25/R27 呈现层） | todo | eval-methodology |
 | 554cdcf2 | 监控绩效轴真闭环——4 个 drift 检测器接 run_weekly_monitor_pass + per-factor IC 真源 + 观测落盘（审计残余） | todo | monitor |
 | 861182e6 | CPCV 接 promote/overfit gate + cv_scheme 双轨 report（价值闭环） | todo | eval-methodology |
@@ -112,6 +114,7 @@
 | aa13c3b0 | 因子机构级度量接 lifecycle 状态机/sizing 生产路径 | todo | factor-lifecycle |
 | e2afc5c2 | 三档成本预设接 sqrt-impact 默认 + 成交报告 impact 成本归因拆字段 | todo | execution-cost |
 | e4496023 | 因子收益归因接消费侧（组合台/归因报告 + UI 呈现） | todo | eval-methodology |
+| fc79b911 | 真数据可成交性 + 复权轴——接真 Tushare 前必修的预装停工地雷（复权/停牌/涨跌停） | todo | data-layer |
 
 ## 按 area 功能索引
 
@@ -150,6 +153,7 @@
 | desktop | bc21c7c1 · done | dreaminate |
 | docs | ecbd0eab · done | dreaminate |
 | eval-methodology | 41ea6e35 · done | dreaminate |
+| eval-methodology | 4c6de2c1 · done | dreaminate |
 | eval-methodology | 69e1cb16 · done | dreaminate |
 | eval-methodology | 6acbb499 · done | dreaminate |
 | eval-methodology | 89e7be1e · done | dreaminate |
