@@ -15,6 +15,10 @@ croniter>=2.0
 scikit-learn>=1.5
 scipy>=1.11
 lightgbm>=4.0
+# §15 artifact 信任门(C-MODELGOV-1):DL safe tensors 安全加载格式(零 pickle·构造上无代码执行)。
+# 轻量包;`safetensors.torch` 子模块按需惰性 import(缺 torch 不影响主进程导入本包)。
+# load_safetensors_artifact 依赖它,且【绝不回落 pickle/.pt 不安全路径】(缺包→显式 raise)。
+safetensors>=0.4
 keyring>=24.0
 cryptography>=42.0
 pytest==8.4.1
