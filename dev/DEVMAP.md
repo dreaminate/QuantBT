@@ -16,6 +16,7 @@
 | 381b6c18 | 实盘因子血统门——未过检验因子上真钱线 → 警告+知情确认 | done | security-invariant | done |
 | 3a8b2360 | R28 全库双时态（known_at 轴 + as-of 重述基本面）（T-033 核验 gap） | done | 数据 | done |
 | 3bb62d7d | 无副作用业务工具接真引擎（agent 一句话真跑回测）——T-027 残余 | done | agent | done |
+| 3d4a872e | 分支 land-readiness 整体评审 + 修 3 发现（2 文档过claim + σ 边界牙缝） | done | review | done |
 | 3d95e0f6 | agent 窗口弹窗 + 教学文案（整合 T-028/T-032/T-034 前端残余） | done | frontend | done |
 | 3f5ed0b8 | agent 客户端窗口 epic(仿 Claude Code)——权限模式切换 + 工具可视化 + 审批弹窗 | done | frontend-epic | done |
 | 41ea6e35 | R4 CPCV（Combinatorial Purged CV）多路径回测 + 组合学/防泄露命门 | done | eval-methodology | done |
@@ -183,6 +184,7 @@
 | paper-fullstack | cfb7d950 · done | dreaminate |
 | portfolio | 46f1cb3c · done | dreaminate |
 | portfolio | ba59fb7b · done | dreaminate |
+| review | 3d4a872e · done | dreaminate |
 | security-invariant | 381b6c18 · done | dreaminate |
 | security-invariant | 6e4eee54 · done | dreaminate |
 | signals | 87ad21fc · done | dreaminate |

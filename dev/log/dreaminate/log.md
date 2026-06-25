@@ -450,3 +450,10 @@
 - **避方法学纠缠**：用模型自身 r2（非 Sharpe/DSR——后者需 prediction→收益转换=用户方法学决策）→ report-only、非回归 unsupported_task 诚实、不替拍板。
 - **验证**：`test_cpcv_oos_distribution.py` 7 + 训练 31 passed；**全量后端 1603 passed / 13 skipped / 0 failed / 124s**（基线 1596，净 +7）。follow-on（861182e6 ②③ q05→gate/Sharpe-DSR/分类排序）池卡留。
 - **本轮 loop「commit 和 push 自动进行」→ 本地 commit + push 分支 worktree-autopolish-w1**（land main 仍仅用户）。
+
+## 2026-06-25 · 分支 land-readiness 整体评审 + 修 3 发现（done 卡 3d4a872e · 里程碑）
+- **里程碑分支级评审**：18 commits（78 文件/+7764）累积未 land → loop 第 4 步「以可上线成品验收」。deep-opus 三角（execution/drift+lifecycle/frontend+infra）+ 自验：安全红线全清（look-ahead σ/ADV as-of 真无泄露、A股 live 全 venue=backtest、M-AUTHORITY 无 gate verdict 参数、动钱未碰）、additive 属实（impact_coef=0 字节相等、无改既有测试）、无结构阻断 → **判定 land-ready**。
+- **修 3 发现**：① [high] signals conformal_abstain_gate 文档过claim（q̂「来自 model_eval·同一命门」暗示生产已闭环、实未串接）→ 软化诚实；② [high] backtest_venue cost_summary 文档称「供 run_detail_core 消费」（实另一 schema 无 producer）→ 软化诚实；③ [medium·真牙缝] σ same-bar 边界未钉（现码 p=j-1 正确但 leak-free 测试只扰未来、漏判 p=j 同根前视，评审种 p=j 两不变量仍过）→ 补 `test_asof_sigma_excludes_same_bar_return_boundary_pinned`（扰单根 close[k]、MUT p=j 验证有牙），σ 边界与 ADV 同级钉死。
+- **教训**：in-code 文档不得声称代码里不存在的跨件 wiring——即便 dev/state 另有诚实追踪，维护者先读 in-code 文档=不假绿灯雷。
+- **验证**：受影响 33 测 + **全量后端 1604 passed / 13 skipped / 0 failed / 123s**（基线 1603，净 +1）。
+- **本轮 loop「commit 和 push 自动进行」→ 本地 commit + push 分支 worktree-autopolish-w1。判定 land-ready，待用户授权合并 main。**

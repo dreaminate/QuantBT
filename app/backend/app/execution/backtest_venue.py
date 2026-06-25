@@ -397,7 +397,11 @@ class BacktestVenue(ExecutionVenue):
         对每笔 fill 的 `cost_breakdown` 各成分求和；`total` 走「Σ 各 fill 的 total」**独立路径**（非 Σ 各成分），
         使 run 级加总恒等式（total == Σ 各成分）有真牙——聚合漏成分/错累加即崩。impact 单列、不再淹没在
         commission 总额（接 per-fill 成本逐成分归因到 run 级）。无成交 → 全 0、n_fills=0（不编造）。
-        供 paper/run 详情（run_detail_core 的 cost_breakdown）/ TCA 消费。
+
+        **消费现状（诚实·不过claim）**：本方法是**可用聚合 API**，供持 BacktestVenue 的 caller（paper/TCA）按需调用。
+        **注**：`run_detail_core` 现有的 `manifest['cost_breakdown']` 是**另一套 schema**（fee/funding/net）且由别处产，
+        本方法**尚未**写进该 manifest——run 详情页的本成分归因为 follow-on（producer wiring 待接，IDE sandbox 回测
+        向量化、不产 per-fill）。绝不暗示已被 run 详情消费。
         """
         comps = ("commission", "slippage", "stamp_duty", "transfer", "impact")
         agg: dict[str, float] = {c: 0.0 for c in comps}

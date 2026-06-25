@@ -363,6 +363,35 @@ def test_asof_adv_is_exact_expanding_prefix_mean_not_lag1():
             f"bar{k} as-of ADV={adv_k}≠前缀均值{np.mean(vols[:k]):.1f}（疑用 lag-1/前一日而非扩张均值）"
 
 
+def test_asof_sigma_excludes_same_bar_return_boundary_pinned():
+    """**σ t-vs-t 边界钉死（评审挖出的牙缝补强）**：bar k 的 σ 只用 <k 实现的收益、**排除当根 r_k=close[k]/close[k-1]**。
+
+    原 leak-free 测试只扰**未来** bar → 无法区分正确 `p=j-1`（排除 r_k）与漏前视 `p=j`（含 r_k 同根）。
+    此测扰**单根** close[k]：correct → asof[k].σ **不变**（不含 r_k）、asof[k+1].σ **变**（含 r_k）；
+    种坏 p=j（含当根）→ asof[k].σ 随 close[k] 变 → 第一断言崩（抓 same-bar look-ahead）。
+    """
+    rng = np.random.default_rng(0)
+    n, k = 30, 10
+    close = 100.0 * np.exp(np.cumsum(rng.standard_normal(n) * 0.02))
+
+    def _mk(c):
+        return pl.DataFrame({"ts": list(range(n)), "symbol": ["BTC"] * n, "open": c,
+                             "high": c * 1.01, "low": c * 0.99, "close": c, "volume": [1000.0] * n})
+
+    c2 = close.copy()
+    c2[k] *= 1.05                                              # 仅扰动 bar k 的 close
+    with warnings.catch_warnings():
+        warnings.simplefilter("ignore")
+        va = BacktestVenue(_mk(close), BacktestCostModel(impact_coef=0.5))
+        vb = BacktestVenue(_mk(c2), BacktestCostModel(impact_coef=0.5))
+    _, sig_a_k = va._impact_asof["BTC"][k]
+    _, sig_b_k = vb._impact_asof["BTC"][k]
+    _, sig_a_k1 = va._impact_asof["BTC"][k + 1]
+    _, sig_b_k1 = vb._impact_asof["BTC"][k + 1]
+    assert sig_a_k == sig_b_k, "asof[k].σ 随 close[k] 变 → 含了当根 r_k（same-bar look-ahead，p=j 漏前视）"
+    assert sig_a_k1 != sig_b_k1, "asof[k+1].σ 应含 r_k=close[k]/close[k-1]、随 close[k] 变（自检：测试确有判别力）"
+
+
 def test_warmup_verdict_is_leakfree_not_flipped_by_future():
     """**命门·PROBE H 回归（评审 critical 修复守门）**：早期成交（zero-vol prefix）的 warmup 裁决
     **只看 F_{t⁻}、绝不被未来量翻转**。

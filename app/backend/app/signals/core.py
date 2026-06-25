@@ -111,10 +111,14 @@ def conformal_abstain_gate(
 ) -> pl.DataFrame:
     """R23 conformal 弃权门：预测区间 [score±q̂] 跨决策阈值 → 方向不可辨 → **弃权**（flat/magnitude=0）。
 
-    **理论（split-conformal 消费侧）**：q̂=`conformal_band` 是模型残差 (1−α) 预测区间半宽（来自
-    `model_eval.conformal_prediction_band` 的 `band_half_width`，同一 q̂ 命门），故真值 ∈ [score−q̂, score+q̂]
-    覆盖≥1−α。当 |score − direction_threshold| ≤ q̂ 时该区间**含阈值** → 在 1−α 置信下无法判定真值落阈值哪侧
-    → 方向纯属噪声、**弃权**（direction=flat、magnitude=0、`abstained=True`）。诚实「不对噪声下单」、不假信号。
+    **理论（split-conformal 消费侧）**：q̂=`conformal_band` 是模型残差 (1−α) 预测区间半宽，故真值 ∈
+    [score−q̂, score+q̂] 覆盖≥1−α。当 |score − direction_threshold| ≤ q̂ 时该区间**含阈值** → 在 1−α 置信下
+    无法判定真值落阈值哪侧 → 方向纯属噪声、**弃权**（direction=flat、magnitude=0、`abstained=True`）。诚实
+    「不对噪声下单」、不假信号。
+
+    **q̂ 来源（诚实·不过claim）**：本门**设计**消费 `model_eval.conformal_prediction_band` 的 `band_half_width`
+    （量纲同义=对预测/score 的残差区间半宽，已有测试核语义一致）；但**生产信号管线尚未自动串接**——调用方须
+    自行传入 q̂（卡 92a2182f ① 库就绪、生产 wiring=follow-on）。绝不暗示已闭环。
 
     `conformal_band` ≤ 0 → 不弃权（abstained 全 False，向后兼容）；缺 `score_col` → raise（不静默放过：弃权
     判定必须用**原始 score** 量纲与阈值比，confidence 的 sigmoid 已失真不可代）。`abstained` 列 additive。
