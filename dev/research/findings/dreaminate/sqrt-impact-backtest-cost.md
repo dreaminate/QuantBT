@@ -37,10 +37,6 @@ opt-in 启用（impact_coef>0）时：**须 volume 列**（估 ADV），无则 *
 5. **不假绿灯**：impact_coef>0 但无 volume 列 → init raise（绝不静默 0 冲击）；participation<0/σ≤0/coef≤0 退化安全。
 6. **δ 锁定**：impact_delta 默认 0.5（R18），改离 0.5 须显式（窄带，文档标）。
 
-## 复用 [按需]
-- `app/execution/backtest_venue.py`：现有 `_cost_for_trade`（commission/slippage/stamp/transfer），冲击项**加**不替换。
-- `app/factor_factory/lifecycle_metrics.py` `strategy_capacity`：同 sqrt-impact 物理，交叉校验测试绑定（不跨模块产依赖，靠测试守一致）。
-
 ## 扩张窗 as-of 无泄露自估（resolves P2 0f696e56 · 数学先行）
 **问题**：原自估用**全样本** ADV/σ（`mean(全部 volume)` / `std(全部 close 收益)`）作每笔成交的流动性输入 → 早期成交的参与率 `Q/ADV` 被**未来** bar 的流动性稀释、σ 含未来波动 = **前视泄露**，回测冲击偏乐观。
 
@@ -55,6 +51,10 @@ $$\widehat{\mathrm{ADV}}_{t^-}=\frac{1}{|D_{<t}|}\sum_{d\in D_{<t}}V_d,\quad D_{
 **warmup（诚实处置·不假绿灯·裁决纯由 F_{t⁻} 驱动）**：`|D_{<t}|=0`（首日）或 prior 收益 <2（`t<3`）⇒ 估计在 `F_{t⁻}` 上未定义。**绝不**偷看未来补估，也**不**对该笔静默假装 0 成本——该笔**不计冲击但计数+披露**（`venue._impact_warmup_fills` + 一次性 warning）。**关键（评审 PROBE H 修正）**：warmup-vs-charge 的裁决**只看成交 ts 的 as-of 估计（F_{t⁻}）**，**绝不**用「全样本 `max(volume)>0`」之类含未来的信号判定——否则早期成交的 skip/charge 离散决策会被**未来 bar** 翻转（构成残余前视、且让缺流动性成交伪装成 warmup 静默放过=假绿灯）。「symbol 全样本无 volume」的硬 fail-fast 只保留在 **ts=None 终端路径**（汇总/直接调用，序列末无未来⇒非泄露）；replay 每笔成交一律走 F_{t⁻} as-of，估不出即 warmup-披露。一致性：随历史增长 `\widehat{\cdot}_{t^-}→` 全样本值（LLN），早期估计方差大（披露）；扩张窗剔除的正是全样本估计的乐观偏向。
 
 **ts=None 回退**：直接调用（非 replay、无成交 ts）退化到**终端全样本**标量（序列末无「未来」⇒ 末端点估计用全样本非泄露），供单测/汇总；replay 路径恒传 ts → 走 as-of。
+
+## 成本逐成分诚实归因（e2afc5c2 #1 · honesty）
+fill 报告原 `commission` 字段实装的是**总成本**（commission+slippage+stamp+transfer+impact），下游做成本拆解/TCA 会把市场冲击误读成手续费。**修**：抽 `_cost_breakdown` 返 `{commission, slippage, stamp_duty, transfer, impact, total}`（impact **单列、绝不并入 commission**，各成分非负、求和==total）；fill 报告 **additive** 加 `cost_breakdown`，顶层 `commission` 保留=`total` 仅向后兼容（`cost_drift` 取总实现成本不破）。`_cost_for_trade` 变薄壳返 `total`；`step` 一次算 breakdown（避免重算令 warmup 计数双增）。種坏门：impact 并入 commission 成分→commission 虚高被抓（MUT-C 验证有牙）。
+**e2afc5c2 #2（三档预设默认 size-aware）= 用户方法学决策**：启用 impact 仍需冲击系数 Y（无万能默认、须用户/校准给），选 Y 是用户那摊；seam 已就绪（任何预设 caller 可传 `impact_coef` + 无泄露自估/显式 ADV），生产默认保持关直到用户给 Y——不替拍板。
 
 ## 复用 [按需]
 - `app/execution/backtest_venue.py`：现有 `_cost_for_trade`（commission/slippage/stamp/transfer），冲击项**加**不替换。

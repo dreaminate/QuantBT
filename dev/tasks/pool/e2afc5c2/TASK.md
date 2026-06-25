@@ -14,6 +14,9 @@ depends_on: [7179ba36278e4091a8e29b4d58336525]
 
 # 三档成本预设接 sqrt-impact 默认 + impact 成本归因拆字段
 
+> **状态（2026-06-25）**：**② 成本归因拆字段 ✅ done**（done 卡 6e264c59·`cost_breakdown` impact 单列、commission=total 向后兼容、MUT-C 验证有牙）。
+> **① 三档预设默认 size-aware = 用户方法学决策、本卡留池待用户拍**：启用 impact 须冲击系数 Y（无万能默认、须用户/校准给）；seam 已就绪（任何预设 caller 可传 `impact_coef` + 无泄露自估[卡 d9bf88b1]/显式 ADV），生产默认保持关直到用户给 Y——不替拍板（用户护栏：方法学松紧是用户那摊）。
+
 ## Scope [必填]
 卡 7179ba36 的 sqrt-impact 默认关、需用户显式启用。本卡：① 把 size-aware 平方根冲击接进**三档成本预设**
 （GOAL §M9.2），让生产回测默认 size-aware（大资金不再系统性过优）；② 成交报告里成本拆**结构化字段**

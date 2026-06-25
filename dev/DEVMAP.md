@@ -24,6 +24,7 @@
 | 64717fe6 | paper provider 真回放捆绑样本——替换确定性合成游走（§3 增强） | done | paper | done |
 | 69e1cb16 | R23 不确定性预测区间（split conformal/CQR/ACI）+ abstain + 覆盖定理命门 | done | eval-methodology | done |
 | 6acbb499 | R27 冷启动 MinTRL（最小业绩期长度）+ PSR 反解命门 | done | eval-methodology | done |
+| 6e264c59 | 回测成本逐成分诚实归因（impact 单列不混入 commission） | done | execution-cost | done |
 | 6e4eee54 | 入口×必经门覆盖矩阵回归 + 所有 venue 经 OrderGuard.wrap 的 CI 静态检查 | done | security-invariant | done |
 | 7179ba36 | R18 平方根市场冲击 回测成本项（size-aware）+ 容量交叉校验命门 | done | execution-cost | done |
 | 79ebe273 | 模拟台后端接线 — /api/paper/* 整层 + 晋级审批门 + 风险门冻结哈希链 | done | backend | done |
@@ -134,6 +135,7 @@
 | eval-methodology | 6acbb499 · done | dreaminate |
 | eval-methodology | b1e4efdf · done | dreaminate |
 | eval-methodology | d4a324ae · done | dreaminate |
+| execution-cost | 6e264c59 · done | dreaminate |
 | execution-cost | 7179ba36 · done | dreaminate |
 | execution-cost | d9bf88b1 · done | dreaminate |
 | factor-lifecycle | b12de4f5 · done | dreaminate |

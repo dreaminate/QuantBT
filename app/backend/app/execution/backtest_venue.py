@@ -149,8 +149,10 @@ class BacktestVenue(ExecutionVenue):
                 continue
             qty = booked.order.quantity
             side: OrderSide = booked.order.side
-            # 传 next_ts → 冲击走扩张窗 as-of（仅用 <next_ts 的流动性/σ，无前视泄露）。
-            cost = self._cost_for_trade(side, qty, executed_price, booked.order.symbol, ts=next_ts)
+            # 传 next_ts → 冲击走扩张窗 as-of（仅用 <next_ts 的流动性/σ，无前视泄露）。逐成分一次算（避免
+            # 重算令 warmup 计数器双增）；cost=total，breakdown 附进报告供下游真归因（impact 不混入 commission）。
+            breakdown = self._cost_breakdown(side, qty, executed_price, booked.order.symbol, ts=next_ts)
+            cost = breakdown["total"]
             signed_qty = qty if side == "buy" else -qty
             self._cash -= signed_qty * executed_price + cost
             pos = self._positions.get(booked.order.symbol) or Position(symbol=booked.order.symbol, quantity=0.0)
@@ -175,7 +177,8 @@ class BacktestVenue(ExecutionVenue):
                     "side": side,
                     "filled_qty": qty,
                     "fill_price": executed_price,
-                    "commission": cost,
+                    "commission": cost,            # 向后兼容=total（含 impact）；逐成分见 cost_breakdown
+                    "cost_breakdown": breakdown,    # 诚实归因：commission/slippage/stamp_duty/transfer/impact/total
                     "status": booked.status,
                     "ts": next_ts,
                 }
@@ -346,8 +349,14 @@ class BacktestVenue(ExecutionVenue):
                 stacklevel=3,
             )
 
-    def _cost_for_trade(self, side: OrderSide, qty: float, price: float, symbol: str | None = None,
-                        ts: Any = None) -> float:
+    def _cost_breakdown(self, side: OrderSide, qty: float, price: float, symbol: str | None = None,
+                        ts: Any = None) -> dict[str, float]:
+        """逐成分成本（诚实归因·不假绿灯）：`commission`/`slippage`/`stamp_duty`/`transfer`/`impact` + `total`。
+
+        **impact 单列、绝不并入 commission**——下游可真做成本归因/TCA（市场冲击不会被误读成手续费）。
+        fill 报告的 `commission` 顶层字段保留=`total`（含 impact）仅向后兼容旧消费者（cost_drift 取总实现成本）；
+        要逐成分一律读 `cost_breakdown`。各成分非负、求和==total（测试守恒）。
+        """
         notional = qty * price
         commission = notional * self._cost.commission_bps * 1e-4
         slippage = notional * self._cost.slippage_bps * 1e-4
@@ -372,7 +381,14 @@ class BacktestVenue(ExecutionVenue):
                 impact = notional * square_root_impact_fraction(
                     participation, sigma, self._cost.impact_coef, self._cost.impact_delta
                 )
-        return commission + slippage + stamp + transfer + impact
+        return {"commission": commission, "slippage": slippage, "stamp_duty": stamp,
+                "transfer": transfer, "impact": impact,
+                "total": commission + slippage + stamp + transfer + impact}
+
+    def _cost_for_trade(self, side: OrderSide, qty: float, price: float, symbol: str | None = None,
+                        ts: Any = None) -> float:
+        """本笔成交总成本（=逐成分 total，向后兼容标量入口）。逐成分见 `_cost_breakdown`。"""
+        return self._cost_breakdown(side, qty, price, symbol, ts)["total"]
 
 
 __all__ = ["BacktestCostModel", "BacktestVenue", "MatchingMode"]

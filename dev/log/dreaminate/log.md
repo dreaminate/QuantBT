@@ -392,3 +392,9 @@
 - **评审三角（deep-opus‖codex 互不知情 + 我裁决）挖出真 critical 并修**：① 初版用全样本 `max(volume)>0` 判 warmup-vs-fail-fast → PROBE H 实测「early bar 逐位相同、仅未来量不同 → 裁决翻转(raise vs warmup)」=残余前视 + 缺流动性伪装 warmup 假绿灯。**修**：warmup 裁决改纯 F_{t⁻} prefix 驱动、剔除全样本信号；未知 ts 改 warmup-披露不回退泄露终端值。② σ 通道测试无牙（原 leak-free 测试只扰量、close 相同）+ ADV 机制未钉死 → 补 σ-价测试 + 非平量机制测试，**MUT-A（σ 全样本）/MUT-B（lag-1）双 mutation 验证真有牙**（旧测漏、新测必抓）。
 - **验证**：全量后端 **1571 passed / 13 skipped / 0 failed**（基线 1564，净 +7）；PROBE H 修前(raise vs cost=0)→修后(两面板同 warmup)实证。**教训**：除 mutation 用定点反向 edit，**绝不 `git checkout` 带未提交改动的文件**（本轮误用一次、全切片实现被抹、已重建）。
 - **land main 待用户授权**（本轮 loop「commit 不擅自 push」→ 本地 commit、未 push）。
+
+## 2026-06-25 · 成本逐成分诚实归因（done 卡 6e264c59 / e2afc5c2 #1）+ 测试防挂死（commit 443fca9）
+- **成本归因（honesty）**：fill 报告 `commission` 字段实装总成本（含 impact）→ 下游 TCA 误读市场冲击为手续费。修 `_cost_breakdown` 逐成分（impact **单列绝不并入 commission**、各成分非负、求和==total），fill 报告 additive 加 `cost_breakdown`、顶层 commission=total 向后兼容（cost_drift 取总实现成本不破），`step` 一次算 breakdown（避免 warmup 计数双增）。MUT-C（impact 并入 commission 成分）验证有牙（commission 虚高被抓）。finding 补「成本逐成分诚实归因」节 + 修 slice-9 误留的「## 复用」重复节。e2afc5c2 #2（三档预设默认 size-aware）=用户方法学决策（需 Y、seam 就绪默认关、不替拍板）。
+- **测试套件防挂死（诚实纠错 + 加固）**：排查「测试跑了 7h/9h」发现两个 pytest 进程空挂——根因 `test_dag_kernel::test_effect_ledger_concurrent_same_key`（8 连接争 SQLite 锁）在我**多 full-suite 并行叠跑** + 后台**无 `--timeout`** 下被饿死挂死（单独 5.4s、全量单独 192s 绿=非生产 bug）；后台被 kill 后 harness 误报「exit 0」=假绿、识破未当真。修 pytest.ini 加全局 `timeout=120` + 并发测试 `daemon=True`（commit 443fca9）。**教训记 memory**：全量套件绝不并行叠跑、必带超时、凭真汇总行判绿别凭 exit code。
+- **验证**：`test_sqrt_impact_cost.py` 23 + test_dag_kernel 25 passed；**全量单独前台 1574 passed / 13 skipped / 0 failed / 192s**（基线 1571，净 +3）。
+- **land main 待用户授权**（本轮 loop「commit 不擅自 push」→ 本地 commit、未 push）。

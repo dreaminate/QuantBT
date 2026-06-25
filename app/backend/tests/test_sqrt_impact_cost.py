@@ -10,6 +10,7 @@
 
 from __future__ import annotations
 
+import json
 import math
 import warnings
 
@@ -111,6 +112,63 @@ def test_impact_off_without_volume_ok():
     """impact 关时无 volume 不报错（向后兼容：现有无 volume 回测照跑）。"""
     v = BacktestVenue(_panel(with_volume=False), BacktestCostModel())
     assert v._cost_for_trade("buy", 10, 100.0, "BTC") > 0
+
+
+# ===========================================================================
+# 成本逐成分诚实归因（e2afc5c2·impact 单列不混入 commission）
+# ===========================================================================
+
+
+def test_cost_breakdown_components_sum_to_total_and_impact_separate():
+    """逐成分诚实归因：各成分非负、求和==total，且 impact **单列不混入 commission**。
+
+    种坏（honesty 门）：把 impact 并进 commission 成分（e2afc5c2 eng 指认的下游误读）→ commission 成分
+    会虚高、且与「impact 关」时不一致 → 本测抓。
+    """
+    cm = BacktestCostModel(commission_bps=5, slippage_bps=3, impact_coef=0.5,
+                           impact_adv={"BTC": 2000.0}, impact_sigma={"BTC": 0.03})
+    with warnings.catch_warnings():
+        warnings.simplefilter("ignore")
+        v = BacktestVenue(_panel(), cm)
+    bd = v._cost_breakdown("buy", 100, 100.0, "BTC")
+    notional = 100 * 100.0
+    assert abs(bd["commission"] - notional * 5e-4) < 1e-12         # commission=纯 commission_bps、未混 impact
+    assert abs(bd["slippage"] - notional * 3e-4) < 1e-12
+    assert bd["impact"] > 0.0 and bd["stamp_duty"] == 0.0          # impact 单列且 >0；买入无印花
+    parts = ("commission", "slippage", "stamp_duty", "transfer", "impact")
+    assert all(bd[k] >= 0.0 for k in parts)                        # 各成分非负
+    assert abs(sum(bd[k] for k in parts) - bd["total"]) < 1e-12    # 求和守恒==total
+    # 反证：impact 确实没被并进 commission——启用 impact 时 commission 成分与「impact 关」逐位相同
+    bd0 = BacktestVenue(_panel(), BacktestCostModel(commission_bps=5, slippage_bps=3))._cost_breakdown("buy", 100, 100.0, "BTC")
+    assert abs(bd["commission"] - bd0["commission"]) < 1e-12 and bd0["impact"] == 0.0
+
+
+def test_fill_report_has_cost_breakdown_backward_compatible_commission_total():
+    """fill 报告 additive 含 cost_breakdown；顶层 commission=total（含 impact）向后兼容（cost_drift 等旧消费者不破）。"""
+    from app.execution.base import Order
+
+    cm = BacktestCostModel(commission_bps=5, slippage_bps=3, impact_coef=0.5,
+                           impact_adv={"BTC": 2000.0}, impact_sigma={"BTC": 0.03})
+    with warnings.catch_warnings():
+        warnings.simplefilter("ignore")
+        v = BacktestVenue(_panel(), cm)
+    v.place_order(Order(venue="backtest", symbol="BTC", side="buy", quantity=100, order_type="market"))
+    rep = v.step()[0]
+    assert "cost_breakdown" in rep and rep["cost_breakdown"]["impact"] > 0.0
+    assert abs(rep["commission"] - rep["cost_breakdown"]["total"]) < 1e-12   # 顶层 commission=total（向后兼容）
+    assert rep["commission"] > rep["cost_breakdown"]["commission"]           # total 含 impact > 纯 commission 成分
+    json.dumps(rep["cost_breakdown"])                                        # JSON-safe
+
+
+def test_cost_breakdown_warmup_impact_zero_still_sums():
+    """warmup（自估 prefix 不足）→ impact 成分=0、求和仍==total（不假绿灯：不计冲击但守恒）。"""
+    with warnings.catch_warnings():
+        warnings.simplefilter("ignore")
+        v = BacktestVenue(_panel(n=12), BacktestCostModel(commission_bps=5, slippage_bps=3, impact_coef=0.5))
+        bd = v._cost_breakdown("buy", 50, 100.0, "BTC", ts=0)     # ts=0 无 prior → warmup（告警已抑）
+    parts = ("commission", "slippage", "stamp_duty", "transfer", "impact")
+    assert bd["impact"] == 0.0 and v._impact_warmup_fills == 1
+    assert abs(sum(bd[k] for k in parts) - bd["total"]) < 1e-12
 
 
 # ===========================================================================
