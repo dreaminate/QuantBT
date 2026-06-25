@@ -1,8 +1,8 @@
 ---
 uuid: ec7a7d9a07764b37bc23d49abb4c1284
 title: 数据写门 scope 余项——11 字段 + data 级 lineage + on-disk manifest 自动接线（B-VERSION-1 余）
-status: todo
-owner: wait
+status: in_progress
+owner: dreaminate
 assigned_by: dreaminate
 review_status: 0
 priority: P2

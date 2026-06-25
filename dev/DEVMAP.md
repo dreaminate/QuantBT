@@ -6,6 +6,10 @@
 
 | uuid8 | 标题 | status | area | 位置 |
 |---|---|---|---|---|
+| 67b42025 | RDP 接线——接现导出器 6 字段 + 接真 promote 路径 require_valid_rdp（D-RDP-1 wire） | in_progress | delivery | active |
+| 6a8752ab | PIT 训练全链激活——TrainingService train_now/submit 透传 as_of_known（B-PIT-1 activate） | in_progress | data-pit | active |
+| ec7a7d9a | 数据写门 scope 余项——11 字段 + data 级 lineage + on-disk manifest 自动接线（B-VERSION-1 余） | in_progress | data-pit | active |
+| f19c5c19 | QRO 统一对象信封 + 状态四/五轴——对象脊柱地基（A-QRO-1） | in_progress | qro | active |
 | 0430cd78 | 数据更新写时强约束——dataset_version/checksum/lineage 升 block 门（B-VERSION-1） | done | data-pit | done |
 | 05d6f511 | 单人 self-approve 仅非真钱通道(冷却+留痕)，真钱硬双人 | done | approval | done |
 | 07b10903 | DS-6 装机收口——跨平台一键启动 + mkdir（可缓·docker compose 兜底） | done | onboarding-docs | done |
@@ -116,15 +120,11 @@
 | 31289338 | 冷启动 gate/UI 接 MinTRL：DSR=N/A + PSR + "需 N 期"渐进披露（R25/R27 呈现层） | todo | eval-methodology |
 | 554cdcf2 | 监控绩效轴真闭环——4 个 drift 检测器接 run_weekly_monitor_pass + per-factor IC 真源 + 观测落盘（审计残余） | todo | monitor |
 | 6144bd61 | artifact 信任门生产激活——producer 落盘接 register + 翻 enforce + safetensors 入依赖（C-MODELGOV-1 activate） | todo | model-governance |
-| 67b42025 | RDP 接线——接现导出器 6 字段 + 接真 promote 路径 require_valid_rdp（D-RDP-1 wire） | todo | delivery |
-| 6a8752ab | PIT 训练全链激活——TrainingService train_now/submit 透传 as_of_known（B-PIT-1 activate） | todo | data-pit |
 | 861182e6 | CPCV 接 promote/overfit gate + cv_scheme 双轨 report（价值闭环） | todo | eval-methodology |
 | 92a2182f | conformal 区间消费侧接线——模型台/信号层预测附校准区间 + abstain UI 呈现 | todo | eval-methodology |
 | aa13c3b0 | 因子机构级度量接 lifecycle 状态机/sizing 生产路径 | todo | factor-lifecycle |
 | e2afc5c2 | 三档成本预设接 sqrt-impact 默认 + 成交报告 impact 成本归因拆字段 | todo | execution-cost |
 | e4496023 | 因子收益归因接消费侧（组合台/归因报告 + UI 呈现） | todo | eval-methodology |
-| ec7a7d9a | 数据写门 scope 余项——11 字段 + data 级 lineage + on-disk manifest 自动接线（B-VERSION-1 余） | todo | data-pit |
-| f19c5c19 | QRO 统一对象信封 + 状态四/五轴——对象脊柱地基（A-QRO-1） | todo | qro |
 
 ## 按 area 功能索引
 
@@ -160,8 +160,11 @@
 | backend | e069d820 · done | dreaminate |
 | config | 8ab894cd · done | dreaminate |
 | data-connectors | e1a98c41 · done | dreaminate |
+| data-pit | 6a8752ab · in_progress | dreaminate |
+| data-pit | ec7a7d9a · in_progress | dreaminate |
 | data-pit | 0430cd78 · done | dreaminate |
 | data-pit | e01bf12f · done | dreaminate |
+| delivery | 67b42025 · in_progress | dreaminate |
 | delivery | 9d593481 · done | dreaminate |
 | desktop | bc21c7c1 · done | dreaminate |
 | docs | ecbd0eab · done | dreaminate |
@@ -224,6 +227,7 @@
 | paper-fullstack | cfb7d950 · done | dreaminate |
 | portfolio | 46f1cb3c · done | dreaminate |
 | portfolio | ba59fb7b · done | dreaminate |
+| qro | f19c5c19 · in_progress | dreaminate |
 | review | 3d4a872e · done | dreaminate |
 | security-invariant | 381b6c18 · done | dreaminate |
 | security-invariant | 6e4eee54 · done | dreaminate |

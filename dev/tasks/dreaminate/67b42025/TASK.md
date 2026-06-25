@@ -1,8 +1,8 @@
 ---
 uuid: 67b4202584534a23b147973d7d48b8ca
 title: RDP 接线——接现导出器 6 字段 + 接真 promote 路径 require_valid_rdp（D-RDP-1 wire）
-status: todo
-owner: wait
+status: in_progress
+owner: dreaminate
 assigned_by: dreaminate
 review_status: 0
 priority: P2

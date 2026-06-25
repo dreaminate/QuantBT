@@ -1,8 +1,8 @@
 ---
 uuid: f19c5c192f4a44cc95fd159ea04d94e5
 title: QRO 统一对象信封 + 状态四/五轴——对象脊柱地基（A-QRO-1）
-status: todo
-owner: wait
+status: in_progress
+owner: dreaminate
 assigned_by: dreaminate
 review_status: 0
 priority: P0

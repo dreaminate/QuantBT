@@ -1,8 +1,8 @@
 ---
 uuid: 6a8752abcc324ec18cbfa910e1e78376
 title: PIT 训练全链激活——TrainingService train_now/submit 透传 as_of_known（B-PIT-1 activate）
-status: todo
-owner: wait
+status: in_progress
+owner: dreaminate
 assigned_by: dreaminate
 review_status: 0
 priority: P2
