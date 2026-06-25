@@ -39,6 +39,11 @@ from typing import Any, Literal
 TrustLevel = Literal["ok", "caution", "high_risk", "insufficient_data"]
 Severity = Literal["high", "medium", "low"]
 
+# DSR 别名**单一源**：_rule_dsr / checked_metrics / has_dsr 守门三处共用，杜绝手抄漂移——
+# 否则某处含 dsr_confidence 触 low flag、另一处不含 → has_dsr=False 早返 insufficient_data，
+# flags[low_dsr_confidence high] ⊥ trust_level[insufficient] 自相矛盾（误导·不能信）。
+_DSR_ALIASES = ("dsr", "deflated_sharpe", "deflated_sharpe_ratio", "dsr_confidence")
+
 
 @dataclass
 class RiskFlag:
@@ -101,7 +106,7 @@ def _rule_pbo(metrics: dict[str, Any]) -> RiskFlag | None:
 
 
 def _rule_dsr(metrics: dict[str, Any]) -> RiskFlag | None:
-    v = _read(metrics, "dsr", "deflated_sharpe", "deflated_sharpe_ratio", "dsr_confidence")
+    v = _read(metrics, *_DSR_ALIASES)
     if v is None:
         return None
     if v < 0.2:
@@ -234,7 +239,7 @@ def compute_risk_summary(metrics: dict[str, Any] | None) -> RiskSummary:
     # 完整 checked_metrics：遍历每个规则中尝试 read 的 alias，记录命中
     rule_metric_aliases = {
         "pbo": ["pbo", "probability_of_backtest_overfitting"],
-        "dsr": ["dsr", "deflated_sharpe", "deflated_sharpe_ratio", "dsr_confidence"],
+        "dsr": list(_DSR_ALIASES),
         "max_drawdown": ["max_drawdown", "drawdown"],
         "sharpe": ["sharpe", "sharpe_ratio"],
         "ic_ir": ["ic_ir", "ic_information_ratio"],
@@ -245,7 +250,7 @@ def compute_risk_summary(metrics: dict[str, Any] | None) -> RiskSummary:
 
     # 判断等级：核心两个反过拟合证据缺失 → insufficient
     has_pbo = _read(metrics, "pbo") is not None
-    has_dsr = _read(metrics, "dsr", "deflated_sharpe", "deflated_sharpe_ratio") is not None
+    has_dsr = _read(metrics, *_DSR_ALIASES) is not None   # 与 _rule_dsr/checked 同一别名源（含 dsr_confidence·防矛盾）
     has_sharpe = _read(metrics, "sharpe", "sharpe_ratio") is not None
 
     if has_sharpe and not has_pbo and not has_dsr:

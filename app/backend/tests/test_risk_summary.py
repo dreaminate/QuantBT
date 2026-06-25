@@ -258,3 +258,28 @@ def test_unhealthy_auxiliary_still_surfaces_flag_not_silenced():
     r = compute_risk_summary({"turnover": 50.0})   # 极高换手（>3.0 阈）→ flag
     assert r.trust_level in ("caution", "high_risk")   # 真风险信号照常浮出，非 insufficient
     assert any(f.name == "excessive_turnover" for f in r.flags)
+
+
+# ============================================================
+# DSR 别名单一源：flags 与 trust_level 不自相矛盾（审计 pass2 #8）
+# ============================================================
+
+
+def test_dsr_confidence_alias_consistent_flags_and_trust_level():
+    """**矛盾门**：dsr_confidence 是 DSR 别名 → 触 low_dsr_confidence 时 has_dsr 必识得、绝不早返 insufficient。
+
+    种坏（修前）：has_dsr 别名集漏 dsr_confidence → {sharpe, dsr_confidence=0.1} 触 high flag 却判
+    insufficient_data（trust 说『缺 DSR 证据』、flags 说『DSR 太低高风险』=自相矛盾·误导）。
+    MUT（has_dsr 别名集去掉 dsr_confidence）→ 本测红。
+    """
+    r = compute_risk_summary({"sharpe": 1.8, "dsr_confidence": 0.1})
+    assert any(f.name == "low_dsr_confidence" for f in r.flags)      # DSR 证据确被读到（low flag 触发）
+    assert r.trust_level != "insufficient_data", \
+        "dsr_confidence 触 low flag 却判 insufficient → has_dsr 别名漂移、flags⊥trust_level 自相矛盾"
+    assert r.trust_level == "high_risk"                              # 与 high flag 一致
+
+
+def test_dsr_confidence_alias_healthy_reaches_ok():
+    """dsr_confidence 健康（≥0.2）+ sharpe → has_dsr 识得 → 可达 ok（别名源一致·不误判 insufficient）。"""
+    r = compute_risk_summary({"sharpe": 1.5, "dsr_confidence": 0.8})
+    assert r.trust_level == "ok"

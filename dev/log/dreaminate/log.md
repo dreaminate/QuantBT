@@ -6,6 +6,14 @@
 ## <日期> · <标题>
 - 建/改了什么 + 命门  - 验收：<对抗测试 + 变异 + 全量数字>  - 下一步：<…> -->
 
+## 2026-06-25 · risk_summary DSR 别名单一源——消除 flags⊥trust_level 自相矛盾（卡 1b886c2e · D-DSR-ALIAS）
+
+- **缘起**：autonomous-loop（ultracode）。第二轮审计 #8（lev 5）：DSR 别名三处手抄不一致——_rule_dsr(104)/rule_metric_aliases(237) 含 dsr_confidence、has_dsr 守门(248) 漏 → {sharpe, dsr_confidence=0.1} 触 low_dsr_confidence HIGH flag 但 has_dsr=False 早返 insufficient_data（携 flag）= flags[high]⊥trust_level[insufficient] 自相矛盾。
+- **不变量先行**：同一 metric 的 has_*/[触发规则]/checked 必须共用同一别名集，否则 has_*=False 早返 insufficient 与已触 flag 矛盾。
+- **实现（单一源重构）**：提 module 级 `_DSR_ALIASES=(dsr,deflated_sharpe,deflated_sharpe_ratio,dsr_confidence)`，三处共用→漂移不可能。纯 correctness 内部一致性·不动阈值/口径=不涉用户方法学。
+- **验收**：+2 测试（矛盾门：dsr_confidence=0.1→high_risk 与 flag 一致；健康路径：dsr_confidence=0.8→可达 ok）。MUT（has_dsr 去 dsr_confidence）→ 矛盾复现+健康误判 insufficient 2 测红。**全量后端 1655 passed / 13 skipped / 0 failed / 178s**（基线 1653，净 +2）；无测试依赖旧矛盾行为。
+- **下一步**：分支续 land-ready，commit+push 自动；候选 #7（HRP safe·需 from_cov 入口）/ fc79b911 ②③ / e4496023 归因端点 / #6（待用户拍）。
+
 ## 2026-06-25 · 组合优化诚实化——risk_parity 真 ERC + mean_variance 不收敛透明（卡 5891da42 · D-PORTFOLIO-HONEST）
 
 - **缘起**：autonomous-loop（ultracode）。第二轮审计 #3（risk_parity 命名 theory↔impl·lev 7）+ #5（MVO 静默回退·lev 6）。

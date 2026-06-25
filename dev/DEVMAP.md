@@ -11,6 +11,7 @@
 | 0f8ec248 | 信号层规范组合器 compose_signal_pipeline——不可绕过的安全门顺序（不假信号） | done | signals | done |
 | 180a341e | 核验 agent tool_call 前端派发是否旁路受控翻译门（R11 前端缺口审计） | done | verification | done |
 | 1b83a5c5 | IC 持久性 AR(1) 半衰期接进 lifecycle 状态机（perf 轴·advisory） | done | factor-lifecycle | done |
+| 1b886c2e | risk_summary DSR 别名单一源——消除 flags⊥trust_level 自相矛盾（dsr_confidence 漂移） | done | eval-methodology | done |
 | 1e0e65b4 | 组合消费者——agent 可调组合三角 gate（SEQ-CONSUMER=A · C full-fat 触发器） | done | agent | done |
 | 29258b77 | conformal 校准区间 + OOS 真留出覆盖接进模型台 UI（能信·不假绿灯） | done | frontend-trust | done |
 | 2da39479 | CPCV 作 cv_scheme 产 per-path OOS 指标分布（report-only · 命门最深件 ①） | done | models-methodology | done |
@@ -155,6 +156,7 @@
 | data-layer | ff19c992 · done | dreaminate |
 | desktop | bc21c7c1 · done | dreaminate |
 | docs | ecbd0eab · done | dreaminate |
+| eval-methodology | 1b886c2e · done | dreaminate |
 | eval-methodology | 41ea6e35 · done | dreaminate |
 | eval-methodology | 4c6de2c1 · done | dreaminate |
 | eval-methodology | 5891da42 · done | dreaminate |
