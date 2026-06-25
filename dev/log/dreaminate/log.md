@@ -435,3 +435,10 @@
 - **不假绿灯**：T<K+2→insufficient 不出 β；rank<K+1→collinear 不报不可识别 β；近共线→ok+warn（β 不稳）；非有限行剔除披露；低 R² 如实报（收益多由特异驱动≠已归因）。
 - **验证**：`test_attribution.py` 8 + `test_methodology_invariants::test_attribution_sum_identity_invariant` 1 passed；**全量后端 1594 passed / 13 skipped / 0 failed / 151s**（基线 1585，净 +9）。消费侧（组合台/归因报告 UI·因子集/口径=用户方法学决策）mint 卡 e4496023。
 - **本轮 loop「commit 和 push 自动进行」→ 本地 commit + push 分支 worktree-autopolish-w1**（land main 仍仅用户）。
+
+## 2026-06-25 · BacktestVenue.cost_summary（per-fill 成本归因收口到 run 级·done 卡 7ac5a0fe）
+- **收口**：slice 成本归因（卡 6e264c59）只到 per-fill；run_detail_core:150 已读 run 级 manifest.cost_breakdown 但无 producer（恒空）。建 `cost_summary()` 聚合 audit fills → run 级（commission/slippage/stamp_duty/transfer/impact/total + n_fills），impact 单列不淹没在 commission。
+- **run 加总恒等式有牙**：total 走「Σ各 fill.total」独立路径（非 Σ成分）→ total==Σ成分有真牙；MUT-cs2（聚合漏 impact）→ 测试崩。无成交→全 0、n_fills=0（不编造）。
+- **验证**：`test_sqrt_impact_cost.py` 25 passed（+2 cost_summary）；**全量后端 1596 passed / 13 skipped / 0 failed / 128s**（基线 1594，净 +2）。
+- **follow-on**：backtest→manifest 把 venue.cost_summary() 落 manifest.cost_breakdown 的 producer wiring 待接（IDE sandbox 回测是否产 per-fill 待确认）——本卡提供可用聚合 API、wiring 建后续 mint。
+- **本轮 loop「commit 和 push 自动进行」→ 本地 commit + push 分支 worktree-autopolish-w1**（land main 仍仅用户）。

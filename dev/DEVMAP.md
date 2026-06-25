@@ -30,6 +30,7 @@
 | 6e4eee54 | 入口×必经门覆盖矩阵回归 + 所有 venue 经 OrderGuard.wrap 的 CI 静态检查 | done | security-invariant | done |
 | 7179ba36 | R18 平方根市场冲击 回测成本项（size-aware）+ 容量交叉校验命门 | done | execution-cost | done |
 | 79ebe273 | 模拟台后端接线 — /api/paper/* 整层 + 晋级审批门 + 风险门冻结哈希链 | done | backend | done |
+| 7ac5a0fe | BacktestVenue.cost_summary —— per-fill 成本归因收口到 run 级 | done | execution-cost | done |
 | 82120b9c | agent 窗口前端核心（Web）——对话流 + 工具可视化 + 权限模式切换 | done | frontend | done |
 | 87ad21fc | R18 stacking 控制项 N/A 标注 + 实现时 OOF 约束（T-033 核验 gap） | done | signals | done |
 | 8ab894cd | 审批 SLA 与 leverage_cap 可配置；杠杆不设硬上限；真钱超时永远 default_reject | done | config | done |
@@ -144,6 +145,7 @@
 | eval-methodology | ff286f80 · done | dreaminate |
 | execution-cost | 6e264c59 · done | dreaminate |
 | execution-cost | 7179ba36 · done | dreaminate |
+| execution-cost | 7ac5a0fe · done | dreaminate |
 | execution-cost | d9bf88b1 · done | dreaminate |
 | factor-lifecycle | 1b83a5c5 · done | dreaminate |
 | factor-lifecycle | b12de4f5 · done | dreaminate |

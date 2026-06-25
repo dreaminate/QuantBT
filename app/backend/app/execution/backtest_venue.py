@@ -390,5 +390,34 @@ class BacktestVenue(ExecutionVenue):
         """本笔成交总成本（=逐成分 total，向后兼容标量入口）。逐成分见 `_cost_breakdown`。"""
         return self._cost_breakdown(side, qty, price, symbol, ts)["total"]
 
+    def cost_summary(self) -> dict[str, float]:
+        """聚合本 venue 所有成交的逐成分成本 → **run 级诚实归因**（commission/slippage/stamp_duty/transfer/
+        impact/total + n_fills）。
+
+        对每笔 fill 的 `cost_breakdown` 各成分求和；`total` 走「Σ 各 fill 的 total」**独立路径**（非 Σ 各成分），
+        使 run 级加总恒等式（total == Σ 各成分）有真牙——聚合漏成分/错累加即崩。impact 单列、不再淹没在
+        commission 总额（接 per-fill 成本逐成分归因到 run 级）。无成交 → 全 0、n_fills=0（不编造）。
+        供 paper/run 详情（run_detail_core 的 cost_breakdown）/ TCA 消费。
+        """
+        comps = ("commission", "slippage", "stamp_duty", "transfer", "impact")
+        agg: dict[str, float] = {c: 0.0 for c in comps}
+        total = 0.0
+        n_fills = 0
+        for rec in self._audit.export():
+            if rec.get("kind") != "fill":
+                continue
+            bd = (rec.get("payload") or {}).get("cost_breakdown")
+            if not isinstance(bd, dict):
+                continue
+            n_fills += 1
+            for c in comps:
+                v = bd.get(c)
+                if isinstance(v, (int, float)) and math.isfinite(v):
+                    agg[c] += float(v)
+            tv = bd.get("total")                          # 独立累加 fill.total（≠Σ成分）→ 恒等式有牙
+            if isinstance(tv, (int, float)) and math.isfinite(tv):
+                total += float(tv)
+        return {**agg, "total": total, "n_fills": float(n_fills)}
+
 
 __all__ = ["BacktestCostModel", "BacktestVenue", "MatchingMode"]

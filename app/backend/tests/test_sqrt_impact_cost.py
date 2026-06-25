@@ -172,6 +172,43 @@ def test_cost_breakdown_warmup_impact_zero_still_sums():
 
 
 # ===========================================================================
+# run 级成本聚合（cost_summary · per-fill 归因收口到 run 级）
+# ===========================================================================
+
+
+def test_cost_summary_aggregates_fills_with_run_level_identity():
+    """run 级聚合 == Σ 各 fill cost_breakdown；**run 加总恒等式 total==Σ成分**（聚合漏成分/错累加→崩）。"""
+    from app.execution.base import Order
+
+    cm = BacktestCostModel(commission_bps=5, slippage_bps=3, impact_coef=0.5,
+                           impact_adv={"BTC": 2000.0}, impact_sigma={"BTC": 0.03})
+    with warnings.catch_warnings():
+        warnings.simplefilter("ignore")
+        v = BacktestVenue(_panel(n=20), cm)
+    for _ in range(3):
+        v.place_order(Order(venue="backtest", symbol="BTC", side="buy", quantity=50, order_type="market"))
+        v.step()
+    summ = v.cost_summary()
+    assert summ["n_fills"] == 3.0
+    fills = [r["payload"]["cost_breakdown"] for r in v.audit.export() if r["kind"] == "fill"]
+    assert len(fills) == 3
+    for c in ("commission", "slippage", "stamp_duty", "transfer", "impact", "total"):
+        assert abs(summ[c] - sum(f[c] for f in fills)) < 1e-9, f"成分 {c} run 聚合≠Σfill"
+    # run 级加总恒等式：total == Σ成分（total 走独立 Σfill.total 路径 → 有真牙）。
+    comp_sum = summ["commission"] + summ["slippage"] + summ["stamp_duty"] + summ["transfer"] + summ["impact"]
+    assert abs(summ["total"] - comp_sum) < 1e-9
+    assert summ["impact"] > 0.0                      # impact 单列、run 级可见（不淹没在 commission）
+
+
+def test_cost_summary_empty_no_fills_all_zero():
+    """无成交 → 全 0、n_fills=0（不编造）。"""
+    v = BacktestVenue(_panel(), BacktestCostModel())
+    summ = v.cost_summary()
+    assert summ["n_fills"] == 0.0
+    assert all(summ[c] == 0.0 for c in ("commission", "slippage", "stamp_duty", "transfer", "impact", "total"))
+
+
+# ===========================================================================
 # 命门：与 §3 容量交叉校验（同一 sqrt-impact 物理）
 # ===========================================================================
 
