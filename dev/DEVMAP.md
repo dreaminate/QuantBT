@@ -25,6 +25,7 @@
 | 46f1cb3c | 组合层 M8 多证据三角守门（T-033 核验 gap 升级） | done | portfolio | done |
 | 4c6de2c1 | risk_summary ok 门加固——仅辅助指标(零核心证据)绝不判可信(修 LIVE 假绿灯) | done | eval-methodology | done |
 | 51271d38 | 因子台三纯库+挖掘 后端 — 信号契约 + ML/DL 登记 + 暴力遍历守门引擎 | done | backend | done |
+| 5891da42 | 组合优化诚实化——risk_parity 真 ERC(名实一致) + mean_variance 不收敛透明(非静默回退) | done | eval-methodology | done |
 | 5e47b82f | 因子台前端 P0 — 5 视图像素还原 + mock(库/相关/评测/构建DSL/研究) | done | frontend | done |
 | 6403b9bf | 诚实残余核验——监控尾部闭环 + 组合层三角 + D2 四残余 | done | verification | done |
 | 64717fe6 | paper provider 真回放捆绑样本——替换确定性合成游走（§3 增强） | done | paper | done |
@@ -156,6 +157,7 @@
 | docs | ecbd0eab · done | dreaminate |
 | eval-methodology | 41ea6e35 · done | dreaminate |
 | eval-methodology | 4c6de2c1 · done | dreaminate |
+| eval-methodology | 5891da42 · done | dreaminate |
 | eval-methodology | 69e1cb16 · done | dreaminate |
 | eval-methodology | 6acbb499 · done | dreaminate |
 | eval-methodology | 89e7be1e · done | dreaminate |

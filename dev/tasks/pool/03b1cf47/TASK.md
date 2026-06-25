@@ -14,6 +14,12 @@ depends_on: []
 
 # 组合优化诚实化 + risk_summary 单支证据对齐
 
+> **进度（2026-06-25）**：**① risk_parity 真 ERC + ② mean_variance 不收敛透明 ✅ done**（done 卡 5891da42·D-PORTFOLIO-HONEST）：
+> risk_parity→真等风险贡献（乘性不动点+平方根阻尼·对角退化逆波动·名实一致保 API）；mean_variance 不收敛 raise +
+> optimize_portfolio 标 `mvo_not_converged` violation+等权回退（透明非静默）；MUT-#3/#5 双变异抓。
+> **剩 ③（#6·用户方法学拍板）**：risk_summary 单支 DSR（无 pbo）即 ok vs 权威 gate（PBO 缺→yellow）——与既有测试
+> `test_gate_brings_risk_summary_alive`（注入 dsr 后 ≠insufficient）设计意图冲突，改前须重审「advisory chip 该多严」=用户拍板（不替决定）。
+
 ## Scope [必填]
 三条「数学↔实现不一致 / 未验证当已验证」缺口（当前生产面 MVO/风险平价暂未真钱消费 → 非今日致命，但接入即变致命，提前补牙）：
 ① **risk_parity 实为逆波动**（optimizers.py:70）：docstring 自称 risk parity，实际给 1/σ 等权——相关 0.9 两资产实测风险贡献

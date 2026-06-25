@@ -6,6 +6,15 @@
 ## <日期> · <标题>
 - 建/改了什么 + 命门  - 验收：<对抗测试 + 变异 + 全量数字>  - 下一步：<…> -->
 
+## 2026-06-25 · 组合优化诚实化——risk_parity 真 ERC + mean_variance 不收敛透明（卡 5891da42 · D-PORTFOLIO-HONEST）
+
+- **缘起**：autonomous-loop（ultracode）。第二轮审计 #3（risk_parity 命名 theory↔impl·lev 7）+ #5（MVO 静默回退·lev 6）。
+- **#3 数学先行 + 数值纠偏**：真 ERC=各 RC_i=w_i·(Σw)_i 相等；乘性不动点暖启 w∝1/σ 迭代 w_i←w_i·√(target/RC_i)。**自查发现满步乘性更新振荡不收敛（[.333]↔[.256] 反复）→ 必须平方根阻尼**（log 半步）才稳定；对角 Σ 退化为逆波动（逆波动是零相关特例·相关非零 ERC≠逆波动）。**#5**：res.success=False⟹KKT 未达不得静默当解。
+- **实现（additive+行为修正）**：+PortfolioOptimizationError；risk_parity→真 ERC（sqrt 阻尼·非 PSD 回落暖启不崩·保 API 名实一致）；mean_variance 不收敛 raise；optimize_portfolio try/except 标 mvo_not_converged violation+等权回退（透明非静默）；docstring 诚实。**护栏=名实一致/透明 correctness 非设卡**（用户已选 risk_parity 让它真做·非强加）。
+- **验收**：+4 测试（真 ERC RC 相等+sentinel 逆波动不均·对角退化·MVO raise·optimize 标 violation）。MUT-#3（退回逆波动）→ ERC RC 不均红 + 旧 inverse_sigma 仍绿（向后兼容）；MUT-#5（静默回退）→ raise/violation 2 测红。**全量后端 1653 passed / 13 skipped / 0 failed / 233s**（基线 1649，净 +4）。
+- **#6 留池（用户方法学）**：risk_summary 单支 DSR 即 ok vs 权威 gate（PBO 缺→yellow）与既有测试意图冲突=advisory chip 宽松度=用户拍板（03b1cf47 ③ 不替决定）。
+- **下一步**：分支续 land-ready，commit+push 自动；候选 fc79b911 ②③（停牌/涨跌停）/ e4496023 归因端点 / #6（待用户拍）。
+
 ## 2026-06-25 · 拆「未复权价喂回测/成交层」停工红线地雷——runtime 复权真乘进 OHLC（卡 ff19c992 · D-ADJ-FACTOR）
 
 - **缘起**：autonomous-loop（ultracode）。第二轮审计 #1（lev 7·RULES.project 停工红线）：`_merge_runtime_adjustment_factor` 只 join 把 adj_factor 贴成悬空列、从不乘进 OHLC + stocks_cn 首取未复权 daily → 落盘未复权连续价、除权跳变当真收益。

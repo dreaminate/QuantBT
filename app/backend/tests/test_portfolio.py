@@ -101,3 +101,76 @@ def test_optimize_portfolio_dispatch_and_metrics() -> None:
         assert res.expected_volatility >= 0
     res_mvo = optimize_portfolio("mean_variance", mu, cov, PortfolioConstraints(single_pos_max=0.4))
     assert res_mvo.optimizer == "mean_variance"
+
+
+# ============================================================
+# risk_parity 真 ERC + mean_variance 不收敛透明（审计 pass2 #3/#5）
+# ============================================================
+
+
+def _erc_rc_fractions(cov: pd.DataFrame, w: dict) -> np.ndarray:
+    wa = np.array([w[s] for s in cov.columns])
+    m = cov.values @ wa
+    total = float(wa @ m)
+    return (wa * m) / total
+
+
+def test_risk_parity_true_erc_equal_risk_contributions():
+    """**命门（theory↔impl）**：相关非零下各标的风险贡献 RC_i 相等（真 ERC），且**逆波动做不到**。
+
+    A,B 相关 0.9（σ 同）、C 独立 → 真 ERC：RC 三者相等；逆波动(此处=等权)让 A,B 各扛≈2×C（RC 不均）。
+    MUT（还原 risk_parity 为 1/σ 逆波动）→ RC 不均、本测红。
+    """
+    cov = pd.DataFrame(
+        [[0.01, 0.009, 0.0], [0.009, 0.01, 0.0], [0.0, 0.0, 0.01]],
+        index=list("ABC"), columns=list("ABC"),
+    )
+    w = risk_parity(cov)
+    assert sum(w.values()) == pytest.approx(1.0, abs=1e-9)
+    rc = _erc_rc_fractions(cov, w)
+    assert rc.max() - rc.min() < 1e-6, f"风险贡献不均 {rc}（非真 ERC=逆波动冒充 risk parity）"
+    # ERC 应增持独立标的 C、减持相关簇 A/B（逆波动会给等权）
+    assert w["C"] > w["A"] and w["C"] > w["B"]
+    # sentinel：逆波动(等权)在此 cov 下 RC 显著不均（证 ERC≠逆波动·命门有牙）
+    inv_rc = _erc_rc_fractions(cov, {"A": 1 / 3, "B": 1 / 3, "C": 1 / 3})
+    assert inv_rc.max() - inv_rc.min() > 0.1
+
+
+def test_risk_parity_diagonal_reduces_to_inverse_vol():
+    """对角 Σ（零相关）→ ERC 退化为逆波动 1/σ（逆波动是 ERC 的零相关特例）。"""
+    cov = pd.DataFrame(np.diag([0.04, 0.01, 0.0025]), index=list("ABC"), columns=list("ABC"))
+    w = risk_parity(cov)
+    inv = 1.0 / np.sqrt(np.diag(cov.values))
+    inv = inv / inv.sum()
+    for i, s in enumerate("ABC"):
+        assert w[s] == pytest.approx(inv[i], abs=1e-6)
+
+
+def test_mean_variance_raises_on_nonconvergence(monkeypatch):
+    """**假绿灯门**：SLSQP 不收敛 → raise PortfolioOptimizationError（绝不静默返回等权冒充 MVO 解）。"""
+    from types import SimpleNamespace
+
+    from app.portfolio import optimizers as opt
+    monkeypatch.setattr(opt, "minimize",
+                        lambda *a, **k: SimpleNamespace(success=False, x=np.full(3, 1 / 3), message="forced"))
+    mu = pd.Series([0.05, -0.02, 0.01], index=list("ABC"))
+    cov = pd.DataFrame(np.eye(3) * 0.01, index=list("ABC"), columns=list("ABC"))
+    with pytest.raises(opt.PortfolioOptimizationError, match="未收敛"):
+        opt.mean_variance(mu, cov)
+
+
+def test_optimize_portfolio_flags_mvo_nonconvergence(monkeypatch):
+    """不收敛经 optimize_portfolio → 透明标 'mvo_not_converged' violation + 等权回退（非静默）。
+
+    MUT（还原 mean_variance 静默返回 w0）→ 无 raise、无 violation、本测红。
+    """
+    from types import SimpleNamespace
+
+    from app.portfolio import optimizers as opt
+    monkeypatch.setattr(opt, "minimize",
+                        lambda *a, **k: SimpleNamespace(success=False, x=np.full(3, 1 / 3), message="forced"))
+    mu = pd.Series([0.05, -0.02, 0.01], index=list("ABC"))
+    cov = pd.DataFrame(np.eye(3) * 0.01, index=list("ABC"), columns=list("ABC"))
+    res = opt.optimize_portfolio("mean_variance", mu, cov)
+    assert "mvo_not_converged" in res.constraint_violations           # 透明标记（非静默）=核心牙
+    assert len(res.weights) == 3 and res.optimizer == "mean_variance"  # 回退仍出权重（不崩）
