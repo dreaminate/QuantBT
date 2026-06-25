@@ -38,6 +38,16 @@ from .lifecycle import (
     LifecycleThresholds,
     evaluate_transition,
 )
+from .lifecycle_metrics import (
+    CapacityEstimate,
+    CrowdingAdvisory,
+    DecayEstimate,
+    FactorFamilies,
+    crowding_advisory,
+    factor_families,
+    ic_decay_half_life,
+    strategy_capacity,
+)
 from .panel_source import (
     PanelSourceError,
     factor_panel,
@@ -74,7 +84,15 @@ from .signal_contract import (
 __all__ = [
     "DEFAULT_THRESHOLDS",
     "AuditCheck",
+    "CapacityEstimate",
     "CorrPair",
+    "CrowdingAdvisory",
+    "DecayEstimate",
+    "FactorFamilies",
+    "crowding_advisory",
+    "factor_families",
+    "ic_decay_half_life",
+    "strategy_capacity",
     "CorrelationError",
     "CorrelationReport",
     "ExpressionError",

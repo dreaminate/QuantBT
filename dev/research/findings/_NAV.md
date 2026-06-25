@@ -15,8 +15,12 @@
 - `desk-handoff/sharedFoundation.md` — I now have a complete, verified picture across all desks plu
 
 ## dreaminate
-- `dreaminate/spine-consistency-gate/00-consistency-gate-theory.md` — FINDING · Mathematical Spine 一致性门 — 形式化模型与必要性证明
-- `dreaminate/spine-consistency-gate/01-dsr-theory-binding.md` — FINDING · DSR（Deflated Sharpe Ratio）理论 + Spine 绑定（全链贯穿第一段）
+- `dreaminate/conformal-intervals.md` — FINDING · R23 不确定性预测区间（split conformal / CQR / ACI）+ abstain
+- `dreaminate/cpcv.md` — FINDING · R4 CPCV（Combinatorial Purged Cross-Validation）多路径回
+- `dreaminate/drift-detectors.md` — FINDING · §5 生产期漂移检测器（rolling-PSR / CUSUM / Page-Hinkley / P
+- `dreaminate/factor-lifecycle-institutional.md` — FINDING · §3 因子机构级生命周期度量（衰减半衰期 / 容量 / 因子族 / 拥挤）
+- `dreaminate/factor-return-attribution.md` — FINDING · 因子收益归因（returns-based factor attribution · 北极星「归因」阶
+- `dreaminate/mintrl-cold-start.md` — FINDING · R27 冷启动 MinTRL（最小业绩期长度）+ 诚实"证据不足"
 - `dreaminate/spine-designs/00-contracts-and-coherence.md` — 00 · 脊柱跨部件契约一致性 + 测试真实性复核
 - `dreaminate/spine-designs/01-deterministic-kernel.md` — 01 · 确定性 DAG 内核 + checkpoint/replay/fork/rollback + 交易副作用不可幂
 - `dreaminate/spine-designs/02-llm-record-replay.md` — 02 · LLM 节点 record/replay 确定性 + 受控翻译层
@@ -26,4 +30,5 @@
 - `dreaminate/spine-designs/06-security-rbac-gate.md` — 06 · Agent 安全(注入/越权/密钥) + 确定性策略门 deny-by-default + 交易所侧硬墙
 - `dreaminate/spine-designs/07-approval-gates.md` — 07 · HITL 审批门双通道(探索/确证) + promote 改造成带审批门状态机 + 幂等恢复
 - `dreaminate/spine-designs/README.md` — 机构级 Agent OS · 脊柱 build-ready 设计（二轮·第一簇）
+- `dreaminate/sqrt-impact-backtest-cost.md` — FINDING · R18 平方根市场冲击 回测成本项（size-aware impact）
 

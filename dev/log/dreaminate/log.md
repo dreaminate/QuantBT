@@ -6,6 +6,138 @@
 ## <日期> · <标题>
 - 建/改了什么 + 命门  - 验收：<对抗测试 + 变异 + 全量数字>  - 下一步：<…> -->
 
+## 2026-06-25 · CPCV q05→gate 最后一公里——promote 真实路径读 emit cpcv 透传 gate（卡 f1bd08f2 · D-CPCV-PROMOTE）
+
+- **缘起**：autonomous-loop（ultracode）。correctness 审计 workflow（wm8x329vn）#8（高假绿灯）：done 卡 89e7be1e 让 gate 接受 cpcv，但生产 promote 路径 `promote.py:_run_overfit_gate` 调 `evaluate_overfit_gate` 时从不传 cpcv → gate 恒 cpcv=None，cpcv_conservative 在真实晋级路径永远触发不了（我自己 cpcv→gate 工作的最后一公里断线）。
+- **实现（additive）**：`_run_overfit_gate` 读 `result.get("cpcv_distribution")`（退 meta 内·须 dict status=ok）+ `meta.cpcv_policy`（默认 report_only·非法值回落·守不替方法学拍板）→ 透传 evaluate_overfit_gate。verdict.to_dict() 经 asdict 含 cpcv → run.json gate_verdict 携带。缺则 None（不编造·向后兼容逐位不变）。
+- **验收**：test_gate_wiring +3（T-GW-7：emit 带 cpcv→verdict.cpcv 非空 fragile=True+policy 真读 / 不带→None / 非法 policy 回落 report_only 不降级）。MUT（promote 丢透传）→ 透传+非法回落 2 测试红、缺则 None 测试仍绿（精准）；定点反向 edit 后还原。**全量后端 1626 passed / 13 skipped / 0 failed / 149s**（基线 1623，净 +3）。
+- **CPCV 全链端到端贯通**：库→消费(regression+二分类)→train_model opt-in→result.json→eval 端点→UI 卡→gate(run/gate_runner)→**promote 真实路径**。剩 861182e6 ③（cv_scheme UI 选项+双轨 report+Sharpe/DSR 转换=用户方法学）池卡留。
+- **下一步**：分支续 land-ready，commit+push 自动；候选下一切片见审计残余（attribution provider / 信号组合器 / 监控绩效轴 554cdcf2）+ 池卡。
+
+## 2026-06-25 · 监控调度 driver 接线——补缺失生产 tick loop 让 weekly cron 真 fire（卡 698a3c60 · D-MONITOR-DRIVER）
+
+- **缘起 + 选片**：autonomous-loop（ultracode on）。先跑只读 correctness 审计 workflow（wm8x329vn·7 方法学域并行+对抗证伪·24 agent·全程 graphify+Read 不跑 pytest，不违「套件不叠跑」红线），排出 16 真缺口；取 #1（lev 8·不卡用户·最清晰假绿灯）。
+- **缺口（端到端假绿灯）**：`main._start_production_monitor_scheduler` 注册 weekly DAG（cron 0 9 * * 1）+ log「已启动」，但 `Scheduler.tick()` 是轮询式（engine.py:302 docstring「调用方 loop 里 every N s 调 tick」）、生产**无 driver** → cron 永不到点 fire、退役闭环空转。端到端测试靠手动 tick+拨表 2000 年强制到期绕过 cron 门+绕过「谁 tick」，运维误以为周一自动退役实则 scheduler 静止。
+- **活性先行**：注册的 cron 必有驱动器使其 scheduled_at≤now 时 fire；轮询器不被周期调用=cron 形同虚设。weekly op 是 kind=pure（不触券商/资金、只改 registry+PROV）→ driver 让它 fire 不涉动钱；A1 退役只接绩效/成本轴红线不碰。
+- **实现（additive·daemon 线程）**：`_monitor_driver_loop`（`_MONITOR_DRIVER_STOP.wait(interval)` 周期 tick·异常吞续跑·读全局句柄）+ `_start_monitor_driver`（幂等·env QUANTBT_MONITOR_DRIVER 可关·TICK_SECONDS 周期）+ `stop_monitor_driver`；startup 接 driver、新增 shutdown 停。daemon+默认 60s ⇒ 秒级测试永不误触发。**护栏=不替用户拍「是否自动跑」**（env 可关）、修复 correctness 活性假绿灯非新设门。
+- **验收**：`test_monitor_driver` 4 测试。MUT-1（driver 不 tick）→ 真-tick 测试超时红；MUT-2（startup 不接 driver）→ 接线测试红；双变异定点反向 edit 后还原。**全量后端 1623 passed / 13 skipped / 0 failed / 180s**（基线 1619，净 +4）。
+- **诚实残余 → follow-on 卡 554cdcf2**：绩效轴真退役还差 ① 4 个 drift 检测器接 run_weekly_monitor_pass 的 perf_drift（审计 #3·lev 7）② per-factor IC 真源 ③ 观测落盘。driver 只解「scheduler 静止」这层。
+- **审计其余高分发现（留池/已覆盖，供后续选片）**：#2 attribution 无 per-factor 收益 provider（lev 7·物化纯工程、选因子集=用户）；#4 信号弃权门 q̂ 不自动喂（lev 6·用户方法学）；#5 gate.color 无执行牙（lev 5·=用户「放行不设卡」哲学、非 bug）；#6 无规范信号组合器；#7 capacity 未接 sizing（无 sizing 层）；#8 cpcv→promote 真实路径残口（promote_ide_run 调 gate 时 cpcv=None）。被证伪：DSR/Bootstrap-CI 每支恒活、PBO 单策略恒 None（矩阵<10 列·三角退化双证据+yellow 天花板）。
+- **下一步**：分支续 land-ready，commit+push 自动；候选下一切片见审计残余 + 池卡。
+
+## 2026-06-25 · CPCV 路径稳健性 q05 接进 overfit gate（report-only 默认 / cpcv_conservative opt-in · 卡 89e7be1e · D-CPCV-GATE）
+
+- **缘起**：autonomous-loop。池卡 861182e6 ② 残项「q05 接 promote/overfit gate」——CPCV per-path 分布此前只到 UI（done 876a0c11·report-only），未接 gate。
+- **数学先行**：q05=路径分布 5% 分位=保守端；q05<无技能基线（r2:0/auc:0.5）=部分路径无优于随机=过拟合脆弱信号。取**保守分位非均值**（守「均值掩盖差路径」）。q05 是 PBO/DSR/Bootstrap-CI 多证据三角外的**第四类弱证据**（路径一致性≠跨策略过拟合 PBO，绝不喂 cscv_pbo）→ 最多 advisory 降一档（守 R2 单支不承重），**绝不硬 red、绝不升级**（路径稳≠策略好，不洗假绿灯）。
+- **实现（additive·两层）**：① `overfit_gate.py` GateVerdict +`cpcv` 字段、run_overfit_gate +`cpcv_distribution`/`cpcv_policy`（report_only 默认/cpcv_conservative）+ 降级逻辑（仅 fragile∧green→yellow）+ verdict_phrasing/reason 三分支注；② `gate_runner.evaluate_overfit_gate` 透传两参数（**promote 生产路径接通**）。默认 None/report_only → 行为逐位不变（守不替方法学拍板）。缺/status≠ok→cpcv=None（未算≠已算）。
+- **验收**：单元 `test_overfit_gate_cpcv` 6 + `test_gate_wiring` 透传 2（T-GW-6）。**变异（牙坐实）**：MUT-A（report_only 也降级）/MUT-B（降级成 red）/MUT-C（gate_runner 丢转发）三变异全抓——定点反向 edit 后还原（**绝不 git checkout 带未提交改动**）。green 可达走组合层 A2 allow_pbo_absent_green。**全量后端 1619 passed / 13 skipped / 0 failed / 183s**（基线 1611，净 +8）。
+- **下一步**：861182e6 ③剩（cv_scheme UI 选项 + 双轨 report 不自动判赢 + Sharpe/DSR prediction→收益转换，用户方法学）池卡留；分支续 land-ready，commit+push 自动。
+
+## 2026-06-25 · conformal 校准区间接进 model_eval——第二个价值闭环（卡 d4a324ae · D-CONFORMAL-MODELEVAL）
+
+- **缘起**：autonomous-loop。继续合拢价值闭环——选最大未接数学件 conformal（R23）接进模型台。
+- **实现（additive）**：`model_eval.conformal_prediction_band`——回归 OOS 残差按**时间序**切 calib(前半)/test(后半，leak-free)→ 复用 `split_conformal_interval` 算带 q̂ → 在 test 上报**真留出覆盖率**（非循环自证）；`training_job_eval` 加 `conformal_interval` 字段（additive，不破 charts/metrics）。命门实证：留出覆盖 α=0.1→0.901/α=0.05→0.948（跨 100 seed 匹配总体 k/(m+1)）。
+- **两轮独立复核全闭环（同型门牙缺口第三轮，措辞/判别路径）**：
+  - ① **Stop-hook codex 顾问 P2**：黑名单 `task=="classification"` 漏 **lambdarank(排序)** → 对排序 job 残差发假校准信号 → 改**白名单** `task!="regression"`（regression-only，classification/lambdarank/未知→None）。
+  - ② **多透镜评审 2 confirmed medium**：(a) 覆盖测试措辞「经验均值≥1−α=达标」=**假绿灯**——80-seed 均值 0.8986<0.90 靠 -0.01 slack 过；conformal 保证的是**总体**覆盖 k/(m+1)≈0.9005≥nominal，**经验均值是带噪估计可略低**，称「达标」违 §3 → 改**统计一致性断言**（|均值−k/(m+1)|≤几个 MC 标准误，核 k/(m+1)≥1−α 总体保证，去「达标」绿灯措辞）。(b) **核心命门「非循环·非自证」零牙**——种 test→calib 循环自证 bug（`np.mean(|calib|<=q)`、恒≈0.905）7 测全过=纸糊门（**正是用户在 worktree 种的 `# INJECTED BUG: self-validate on calib`**）→ 加 **σ1/σ3 非循环 sentinel**（calib σ1/test σ3 真留出覆盖 0.36<<0.9，循环自证会≈0.9 被抓）。low 修：.1% 显示去进位掩盖（89.6%≠「90%达标」）/test 非有限掩码披露/抽样噪声 caveat/__all__ 导出。
+  - **第三轮坐实同型盲区**（dsr sr_benchmark / banned-words / 此处循环自证）：我的测试一再"断言 happy-path 数字、不区分正确机制 vs 似真错误机制"。现都补成真有牙 sentinel。
+- **验证**：`test_model_eval_conformal.py` 9 + model_eval 6 回归 passed；**全量后端 1564 passed / 13 skipped / 0 failed**，基线 1554 未破。
+- **交付**：本轮 loop「commit 不擅自 push」→ 本地 commit、未 push。land main 待授权。下一步：继续合拢价值闭环或续方法学。
+
+## 2026-06-25 · 冷启动 MinTRL 接进 run /overfit 投影——首个价值闭环合拢（卡 b1e4efdf · D-COLDSTART-WIRE）
+
+- **缘起**：autonomous-loop。CEO 透镜连续 6 切片指「数学对、未接到用户」（7 张 P2 接线卡累积）→ 本轮转向**合拢价值闭环**。评估各 P2：CPCV→gate 难（CPCV 需按折 fit-predict、gate 只见最终 returns）、lifecycle→退役是方法学拍板、cold-start→UI 是前端 + RunDetailPage 冻结 → 选**最低风险**：MinTRL 接 /overfit（R27 明言冷启动呈现层、不动治理闸门）。
+- **实现（additive·扩展不替换）**：`run_verdict._cold_start_evidence`（MinTRL 判证据充分性 4 状态：ok+短→证据不足/N<3 或 σ≈0→DSR 不适用/负 edge→never_significant）；`project_overfit` 加 `cold_start` 字段，**不动 gate.color/is_promotion_candidate/三态裁决**（R27 呈现层不动治理）。axis="track_record_length" 与过拟合门样本充分性轴区分。JSON-safe（inf/nan→null）。
+- **对抗测试**：`test_run_verdict_cold_start.py` 9（短不渲染达标/N=1 DSR 不适用/never_significant/措辞守门/JSON-safe/集成）+ run_verdict_card 14 回归不破。
+- **两轮独立复核全闭环（措辞守门是焦点）**：
+  - ① **用户在 run_verdict.py 种 banned-words mutation**（sufficient 分支 note 塞「可信，已排除过拟合」）——测我的 R7 措辞守门。已撤回正确。教训同 dsr 那次：**让测试显式行权判别路径** → 强化禁词测试**显式覆盖全 4 状态分支（含 ok_sufficient 高危分支）+ 覆盖断言 + sentinel**，那条 mutation 落 ok_sufficient 分支必被抓。
+  - ② **多透镜评审 confirmed（governance medium + correctness low）**：**我的禁词集 `("可信","安全","排除过拟合","通过")` 是 R7 红线不完整子集**——漏 **保证/可复现/组织独立**（姊妹测试 test_run_verdict_card 用完整 6 词；cold_start note 手拼绕过 `_verdict_note` 单一措辞源 → 此测试是唯一守门 → 子集=纸糊门，未来「保证显著」之类会溜）。→ 补全 R7 红线全集 + **加生产 runtime 防御守门**（`_BANNED_VERDICT_WORDS`，红线词出现即退安全兜底、生产期绝不输出禁词、不只靠测试）+ 单一源对齐测试（生产集 ⊇ 红线、测试集==生产集不漂）+ insufficient 分 n<3/σ≈0 措辞 + dsr_applicable 口径修。
+- **验证**：**全量后端 1555 passed / 13 skipped / 0 failed**，基线 1547 未破。
+- **交付**：上轮授权 push 的 6 切片已在 origin；本轮 loop 回「commit 不擅自 push」→ 本切片仅本地 commit、未 push。land main 待授权。下一步：继续合拢价值闭环或续方法学。
+
+## 2026-06-25 · R27 冷启动 MinTRL（最小业绩期长度）+ PSR 反解命门 + 用户 mutation 抓门牙缺口（卡 6acbb499 · D-MINTRL-R27）
+
+- **缘起**：autonomous-loop 下一切片。MinTRL 未建、R27=确认「冷启动 N=1 剔 DSR、用 PSR/MinTRL + 显式证据不足」→ 自取（扩展已建 PSR、低风险、直击「能信」+ 降门槛：诚实告诉新用户"业绩期太短、还需 N 期"）。
+- **数学先行 + 并行思考**：落 `findings/dreaminate/mintrl-cold-start.md`（MinTRL=PSR 反解推导）；codex(xhigh) 确认是 PSR 精确反解 + 边界。
+- **实现（扩展不替换）**：`dsr.py` 加 MinTRLResult + minimum_track_record_length，denom² 与 PSR 同项同钳 → **n=MinTRL 时 PSR≡confidence**（实证 8.88e-16 机器精度）。SR≤SR*→+∞、n<3/N=1→insufficient（R27 不假装算出）、冷启动 sufficient=n≥⌈MinTRL⌉。
+- **对抗测试 + 命门**：`test_mintrl_cold_start.py` **10 passed** + 方法学不变量 **+2**（PSR↔MinTRL 反解 8.88e-16 / 单调边界）。
+- **两轮独立复核抓到 2 类同型「门牙缺口」全补（这轮的核心收获）**：
+  - ① **用户在 dsr.py 种 mutation `delta = sr_pp  # dropped sr_benchmark`**（RULES §2「种已知坏门必抓」）——精准戳中我盲区：**所有 MinTRL 测试都用 sr_benchmark=0**，此时 `sr_pp−0≡sr_pp`，mutation 完全隐形，**71 测全绿漏网**。诚实承认门牙缺口 → 补 sr_benchmark≠0 交叉校验（含正/负基准）→ 带 mutation 实测 **RED（max|Δz|=2.08≫1e-9）**、还原正确代码后绿 → 门有牙确认。
+  - ② **多透镜评审 1 confirmed medium**：`test_mintrl_cold_start_sufficiency_verdict` 在 seed=5 落 status='never_significant'（负 edge）→ 核心 `assert not sufficient` 被 `if status==ok` 跳过 → 评审注入「`>=` 翻 `<=`」回归 71 测仍全绿、ok+short 的 sufficient 语义零覆盖。→ 改**确定性构造**（sr_pp=0.05 短→证据不足 / sr_pp=0.3 长→达标）+ **无条件 assert** 钉死两路。
+  - **两条同属「测试过运气/未行权判别路径」**（与 §3 随机游走单种子、§5 NaN 同源教训）。低优：ceil 测试改纯矩确定性（去单种子重采样噪声）。
+- **验收**：**全量后端 1547 passed / 13 skipped / 0 failed**，基线 1534 未破。mint **P2 卡 31289338**（冷启动 gate/UI 接 MinTRL：DSR=N/A + PSR + "需 N 期"渐进披露，R25/R27 呈现层）。
+- **下一步**：land main 待用户授权；进下一切片（倾向开始合拢价值闭环/接 P2，已累计 7 张接线卡）。
+
+## 2026-06-24 · R18 平方根市场冲击 回测成本项（size-aware）+ 容量交叉校验命门（卡 7179ba36 · D-SQRT-IMPACT-R18）
+
+- **缘起**：autonomous-loop 下一切片。审计发现回测成本 `BacktestCostModel` slippage 是平 bps 常数、随单量不变 → 大单成本系统性低估、大资金回测过优（接近「未复权价喂回测」级 P&L 失真）→ 自取（这次外科、直接接进真回测非孤岛）。
+- **数学先行**：落 `findings/dreaminate/sqrt-impact-backtest-cost.md`（平方根冲击律 Y·σ·(Q/ADV)^δ + 理论 Kyle-λ/propagator 凹增 + 容量交叉校验命门）。
+- **实现（扩展不替换 + 向后兼容）**：`execution/impact.py` 单一公式源（δ=0.5 锁定 R18，与 §3 容量 strategy_capacity **同 sqrt-impact 物理**）；`BacktestCostModel` 加 impact_coef 默认 **0=关 → 冲击项恒 0、现有回测字节不变**；启用须 volume 列估 ADV、否则 init raise。
+- **对抗测试 + 命门层**：`test_sqrt_impact_cost.py` **14 passed**（√标度/向后兼容字节不变/大单惩罚/无 volume raise/无效 ADV fail-fast/日内日 ADV/前视 warning/显式无泄露入口）+ 方法学不变量 **+3**（√标度精确/Y·σ 线性/**容量 C 处冲击==毛 alpha 交叉校验**）。
+- **两轮独立复核全闭环**：① **Stop-hook codex 顾问 2 条 P2**——无效 ADV（volume 全 0/null/NaN）静默当 0 冲击=假绿灯（→成交时 fail-fast raise）/ 日内 1m·1h 数据 vol.mean 是每 bar 量非日 ADV、高估 √bars/日（→ts 为 datetime 时按日聚合 volume→真日 ADV）；② **多透镜评审 1 confirmed HIGH**——ADV/σ **全样本估计（含未来 bar）→ 启用 impact 的回测有前视泄露**（实测早期成交参与率被未来高量稀释 50x→冲击低估 ~7x），**命中 RULES.project §17 look-ahead 红线字面**，但评审精准裁定**非 stop-work、是 §7 拍板项**（理由：impact_coef 默认 0=关，active/默认路径无前视、字节不变；finding+docstring 已诚实标注「样本内估计未做滚动无泄露」+ P2 scope → 非 §3 假绿灯）。**按用户护栏「风险决策标清用户自负即放行、别把缓解当不交付硬条件」处置**：① default-off 路径前视红线守住 ② opt-in 自估路径 emit **代码级响亮 warning**（残余文档→代码可见、标用户自负）③ 提供**显式点位无泄露 ADV/σ 入口**（绕开自估、不触发 warning）④ mint **P2 卡 0f696e56**（滚动无泄露自估根治）。数学核心经 correctness/governance/CEO/eng 4 透镜独立复跑全真、对抗测试有真牙。
+- **验收**：**全量后端 1534 passed / 0 真失败**（1 条预存异步 flake `test_eval_endpoint_after_training` 在 354s 重载全量下排队超时报 queued、**单独重跑 1 passed**、与本切片 execution 改动完全无关），基线 1518 未破、**默认关字节不变验证**。mint P2: 0f696e56(无泄露自估) + e2afc5c2(三档成本预设接 sqrt-impact + 成交报告成本归因拆字段)。
+- **下一步**：land main 待用户授权；进下一切片。
+
+## 2026-06-24 · §3 因子机构级生命周期度量（衰减/容量/因子族/拥挤）+ 命门（卡 b12de4f5 · D-LIFECYCLE-§3）
+
+- **缘起**：autonomous-loop 下一切片。M11 确认「toy 五态机 / 机构级（衰减/拥挤/容量/因子族）未做」→ 自取 GOAL §3 度量层 4 件。
+- **数学先行 + 并行思考**：落 `findings/dreaminate/factor-lifecycle-institutional.md`（AR(1) 半衰期 / sqrt-impact 容量闭式推导 / 因子族相关聚类 / 拥挤定性 + 命门）；codex(xhigh) 复核——加固 **ρ 绝不 clip** / **容量 τ³ 标度** / corr-vs-距离阈钉清 / 拥挤结构隔离。
+- **实现（扩展不替换）**：`lifecycle_metrics.py`（lifecycle.py toy 五态机不动）；**n_eff 抽 `_cluster_labels` 单一聚类口径源**（因子族与 honest-N 同源、cross-check 守不漂）。**命门**：①半衰期绝不 clip ρ（ρ≥1→no_decay/ρ≤0→reversal/ρ̂>0.95 近单位根或 CI 跨0/1→unstable，机器门绝不对随机游走发 ok）②容量 δ=0.5 锁定不暴露入参（R18）、α≤0→no_edge、cost(C)≈α 自检、Y 占位诚实告警③因子族 n_families==n_eff.point 交叉校验 + 阈值不可调（防放水）④拥挤 CrowdingAdvisory 结构无任何减仓/动作字段（GOAL §3 禁自动减仓，R19）、missing≠crowding 0。
+- **对抗测试 + 命门层**：`test_factor_lifecycle_metrics.py` **25 passed** + 方法学不变量 **+6**（半衰期解析点 ρ=0.5→h=1 / ρ 不 clip sentinel / 容量精确标度 + 净 alpha=0 自检 / 因子族==n_eff 交叉校验 / 拥挤无动作字段机器钉死）。
+- **两轮独立复核全闭环（共 7 真问题）**：① **Stop-hook codex 顾问 3 条 P2**——零拥挤 falsy 陷阱（`0.0 or nan` 把有效零相关当 missing→修成 none）/ IC 跨 NaN 缺口拼接（先 arr[isfinite] 压扁 stitch→改原轴建对只丢跨缺口对）/ 因子族阈值 override 放水口（→锁定不暴露）；② **多透镜评审 4 confirmed**——随机游走 ρ=1 ~28% 种子假绿灯 + 测试单种子脆弱（→ρ̂>0.95 local-to-unity 降级 unstable，ρ=1 'ok' 占比降<10%、ρ=0.9 合法仍 100% ok；测试改多种子 sweep）/ 容量 δ 可改离 R18 锁定 0.5（自检循环抓不到→锁定不暴露）/ 容量 Y 占位无诚实告警（→告警）/ 拥挤等级阈值 override 放水（→锁定）+ 越界相关脏值（→insufficient）。数学核心经 correctness/governance/CEO/eng **4 透镜独立复跑全真**、对抗测试有真牙。low 清理：DRY 单一源 / 死 import·Literal / 4 dataclass to_dict / __init__ 导出。
+- **验收**：**全量后端 1518 passed / 13 skipped / 0 failed**（实跑 223s，机器负载偏慢但 `--timeout=120` 单测超时无触发=未卡，非 hang），基线 1487 未破。mint **P2 卡 aa13c3b0**（度量接 lifecycle 退役/sizing/组合独立性生产路径）。
+- **下一步**：land main 待用户授权；进下一切片。
+
+## 2026-06-24 · R4 CPCV（Combinatorial Purged CV）多路径回测 + 组合学/防泄露命门（卡 41ea6e35 · D-CPCV-R4）
+
+- **缘起**：autonomous-loop 下一切片。确认 GOAL §4「CPCV 双轨 walk-forward（R4）」中 CPCV 多路径**未建**（`models/purged_cv.py` 只有单路径 purged k-fold；pbo.py 的 cscv_pbo 是 PBO 用对称 CV ≠ CPCV 路径生成）→ 自取扩展。数学最密 + correctness-critical（防泄露 + 多路径分布喂已建 PBO/DSR 命门）。
+- **数学先行 + 并行思考**：落 `findings/dreaminate/cpcv.md`（φ=C(N−1,k−1)=k·C(N,k)/N 双计数证明 + golden path_matrix N=4,k=2 + 命门）；codex(xhigh) 复核——确认 φ 恒等/路径重建算法，加固三处：**purge 必须逐 test group 段判**（非全局 min..max，否则误删非连续 test group 中间合法 train）、**PBO 路径≠策略红线**（单策略 φ 路径绝不冒充策略数）、embargo 语义（AFML test 后 vs purged_kfold 两侧）。
+- **实现（扩展不替换）**：`models/cpcv.py` 复用 purged_cv 的 t1-overlap purge 口径；C(N,k) 爆炸预检 raise **绝不静默采样**（否则 φ 公式失效）；多路径 Sharpe 分布给保守分位 q05/min。**命门钉死**：①φ 路径≠φ 策略（不产 PBO，测试守）②饿死/未覆盖路径记 NaN 剔除 + n_paths_dropped 可见、**绝不伪造 0.0 污染保守分位**③insufficient dict 形状对称④R4=B「真实市场未确立」`CPCV_REALWORLD_SUPERIORITY_ESTABLISHED=False` 常量机器钉死（双轨不自动判赢）。
+- **对抗测试 + 命门层**：`test_cpcv.py` **22 passed**（golden path_matrix / 覆盖来源==path_matrix / purge sentinel / embargo AFML 单侧 / 饿死路径不假 0 / PBO 红线 / 爆炸 / 边界）+ 方法学不变量 **+4**（φ 恒等 N=3..12 / occurrence 双射 / 覆盖来源 / 逐段 purge sentinel）。
+- **多透镜评审（autoplan 等价 4 透镜 + 对抗复核，14 agents）**：数学核心经 correctness/governance/CEO/eng **独立复跑全真**、对抗测试有真牙（sentinel 证伪变体确变红）。修 9 confirmed：**medium 命门后门（饿死路径默认 Sharpe 静默假 0.0 污染 q05/min）** + insufficient dict 形状不对称 + 路径覆盖测试缺来源区分牙 + embargo 单侧方向零测试 + low 清理（build_path_matrix 爆炸护栏/负 embargo 拒/死 import/per_combo 长度校验/__init__ 再导出/caveat 机器钉死/文档「生成器→list」）。
+- **实证亮点**：φ 恒等全对（N=3..12）；golden path_matrix 精确匹配 codex；**purge 0 泄露 vs 不 purge 120**；饿死路径记 NaN 不污染 min（修后正收益策略 min>0）。
+- **验收**：**全量后端 1487 passed / 13 skipped / 0 failed**，基线 1478 未破。mint **P2 卡 861182e6**（接 promote/overfit gate + cv_scheme 双轨 report，应 CEO「价值闭环未合拢——CPCV 纯孤岛」）。
+- **下一步**：land main 待用户授权；进下一切片。
+
+## 2026-06-24 · R23 不确定性预测区间（split conformal/CQR/ACI）+ abstain + 覆盖定理命门（卡 69e1cb16 · D-CONFORMAL-R23）
+
+- **缘起**：autonomous-loop 下一切片。确认 GOAL §4「conformal/CQR/ACI 区间 + abstain（R23）」**完全未实现**（eval/ 无不确定性模块），最高杠杆 + 数学最密 + 直击「能信」（诚实不确定性而非假自信）+ 非凭据门 → 自取。
+- **数学先行 + 并行思考**：落 `findings/dreaminate/conformal-intervals.md`（split conformal/CQR/ACI 公式 + 覆盖定理 + 可证伪不变量 + R23 不锁 α 治理）；codex(xhigh) 独立复核，**修正三处**：ACI 长程界应 (max{α₁,1−α₁}+γ)/(Tγ) 非 (α₁+γ)/(Tγ)；CQR Q̂ 可负（合法收窄）+ 端点交叉 abstain 绝不交换；手写秩分位（非 np.quantile 默认插值）。
+- **实现（扩展不替换）**：新建 `eval/conformal.py`——**模型无关**（接残差/分位预测、不接模型本体，合信号契约解耦）；秩 k=⌈(n+1)(1−α)⌉ 含 +1 校正、k>n→abstain（n<⌈1/α⌉−1）；ACI raw α_t 递推 + clipped-level 工程变体。**命门钉死**：①不锁 α（R23·全调用方传参、内部不硬编，仅 docstring/gamma 出现 0.x 字面量）②abstain 三态不假绿灯 + `__post_init__` 构造期拒矛盾态 + **非 1D 输入亦 abstain**（防畸形数组区间逃网）③exchangeability 诚实披露、ACI 工程变体实测收敛不空引论文界。
+- **对抗测试 + 命门**：`test_conformal_intervals.py` **25 passed**（abstain/CQR符号/Q̂可负/端点交叉/ACI方向/漂移长程覆盖/非1D/构造期拒态）+ 方法学不变量 **+9**（分布无关覆盖 ≥1−α、**+1 校正 sentinel 门有牙**、ACI 漂移长程覆盖收敛、单调嵌套、CQR 覆盖、ACI 递推恒等、不锁 α）。
+- **实证亮点**：split 覆盖 normal/重尾t/偏态/异方差**全≈0.90 分布无关**；**ACI 漂移下长程覆盖 0.901 vs 固定 split 0.542**（漂移崩）；CQR oracle 过窄→Q̂>0 放大、过宽→Q̂<0 收窄。
+- **多透镜评审（autoplan 等价 4 透镜 + 对抗复核）**：confirmed_real 空——数学经 CEO/governance **独立数值复验**全真（覆盖落理论带、abstain 阈跨 α 精确含非整 α、CQR validity 不依赖分位质量、四命门达标）。correctness 透镜点出 1 条 medium：**非 1D 输入绕过 abstain 网产畸形数组区间** → 已修（1D 守门）+ 低优清理全做（CQR max_width 对称旋钮 / `__post_init__` 拒矛盾态 / `to_dict` / 披露面收窄到已实现 / `_min_calib_for` 单一源 / docstring 措辞）。
+- **验收**：**全量后端 1460 passed / 13 skipped / 0 failed**，基线 1453 未破。mint **P2 卡 92a2182f**（消费侧接线：模型台/信号层预测附校准区间 + abstain UI 渐进披露，应 CEO「未接线另一半当 live 债追」）。
+- **下一步**：land main 待用户授权（不擅自 push/land）；进下一切片。
+
+## 2026-06-24 · §5 生产期漂移检测器（rolling-PSR/CUSUM/Page-Hinkley/PSI）+ 理论不变量命门（卡 d718d5c5 · D-DRIFT-§5）
+
+- **缘起**：autonomous-loop（用户授权自主迭代，北极星#1 数学贯穿/#2 理论先证明/#4 监管对齐命门）。所有卡 done、pool 空 → 自取 state.md 点名的「新生残余：§5 漂移检测器」。现有 monitor 只有粗粒度成本漂移阈值，缺 GOAL §5 的统计漂移检测器。
+- **数学先行 + 并行双脑**：落 `findings/dreaminate/drift-detectors.md`（4 检测器公式+推导+治理 voice）；deep-opus‖codex 三脑独立复核——**deep-opus 实证抓到教科书 Page-Hinkley 全局 running-mean 的 √t 假告警致命陷阱**（平稳噪声 FPR→1）→ 改 frozen-baseline 变体 + 配 sentinel 证明弃用对（单脑会照教科书埋雷）。
+- **实现（扩展不替换 + 命门钉死）**：`dsr.py` +`probabilistic_sharpe_ratio`（与已变异验证的 DSR V-path 互为 1e-12 交叉校验锚，实测偏差 0.0）；新建 `monitor/drift.py`（4 检测器 + 三态 ok/breach/insufficient_evidence + 绩效轴/特征轴**类型隔离**）；`monitor_tick` additive `perf_drift`。**三层钉死**：①rolling-PSR 签名不暴露 n_trials/var_sr_hat（杜绝 DSR 通缩走私进 live 退役，违 M-AUTHORITY/GOAL §5）②PSI=FeatureDriftDiagnosis 无 breach/无 to_lifecycle_observation/类型层喂不进 monitor_tick + 运行期 axis 防伪 ③CUSUM/PH 冻结基准（绝不用监控窗自身均值，温水煮青蛙）。
+- **多透镜评审（autoplan 等价：correctness/governance/CEO/eng 并行 + 对抗复核）抓真 bug 全修**：**5 条 confirmed——4 条 NaN 静默假绿灯（high，正中本模块自钉「不假绿灯」命门：喂数缺口插 NaN→NaN<floor 恒 False 绕过守门→主告警读绿=对真钱致命静默）** + 1 条 CEO 阈值代价诚实披露（PSR_FLOOR=0.90 偏激进，已标注）。修法：`_all_finite` 守门 4 检测器全判 insufficient + 对抗测试钉死；eng 4 清理（死常量→_SIGMA_FLOOR、冗余 re-export、饱和值/全零 docstring）全做。
+- **验收**：`test_drift_detectors.py` **31 passed**（温水煮青蛙/方向/PH sentinel/PSI 范畴红线/NaN 假绿灯）+ `test_methodology_invariants.py` **19→38 passed**（+19 理论不变量：PSR↔DSR 恒等含中段判别力、PSI 对称/非负/置换、CUSUM 平移/尺度等变 + sentinel 门有牙、PH FPR 受控）。**全量后端 1426 passed / 13 skipped / 0 failed（167s），基线 1357 未破**。
+- **诚实残余（非假绿）**：冻结基准 μ0/σ0 跨重启持久化依赖上游观测管道（建议 mint 后续卡）；PSR 自相关高估有效 n（docstring 披露）；阈值标定属用户方法学旋钮（代价已诚实标）。
+- **下一步**：land main 待用户授权（不擅自 commit/push）；进下一切片。
+
+## 2026-06-24 · 交付门收尾波「全量落地 web」全完成（4 P2 卡清零 + glossary 27 + rag 回归修 + land main）
+
+- **缘起**：用户 /autoplan「全量落地 web」→ 3 问全选推荐档（全量范围 / 授权 land delivery-slice / 凭据门码路+文档待验收）。理解 workflow 摸清：项目 ~95% 已绿，真缺口=整波 32 commit 未 land main + 5 张卡（e1a98c41 已做未归档 + 4 待做）。worktree `deliver-final`（基 delivery-slice）。
+- **4 张 P2 卡（deep-opus 各实现，leader 复核真绿 + 变异自检）**：ba59fb7b 组合 promote 生产端点 record=True 真记 honest-N（`4082d5d`，+8 测）/ de764e1c 监控生产调度 strict scheduler+观测管道（`b871c92`，+10 测，范畴红线钉死 monitor_tick 不接 verdict，§5 漂移检测器诚实标残余未投机造桩）/ 64717fe6 paper 真 BTC 样本回放 entry_price 反推防 P&L 失真（`45b0f19`，+7 测）/ a367bfc8 testnet 真喂码路 fail-open 留痕 key 不进 LLM（`2fd185f`，+20 测，真连接待用户 key）+ e1a98c41 vision bug 落档（ac72b81 此前已修）。
+- **glossary 27 词条**：workflow 27 写手并行→6 批对抗验文献真实性→修 6 处（2 critical：var_cvar VaR 公式杂散负号、funding_rate 杜撰文献换真 arXiv:2310.11771）（`2ea71b7`）。validate_glossary PASS count=30。
+- **回归自查（不假绿）**：glossary 补全改了 RAG 检索结果→test_retrieve_glossary_hit 转红（base 0 failed=我引入）。二分定位坐实（glossary 还原 base→测试转绿），修 rag 加别名整体点名 boost（`d39d606`）+ 钉回归门；未让卡2 的「预存」误判蒙混。
+- **验收**：**全量后端 1357 passed / 13 skipped / 0 failed（实跑 189s）**+ 前端 **vitest 280 + tsc 0 + build 绿**（delivery-slice worktree 验，前端源同 deliver-final）+ validate PASS。
+- **下一步**：land delivery-slice（含本波收尾）→ main（用户授权）。凭据门 §9 尾项码路+文档就绪待用户验收；新生残余建议 mint 卡（生产周度 IC 重算、§5 漂移检测器、观测持久化）。
+
+## 2026-06-23 · code-review 修复批（交付门波 land 后 xhigh 审出 15 缺陷全修）· 6 worker 并行 + land main
+
+- **缘起**：交付门波 land main 后跑 workflow code-review(xhigh)：50 候选→26 验证→**15 报告**。讽刺的是「修 §3 假绿灯」的波自己留了新假绿灯 + 默认路径断 + leader relabel 偷懒。用户「全部要修」。
+- **7 单元（文件 disjoint）6 worker 并行各 PR**：FU1 main.py 注册诚实化（#10·**§5 治理**：H3 market 派生不默认 equity_cn 伪造 600519 / H4 注册失败显 error 非静默 200 / M3 二次注册 reconcile / M6 relabel 漏 3 注释 / M7 prime 惰性化；worker 自身 code-review 还抓出 A股 spot 误判成 crypto 绕 live-forbidden 并修）/ FU2 synth 诚实化（#7·M1 组装输入落 metadata+诚实 note 不静默丢 / M8 LLM market 校验）/ FU3 裁决卡 null（#8·H2 pbo/dsr null→N/A 不假绿）/ FU4 Agent 台 live（#9·H1-fe LIVE 无 run_id 不退 mock 绿、显诚实态 / M5 不丢上下文）/ FU5 paper desk 并发（#11·M4 prime 前 stop scheduler join 防 equity_log 撕裂 / perf mtm_count）/ FU6+7（#6·M2 goal_id 纳 benchmark/cost/window 防撞覆盖 / 删 paperApi 死 export）。
+- **leader 整合**：6 PR merge（文件 disjoint，仅 FU1/FU5 共改 test_paper_desk_api 冲突→两组回归测试都留）。
+- **§5 治理终审**：A股恒拒 live（attempt_live_order 对 equity_cn 恒 AShareLiveForbidden）、INV-5、止模拟盘、market 派生不伪造标的——全不破，且更准。
+- **验收**：**全量后端 1311 passed / 13 skipped**（基线 1292 + ~19 新回归种坏门）+ 前端 **280 passed + tsc/build 绿** + e2e/治理测试全过。每 finding 配回归测试（修前红/修后绿对照验证）。
+- **下一步**：land main（用户授权全修+land）。
+
 ## 2026-06-23 · 交付门垂直切片整波收官（DS-2~6 + e2e）· 6 worker 并行 + leader 整合 land main
 
 - **审计收卡**：55 done 卡全诚实、0 假绿灯、validate PASS。微调：ba59fb7b/de764e1c pool→自领 active；defe660c Scope 澄清前后端；46f1cb3c/d0e5d208 残余加承接链路注。
@@ -314,3 +446,98 @@
 - **全量验证**：gate+spine 组 **71 passed**、verdict/promote/gate_runner **88 passed**；全量后端真汇总见下条/本日。凭真汇总行判绿。
 - **推进**：GOAL §6/§8 + gap #3：脊柱从「孤立可证」→「真正 gate 生产 promote」（DSR 数值漂移/源 staleness/执行抛错三类都在生产门被挡）。**残余**：只接 DSR 一支，PBO/bootstrap/factor 等逐个补；spine_consistency 未在前端/RDP 展示。
 - **交付**：同 worktree `auto/math-spine`；commit/push 自管、**land main 待用户**。
+## 2026-06-25 · sqrt-impact 扩张窗 as-of 无泄露根治（done 卡 d9bf88b1 / 池卡 0f696e56 闭）
+- **根治前视（look-ahead 红线）**：sqrt-impact 自估 ADV/σ 从全样本（含未来 bar）改**扩张窗 as-of**——replay 每笔成交按 ts 只用 `F_{t⁻}`（datetime 按日聚合「严格早于当日」+ int ts 前缀均量 + σ 扩张 std 只用 r_1..r_{t-1}）；`step` 传 next_ts；终端标量仅 ts=None 回退。warning 转 informational（无前视/扩张窗/warmup 披露）。数学推导补进 finding「扩张窗 as-of 无泄露自估」节。
+- **评审三角（deep-opus‖codex 互不知情 + 我裁决）挖出真 critical 并修**：① 初版用全样本 `max(volume)>0` 判 warmup-vs-fail-fast → PROBE H 实测「early bar 逐位相同、仅未来量不同 → 裁决翻转(raise vs warmup)」=残余前视 + 缺流动性伪装 warmup 假绿灯。**修**：warmup 裁决改纯 F_{t⁻} prefix 驱动、剔除全样本信号；未知 ts 改 warmup-披露不回退泄露终端值。② σ 通道测试无牙（原 leak-free 测试只扰量、close 相同）+ ADV 机制未钉死 → 补 σ-价测试 + 非平量机制测试，**MUT-A（σ 全样本）/MUT-B（lag-1）双 mutation 验证真有牙**（旧测漏、新测必抓）。
+- **验证**：全量后端 **1571 passed / 13 skipped / 0 failed**（基线 1564，净 +7）；PROBE H 修前(raise vs cost=0)→修后(两面板同 warmup)实证。**教训**：除 mutation 用定点反向 edit，**绝不 `git checkout` 带未提交改动的文件**（本轮误用一次、全切片实现被抹、已重建）。
+- **land main 待用户授权**（本轮 loop「commit 不擅自 push」→ 本地 commit、未 push）。
+
+## 2026-06-25 · 成本逐成分诚实归因（done 卡 6e264c59 / e2afc5c2 #1）+ 测试防挂死（commit 443fca9）
+- **成本归因（honesty）**：fill 报告 `commission` 字段实装总成本（含 impact）→ 下游 TCA 误读市场冲击为手续费。修 `_cost_breakdown` 逐成分（impact **单列绝不并入 commission**、各成分非负、求和==total），fill 报告 additive 加 `cost_breakdown`、顶层 commission=total 向后兼容（cost_drift 取总实现成本不破），`step` 一次算 breakdown（避免 warmup 计数双增）。MUT-C（impact 并入 commission 成分）验证有牙（commission 虚高被抓）。finding 补「成本逐成分诚实归因」节 + 修 slice-9 误留的「## 复用」重复节。e2afc5c2 #2（三档预设默认 size-aware）=用户方法学决策（需 Y、seam 就绪默认关、不替拍板）。
+- **测试套件防挂死（诚实纠错 + 加固）**：排查「测试跑了 7h/9h」发现两个 pytest 进程空挂——根因 `test_dag_kernel::test_effect_ledger_concurrent_same_key`（8 连接争 SQLite 锁）在我**多 full-suite 并行叠跑** + 后台**无 `--timeout`** 下被饿死挂死（单独 5.4s、全量单独 192s 绿=非生产 bug）；后台被 kill 后 harness 误报「exit 0」=假绿、识破未当真。修 pytest.ini 加全局 `timeout=120` + 并发测试 `daemon=True`（commit 443fca9）。**教训记 memory**：全量套件绝不并行叠跑、必带超时、凭真汇总行判绿别凭 exit code。
+- **验证**：`test_sqrt_impact_cost.py` 23 + test_dag_kernel 25 passed；**全量单独前台 1574 passed / 13 skipped / 0 failed / 192s**（基线 1571，净 +3）。
+- **land main 待用户授权**（本轮 loop「commit 不擅自 push」→ 本地 commit、未 push）。
+
+## 2026-06-25 · IC 持久性半衰期接 lifecycle 状态机（done 卡 1b83a5c5 / aa13c3b0 ①）
+- **价值闭环**：`ic_decay_half_life`（slice-4 建、lifecycle 状态机零消费）→ `LifecycleManager.decay_diagnostic`（perf 轴 advisory）+ evaluate() 事件 advisory 注解；硬转移逻辑零改。**关键修正**：它是 IC 持久性（自相关）半衰期 ≠ 现有转移测的 IC 水平衰减——两不同概念，故 advisory 不并入硬转移（避免数学↔实现混淆 + 守 slice-4「unstable 不作硬退役」自律）。
+- **命门**：M-AUTHORITY A1（转移只吃 perf 轴 IC 观测、注入 gate verdict 到 extra 不改判，MUT-M 验证有牙）+ 单一源（复用 ic_decay_half_life、多 ρ 区间扫描，MUT-S clip ρ>0.9 验证有牙）+ 诚实 status（随机游走→unstable 绝不 'ok'）。
+- **meta 教训应用 + 验证**：单一源测试初版只测 ρ=0.6 一点 → MUT-S 逃逸（「测单点 happy-path 不扫判别区间」盲区）→ 强化为 ρ∈{0.3,0.6,0.9,0.97}+reversal 扫描后必抓。
+- **验证**：`test_lifecycle_decay_advisory.py` 5 + test_alpha_lite_and_lifecycle 7 passed；**全量后端 1579 passed / 13 skipped / 0 failed / 180s**（基线 1574，净 +5）。aa13c3b0 ② 容量/拥挤→sizing 留池（方法学决策）。
+- **本轮 loop「commit 和 push 自动进行」→ 本地 commit + push 分支 worktree-autopolish-w1**（land main 仍仅用户）。
+
+## 2026-06-25 · conformal 接信号层弃权 + 并发测试负载 flaky 根治（done 卡 ee3b8dbd / 92a2182f ①）
+- **价值闭环**：`signals.conformal_abstain_gate` 后处理器——预测区间 [score±q̂] 跨决策阈值（|score−thr|≤q̂）→ 方向不可辨 → 弃权（flat/magnitude=0/abstained=True），诚实「不对噪声下单」。q̂ 用 model_eval `conformal_prediction_band` 的 band_half_width（同一 q̂ 命门交叉校验）。量纲正确：缺 score_col raise、绝不用 confidence sigmoid/magnitude clip 失真值代。band≤0 向后兼容。
+- **门有牙**：MUT-conf1（≤→< 漏边界）→边界测试抓；MUT-conf2（反转弃权条件）→跨阈值测试抓。
+- **附带根治并发测试负载 flaky**：`test_effect_ledger_concurrent_same_key`（8 连接争 SQLite 锁）重负载下各等满 5s busy_timeout 被饿死、撞 pytest.ini 全局 timeout=120 fail（**全局兜底按设计 fail-fast、未再挂 7-9h**）。根因治：`EffectLedger` 加可配 `busy_timeout_ms`（默认 5000=生产不变·additive），测试用 1000 → loser 快速失败、5.4s→1.1s、3/3 稳；不变量 at-most-one 不受影响。套件 271s→164s。
+- **CPCV→gate（861182e6）勘察**：判为需独立 Plan（train_model 单路径 OOS→组合多路径重构跨 3 层 + 成本×C(N,k)；**CPCV paths≠cscv_pbo 跨策略矩阵、不可误喂**），scope 已落卡供后续。
+- **验证**：`test_conformal_abstain_signal.py` 6 + test_signals 7 + test_dag_kernel 25 passed；**全量后端 1585 passed / 13 skipped / 0 failed / 164s**（基线 1579，净 +6）。
+- **本轮 loop「commit 和 push 自动进行」→ 本地 commit + push 分支 worktree-autopolish-w1**（land main 仍仅用户）。
+
+## 2026-06-25 · 冷启动 MinTRL 业绩期证据接裁决卡 UI（done 卡 c5960022 / 31289338 UI · 能信）
+- **价值闭环（能信·首个前端切片）**：后端 cold_start（卡 b1e4efdf 建于 project_overfit、UI 零呈现）→ `RunVerdictCard` 首类「业绩期」格 `ColdStartStat` + `LiveRunVerdictCard` mapToData 真映射（/overfit cold_start → `coldStartOrNull` 形状校验 → RunVerdictData.coldStart → 渲染）。小白看见「证据不足·需 N 期」而非在短业绩期上信 PBO/DSR。
+- **不假绿灯在 UI**：sufficient=false→「证据不足」警示色非绿、sufficient=true→「充分」中性色非绿（够数据≠策略好、质量看 PBO/DSR）、缺省/坏形状→不渲染（不编造达标）。R7：UI 只渲业绩期长度事实、合规措辞走后端 cold_start.note 单一源（harness R7 扫描门覆盖）。
+- **门有牙**：MUT-cs（冷启动恒渲成功绿）→ 3 冷启动测试 FAIL（不假绿灯有牙）。
+- **worktree 前端验证**：worktree 无 node_modules（git worktree 不带 gitignored）→ symlink 主仓库 app/frontend/node_modules 跑 tsc/vitest/build，验后清理（symlink+dist 不入库）。
+- **验证**：tsc 无类型错；`RunVerdictCard.test` 28 + `LiveRunVerdictCard.test` 15 passed；**全前端 288 passed / 23 文件**（基线 280，净 +8）；vite build ✓。
+- **本轮 loop「commit 和 push 自动进行」→ 本地 commit + push 分支 worktree-autopolish-w1**（land main 仍仅用户）。
+
+## 2026-06-25 · conformal 校准区间接模型台 UI（done 卡 29258b77 / 92a2182f ② · 能信）
+- **价值闭环**：conformal_interval（卡 d4a324ae 建于 model_eval·OOS 真留出覆盖、UI 零呈现）→ `ConformalIntervalCard` 纯组件（--cc-* token）+ TrainingBenchPage openEval 真映射（读 body.conformal_interval → 渲染）。用户看见「±半宽·目标覆盖·留出实测覆盖 + caveat」或「证据不足」。
+- **不假绿灯在 UI**：abstained（calib 不足）→「证据不足」警示色、绝不造假区间/假覆盖；单次留出覆盖率**中性色非成功绿**（带噪估计、跨多次取均值方判校准——后端 note 已述）；interval 缺/null→不渲染（不编造）。合规说明走后端 note 单一源、原样渲染。
+- **门有牙**：MUT-cf（单次覆盖渲成功绿）→「不假绿灯①」FAIL。
+- **验证**：tsc 无错；`ConformalIntervalCard.test` 5 passed；**全前端 293 passed / 24 文件**（基线 288，净 +5）；vite build ✓。
+- **本轮 loop「commit 和 push 自动进行」→ 本地 commit + push 分支 worktree-autopolish-w1**（land main 仍仅用户）。
+
+## 2026-06-25 · 因子收益归因建库（done 卡 ff286f80 · 北极星「归因」阶段填缺）
+- **填 pipeline 缺口**：grep 实证北极星「归因」阶段无独立模块 → 建 `eval/attribution.py` `factor_return_attribution`。组合实现收益 OLS 时序回归到因子收益、分解各因子贡献（contrib_k=β̂_k·ΣF_k）+ 特异（specific=Tα̂+Σε̂）。数学先行 finding「因子收益归因」。
+- **命门加总恒等式有真牙**：Σcontrib+specific≡Σr 逐位；contrib（β̂·ΣF）与 specific（Tα̂+Σε̂）独立公式 → 非构造性 tautology。MUT-attr（contrib 用 mean 代 sum）→ test_attribution 恒等式 + methodology 恒等式 + 已知 β 恢复三测全红。
+- **不假绿灯**：T<K+2→insufficient 不出 β；rank<K+1→collinear 不报不可识别 β；近共线→ok+warn（β 不稳）；非有限行剔除披露；低 R² 如实报（收益多由特异驱动≠已归因）。
+- **验证**：`test_attribution.py` 8 + `test_methodology_invariants::test_attribution_sum_identity_invariant` 1 passed；**全量后端 1594 passed / 13 skipped / 0 failed / 151s**（基线 1585，净 +9）。消费侧（组合台/归因报告 UI·因子集/口径=用户方法学决策）mint 卡 e4496023。
+- **本轮 loop「commit 和 push 自动进行」→ 本地 commit + push 分支 worktree-autopolish-w1**（land main 仍仅用户）。
+
+## 2026-06-25 · BacktestVenue.cost_summary（per-fill 成本归因收口到 run 级·done 卡 7ac5a0fe）
+- **收口**：slice 成本归因（卡 6e264c59）只到 per-fill；run_detail_core:150 已读 run 级 manifest.cost_breakdown 但无 producer（恒空）。建 `cost_summary()` 聚合 audit fills → run 级（commission/slippage/stamp_duty/transfer/impact/total + n_fills），impact 单列不淹没在 commission。
+- **run 加总恒等式有牙**：total 走「Σ各 fill.total」独立路径（非 Σ成分）→ total==Σ成分有真牙；MUT-cs2（聚合漏 impact）→ 测试崩。无成交→全 0、n_fills=0（不编造）。
+- **验证**：`test_sqrt_impact_cost.py` 25 passed（+2 cost_summary）；**全量后端 1596 passed / 13 skipped / 0 failed / 128s**（基线 1594，净 +2）。
+- **follow-on**：backtest→manifest 把 venue.cost_summary() 落 manifest.cost_breakdown 的 producer wiring 待接（IDE sandbox 回测是否产 per-fill 待确认）——本卡提供可用聚合 API、wiring 建后续 mint。
+- **本轮 loop「commit 和 push 自动进行」→ 本地 commit + push 分支 worktree-autopolish-w1**（land main 仍仅用户）。
+
+## 2026-06-25 · CPCV 作消费产 per-path OOS 指标分布（done 卡 2da39479 / 861182e6 ① · 最深命门件）
+- **啃下前 3 轮延后的 CPCV**：经勘察（assemble_cpcv_paths 通用、组合序一致）后落地消费侧 ①。`models/training.py::cpcv_oos_metric_distribution`——φ=C(N-1,k-1) 路径各覆盖全样本一次→每路径模型 OOS r2→分布（mean/std/q05/min/median/max/frac_below_0；q05/路径方差=过拟合脆弱度）。report-only、regression-only。
+- **行为不变抽 `_fit_predict_fold`**：从 train_model 主循环抽出（lambdarank group + classification proba 分支原样），train_model 与 CPCV 共用=fit/predict 单一源；31 训练测试 + 全量套件绿（行为保持）。
+- **判别器命门有真牙**：强信号→r2 高稳、噪声→r2≈0/负；MUT「预测 test 段内反序(misalign)」→强信号 r2 崩 -0.87→判别器+强信号测试双红（证 assemble_cpcv_paths 路径重组对齐正确，非纸糊）。
+- **避方法学纠缠**：用模型自身 r2（非 Sharpe/DSR——后者需 prediction→收益转换=用户方法学决策）→ report-only、非回归 unsupported_task 诚实、不替拍板。
+- **验证**：`test_cpcv_oos_distribution.py` 7 + 训练 31 passed；**全量后端 1603 passed / 13 skipped / 0 failed / 124s**（基线 1596，净 +7）。follow-on（861182e6 ②③ q05→gate/Sharpe-DSR/分类排序）池卡留。
+- **本轮 loop「commit 和 push 自动进行」→ 本地 commit + push 分支 worktree-autopolish-w1**（land main 仍仅用户）。
+
+## 2026-06-25 · 分支 land-readiness 整体评审 + 修 3 发现（done 卡 3d4a872e · 里程碑）
+- **里程碑分支级评审**：18 commits（78 文件/+7764）累积未 land → loop 第 4 步「以可上线成品验收」。deep-opus 三角（execution/drift+lifecycle/frontend+infra）+ 自验：安全红线全清（look-ahead σ/ADV as-of 真无泄露、A股 live 全 venue=backtest、M-AUTHORITY 无 gate verdict 参数、动钱未碰）、additive 属实（impact_coef=0 字节相等、无改既有测试）、无结构阻断 → **判定 land-ready**。
+- **修 3 发现**：① [high] signals conformal_abstain_gate 文档过claim（q̂「来自 model_eval·同一命门」暗示生产已闭环、实未串接）→ 软化诚实；② [high] backtest_venue cost_summary 文档称「供 run_detail_core 消费」（实另一 schema 无 producer）→ 软化诚实；③ [medium·真牙缝] σ same-bar 边界未钉（现码 p=j-1 正确但 leak-free 测试只扰未来、漏判 p=j 同根前视，评审种 p=j 两不变量仍过）→ 补 `test_asof_sigma_excludes_same_bar_return_boundary_pinned`（扰单根 close[k]、MUT p=j 验证有牙），σ 边界与 ADV 同级钉死。
+- **教训**：in-code 文档不得声称代码里不存在的跨件 wiring——即便 dev/state 另有诚实追踪，维护者先读 in-code 文档=不假绿灯雷。
+- **验证**：受影响 33 测 + **全量后端 1604 passed / 13 skipped / 0 failed / 123s**（基线 1603，净 +1）。
+- **本轮 loop「commit 和 push 自动进行」→ 本地 commit + push 分支 worktree-autopolish-w1。判定 land-ready，待用户授权合并 main。**
+
+## 2026-06-25 · ic_decay 诚实 status 精修 no_persistence（done 卡 b762da53 · 清评审 low 残余）
+- **诚实 status**：ic_decay_half_life 原 ρ̂≤0 一律 reversal，但 ρ̂≈0 白噪 IC 是无持久性非反转（reversal=anti-persistent 须 ρ 显著<0）。改按 95% CI 上界：ci_hi<0→reversal、CI 含 0→no_persistence（无显著自相关·非反转非持久）。对齐不假绿灯/honest-status（不把噪声弱负 over-claim 成反转）。
+- **MUT 验证有牙**：还原「ρ≤0 全 reversal 过claim」→ 弱负（ρ=-0.2 n=45 CI 含 0）测试红。低 ripple（显著负仍 reversal、random walk 不碰、near-constant insufficient、decay_diagnostic advisory 传播不变）。
+- **验证**：test_factor_lifecycle_metrics 31 + test_lifecycle_decay_advisory 全 passed；**全量后端 1605 passed / 13 skipped / 0 failed / 124s**（基线 1604，净 +1）。
+- **本轮 loop「commit 和 push 自动进行」→ 本地 commit + push 分支 worktree-autopolish-w1。分支续 land-ready。**
+
+## 2026-06-25 · CPCV per-path 分布扩二分类 roc_auc（done 卡 c43c6301 · 扩 2da39479）
+- **任务扩展**：cpcv_oos_metric_distribution 从 regression-only(r2) additive 扩二分类(roc_auc·重组 proba 路径)。任务白名单：regression→r2(baseline 0)、二分类→roc_auc(baseline 0.5)、多分类/lambdarank/无 predict_proba→unsupported_task 诚实。proba 路径用 assemble_cpcv_paths 重组（与 pred 同机制）。
+- **判别器有牙**：MUT「proba misalign」→ 强分类器 auc 崩 0.4999 → 强信号高 auc + 强 vs 噪声判别器双红（证 proba 重组对齐正确）。additive（regression 路径不变 baseline=0.0）、report-only 不接 gate。
+- **验证**：`test_cpcv_oos_distribution.py` 11 passed（+4 分类）；**全量后端 1609 passed / 13 skipped / 0 failed / 124s**（基线 1605，净 +4）。
+- **本轮 loop「commit 和 push 自动进行」→ 本地 commit + push 分支 worktree-autopolish-w1。分支续 land-ready。**
+
+## 2026-06-25 · CPCV 路径分布 opt-in 集成进 train_model（done 卡 74f93771）
+- **集成进训练生命周期**：CPCV 消费函数（done 2da39479/c43c6301）从孤立可调 → opt-in 集成进 train_model（ModelSpec +compute_cpcv 默认关 + cpcv_n_groups/k_test；TrainResult +cpcv_distribution；开启则训练后产分布随 result.json 流到 verdict/UI）。默认关=零行为/成本变更（护栏：不替方法学拍板、开启=用户自负 C(N,k) 拟合）。
+- **additive 零回归**：ModelSpec/TrainResult 加 default 字段向后兼容、train_model 默认关分支行为不变；49 训练测试 + 全量套件绿。
+- **验证**：`test_cpcv_oos_distribution.py` 12 passed（+1 opt-in：默认关→None、开启→分布·asdict JSON-safe）；**全量后端 1610 passed / 13 skipped / 0 failed / 124s**（基线 1609，净 +1）。follow-on（861182e6 ②）：cpcv_distribution→verdict/UI + q05 接 gate（阈值=用户方法学）池卡留。
+- **本轮 loop「commit 和 push 自动进行」→ 本地 commit + push 分支 worktree-autopolish-w1。分支续 land-ready。**
+
+## 2026-06-25 · CPCV 路径稳健性分布呈现到模型台 UI（done 卡 876a0c11 · CPCV→用户闭环收尾）
+- **闭环收尾**：cpcv_distribution（卡 74f93771）→ training_job_eval 透传 → `CpcvRobustnessCard`（模型台·report-only）。CPCV 全链：库→消费(regression+二分类)→train_model opt-in→result.json→eval→UI。
+- **不假绿灯在 UI**：未算/缺→不渲染、status≠ok→不造假分布、q05<无技能基线(r2:0/auc:0.5)→脆弱警示色非绿、q05≥基线中性非绿（路径稳≠策略好）。report-only 不接 gate。
+- **worktree 坑（已避污染）**：symlink node_modules 一度成真目录（gitignored·主仓库未污染·已确认 141 项完好）→ rm -rf 安全清理；git status 仅 4 源文件无 node_modules 泄漏。
+- **验证**：`CpcvRobustnessCard.test` 5 + `test_model_eval_conformal` 10（+1 cpcv 透传）passed；**全前端 298 / 25 文件 + tsc + build ✓**；**全量后端 1611 passed / 13 skipped / 0 failed**（基线 1610，净 +1）。861182e6 ②剩 q05→gate（阈值=用户方法学）池卡留。
+- **本轮 loop「commit 和 push 自动进行」→ 本地 commit + push 分支 worktree-autopolish-w1。分支续 land-ready。**

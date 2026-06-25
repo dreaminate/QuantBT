@@ -459,6 +459,161 @@ describe("DS-3 · liveRunId 贯穿裁决卡（真 run_id → LiveRunVerdictCard 
   });
 });
 
+describe("§3 LIVE 态无 run_id 不退 mock 绿（裁决卡诚实空态/错态 · H1-frontend）", () => {
+  it("对抗：LIVE 态无 run_id → 绝不渲染 MOCK_AGENT_RUN 绿卡（无写死 0.18/1.34）", () => {
+    const unlocked = new Set<CoworkKind>(["run"]);
+    const { container } = renderWithDesk(
+      <CoworkArea cowork="run" unlocked={unlocked} liveMode />,
+    );
+    // 接真态无真 run_id：绝不退回写死 mock 绿裁决卡（§3 假绿灯回归门）。
+    expect(screen.queryByTestId("run-verdict-card")).toBeNull();
+    expect(screen.queryByTestId("live-run-verdict-card")).toBeNull();
+    // 伪造的绿裁决数字（PBO 0.18 / DSR 1.34）绝不出现。
+    expect(screen.queryByText("0.18")).toBeNull();
+    expect(screen.queryByText("1.34")).toBeNull();
+    // 改显诚实中性空态。
+    expect(container.querySelector("[data-run-live-empty]")).not.toBeNull();
+    expect(screen.getByText("尚无回测结果")).toBeInTheDocument();
+  });
+
+  it("LIVE 态回测失败（liveError）→ 显诚实错态 + 原因，绝不退 mock 绿", () => {
+    const unlocked = new Set<CoworkKind>(["run"]);
+    const { container } = renderWithDesk(
+      <CoworkArea
+        cowork="run"
+        unlocked={unlocked}
+        liveMode
+        liveError="A股无样本：回测返回 error，无 run_id。"
+      />,
+    );
+    expect(screen.queryByTestId("run-verdict-card")).toBeNull();
+    expect(screen.queryByText("0.18")).toBeNull();
+    expect(screen.queryByText("1.34")).toBeNull();
+    const err = container.querySelector("[data-run-live-error]");
+    expect(err).not.toBeNull();
+    expect((err as HTMLElement).textContent ?? "").toMatch(/回测失败/);
+    expect((err as HTMLElement).textContent ?? "").toContain("A股无样本");
+  });
+
+  it("演示态（liveMode 缺省）无 run_id → 仍退 mock 卡（显式演示，恒挂 MockBadge）", () => {
+    const unlocked = new Set<CoworkKind>(["run"]);
+    renderWithDesk(<CoworkArea cowork="run" unlocked={unlocked} />);
+    // 非接真态（演示/独立用法）：mock 卡仍可达（写死 0.18/1.34 + MockBadge）。
+    expect(screen.getByTestId("run-verdict-card")).toBeInTheDocument();
+    expect(screen.getByText("0.18")).toBeInTheDocument();
+    expect(screen.getByText("1.34")).toBeInTheDocument();
+    expect(screen.getAllByText("MOCK 数据").length).toBeGreaterThanOrEqual(1);
+  });
+
+  it("有真 run_id 时 liveMode 仍走 live 卡（run_id 优先于空态）", () => {
+    const unlocked = new Set<CoworkKind>(["run"]);
+    const { container } = renderWithDesk(
+      <CoworkArea
+        cowork="run"
+        unlocked={unlocked}
+        liveMode
+        liveRunId="run_live_z"
+      />,
+    );
+    // 有真 run_id → 走 live 卡（接真三端点），不显空态。
+    expect(container.querySelector("[data-run-live-empty]")).toBeNull();
+    expect(container.querySelector("[data-cowork-card=\"run\"]")).not.toBeNull();
+  });
+});
+
+describe("§M5 LIVE 已有对话不被写死首条 prompt 冲掉（不丢上下文）", () => {
+  function sseUser(msg: string): Response {
+    // 回显 user 事件 + done，模拟真流（让 blocks 非空 = 有在途对话）。
+    const body =
+      `event: user\ndata: ${JSON.stringify({ text: msg })}\n\n` +
+      'event: done\ndata: {"final_message":"","succeeded":true}\n\n';
+    const stream = new ReadableStream<Uint8Array>({
+      start(c) {
+        c.enqueue(new TextEncoder().encode(body));
+        c.close();
+      },
+    });
+    return new Response(stream, {
+      status: 200,
+      headers: { "content-type": "text/event-stream" },
+    });
+  }
+  afterEach(() => vi.unstubAllGlobals());
+
+  const firstPromptCalls = (fetchMock: ReturnType<typeof vi.fn>) =>
+    fetchMock.mock.calls
+      .map((c) => String(c[0]))
+      .filter((u) =>
+        u.includes(encodeURIComponent("组装一个 A股周频多因子策略")),
+      ).length;
+
+  it("挂载（无在途对话）自动起首条 prompt；后续 effect 不重复自动起", async () => {
+    const fetchMock = vi.fn((u: RequestInfo) =>
+      Promise.resolve(sseUser(String(u))),
+    );
+    vi.stubGlobal("fetch", fetchMock);
+    renderWithDesk(<AgentWorkbenchPage />);
+    // 挂载即接真 → 首条 prompt 自动起一次（无在途对话才自动起）。
+    await waitFor(() => {
+      expect(firstPromptCalls(fetchMock)).toBeGreaterThanOrEqual(1);
+    });
+  });
+
+  it("对抗：LIVE 已发用户消息后 → 不被写死首条 prompt 自动重起冲掉（保上下文）", async () => {
+    const fetchMock = vi.fn((u: RequestInfo) =>
+      Promise.resolve(sseUser(String(u))),
+    );
+    vi.stubGlobal("fetch", fetchMock);
+    renderWithDesk(<AgentWorkbenchPage />); // 默认 liveMode=true，挂载自动起首条 prompt
+    await waitFor(() => {
+      expect(firstPromptCalls(fetchMock)).toBeGreaterThanOrEqual(1);
+    });
+    // 用户在 LIVE 发真消息 → 起以该消息为驱动的真流（有在途对话）。
+    const box = screen.getByPlaceholderText("回复，或 / 命令…");
+    fireEvent.change(box, { target: { value: "把回撤收紧到 15%" } });
+    fireEvent.keyDown(box, { key: "Enter" });
+    await waitFor(() => {
+      const called = fetchMock.mock.calls.map((c) => String(c[0]));
+      expect(
+        called.some((u) =>
+          u.includes(encodeURIComponent("把回撤收紧到 15%")),
+        ),
+      ).toBe(true);
+    });
+    const afterUserMsg = firstPromptCalls(fetchMock);
+    // 关键回归门：用户消息之后，[liveMode] effect 绝不再自动用写死首条 prompt 重起流
+    // 冲掉用户对话（已有在途对话 → 不自动重置）。
+    await new Promise((r) => setTimeout(r, 20));
+    expect(firstPromptCalls(fetchMock)).toBe(afterUserMsg);
+    // 用户消息仍是最后驱动的真流（上下文未被首条 prompt 顶替）。
+    const lastUrl = String(
+      fetchMock.mock.calls[fetchMock.mock.calls.length - 1][0],
+    );
+    expect(lastUrl).toContain(encodeURIComponent("把回撤收紧到 15%"));
+  });
+
+  it("demo→live 回切（演示已清空对话）：自动起首条 prompt（不留空白接真台）", async () => {
+    const fetchMock = vi.fn((u: RequestInfo) =>
+      Promise.resolve(sseUser(String(u))),
+    );
+    vi.stubGlobal("fetch", fetchMock);
+    const { container } = renderWithDesk(<AgentWorkbenchPage />);
+    await waitFor(() => {
+      expect(firstPromptCalls(fetchMock)).toBeGreaterThanOrEqual(1);
+    });
+    const before = firstPromptCalls(fetchMock);
+    // 切到演示（清空 live 对话）再切回接真 → 无在途对话 → 自动起首条 prompt（不空台）。
+    fireEvent.click(container.querySelector("[data-demo-toggle]") as HTMLElement);
+    fireEvent.click(container.querySelector("[data-live-toggle]") as HTMLElement);
+    await waitFor(() => {
+      expect(container.querySelector("[data-live-badge]")).not.toBeNull();
+    });
+    await waitFor(() => {
+      expect(firstPromptCalls(fetchMock)).toBe(before + 1);
+    });
+  });
+});
+
 describe("§3 handoff 提交失败诚实呈现（不假绿灯）", () => {
   afterEach(() => vi.restoreAllMocks());
 

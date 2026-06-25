@@ -3,6 +3,7 @@
 import datetime as _dt
 import logging
 import os
+import threading
 import uuid
 from pathlib import Path
 from typing import Any
@@ -168,10 +169,18 @@ from .paper import (  # noqa: E402
 PAPER_DESK = PaperDeskService()
 
 
+# M7 惰性 prime：import 期只 register_run（纯内存，便宜），prime（16 ticks + MTM 文件 I/O，慢）
+# 推迟到首次访问该 run 时再跑——不阻塞 import/startup，仍诚实（未 prime 的 seed 是空壳净值，访问即补）。
+_SEED_PRIME_PENDING: set[str] = set()
+_SEED_PRIME_LOCK = threading.Lock()
+
+
 def _seed_paper_runs() -> None:
     """种入 demo 模拟盘（dev 友好；生产由策略台 promote 注册）。判定输入保守=未达标，绝不假绿灯。
 
     weekly_cn_multifactor 配成「4 门可过」以便前端晋升判定走真端点演示人工审批；其余保守。
+    M7：本函数只 register_run（便宜）并标记待 prime；真 prime（喂 bars + MTM 文件 I/O）惰性化，
+    由 `_prime_pending_seed` 在首次访问时补——绝不在 import/startup 阻塞起后端。
     """
 
     paper_root = DATA_ROOT / "paper"
@@ -194,10 +203,34 @@ def _seed_paper_runs() -> None:
             PAPER_DESK.register_run(
                 equity_log_path=paper_root / s["run_id"] / "equity_log.jsonl", **s,
             )
-            # 注册即喂模拟 bars 跑出真净值序列（非空壳）；明确是回放捆绑样本（模拟，非实盘 key）。
-            PAPER_DESK.prime_run(s["run_id"])
+            _SEED_PRIME_PENDING.add(s["run_id"])  # 待惰性 prime（首次访问才喂模拟 bars 产净值）
         except Exception:  # noqa: BLE001  种子失败不阻塞 app 启动
             logging.getLogger(__name__).warning("seed paper run failed: %s", s["run_id"])
+
+
+def _prime_pending_seed(run_id: str) -> None:
+    """惰性补 prime 单个 seed run（首次访问触发）：喂模拟 bars 跑出真净值序列（非空壳）。
+
+    数据源按市场分流：crypto 配捆样本→真 BTC close 回放(bundled_sample_replay)，无样本市场(A股)→
+    确定性合成游走兜底(deterministic_sim_walk)；均为模拟非实盘 key。幂等（prime_run 自身复位）；
+    线程安全（取出后才 prime，避免重复跑）。慢/只读 DATA_ROOT 时 prime 失败降级空壳是诚实行为。
+    """
+
+    with _SEED_PRIME_LOCK:
+        if run_id not in _SEED_PRIME_PENDING:
+            return
+        _SEED_PRIME_PENDING.discard(run_id)
+    try:
+        PAPER_DESK.prime_run(run_id)
+    except Exception:  # noqa: BLE001  prime 失败降级空壳（诚实），不阻塞访问
+        logging.getLogger(__name__).warning("lazy prime seed run failed: %s", run_id)
+
+
+def _prime_all_pending_seeds() -> None:
+    """列表端点入口：把所有待 prime 的 seed 一次补齐（首次列模拟台时触发）。"""
+
+    for rid in list(_SEED_PRIME_PENDING):
+        _prime_pending_seed(rid)
 
 
 _seed_paper_runs()
@@ -314,6 +347,17 @@ ORDER_BROKER = _KeyBroker(KEYSTORE)
 RISK_MONITOR = RiskMonitor(RISK_LIMITS)
 KILL_SWITCH = KillSwitch([])  # 实盘 venue 启用时由 settings 注入
 
+# M（卡 de764e1c · D-WAVE1A 残余②）：监控生产调度。startup 才构造 Scheduler(strict=True) +
+# 注册 weekly 监控 DAG（让 monitor_tick 在生产真跑）。缺 croniter → strict=True 启动响亮失败
+# （绝不静默不 tick = paper-true）。调用方在 loop 里周期 tick；本进程级 holder 供运维/测试取句柄。
+PRODUCTION_SCHEDULER: "Scheduler | None" = None
+
+# M driver（接线缺口修复）：`_start_production_monitor_scheduler` 只**注册** weekly DAG，engine.py 明载
+# 「调用方在 loop 里 every N seconds 调 tick()」——但此前生产**无任何 driver** 去 tick → cron=0 9 * * 1
+# 永不到点触发、退役闭环空转（log「已启动」是假绿灯）。本 daemon 线程即那个缺失的生产调用方。
+_MONITOR_DRIVER_THREAD: "threading.Thread | None" = None
+_MONITOR_DRIVER_STOP = threading.Event()
+
 AGENT_SLOT_FILLER = StrategyGoalSlotFiller()
 CODE_REPLICATOR = CodeReplicator()
 # DS-2（造站接真 · blocker #2）：strategy_goal.create 校验落库产真 goal_id（被 DS-1 backtest 消费）。
@@ -404,9 +448,98 @@ def _agent_runtime(run_id: str | None = None, permission_mode: str = "auto", sys
     return runtime
 
 
+def _start_production_monitor_scheduler() -> "Scheduler":
+    """构造生产 `Scheduler(strict=True)` + 注册 weekly 监控 DAG（卡 de764e1c）。
+
+    扩展不替换：在既有 startup 钩子里加监控调度起点，不动其它启动逻辑。
+    - strict=True：缺 croniter → 构造即 raise（响亮失败），绝不让监控 tick 静默不跑（paper-true 红线）。
+    - 幂等：startup 可能被多次触发（如多个 TestClient），重复构造/重复 `.add` 同名 DAG 仅覆盖，无副作用。
+    返回 scheduler 句柄（也存进 PRODUCTION_SCHEDULER 进程级单例，供运维 loop tick / 测试取用）。
+    """
+
+    global PRODUCTION_SCHEDULER
+    from .dag.engine import Scheduler  # 局部导入：与 dag 包解耦，按需起调度
+    from .monitor.production import build_weekly_monitor_dag
+
+    scheduler = Scheduler(strict=True)  # 缺 croniter → 此处响亮失败
+    scheduler.add(build_weekly_monitor_dag())  # 周一早 9 点跑监控扫描（monitor_tick 生产真跑）
+    PRODUCTION_SCHEDULER = scheduler
+    _main_logger.info("生产监控调度已注册：weekly_factor_monitor cron=0 9 * * 1（待 driver 周期 tick）")
+    return scheduler
+
+
+def _monitor_driver_loop(interval_seconds: float) -> None:
+    """后台 driver：every `interval_seconds` 调 `PRODUCTION_SCHEDULER.tick()`，让注册的 weekly cron 真到点 fire。
+
+    `Scheduler.tick()` 是轮询式（`scheduled_at<=now` 才 fire，见 dag/engine.py），其 docstring 明载
+    「调用方在 loop 里 every N seconds 调 tick()」——本 loop 就是那个生产调用方。补上后 weekly_factor_monitor
+    cron 才真触发（此前空转=假绿灯：log 称已启动、实则无人 tick）。
+    daemon 线程：不阻塞进程退出；`_MONITOR_DRIVER_STOP` 可停（shutdown/测试隔离）；单次 tick 异常吞掉续跑
+    （一次失败不杀 driver，下周期重试）。每次 tick 读全局 `PRODUCTION_SCHEDULER`（startup 重建则跟随最新句柄）。
+    """
+
+    while not _MONITOR_DRIVER_STOP.wait(interval_seconds):
+        sched = PRODUCTION_SCHEDULER
+        if sched is None:
+            continue
+        try:
+            sched.tick()
+        except Exception:  # noqa: BLE001  单次 tick 失败不杀 driver（下周期重试）
+            _main_logger.exception("监控调度 driver tick 失败（driver 续跑）")
+
+
+def _start_monitor_driver() -> "threading.Thread | None":
+    """启动监控调度 driver（幂等 · env 可关 · daemon）。返回线程句柄；env 关时返 None。
+
+    - `QUANTBT_MONITOR_DRIVER`（默认开）：设 0/false/off/no → 不起 driver（scheduler 仍注册但不自动 tick，
+      由运维外部 cron 调 `run_production_monitor_cycle`；不替用户拍「是否自动跑」松紧）。
+    - `QUANTBT_MONITOR_TICK_SECONDS`（默认 60）：tick 周期。daemon + 默认 60s ⇒ 秒级测试永不误触发 weekly op。
+    - 幂等：startup 可能被多次触发（多 TestClient），已有活线程则复用、绝不重复起。
+    """
+
+    global _MONITOR_DRIVER_THREAD
+    if os.getenv("QUANTBT_MONITOR_DRIVER", "1").strip().lower() in ("0", "false", "off", "no"):
+        _main_logger.info("监控调度 driver 按 env QUANTBT_MONITOR_DRIVER 关闭（scheduler 注册但不自动 tick）")
+        return None
+    if _MONITOR_DRIVER_THREAD is not None and _MONITOR_DRIVER_THREAD.is_alive():
+        return _MONITOR_DRIVER_THREAD  # 幂等：不重复起线程
+    try:
+        interval = float(os.getenv("QUANTBT_MONITOR_TICK_SECONDS", "60"))
+    except ValueError:
+        interval = 60.0
+    interval = max(0.001, interval)
+    _MONITOR_DRIVER_STOP.clear()
+    thread = threading.Thread(
+        target=_monitor_driver_loop, args=(interval,),
+        name="monitor-scheduler-driver", daemon=True,
+    )
+    thread.start()
+    _MONITOR_DRIVER_THREAD = thread
+    _main_logger.info("监控调度 driver 已启动：every %.3gs 调 PRODUCTION_SCHEDULER.tick()（weekly cron 真 fire）", interval)
+    return thread
+
+
+def stop_monitor_driver() -> None:
+    """停 driver（shutdown/测试隔离）：set stop + join。daemon 本不阻塞退出，显式停便于测试干净复位。"""
+
+    global _MONITOR_DRIVER_THREAD
+    _MONITOR_DRIVER_STOP.set()
+    thread = _MONITOR_DRIVER_THREAD
+    if thread is not None and thread.is_alive():
+        thread.join(timeout=2.0)
+    _MONITOR_DRIVER_THREAD = None
+
+
 @app.on_event("startup")
 def startup_event() -> None:
     ensure_runtime_dirs()
+    _start_production_monitor_scheduler()
+    _start_monitor_driver()  # 补缺失的生产调用方：周期 tick 让 weekly cron 真 fire（否则闭环空转）
+
+
+@app.on_event("shutdown")
+def shutdown_event() -> None:
+    stop_monitor_driver()
 
 
 @app.get("/api/health")
@@ -1219,7 +1352,7 @@ def training_job_eval(job_id: str) -> dict:
     """训练结束的评价图（特征重要度/学习曲线/预测-实际/残差/ROC/分fold）。"""
     import json  # main.py 无模块级 json，函数内 import（与本文件其它端点一致）
 
-    from .eval.model_eval import build_eval_charts, summarize_metrics
+    from .eval.model_eval import build_eval_charts, conformal_prediction_band, summarize_metrics
 
     try:
         job = TRAINING_SERVICE.get_job(job_id)
@@ -1237,6 +1370,10 @@ def training_job_eval(job_id: str) -> dict:
         "family": job.family,
         "charts": build_eval_charts(result),
         "metrics": summarize_metrics(result),
+        # R23 闭环：回归 OOS 的 split-conformal 校准区间 + 真留出覆盖率（None=分类/无 OOS，不适用）。
+        "conformal_interval": conformal_prediction_band(result),
+        # R4 闭环：CPCV 路径稳健性分布（q05/路径方差=过拟合脆弱度）。None=未开 compute_cpcv（不假绿灯：未算≠已算）。
+        "cpcv_distribution": result.get("cpcv_distribution"),
     }
 
 
@@ -2123,7 +2260,46 @@ def strategy_submit_candidate(
     # 候选过裁决 → 注册成模拟台可跑 run（止于 paper；A股恒拒 live、不绕审批门）。
     # 失败不回滚候选登记（候选已 append-only 落库）；模拟台注册是派生动作，独立容错。
     paper = _register_candidate_paper_run(record, payload, creator=user.user_id)
-    return {**record, "paper_run": paper}
+    # H4：注册派生失败带显式 error（前端可显「候选已提交但模拟台注册失败：<原因>」），不静默假成功。
+    out: dict[str, Any] = {**record, "paper_run": paper}
+    if paper is not None and paper.get("error"):
+        out["paper_run_error"] = paper["error"]
+    return out
+
+
+# H3 市场派生：market/asset_class 显式信号映射到 paper 市场枚举（"equity_cn"/"crypto"）。
+# 绝不默认 A股、绝不凭空造标的——无法判定就返 None（unknown），由调用方标 error 不注册伪造 run。
+_VALID_PAPER_MARKETS = ("equity_cn", "crypto")
+
+
+# asset_class → 市场关键词。equity_cn 先判（其 token 更专指）：避免 "equity_cn_spot" 被宽 token
+# "spot" 抢成 crypto。crypto token 去掉非专指的 "spot"（现货也存在于股票/FX，非 crypto 独有）。
+_EQUITY_CN_TOKENS = ("a_share", "ashare", "equity_cn", "stock", "ashr")
+_CRYPTO_TOKENS = ("crypto", "perp", "usdt", "usdc", "btc", "eth", "binance")
+
+
+def _derive_candidate_market(payload: dict) -> str | None:
+    """从 payload 的 market / asset_class 显式信号派生 paper 市场枚举；判不出返 None（unknown）。
+
+    candidate 源自 goal/run，本应知其市场——传 market（equity_cn/crypto，大小写不敏感）或 asset_class
+    （a_share/equity_cn/stock… → equity_cn；crypto/perp/usdt/btc… → crypto）。两者皆无/不识别 → None。
+    绝不默认 equity_cn（H3：crypto 候选不可被静默注册成 A股 + 伪造 600519；A股 spot 亦不可误判成 crypto）。
+    """
+
+    market = payload.get("market")
+    if isinstance(market, str) and market.strip().casefold() in _VALID_PAPER_MARKETS:
+        return market.strip().casefold()
+    asset_class = payload.get("asset_class")
+    if isinstance(asset_class, str) and asset_class.strip():
+        ac = asset_class.strip().casefold()
+        # equity_cn 先判（token 更专指）→ 再 crypto；末尾才用宽 "cn"（避免误吃含 cn 的 crypto 串）。
+        if any(t in ac for t in _EQUITY_CN_TOKENS):
+            return "equity_cn"
+        if any(t in ac for t in _CRYPTO_TOKENS):
+            return "crypto"
+        if "cn" in ac:  # 宽兜底（如 "cn_daily"）——放最后，前面专指 token 都没命中才用。
+            return "equity_cn"
+    return None
 
 
 def _register_candidate_paper_run(
@@ -2132,33 +2308,81 @@ def _register_candidate_paper_run(
     """把过裁决候选注册进模拟台并喂模拟 bars 跑出真净值（idempotent；A股恒 paper）。
 
     治理：register_run 只建模拟台 run，绝不绕审批/动钱/live 下单（A股 attempt_live_order 仍恒拒）。
-    provider 喂的是【回放捆绑样本（模拟，非实盘 key）】。注册失败返 None（候选仍已落库，不阻塞 handoff）。
+    provider 数据源按市场分流【crypto 真捆样本回放 bundled_sample_replay / 无样本市场合成兜底
+    deterministic_sim_walk】，均为模拟非实盘 key。
+
+    返回（永不返 None，让 H4 端点显式透传失败原因）：
+      · 成功：{"registered": True, "run_id", "market", "symbols", **primed}
+      · 失败：{"registered": False, "run_id", "error": <可读原因>}——含市场判不出（H3 unknown）/
+        二次注册市场/标的不符（M3 reconcile 冲突）/ register/prime 异常。
     """
 
     run_id = record["run_id"]
-    market = payload.get("market") if payload.get("market") in ("equity_cn", "crypto") else "equity_cn"
-    symbols = payload.get("symbols") if isinstance(payload.get("symbols"), list) and payload.get("symbols") else (
-        ["BTCUSDT"] if market == "crypto" else ["600519"]
-    )
-    bench = payload.get("bench") or ("BTC" if market == "crypto" else "中证500")
+    # 已注册？取既有 run 以便：① 缺显式市场时复用其市场（不凭空猜）② M3 reconcile 二次注册不符。
+    existing = None
     try:
-        try:
-            PAPER_DESK.get(run_id)
-            registered_before = True
-        except PaperRunNotFound:
-            registered_before = False
-        if not registered_before:  # idempotent：已注册的不重复建（重复 submit 不另造，只重 prime）
+        existing = PAPER_DESK.get(run_id)
+    except PaperRunNotFound:
+        existing = None
+
+    # H3 市场派生：先显式信号；判不出且已有 run 则复用其市场；仍判不出 → unknown，不伪造。
+    market = _derive_candidate_market(payload)
+    if market is None and existing is not None:
+        market = existing.market
+    if market is None:
+        return {
+            "registered": False, "run_id": run_id,
+            "error": "无法判定候选市场（payload 缺 market/asset_class，且无既有 run 可复用）"
+                     "——拒绝默认 A股 / 伪造标的（H3）；请在 handoff 带 market=equity_cn|crypto",
+        }
+
+    # 标的：只用 payload 显式提供的真标的；缺则空壳注册（不凭空造 600519/BTCUSDT，§3 不假绿灯）。
+    raw_symbols = payload.get("symbols")
+    symbols = [str(s) for s in raw_symbols] if isinstance(raw_symbols, list) and raw_symbols else []
+    # 二次注册缺标的：报既有 run 的真实标的（不返空列表谎称无标的——§3 反向不假）。
+    reported_symbols = symbols or ([str(s) for s in existing.symbols] if existing is not None else [])
+    bench = payload.get("bench") or ("BTC" if market == "crypto" else "中证500")
+
+    # M3 reconcile：同 run_id 二次注册若市场/标的与既有不符，显式拒绝（不静默沿用旧值还报 success）。
+    if existing is not None:
+        if existing.market != market:
+            return {
+                "registered": False, "run_id": run_id,
+                "error": f"二次注册市场冲突（M3）：已注册为 {existing.market!r}，本次传 {market!r}"
+                         "——拒绝静默改市场；如需换市场请用新 run_id",
+            }
+        if symbols and [str(s) for s in existing.symbols] != symbols:
+            return {
+                "registered": False, "run_id": run_id,
+                "error": f"二次注册标的冲突（M3）：已注册 {list(existing.symbols)}，本次传 {symbols}"
+                         "——拒绝静默改标的；如需换标的请用新 run_id",
+            }
+
+    # DS-4「都做」testnet 真喂可选档（默认 off）：payload.testnet=True 且配 testnet key → 喂 Binance testnet
+    # 公共实时 bar；无 key/连接失败 → 诚实回退兜底（fail-open 留痕）。治理：testnet key 仅查名存在性不进 LLM、
+    # 永走模拟撮合不下 live 单、A股恒拒 testnet（crypto only，desk 内守门）。
+    want_testnet = bool(payload.get("testnet", False))
+    try:
+        if existing is None:  # idempotent：已注册的不重复建（重复 submit 不另造，只重 prime）
             PAPER_DESK.register_run(
                 run_id=run_id, name=record.get("name") or run_id,
-                origin=f"策略台 · {creator}", market=market, symbols=[str(s) for s in symbols],
+                origin=f"策略台 · {creator}", market=market, symbols=symbols,
                 bench=bench, creator=creator,
                 equity_log_path=DATA_ROOT / "paper" / run_id / "equity_log.jsonl",
+                testnet=want_testnet,
             )
         primed = PAPER_DESK.prime_run(run_id)
-        return {"registered": True, "run_id": run_id, **primed}
-    except Exception as exc:  # noqa: BLE001  注册派生失败不阻塞候选 handoff
+        # provider 档位 + 降级留痕透传（§3 诚实：testnet 真喂 vs 回退兜底对用户透明）。
+        try:
+            _st = PAPER_DESK.status(run_id)
+            primed = {**primed, "provider_kind": _st.get("provider_kind"),
+                      "degrade_reason": _st.get("degrade_reason")}
+        except Exception:  # noqa: BLE001  status 取不到不阻断注册结果
+            pass
+        return {"registered": True, "run_id": run_id, "market": market, "symbols": reported_symbols, **primed}
+    except Exception as exc:  # noqa: BLE001  注册派生失败不阻塞候选 handoff，但带显式 error（H4）
         logging.getLogger(__name__).warning("candidate→paper register failed: %s (%s)", run_id, exc)
-        return None
+        return {"registered": False, "run_id": run_id, "error": f"模拟台注册/prime 失败：{exc}"}
 
 
 @app.get("/api/strategy/candidates")
@@ -3466,6 +3690,114 @@ def promote_run_to_candidate(
     }
 
 
+@app.post("/api/portfolio/{portfolio_id}/promote")
+def promote_portfolio(
+    portfolio_id: str, payload: dict = Body(default_factory=dict), user=Depends(require_user_dependency)
+) -> dict[str, Any]:
+    """组合 promote 生产端点（D-WAVE1A 残余① · ba59fb7b）：组合三角 gate `record=True` 真记 honest-N。
+
+    `ide_promote_run`/`risk_preview` 的【组合层孪生 + record=True 版】：复用单一源 `LEDGER`/
+    `RETURNS_STORE`（一本账，绝不另造）调 `gate_portfolio(record=True, ...)` → 组合独立计入
+    `portfolio:<id>` 命名空间的 honest-N（与单策略串号物理隔离）。是 agent `portfolio.gate` 预览
+    工具（record=False、business_tools.py:5b）的 production 记账孪生：同一组输入契约。
+
+    诚实/PIT 铁律（gate 不自取数，避免前视——调用方喂【已实现】逐期收益，可经 D `load_panel(
+    as_of_known)` PIT join）：
+    - 结构非法（空 weights / 空 asset_returns / 空 markets / 非有限数值）→ 422，**不入账**。
+    - 不可评分（成分集与收益集无交集 → 组合净收益序列 < 2 点）→ 422 **入账前拒绝**：honest-N
+      不可改小（一本账无 set_n/delete），绝不用不可评分的 garbage 永久污染账本。
+    - 有效但样本太短（T≥2 但 < min_T）→ gate 诚实返 `insufficient_evidence`（200，非 HTTP 错误）+
+      照常入账（gate 能评分=一次真实多重检验）。
+    - 裁决 red/yellow → 200，**照常入账**（失败的试验也消耗一次多重检验，绝不靠不记账洗白 honest-N）；
+      `promoted=False`。promote 已记账 ≠ promote 已过闸。
+    - A2 放行（冷启动 PBO N/A）→ 透传 `pbo=None` + `all_agree_positive=False`（非完整三角、组合层
+      override，诚实标，绝不粉饰成三支同向）；强负仍 red（strong_neg 兜底守北极星不假绿灯）。
+
+    本端点不绕单一源：weights/asset_returns 原样透传 `gate_portfolio`（不归一权重、不改序、不改 key
+    大小写——任一都会改 config_hash、破 ADV2 重排同 hash 反作弊）；不接受 body 的 `record`/`ledger`/
+    `strategy_goal_ref`（防 honest-N 洗白：production 只一本账、record 恒 True）。
+    """
+
+    import math
+
+    from .lineage.ledger import HONEST_N_DISCLOSURE
+    from .portfolio.gate import gate_portfolio, portfolio_net_returns
+
+    # —— 结构校验（malformed request → 422，绝不 500、绝不入账）——
+    weights = payload.get("weights")
+    if not isinstance(weights, dict) or not weights:
+        raise HTTPException(status_code=422, detail="weights 须为非空 {symbol: weight}（先构建组合）")
+    asset_returns = payload.get("asset_returns")
+    if not isinstance(asset_returns, dict) or not asset_returns:
+        raise HTTPException(
+            status_code=422,
+            detail="asset_returns 须为非空 {symbol: [逐期已实现收益]}（调用方喂已实现收益，gate 不自取数防前视）",
+        )
+    markets = payload.get("markets")
+    if isinstance(markets, str):
+        markets = [m.strip() for m in markets.split(",") if m.strip()]
+    if not isinstance(markets, list) or not markets:
+        # 空 markets → strictest_asset_class 退化 crypto/252，静默放松 A股 504 min_T → 诚实硬拒。
+        raise HTTPException(
+            status_code=422,
+            detail="markets 须为非空列表（决定最严 min_T：任一成分 A股→504；空列表会静默放松门槛）",
+        )
+
+    # 数值强转（bad float → 422，绝不 500）。
+    try:
+        w_clean = {str(k): float(v) for k, v in weights.items()}
+        ar_clean = {str(k): [float(x) for x in v] for k, v in asset_returns.items()}
+    except (TypeError, ValueError) as exc:
+        raise HTTPException(status_code=422, detail=f"weights/asset_returns 含非数值: {exc}") from exc
+    if any(not math.isfinite(v) for v in w_clean.values()):
+        raise HTTPException(status_code=422, detail="weights 含非有限值（NaN/Inf）")
+    if any(not math.isfinite(x) for series in ar_clean.values() for x in series):
+        raise HTTPException(status_code=422, detail="asset_returns 含非有限值（NaN/Inf）")
+
+    # —— 不可评分前拒绝（入账前）：成分↔收益无交集 → 组合净收益 < 2 点 → 422，绝不入不可评分行污染账本 ——
+    net = portfolio_net_returns(w_clean, ar_clean)
+    if len(net) < 2:
+        raise HTTPException(
+            status_code=422,
+            detail="组合净收益序列不足 2 点（weights 与 asset_returns 无对齐成分）：无法评分，拒绝入账（honest-N 不可改小）",
+        )
+
+    freq = str(payload.get("freq") or "1d")
+    dataset_version = str(payload.get("dataset_version") or "unknown")
+
+    # —— 生产记账：复用单一源一本账（LEDGER/RETURNS_STORE 引用模块全局，便于测试 monkeypatch 隔离）——
+    try:
+        res = gate_portfolio(
+            portfolio_id=str(portfolio_id),
+            weights=w_clean,
+            asset_returns=ar_clean,
+            markets=markets,
+            freq=freq,
+            dataset_version=dataset_version,
+            ledger=LEDGER,                 # 单一源一本账：honest-N 真记账（不另造 store）
+            returns_store=RETURNS_STORE,
+            record=True,                   # production promote 恒记账（≠ 预览 record=False）
+        )
+    except (TypeError, ValueError) as exc:
+        raise HTTPException(status_code=422, detail=f"组合 gate 入参非法: {exc}") from exc
+
+    v = res.verdict
+    out = v.to_dict()
+    out.update({
+        "portfolio_id": str(portfolio_id),
+        "strategy_goal_ref": f"portfolio:{portfolio_id}",   # 独立命名空间（与单策略串号物理隔离）
+        "config_hash": res.config_hash,                      # 复用 ids 单一身份源
+        "honest_n": res.honest_n,                            # 该组合命名空间记账后名义 N（真值下界、不可改小）
+        "honest_n_disclaimer": HONEST_N_DISCLOSURE,          # 诚实免责，逐字（措辞黑名单守门）
+        "recorded": True,                                    # 已写一本账（confirmatory 试验，无论裁决色）
+        "promoted": v.color == "green",                      # 仅 green 视为过闸；记账 ≠ 过闸（诚实）
+        "net_len": len(net),                                 # PIT 对齐后实际入算长度（调用方可见截断）
+        "note": "组合 promote 已记 honest-N（一本账，portfolio:<id> 独立命名空间）。已记账≠已过闸；"
+                "冷启动 PBO=N/A 时 A2 凭 DSR+CI 双正放行(非完整三角)、过拟合仍 red。",
+    })
+    return out
+
+
 @app.get("/api/research/themes/{theme}/honest_n")
 def research_theme_honest_n(theme: str, user=Depends(require_user_dependency)) -> dict[str, Any]:
     """R2 一键下钻：暴露某研究主题的 honest-N（名义 distinct config 计数）+ 诚实免责。
@@ -4167,6 +4499,7 @@ def glossary_meta() -> dict[str, Any]:
 def paper_runs() -> dict[str, Any]:
     """模拟盘列表（侧栏 + 选择）。只读。"""
 
+    _prime_all_pending_seeds()  # M7：列表首访惰性补 seed 净值（import 不阻塞）
     return {"runs": PAPER_DESK.list_runs()}
 
 
@@ -4177,7 +4510,11 @@ def paper_register_run(payload: dict = Body(...), user=Depends(require_user_depe
     治理红线（绝不削弱）：
       · A股恒 paper：本端点只建模拟台 run，绝不下 live 单（A股 live_order 端点仍恒拒）。
       · 不绕审批：晋级仍走 INV-5 人工审批门（approver≠creator + 背书），本端点与晋级无关。
-      · provider 喂的是【回放捆绑样本（模拟，非实盘 key）】——绝非实盘行情取数。
+      · provider 数据源按市场分流【crypto 真捆样本回放 bundled_sample_replay / 无样本市场合成兜底 deterministic_sim_walk】——均为模拟，绝非实盘行情取数。
+      · DS-4 testnet 真喂可选档（payload `testnet=true`，默认 off、crypto only）：配 Binance testnet key 时
+        喂 testnet 公共实时 bar(binance_testnet_live)；无 key/连接失败 → 诚实回退兜底(fail-open 留痕，
+        provider_kind=replay_fallback + degrade_reason)。testnet key 仅查名存在性**不进 LLM**、永走模拟撮合
+        **不下 live 单**（R10/INV-3/D-T021-3）。回退态 source 绝不标 testnet（§3）。
     idempotent：同 run_id 重复 POST 不另造（复用既有 run），只重新 prime 出净值。
     """
 
@@ -4186,8 +4523,10 @@ def paper_register_run(payload: dict = Body(...), user=Depends(require_user_depe
         raise HTTPException(422, detail={"reason": "run_id 必填（不对幽灵 run 开模拟台）"})
     record = {"run_id": run_id, "name": (payload.get("name") or run_id).strip()}
     paper = _register_candidate_paper_run(record, payload, creator=getattr(user, "user_id", "system"))
-    if paper is None:
-        raise HTTPException(500, detail={"reason": "模拟台注册失败（见服务日志）"})
+    # H4/H3：注册失败带显式 error（市场判不出/二次冲突/异常）——不静默假成功、不对未建 run 取 status。
+    if paper is None or not paper.get("registered"):
+        reason = (paper or {}).get("error") or "模拟台注册失败（见服务日志）"
+        raise HTTPException(422, detail={"reason": reason, "register": paper})
     return {"run": PAPER_DESK.status(run_id), "register": paper}
 
 
@@ -4195,6 +4534,7 @@ def paper_register_run(payload: dict = Body(...), user=Depends(require_user_depe
 def paper_status(run_id: str) -> dict[str, Any]:
     """调度器状态 + 配置 + 余额/持仓（直映 PaperSchedulerState.snapshot）。"""
 
+    _prime_pending_seed(run_id)  # M7：首访该 seed 惰性补净值
     try:
         return PAPER_DESK.status(run_id)
     except PaperRunNotFound as exc:
@@ -4225,6 +4565,7 @@ def paper_stop(run_id: str, user=Depends(require_user_dependency)) -> dict[str, 
 def paper_positions(run_id: str) -> dict[str, Any]:
     """持仓表（来自 PaperVenue 单一持仓源 + MTM）。"""
 
+    _prime_pending_seed(run_id)  # M7：首访该 seed 惰性补净值
     try:
         return {"positions": PAPER_DESK.positions(run_id)}
     except PaperRunNotFound as exc:
@@ -4235,6 +4576,7 @@ def paper_positions(run_id: str) -> dict[str, Any]:
 def paper_balance(run_id: str) -> dict[str, Any]:
     """余额条（总权益/可用现金/持仓市值/冻结）。"""
 
+    _prime_pending_seed(run_id)  # M7：首访该 seed 惰性补净值
     try:
         return PAPER_DESK.balance(run_id)
     except PaperRunNotFound as exc:
@@ -4245,6 +4587,7 @@ def paper_balance(run_id: str) -> dict[str, Any]:
 def paper_fills(run_id: str) -> dict[str, Any]:
     """成交回报：从 ExecutionAuditLog(paper_fill) 派生（不另存第二份）。"""
 
+    _prime_pending_seed(run_id)  # M7：首访该 seed 惰性补净值
     try:
         return {"fills": PAPER_DESK.fills(run_id)}
     except PaperRunNotFound as exc:
@@ -4255,6 +4598,7 @@ def paper_fills(run_id: str) -> dict[str, Any]:
 def paper_equity_log(run_id: str) -> dict[str, Any]:
     """净值曲线：读 mark_to_market 写的 JSONL（每收盘一笔）。"""
 
+    _prime_pending_seed(run_id)  # M7：首访该 seed 惰性补净值
     try:
         return {"equity_log": PAPER_DESK.equity_log(run_id)}
     except PaperRunNotFound as exc:

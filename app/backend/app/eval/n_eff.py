@@ -48,19 +48,30 @@ class NEffResult:
         return asdict(self)
 
 
-def _cluster_count(corr: np.ndarray, threshold: float, n: int) -> int:
-    """给定相关阵与阈值，返回层次聚类簇数。阈值越高 → 合并越少 → 簇越多（N_eff 越大）。"""
+def _cluster_labels(corr: np.ndarray, threshold: float, n: int) -> np.ndarray:
+    """层次聚类标签（**单一聚类口径源**：n_eff 与 factor_families 共用，防口径漂移）。
+
+    average linkage、dist=1−|corr|、合并 |corr|≥threshold（= 距离 cutoff 1−threshold）。
+    阈值越高 → 合并越少 → 簇越多（N_eff 越大）。常量列/无相关（NaN）→ 距离 1 自成一簇，**绝不填 0 相关**。
+    """
 
     if n <= 1:
-        return n
+        return np.arange(max(n, 0), dtype=int)
     dist = 1.0 - np.abs(corr)
     np.fill_diagonal(dist, 0.0)
     dist = np.nan_to_num(dist, nan=1.0)        # 常量列/无相关 → 距离 1 → 自成一簇
     dist = np.clip((dist + dist.T) / 2.0, 0.0, None)   # 对称化，去浮点不对称
     condensed = squareform(dist, checks=False)
     z = _hclust(condensed, method=_LINKAGE)
-    labels = fcluster(z, t=1.0 - threshold, criterion="distance")
-    return int(len(set(labels)))
+    return fcluster(z, t=1.0 - threshold, criterion="distance")
+
+
+def _cluster_count(corr: np.ndarray, threshold: float, n: int) -> int:
+    """给定相关阵与阈值，返回层次聚类簇数（复用 `_cluster_labels` 单一口径源）。"""
+
+    if n <= 1:
+        return n
+    return int(len(set(_cluster_labels(corr, threshold, n))))
 
 
 def n_eff_from_matrix(returns_matrix: np.ndarray) -> NEffResult:

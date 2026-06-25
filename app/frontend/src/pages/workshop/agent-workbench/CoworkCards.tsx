@@ -544,20 +544,103 @@ function PortfolioCard() {
   );
 }
 
-function RunCard({ liveRunId }: { liveRunId?: string }) {
-  // 切真：有真 run_id → LiveRunVerdictCard 拉后端三端点（verdict/overfit/cost-sensitivity）。
-  // 无（agent mock 剧本默认）→ 退回 mock 卡，header 恒挂 MockBadge（诚实，不假绿灯）。
-  return (
-    <div data-cowork-card="run">
-      {liveRunId ? (
+function RunCard({
+  liveRunId,
+  liveMode,
+  liveError,
+}: {
+  liveRunId?: string;
+  liveMode?: boolean;
+  liveError?: string;
+}) {
+  // 三路（§3 不假绿灯）：
+  //  ① 有真 run_id → LiveRunVerdictCard 拉后端三端点（verdict/overfit/cost-sensitivity）。
+  //  ② LIVE 态但无 run_id → 诚实空态/错态，**绝不**退回写死 mock 绿（接真态显伪造绿裁决=§3 假绿灯）。
+  //  ③ 演示态（demoMode / 独立用法 · liveMode≠true）无 run_id → mock 卡 + MockBadge（显式演示，诚实角标）。
+  if (liveRunId) {
+    return (
+      <div data-cowork-card="run">
         <LiveRunVerdictCard
           runId={liveRunId}
           detailHref={`/runs/${encodeURIComponent(liveRunId)}`}
           fallback={MOCK_AGENT_RUN}
         />
-      ) : (
-        <RunVerdictCard data={MOCK_AGENT_RUN} />
-      )}
+      </div>
+    );
+  }
+  if (liveMode) {
+    // 接真态无真 run_id：回测失败→红诚实错态；尚未跑出→中性空态。绝不渲染 MOCK_AGENT_RUN 绿卡。
+    return liveError ? (
+      <div data-cowork-card="run" data-run-live-error role="alert">
+        <RunErrorState reason={liveError} />
+      </div>
+    ) : (
+      <div data-cowork-card="run" data-run-live-empty>
+        <RunPendingState />
+      </div>
+    );
+  }
+  return (
+    <div data-cowork-card="run">
+      <RunVerdictCard data={MOCK_AGENT_RUN} />
+    </div>
+  );
+}
+
+/** 接真态无 run_id 的中性空态（尚无回测结果——诚实，不放 mock 绿）。 */
+function RunPendingState() {
+  return (
+    <div
+      style={{
+        border: "1px solid var(--desk-border-strong)",
+        background: "var(--desk-card)",
+        borderRadius: "var(--desk-radius-lg)",
+        padding: "28px 22px",
+        textAlign: "center",
+        color: "var(--desk-text-faint)",
+        fontSize: 13,
+        lineHeight: 1.9,
+      }}
+    >
+      <div style={{ fontWeight: 600, color: "var(--desk-text-dim)" }}>
+        尚无回测结果
+      </div>
+      <div>
+        接真态下回测产出真 run_id 后，这里显验证官裁决（PBO / DSR / 成本敏感性）。
+        <br />
+        在没有真结果前不显示任何裁决数字（不假绿灯）。
+      </div>
+    </div>
+  );
+}
+
+/** 接真态回测失败的诚实错态（显真实失败原因，绝不退回 mock 绿）。 */
+function RunErrorState({ reason }: { reason: string }) {
+  return (
+    <div
+      style={{
+        border: "1px solid var(--desk-danger)",
+        background: "color-mix(in srgb, var(--desk-danger) 8%, transparent)",
+        borderRadius: "var(--desk-radius-lg)",
+        padding: "20px 22px",
+        color: "var(--desk-danger)",
+        fontSize: 13,
+        lineHeight: 1.9,
+      }}
+    >
+      <div style={{ fontWeight: 600 }}>回测失败 · 无裁决结果</div>
+      <div style={{ color: "var(--desk-text-soft)", marginTop: 4 }}>
+        {reason}
+      </div>
+      <div
+        style={{
+          color: "var(--desk-text-dim)",
+          marginTop: 8,
+          fontSize: 11.5,
+        }}
+      >
+        回测未产出 run_id，因此不显示任何裁决数字（诚实呈现，不退回示例绿卡）。
+      </div>
     </div>
   );
 }
@@ -590,10 +673,23 @@ export interface CoworkAreaProps {
    * 缺省（mock 剧本）则裁决卡走 mock + MockBadge。
    */
   liveRunId?: string;
+  /**
+   * 接真态标记（默认 false = 演示/独立用法）。LIVE 态且无 run_id 时：裁决卡显诚实空态/错态，
+   * **绝不**退回写死 mock 绿（§3 不假绿灯）。仅演示态（liveMode≠true）才回落 mock + MockBadge。
+   */
+  liveMode?: boolean;
+  /** 接真态回测失败原因（可选）：有则裁决卡显诚实错态，绝不退回 mock 绿。 */
+  liveError?: string;
 }
 
 /** 产物区：按 cowork + 解锁态渲染对应卡片。 */
-export function CoworkArea({ cowork, unlocked, liveRunId }: CoworkAreaProps) {
+export function CoworkArea({
+  cowork,
+  unlocked,
+  liveRunId,
+  liveMode,
+  liveError,
+}: CoworkAreaProps) {
   const show = cowork && unlocked.has(cowork) ? cowork : null;
   return (
     <div style={{ maxWidth: 620, margin: "0 auto" }} data-cowork-area>
@@ -604,7 +700,13 @@ export function CoworkArea({ cowork, unlocked, liveRunId }: CoworkAreaProps) {
       {show === "model" && <ModelCard />}
       {show === "signal" && <SignalCard />}
       {show === "portfolio" && <PortfolioCard />}
-      {show === "run" && <RunCard liveRunId={liveRunId} />}
+      {show === "run" && (
+        <RunCard
+          liveRunId={liveRunId}
+          liveMode={liveMode}
+          liveError={liveError}
+        />
+      )}
     </div>
   );
 }

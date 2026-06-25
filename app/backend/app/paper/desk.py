@@ -16,6 +16,7 @@
 from __future__ import annotations
 
 import threading
+from collections.abc import Callable
 from dataclasses import dataclass, field
 from datetime import UTC, datetime
 from pathlib import Path
@@ -31,6 +32,12 @@ from .replay_provider import (
     seed_positions,
 )
 from .scheduler import MarketKind, PaperScheduler, PaperSchedulerConfig
+from .testnet_provider import (
+    DEFAULT_TESTNET_KEYSTORE_NAME,
+    TestnetBarProvider,
+    TestnetMarketClient,
+    make_testnet_provider,
+)
 
 
 # ── 晋级判定阈值（参数化，与 factor_factory.lifecycle 语义一致：模拟 1 月 > 基准）──
@@ -60,9 +67,17 @@ class PaperRunRecord:
     paper_annual: float = 0.0
     promoted: bool = False
     promotion_gate_id: str | None = None
-    # 回放 provider（模拟 bar/mark 源，非实盘 key）。注入即 tick_once 真喂数据产净值；None=空壳。
-    provider: ReplayBarProvider | None = None
-    simulated_source: str | None = None  # 数据来源标注（deterministic_sim_walk）——明确是模拟非实盘、非真样本
+    # bar/mark provider（注入即 tick_once 真喂数据产净值；None=空壳）。两类档（duck-typed 同形接口）：
+    #   · ReplayBarProvider  = 兜底（真捆样本回放 / 合成游走，非实盘 key），无 key 也能跑。
+    #   · TestnetBarProvider = testnet 真喂可选档（配 key 时 Binance testnet 公共实时 bar）。
+    provider: ReplayBarProvider | TestnetBarProvider | None = None
+    simulated_source: str | None = None  # 数据来源标注：bundled_sample_replay(crypto 真捆样本) / deterministic_sim_walk(无样本市场合成兜底) / binance_testnet_live(testnet 真喂)——均为模拟非实盘真钱
+    # provider 档位 + 降级留痕（DS-4 testnet 可选档 · fail-open 留痕，§3 诚实不假绿灯）：
+    #   provider_kind ∈ {"testnet"(真喂), "replay_fallback"(请求 testnet 但无 key/连接失败→回退兜底),
+    #                    "replay"(未请求 testnet 的默认兜底), "empty"(simulate=False 空壳)}。
+    #   degrade_reason：请求 testnet 却回退兜底时记降级原因（诚实留痕；回退态 source 绝不标 testnet）。
+    provider_kind: str = "empty"
+    degrade_reason: str | None = None
     initial_cash: float = 1_000_000.0  # 注册时起始现金（prime_run 幂等重置基准）
 
 
@@ -249,6 +264,23 @@ class PaperDeskService:
         self._gates: dict[str, PromotionGate] = {}
         self.risk = FrozenRiskGate()
         self._gate_seq = 0
+        self._keystore: Any = None  # 惰性 SecureKeystore（仅 testnet provider 查 key 名存在性用，不 fetch 本体）
+
+    def _resolve_keystore(self) -> Any:
+        """惰性打开 SecureKeystore（仅供 testnet provider 查 **key 名存在性**，绝不 fetch 明文 secret）。
+
+        失败/无 keyring 返 None（make_testnet_provider 视为未配 → 诚实回退兜底，不抛、不空跑伪装）。
+        """
+
+        if self._keystore is not None:
+            return self._keystore
+        try:
+            from ..security.keystore import SecureKeystore
+
+            self._keystore = SecureKeystore.open()
+        except Exception:  # noqa: BLE001  无 keystore 后端 → None（testnet 回退兜底，fail-safe）
+            self._keystore = None
+        return self._keystore
 
     # ----- run 注册 / 生命周期 -----
     def register_run(
@@ -258,29 +290,62 @@ class PaperDeskService:
         paper_excess_return: float = 0.0, backtest_annual: float = 0.0,
         paper_annual: float = 0.0, risk_limits: dict[str, Any] | None = None,
         simulate: bool = True,
+        testnet: bool = False,
+        testnet_keystore: Any = None,
+        testnet_keystore_name: str = DEFAULT_TESTNET_KEYSTORE_NAME,
+        testnet_client_factory: Callable[[], TestnetMarketClient] | None = None,
     ) -> PaperRunRecord:
-        """注册一条 paper run。simulate=True（默认）注入回放 provider + 建仓种子单：
+        """注册一条 paper run。simulate=True（默认）注入 provider + 建仓种子单：
 
-        tick_once 真喂【捆绑样本 bars（模拟，非实盘 key）】撮合 → MTM 写出移动净值序列。
-        simulate=False 留空壳（无 provider）——tick_once 返 0、净值不动（诚实：未喂数据即不假绿灯）。
+        tick_once 真喂 bars 撮合 → MTM 写出移动净值序列。simulate=False 留空壳（无 provider）——
+        tick_once 返 0、净值不动（诚实：未喂数据即不假绿灯）。
 
-        治理：本方法只建模拟台 run，不绕审批、不动钱、A股恒 paper（live 下单仍走 attempt_live_order 恒拒）。
+        provider 分流（DS-4「都做」）：
+          · testnet=False（默认）→ ReplayBarProvider 兜底（crypto 真捆样本回放 / 无样本市场合成游走），无 key。
+          · testnet=True（用户配 testnet key 时）→ **试** TestnetBarProvider（Binance testnet 公共实时 bar）：
+              - 配 key 且连接成功 → 注入 testnet 真喂（provider_kind="testnet", source=binance_testnet_live）。
+              - 无 key / 连接失败 → **诚实回退** ReplayBarProvider 兜底（provider_kind="replay_fallback" +
+                degrade_reason 留痕；source 仍为兜底真实标签，**绝不**标成 testnet 真喂）——fail-open 留痕。
+
+        治理：testnet 行情走【公共】端点、**仅查 key 名存在性不取明文**（R10/INV-3，testnet key 不进 LLM）；
+        testnet 永走模拟撮合不调 live 下单；A股恒 paper（live 下单仍走 attempt_live_order 恒拒）；不绕审批/动钱。
         """
+
+        # ── testnet 解析在锁外（含网络 I/O：拉 klines）：避免占 self._lock 拖垮全 desk / 首屏 <2s（H2）。──
+        testnet_provider: TestnetBarProvider | None = None
+        degrade_reason: str | None = None
+        if simulate and symbols and testnet:
+            ks = testnet_keystore if testnet_keystore is not None else self._resolve_keystore()
+            testnet_provider, degrade_reason = make_testnet_provider(
+                market, list(symbols), keystore=ks, keystore_name=testnet_keystore_name,
+                client_factory=testnet_client_factory,
+            )
+            # testnet_provider!=None → 真喂；==None → degrade_reason 已含原因，下方回退兜底。
 
         with self._lock:
             audit = ExecutionAuditLog()
             venue = PaperVenue(cash=cash, equity_log_path=equity_log_path, audit=audit)
             cfg = PaperSchedulerConfig(strategy_id=run_id, symbols=list(symbols), market=market,
                                        equity_log_path=equity_log_path)
-            provider: ReplayBarProvider | None = None
+            provider: ReplayBarProvider | TestnetBarProvider | None = None
+            provider_kind = "empty"
             bar_p = mark_p = None
             if simulate and symbols:
-                # 回放 provider = 模拟 bar/mark 源（绝非实盘 key 取数；A股仍恒拒 live，仅模拟撮合）。
-                provider = ReplayBarProvider(symbols=list(symbols))
+                if testnet_provider is not None:
+                    # testnet 真喂档：Binance testnet 公共实时 bar（无 key 公共端点；仅模拟撮合不下真单）。
+                    provider = testnet_provider
+                    provider_kind = "testnet"
+                else:
+                    # 兜底档（默认，或请求 testnet 但无 key/连接失败回退）：crypto 配捆样本→真 BTC close 回放
+                    # (bundled_sample_replay)，无样本市场(A股)→合成游走兜底(deterministic_sim_walk)，标签诚实分流。
+                    provider = ReplayBarProvider(symbols=list(symbols), market=market)
+                    # 请求过 testnet 却回退 → replay_fallback（留痕）；未请求 testnet → 普通 replay。
+                    provider_kind = "replay_fallback" if testnet else "replay"
                 bar_p = make_bar_provider(provider)
                 mark_p = make_mark_provider(provider)
-                # 注入模拟建仓引子（非下单路径）：MTM 反映持仓盈亏 → 净值非空壳。
-                seed_positions(venue, list(symbols))
+                # 注入模拟建仓引子（非下单路径）：entry_price/qty 用各 symbol 序列首价反推
+                # （真样本首价 ~47704 / testnet 真价 ~60000 → qty=notional/首价），MTM 不跨尺度失真。
+                seed_positions(venue, list(symbols), provider=provider)
             sched = PaperScheduler(venue, cfg, bar_provider=bar_p, mark_provider=mark_p)
             rec = PaperRunRecord(
                 run_id=run_id, name=name, origin=origin, market=market, symbols=list(symbols),
@@ -289,6 +354,9 @@ class PaperDeskService:
                 paper_excess_return=paper_excess_return, backtest_annual=backtest_annual,
                 paper_annual=paper_annual, provider=provider,
                 simulated_source=(provider.source if provider else None),
+                provider_kind=provider_kind,
+                # 留痕仅当请求 testnet 却回退兜底时（否则 None）：诚实记降级原因，回退态 source 绝不标 testnet。
+                degrade_reason=(degrade_reason if provider_kind == "replay_fallback" else None),
                 initial_cash=cash,
             )
             self._runs[run_id] = rec
@@ -302,6 +370,10 @@ class PaperDeskService:
         幂等性（复位再跑）：每次先 reset provider 游标 + 清 venue 持仓/现金 + 清空 equity_log + 归零计数，
         再跑同一确定性窗口 → 重复 prime / 重复 submit / 重启 reseed 都产同一 N 点序列，不串行拼接、不漂。
         仅对已注入 provider 的 run 有效；空壳 run（无 provider）tick_once 返 0、净值恒空（§3 不假绿灯）。
+
+        并发安全（M4）：复位/喂 bar/写净值前先停后台调度循环（scheduler.stop() join 线程），避免
+        后台 _bar_loop/_mtm_loop 与 prime 并发改同 venue/state/equity_log → 撕裂写、equity_log 损坏、
+        bars_fed 错乱。复位前若 loop 在跑，prime 后按原态重启（用户视角：re-prime 不停掉已启动的 run）。
         """
 
         with self._lock:
@@ -312,25 +384,41 @@ class PaperDeskService:
                 return {
                     "run_id": run_id, "bars_fed": rec.scheduler.state.bars_fed,
                     "mtm_count": rec.scheduler.state.mtm_count, "fills": 0,
-                    "equity_points": len(self.equity_log(run_id)),
+                    "equity_points": rec.scheduler.state.mtm_count,
                     "simulated": False, "source": None,
                 }
-            # 幂等复位：游标归零 + venue 清态/复位现金/清空 equity_log + 计数归零 + 重新建仓引子。
-            rec.provider.reset()
-            rec.venue.reset_simulation_state(rec.initial_cash)
-            rec.scheduler.state.bars_fed = 0
-            rec.scheduler.state.mtm_count = 0
-            seed_positions(rec.venue, rec.symbols)
-            fills = 0
-            for _ in range(max(0, ticks)):
-                fills += rec.scheduler.tick_once()
-                rec.scheduler.mtm_once()
+            # M4：先停后台循环并 join，确保复位/喂 bar 期间无并发改同 venue/state/equity_log。
+            was_running = rec.scheduler.state.running
+            if was_running:
+                rec.scheduler.stop()
+            reset_ok = False
+            try:
+                # 幂等复位：游标归零 + venue 清态/复位现金/清空 equity_log + 计数归零 + 重新建仓引子。
+                rec.provider.reset()
+                rec.venue.reset_simulation_state(rec.initial_cash)
+                rec.scheduler.state.bars_fed = 0
+                rec.scheduler.state.mtm_count = 0
+                # 复位重建仓必须传同一 provider：用各 symbol 序列首价反推 entry_price/qty，
+                # 否则 re-prime 会按首价 100 重建仓而 mark 喂 47704 → 重新引入 P&L 失真（A7）。
+                seed_positions(rec.venue, rec.symbols, provider=rec.provider)
+                fills = 0
+                for _ in range(max(0, ticks)):
+                    fills += rec.scheduler.tick_once()
+                    rec.scheduler.mtm_once()
+                reset_ok = True
+            finally:
+                # 复位前在跑则按原态重启（prime 不应静默停掉用户已 start 的 run）。
+                # 仅在复位段全部成功后重启：若 reset/喂数据中途抛错（如 equity_log 写盘失败），
+                # 不把后台 loop 拉回半复位的 venue/state 上跑（异常安全：宁可保持 stopped 让异常上浮）。
+                if was_running and reset_ok:
+                    rec.scheduler.start()
             return {
                 "run_id": run_id,
                 "bars_fed": rec.scheduler.state.bars_fed,
                 "mtm_count": rec.scheduler.state.mtm_count,
                 "fills": fills,
-                "equity_points": len(self.equity_log(run_id)),
+                # perf：equity_points 直取内存 mtm_count（=净值行数），不重读 json.loads 整个 jsonl。
+                "equity_points": rec.scheduler.state.mtm_count,
                 "simulated": rec.simulated_source is not None,
                 "source": rec.simulated_source,
             }
@@ -347,14 +435,17 @@ class PaperDeskService:
             return [self._run_summary(r) for r in self._runs.values()]
 
     def start(self, run_id: str) -> dict[str, Any]:
-        rec = self.get(run_id)
-        rec.scheduler.start()
-        return self.status(run_id)
+        # 持 desk _lock：与 prime_run 串行化，杜绝「prime 复位中途被并发 start 启动后台循环」竞态（M4）。
+        with self._lock:
+            rec = self.get(run_id)
+            rec.scheduler.start()
+            return self.status(run_id)
 
     def stop(self, run_id: str) -> dict[str, Any]:
-        rec = self.get(run_id)
-        rec.scheduler.stop()
-        return self.status(run_id)
+        with self._lock:
+            rec = self.get(run_id)
+            rec.scheduler.stop()
+            return self.status(run_id)
 
     # ----- 状态 / book 派生 -----
     def status(self, run_id: str) -> dict[str, Any]:
@@ -365,8 +456,12 @@ class PaperDeskService:
         snap["origin"] = rec.origin
         snap["bench"] = rec.bench
         snap["market"] = rec.market
-        # 数据来源标注：simulated_source 非空 = 确定性合成模拟游走（非真样本）；None = 空壳（未喂数据）。
+        # 数据来源标注：bundled_sample_replay(真捆样本) / deterministic_sim_walk(合成兜底) /
+        # binance_testnet_live(testnet 真喂) / None(空壳未喂数据)。provider_kind + degrade_reason 让
+        # 「testnet 真喂 vs 回退兜底」对用户透明（§3 诚实：回退态 source 绝不标 testnet，degrade 留痕）。
         snap["simulated_source"] = rec.simulated_source
+        snap["provider_kind"] = rec.provider_kind
+        snap["degrade_reason"] = rec.degrade_reason
         return snap
 
     def positions(self, run_id: str) -> list[dict[str, Any]]:
@@ -525,6 +620,7 @@ class PaperDeskService:
             "bench": rec.bench, "running": st.running, "days": rec.days_running,
             "promoted": rec.promoted, "bars_fed": st.bars_fed,
             "simulated_source": rec.simulated_source,
+            "provider_kind": rec.provider_kind, "degrade_reason": rec.degrade_reason,
         }
 
 

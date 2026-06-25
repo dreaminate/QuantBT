@@ -6,31 +6,39 @@
 
 | uuid8 | 标题 | status | area | 位置 |
 |---|---|---|---|---|
-| 64717fe6 | paper provider 真回放捆绑样本——替换确定性合成游走（§3 增强） | todo | paper | active |
-| a367bfc8 | paper testnet 真喂 provider——加密 testnet 实时 bar/mark（用户「都做」可选档） | todo | paper | active |
-| ba59fb7b | 组合 promote production 端点——组合三角 gate record=True 真记 honest-N | todo | portfolio | active |
-| de764e1c | 监控生产调度 + 因子观测记录管道——让 monitor_tick 在生产真跑 | todo | monitor | active |
-| e1a98c41 | binance_vision_pull reload-merge schema bug 修——多日同年 try_parse_dates 崩 | todo | data-connectors | active |
 | 05d6f511 | 单人 self-approve 仅非真钱通道(冷却+留痕)，真钱硬双人 | done | approval | done |
 | 07b10903 | DS-6 装机收口——跨平台一键启动 + mkdir（可缓·docker compose 兜底） | done | onboarding-docs | done |
-| 11b0a3ab | Spine 全链贯穿第一段——DSR 估计器经 Mathematical Spine 真实绑定 + 漂移对账门 | done | math-spine | done |
 | 180a341e | 核验 agent tool_call 前端派发是否旁路受控翻译门（R11 前端缺口审计） | done | verification | done |
+| 1b83a5c5 | IC 持久性 AR(1) 半衰期接进 lifecycle 状态机（perf 轴·advisory） | done | factor-lifecycle | done |
 | 1e0e65b4 | 组合消费者——agent 可调组合三角 gate（SEQ-CONSUMER=A · C full-fat 触发器） | done | agent | done |
+| 29258b77 | conformal 校准区间 + OOS 真留出覆盖接进模型台 UI（能信·不假绿灯） | done | frontend-trust | done |
+| 2da39479 | CPCV 作 cv_scheme 产 per-path OOS 指标分布（report-only · 命门最深件 ①） | done | models-methodology | done |
 | 381b6c18 | 实盘因子血统门——未过检验因子上真钱线 → 警告+知情确认 | done | security-invariant | done |
 | 3a8b2360 | R28 全库双时态（known_at 轴 + as-of 重述基本面）（T-033 核验 gap） | done | 数据 | done |
 | 3bb62d7d | 无副作用业务工具接真引擎（agent 一句话真跑回测）——T-027 残余 | done | agent | done |
+| 3d4a872e | 分支 land-readiness 整体评审 + 修 3 发现（2 文档过claim + σ 边界牙缝） | done | review | done |
 | 3d95e0f6 | agent 窗口弹窗 + 教学文案（整合 T-028/T-032/T-034 前端残余） | done | frontend | done |
 | 3f5ed0b8 | agent 客户端窗口 epic(仿 Claude Code)——权限模式切换 + 工具可视化 + 审批弹窗 | done | frontend-epic | done |
-| 4458ff54 | Spine 接进生产 promote 路径——overfit gate DSR 一致性核（漂移→降级 insufficient） | done | math-spine | done |
+| 41ea6e35 | R4 CPCV（Combinatorial Purged CV）多路径回测 + 组合学/防泄露命门 | done | eval-methodology | done |
 | 4562d903 | Model台后端接线 — JobDetail/IoSpec/walkforward/promote字段/图codegen/研究判定 | done | backend | done |
 | 46f1cb3c | 组合层 M8 多证据三角守门（T-033 核验 gap 升级） | done | portfolio | done |
 | 51271d38 | 因子台三纯库+挖掘 后端 — 信号契约 + ML/DL 登记 + 暴力遍历守门引擎 | done | backend | done |
 | 5e47b82f | 因子台前端 P0 — 5 视图像素还原 + mock(库/相关/评测/构建DSL/研究) | done | frontend | done |
 | 6403b9bf | 诚实残余核验——监控尾部闭环 + 组合层三角 + D2 四残余 | done | verification | done |
+| 64717fe6 | paper provider 真回放捆绑样本——替换确定性合成游走（§3 增强） | done | paper | done |
+| 698a3c60 | 监控调度 driver 接线——补缺失的生产 tick loop，让 weekly cron 真 fire（修复端到端假绿灯） | done | monitor | done |
+| 69e1cb16 | R23 不确定性预测区间（split conformal/CQR/ACI）+ abstain + 覆盖定理命门 | done | eval-methodology | done |
+| 6acbb499 | R27 冷启动 MinTRL（最小业绩期长度）+ PSR 反解命门 | done | eval-methodology | done |
+| 6e264c59 | 回测成本逐成分诚实归因（impact 单列不混入 commission） | done | execution-cost | done |
 | 6e4eee54 | 入口×必经门覆盖矩阵回归 + 所有 venue 经 OrderGuard.wrap 的 CI 静态检查 | done | security-invariant | done |
+| 7179ba36 | R18 平方根市场冲击 回测成本项（size-aware）+ 容量交叉校验命门 | done | execution-cost | done |
+| 74f93771 | CPCV 路径分布 opt-in 集成进 train_model（cpcv_distribution 入 TrainResult·report-only） | done | models-methodology | done |
 | 79ebe273 | 模拟台后端接线 — /api/paper/* 整层 + 晋级审批门 + 风险门冻结哈希链 | done | backend | done |
+| 7ac5a0fe | BacktestVenue.cost_summary —— per-fill 成本归因收口到 run 级 | done | execution-cost | done |
 | 82120b9c | agent 窗口前端核心（Web）——对话流 + 工具可视化 + 权限模式切换 | done | frontend | done |
+| 876a0c11 | CPCV 路径稳健性分布呈现到模型台 UI（能信·report-only·CPCV→用户闭环收尾） | done | frontend-trust | done |
 | 87ad21fc | R18 stacking 控制项 N/A 标注 + 实现时 OOF 约束（T-033 核验 gap） | done | signals | done |
+| 89e7be1e | CPCV 路径稳健性 q05 接进 overfit gate（report-only 默认 / cpcv_conservative opt-in·守不替方法学拍板） | done | eval-methodology | done |
 | 8ab894cd | 审批 SLA 与 leverage_cap 可配置；杠杆不设硬上限；真钱超时永远 default_reject | done | config | done |
 | 9a497bde | 交付门 e2e 集成测试——陌生人 chat→backtest→裁决→paper 全后端路径真 | done | integration-test | done |
 | 9d5405ce | 模拟台前端 P0 — 5 视图 + PaperBoardCard(运行/持仓成交/风险门/复盘/晋升) | done | frontend | done |
@@ -50,15 +58,21 @@
 | T-023 | T-023 | ? | - | done |
 | T-024 | T-024 | ? | - | done |
 | T-025 | T-025 | ? | - | done |
-| a00b3956 | Mathematical Spine 一致性硬门核心（数据模型 + 升级健全谓词门 + append-only 账） | done | math-spine | done |
 | a11e2aa5 | 因子台三纯库 + 暴力遍历挖掘 — 前端设计+实装（GOAL §3，无 handoff 稿，D-DESK-EPIC F1=B 路 b） | done | frontend | done |
+| a367bfc8 | paper testnet 真喂 provider——加密 testnet 实时 bar/mark（用户「都做」可选档） | done | paper | done |
 | a75c4beb | Agent 窗口产物工作区 — 8 产物卡 + Strategy.yaml + Report.md | done | frontend | done |
 | b106177f | 因子台后端接线 — 暴露已有 compute + 相关性/分层回测 + alpha审查 | done | backend | done |
+| b12de4f5 | §3 因子机构级生命周期度量（衰减半衰期/容量/因子族/拥挤）+ 命门 | done | factor-lifecycle | done |
+| b1e4efdf | 冷启动 MinTRL 接进 run /overfit 投影（价值闭环·呈现层不动治理） | done | eval-methodology | done |
 | b2682edc | Model台前端 P0 — 4 子台像素还原 + mock(作业/注册表/构建draw.io/研究) | done | frontend | done |
+| b762da53 | ic_decay 诚实 status 精修——ρ̂≈0 弱负判 no_persistence 而非过claim reversal | done | factor-lifecycle | done |
 | b961f08b | Agent 后端工具补全 — 4 schema+handler + stream 结构化事件 + handoff | done | agent | done |
 | b9af7c82 | 共享画布引擎 — GraphCanvas / NodeCard / EdgeLayer / MiniMap（pan·zoom·连线·框选） | done | frontend-foundation | done |
+| ba59fb7b | 组合 promote production 端点——组合三角 gate record=True 真记 honest-N | done | portfolio | done |
 | bc21c7c1 | agent 窗口 Tauri 桌面挂载（一套组件两处挂载） | done | desktop | done |
 | be3dc598 | 策略台前端 P0 — DAG 编排工作台像素还原 + mock 交互 | done | frontend | done |
+| c43c6301 | CPCV per-path 分布扩到二分类（roc_auc · proba 路径重组） | done | models-methodology | done |
+| c5960022 | 冷启动 MinTRL 业绩期证据接进裁决卡 UI（能信·不假绿灯在前端） | done | frontend-trust | done |
 | c631817e | 防绿灯错觉——三角裁决按权限模式分层呈现 + 工具真实状态标注 | done | governance-ui | done |
 | ca3ab3ec | Agent 窗口里程碑进度线 + 跨台台 switcher | done | frontend | done |
 | cb463286 | DS-5 §3 假绿灯修——乐观假成功改诚实失败（correctness） | done | frontend | done |
@@ -67,21 +81,35 @@
 | d0e5d208 | 监控→自动降级/退役/问责 尾部闭环接线（T-033 核验 gap 升级） | done | monitor | done |
 | d11d1426 | 暗色台地基 — desk 壳件 + design tokens + per-desk accent + 路由边界 | done | frontend-foundation | done |
 | d41b167d | Agent 窗口 D-PERM 反例 UI + self-approve 二次确认 | done | frontend | done |
+| d4a324ae | conformal 校准区间接进 model_eval（价值闭环·OOS 真留出覆盖率） | done | eval-methodology | done |
 | d4cb88f4 | DS-3 裁决接真——run_id 贯穿真裁决卡 + Bootstrap 第三腿前端补全 | done | frontend | done |
 | d5ea778c | 共享 Agent 对话 + Inspector + Dock 组件 | done | frontend-foundation | done |
+| d718d5c5 | §5 生产期漂移检测器（rolling-PSR/CUSUM/Page-Hinkley/PSI）+ 理论不变量命门 | done | monitor | done |
 | d93dc5a0 | 裁决卡 RunVerdictCard + 回测详情顶栏/血缘入口（非冻结） | done | frontend | done |
+| d9bf88b1 | sqrt-impact 自估 ADV/σ 扩张窗 as-of 无泄露（根治回测前视泄露） | done | execution-cost | done |
+| de764e1c | 监控生产调度 + 因子观测记录管道——让 monitor_tick 在生产真跑 | done | monitor | done |
 | defe660c | DS-2 造站接真——Agent台默认接真 + 无key slot-filling 真落库 + Hermes 预设（Fork1=C+Hermes） | done | agent-frontend | done |
 | e069d820 | 裁决卡后端接线 — verdict/overfit/cost-sensitivity/promote/热力 端点 + 措辞合规 | done | backend | done |
+| e1a98c41 | binance_vision_pull reload-merge schema bug 修——多日同年 try_parse_dates 崩 | done | data-connectors | done |
 | e2de3d32 | 前端测试设施基建 — vitest + React Testing Library + 对抗测试 harness | done | frontend-foundation | done |
 | ecbd0eab | GOAL §7 文档对齐(M10 已接 run 闸门)+ 可证伪性/模式 教学文案 | done | docs | done |
 | edc1e326 | 主对话入口接 AgentRuntime + 无副作用工具 + 权限三态(ask/auto/bypass) | done | agent | done |
+| ee3b8dbd | conformal 校准区间接进信号层弃权（消费侧·不对噪声下单） | done | signals-methodology | done |
+| f1bd08f2 | CPCV q05→gate 最后一公里——promote_ide_run 真实路径读 emit cpcv 透传 gate（死接线修复） | done | eval-methodology | done |
 | f6bb5e8e | DS-1 run_id 脊梁——agent backtest 接真引擎写 RUN_ROOT + run_id 贯穿（Fork3=A） | done | agent-backend | done |
+| ff286f80 | 因子收益归因（returns-based attribution）—— 北极星「归因」阶段建库 | done | eval-methodology | done |
 
 ## pool · 待分配
 
 | uuid8 | 标题 | status | area |
 |---|---|---|---|
-| _（池空）_ | | | |
+| 31289338 | 冷启动 gate/UI 接 MinTRL：DSR=N/A + PSR + "需 N 期"渐进披露（R25/R27 呈现层） | todo | eval-methodology |
+| 554cdcf2 | 监控绩效轴真闭环——4 个 drift 检测器接 run_weekly_monitor_pass + per-factor IC 真源 + 观测落盘（审计残余） | todo | monitor |
+| 861182e6 | CPCV 接 promote/overfit gate + cv_scheme 双轨 report（价值闭环） | todo | eval-methodology |
+| 92a2182f | conformal 区间消费侧接线——模型台/信号层预测附校准区间 + abstain UI 呈现 | todo | eval-methodology |
+| aa13c3b0 | 因子机构级度量接 lifecycle 状态机/sizing 生产路径 | todo | factor-lifecycle |
+| e2afc5c2 | 三档成本预设接 sqrt-impact 默认 + 成交报告 impact 成本归因拆字段 | todo | execution-cost |
+| e4496023 | 因子收益归因接消费侧（组合台/归因报告 + UI 呈现） | todo | eval-methodology |
 
 ## 按 area 功能索引
 
@@ -116,9 +144,24 @@
 | backend | b106177f · done | dreaminate |
 | backend | e069d820 · done | dreaminate |
 | config | 8ab894cd · done | dreaminate |
-| data-connectors | e1a98c41 · todo | dreaminate |
+| data-connectors | e1a98c41 · done | dreaminate |
 | desktop | bc21c7c1 · done | dreaminate |
 | docs | ecbd0eab · done | dreaminate |
+| eval-methodology | 41ea6e35 · done | dreaminate |
+| eval-methodology | 69e1cb16 · done | dreaminate |
+| eval-methodology | 6acbb499 · done | dreaminate |
+| eval-methodology | 89e7be1e · done | dreaminate |
+| eval-methodology | b1e4efdf · done | dreaminate |
+| eval-methodology | d4a324ae · done | dreaminate |
+| eval-methodology | f1bd08f2 · done | dreaminate |
+| eval-methodology | ff286f80 · done | dreaminate |
+| execution-cost | 6e264c59 · done | dreaminate |
+| execution-cost | 7179ba36 · done | dreaminate |
+| execution-cost | 7ac5a0fe · done | dreaminate |
+| execution-cost | d9bf88b1 · done | dreaminate |
+| factor-lifecycle | 1b83a5c5 · done | dreaminate |
+| factor-lifecycle | b12de4f5 · done | dreaminate |
+| factor-lifecycle | b762da53 · done | dreaminate |
 | frontend | 3d95e0f6 · done | dreaminate |
 | frontend | 5e47b82f · done | dreaminate |
 | frontend | 82120b9c · done | dreaminate |
@@ -138,22 +181,29 @@
 | frontend-foundation | d11d1426 · done | dreaminate |
 | frontend-foundation | d5ea778c · done | dreaminate |
 | frontend-foundation | e2de3d32 · done | dreaminate |
+| frontend-trust | 29258b77 · done | dreaminate |
+| frontend-trust | 876a0c11 · done | dreaminate |
+| frontend-trust | c5960022 · done | dreaminate |
 | governance-ui | c631817e · done | dreaminate |
 | integration-test | 9a497bde · done | dreaminate |
-| math-spine | 11b0a3ab · done | dreaminate |
-| math-spine | 4458ff54 · done | dreaminate |
-| math-spine | a00b3956 · done | dreaminate |
-| monitor | de764e1c · todo | dreaminate |
+| models-methodology | 2da39479 · done | dreaminate |
+| models-methodology | 74f93771 · done | dreaminate |
+| models-methodology | c43c6301 · done | dreaminate |
+| monitor | 698a3c60 · done | dreaminate |
 | monitor | d0e5d208 · done | dreaminate |
+| monitor | d718d5c5 · done | dreaminate |
+| monitor | de764e1c · done | dreaminate |
 | onboarding-docs | 07b10903 · done | dreaminate |
-| paper | 64717fe6 · todo | dreaminate |
-| paper | a367bfc8 · todo | dreaminate |
+| paper | 64717fe6 · done | dreaminate |
+| paper | a367bfc8 · done | dreaminate |
 | paper-fullstack | cfb7d950 · done | dreaminate |
-| portfolio | ba59fb7b · todo | dreaminate |
 | portfolio | 46f1cb3c · done | dreaminate |
+| portfolio | ba59fb7b · done | dreaminate |
+| review | 3d4a872e · done | dreaminate |
 | security-invariant | 381b6c18 · done | dreaminate |
 | security-invariant | 6e4eee54 · done | dreaminate |
 | signals | 87ad21fc · done | dreaminate |
+| signals-methodology | ee3b8dbd · done | dreaminate |
 | verification | 180a341e · done | dreaminate |
 | verification | 6403b9bf · done | dreaminate |
 | 数据 | 3a8b2360 · done | dreaminate |

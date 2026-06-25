@@ -44,7 +44,7 @@ class EffectLedger:
     `EffectIdempotencyViolation`（已发生的副作用不回滚，仅记冲突供复盘——同 executor.py:156-160）。
     """
 
-    def __init__(self, root: Path | str) -> None:
+    def __init__(self, root: Path | str, *, busy_timeout_ms: int = 5000) -> None:
         self._root = Path(root)
         self._root.mkdir(parents=True, exist_ok=True)
         self._lock = threading.Lock()
@@ -52,7 +52,9 @@ class EffectLedger:
         self._conn.execute("PRAGMA journal_mode=WAL")
         # busy_timeout：跨连接（多实例/多进程）并发写时排队等锁，而非立刻 "database is locked"。
         # 对幂等账尤其要紧——record 因锁失败会让副作用「已发生未记账」，重试时可能重发（M17 雷）。
-        self._conn.execute("PRAGMA busy_timeout=5000")
+        # 可配（默认 5000=生产不变）：高争用压力测试可调小让 loser 快速失败（不变量 at-most-one 不受影响、
+        # 只改 loser 是 OperationalError 还是 IntegrityError；避免负载下 8 连接各等满 5s 把测试饿死，见 pytest.ini timeout）。
+        self._conn.execute(f"PRAGMA busy_timeout={int(busy_timeout_ms)}")
         self._conn.execute(
             """
             CREATE TABLE IF NOT EXISTS effect_dispatches (

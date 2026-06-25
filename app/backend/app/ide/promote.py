@@ -147,6 +147,17 @@ def _run_overfit_gate(
     meta = result.get("metadata") if isinstance(result.get("metadata"), dict) else {}
     returns = [r["net_return"] or 0.0 for r in rows]
     theme = (meta.get("research_theme_id") or strategy_name)
+    # CPCV 路径稳健性 q05 接进 promote 真实路径（done 卡 89e7be1e 的最后一公里）：
+    # emit 携带 cpcv_distribution（模型 train 的 per-path 分布）则透传给 gate；缺则 None（不编造·行为不变）。
+    # cpcv_policy 从 emit metadata 读（默认 report_only 只附报告绝不改裁决——守不替方法学拍板；用户显式
+    # cpcv_conservative 才允许脆弱分布 green→yellow advisory）。非法值回落 report_only。
+    cpcv_distribution = result.get("cpcv_distribution")
+    if not isinstance(cpcv_distribution, dict):
+        m_cpcv = meta.get("cpcv_distribution")
+        cpcv_distribution = m_cpcv if isinstance(m_cpcv, dict) else None
+    cpcv_policy = meta.get("cpcv_policy") or "report_only"
+    if cpcv_policy not in ("report_only", "cpcv_conservative"):
+        cpcv_policy = "report_only"
     gr = evaluate_overfit_gate(
         returns=returns,
         factor=meta.get("factor_formula") or (strategy_code[:2000] if strategy_code else strategy_name),
@@ -160,6 +171,8 @@ def _run_overfit_gate(
         periods_per_year=freq_to_ppy(metadata["frequency"]),
         ledger=ledger,
         returns_store=returns_store,
+        cpcv_distribution=cpcv_distribution,
+        cpcv_policy=cpcv_policy,
         record=True,
     )
     v = gr.verdict

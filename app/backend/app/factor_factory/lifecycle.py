@@ -20,6 +20,7 @@ from dataclasses import asdict, dataclass, field
 from datetime import UTC, datetime
 from typing import Any, Literal
 
+from .lifecycle_metrics import DecayEstimate, ic_decay_half_life
 from .registry import Factor, FactorRegistry, LifecycleState
 
 
@@ -144,19 +145,40 @@ class LifecycleManager:
             return list(self._events)
         return [e for e in self._events if e.factor_id == factor_id]
 
+    def decay_diagnostic(self, factor_id: str, version: int, *, min_periods: int = 30) -> DecayEstimate | None:
+        """因子 IC 持久性 AR(1) 半衰期诊断（**perf 轴·advisory**）——复用 `lifecycle_metrics` 单一源。
+
+        h=ln(0.5)/ln(ρ)，ρ=AR(1) 持久系数（见 lifecycle_metrics 与 finding 推导）。**绝不作硬退役依据**
+        （slice-4 自律 + 用户方法学护栏）：near-unit-root 弱识别→status='unstable'，随机游走/反转/样本不足
+        如实标 unstable/reversal/insufficient，仅供人工/UI/监控自判；**不进 `evaluate_transition` 的硬转移**。
+        无观测历史 → None。纯 perf 轴（只读 IC 观测，绝不碰 DSR/PBO gate verdict——M-AUTHORITY 风格）。
+        """
+        history = self.history(factor_id, version)
+        if not history:
+            return None
+        return ic_decay_half_life([o.ic_mean for o in history], min_periods=min_periods)
+
     def evaluate(self, factor_id: str, version: int) -> LifecycleEvent | None:
         factor = self._registry.get(factor_id, version)
         history = self.history(factor_id, version)
+        # 硬转移**独立**由 evaluate_transition 决定（只吃 perf 轴 IC 观测）；decay 仅作 advisory 注解、绝不改判。
         next_state = evaluate_transition(factor, history, thresholds=self._thresholds)
         if next_state == factor.lifecycle_state:
             return None
+        decay = self.decay_diagnostic(factor_id, version)
+        if decay is None:
+            decay_note = ""
+        elif decay.status == "ok":
+            decay_note = f"；IC 持久性 h={decay.half_life:.1f}期/ρ={decay.rho:.3f}（advisory·不作硬退役依据）"
+        else:
+            decay_note = f"；IC 持久性诊断={decay.status}（advisory·不作硬退役依据）"
         event = LifecycleEvent(
             factor_id=factor_id,
             version=version,
             from_state=factor.lifecycle_state,
             to_state=next_state,
             happened_at_utc=datetime.now(UTC).isoformat(),
-            reason=f"自动迁移：观测 {len(history)} 期",
+            reason=f"自动迁移：观测 {len(history)} 期{decay_note}",
         )
         self._registry.update_state(factor_id, version, next_state)
         self._events.append(event)
