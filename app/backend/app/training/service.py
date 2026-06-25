@@ -381,10 +381,19 @@ class TrainingService:
     def _run_code(self, code: str, panel: pd.DataFrame, job_dir: Path) -> dict[str, Any]:
         panel_path = job_dir / "panel.parquet"
         panel.to_parquet(panel_path)
+        # C-MODELGOV-1·残余① 兑现：把信任根 + enforce 继承透传给子进程（runner trust-bootstrap 钩子），
+        # 使【自由代码 / DL】子进程内用户代码自调 predict_with / load_model（trust 默认）也过信任门——
+        # 子进程 store_under(QUANTBT_TRUST_ROOT) 与主进程消费侧 store_under(self._root) 解析到【同一】
+        # on-disk JSONL（跨进程共享·producer 登记的系统自产 artifact 子进程可见、外来未登记被拒·§15）。
+        # enforce 继承自 self._trust_enforce（W1 单点可逆开关）：默认 ON；trust_enforce=False → 子进程同步回退。
         res = run_code(
             code,
             job_dir,
-            env_extra={"QUANTBT_PANEL_PATH": str(panel_path)},
+            env_extra={
+                "QUANTBT_PANEL_PATH": str(panel_path),
+                "QUANTBT_TRUST_ROOT": str(self._root),
+                "QUANTBT_TRUST_ENFORCE": "1" if self._trust_enforce else "0",
+            },
             timeout=self._timeout,
         )
         if not res.ok:
