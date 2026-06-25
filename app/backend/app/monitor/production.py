@@ -29,17 +29,29 @@ D-WAVE1A 残余②：M 卡（d0e5d208）建好了闭环机制（周期 tick → 
 from __future__ import annotations
 
 import logging
-from collections.abc import Callable, Iterable
+from collections.abc import Callable, Iterable, Sequence
+from dataclasses import replace
 from datetime import UTC, date, datetime
 from typing import TYPE_CHECKING, Any
+
+import numpy as np
 
 from ..dag.engine import DAGDefinition, DAGTask, register_op
 from ..factor_factory.lifecycle import FactorObservation, LifecycleManager
 from ..factor_factory.registry import FactorRegistry
 from .closure import MonitorAction, monitor_tick
 from .cost_drift import compute_weekly_cost_drift
+from .drift import (
+    PSR_FLOOR_DEFAULT,
+    PerfDriftSignal,
+    cusum_drift,
+    page_hinkley_drift,
+    rolling_psr_drift,
+)
 
-if TYPE_CHECKING:  # 仅类型：避免运行期把 paper 包拖进 import 链
+if TYPE_CHECKING:  # 仅类型：避免运行期把 paper / polars 包拖进 import 链
+    import polars as pl
+
     from ..paper.desk import PaperDeskService
 
 logger = logging.getLogger(__name__)
@@ -55,6 +67,12 @@ _ACTIVE_STATES = ("NEW", "QUALIFIED", "PROBATION", "OBSERVATION", "WARNING")
 # ic_provider 契约：给 (factor_id, version) 返回**真实**周期 IC 观测，或 None（无真源时）。
 ICProvider = Callable[[str, int], FactorObservation | None]
 
+# perf_provider 契约（卡 554cdcf2 残余①）：给 (factor_id, version) 返回**绩效轴**漂移信号
+# （rolling-PSR 主告警 / CUSUM·PH 确证，见 drift.py），或 None（无真实周期收益序列时）。
+# 类型恒为 PerfDriftSignal（axis="performance"）——**绝不**返回 FeatureDriftDiagnosis（PSI 特征轴只根因，
+# monitor_tick 类型层即拒）。无真源 → None（绝不伪造，诚实优先，与 ic_provider 同范式）。
+PerfDriftProvider = Callable[[str, int], PerfDriftSignal | None]
+
 
 def run_weekly_monitor_pass(
     registry: FactorRegistry,
@@ -64,6 +82,7 @@ def run_weekly_monitor_pass(
     week: date | None = None,
     asset_class: str = "crypto_perp",
     ic_provider: ICProvider | None = None,
+    perf_provider: PerfDriftProvider | None = None,
 ) -> list[MonitorAction]:
     """一次生产 weekly 监控扫描：成本漂移 + 周期观测 → 对每个活跃因子驱动 `monitor_tick`。
 
@@ -71,8 +90,15 @@ def run_weekly_monitor_pass(
     生产调度调用（见 `run_production_monitor_cycle` + `main.py` startup）。对抗测试「断接线」即
     不注册/不调用本路径 → 因子停在 WARNING、不退役（证明接线真生效，非套套逻辑）。
 
-    诚实：`ic_provider=None`（生产默认）时**只**喂成本漂移信号（真实测得），绝不伪造 per-factor IC。
-    范畴红线：只向 `monitor_tick` 传 `drift_pct`/`observation`（绩效轴），绝不传 gate verdict。
+    诚实：`ic_provider=None` / `perf_provider=None`（生产默认）时**只**喂成本漂移信号（真实测得），
+    绝不伪造 per-factor IC、绝不伪造绩效轴漂移。
+    范畴红线（M-AUTHORITY=A1）：只向 `monitor_tick` 传**绩效/成本轴**——`observation`（周期 IC）、
+    `drift_pct`（成本漂移）、`perf_drift`（rolling-PSR/CUSUM/PH 绩效轴信号）。**绝不**传 gate
+    verdict（DSR/PBO 晋级闸）、**绝不**传特征轴 PSI（monitor_tick 类型层即拒）。
+
+    残余①接线：`perf_provider` 是 4 个绩效轴 drift 检测器（rolling-PSR/CUSUM/PH）进入生产的**唯一接缝**
+    ——此前 `run_weekly_monitor_pass` 从不传 `perf_drift`，三件套在生产从未求值。对抗测试「断接线」即
+    不传 `perf_provider` → 绩效轴退役不触发（证明接线真生效，非套套逻辑）。
     """
 
     records = list(audit_records)
@@ -85,13 +111,14 @@ def run_weekly_monitor_pass(
             continue  # RETIRED 等终态：不再喂观测
         # 真实周期 IC：仅当有真源（ic_provider）才喂；无真源 → None（不伪造，诚实优先）。
         observation = ic_provider(factor.factor_id, factor.version) if ic_provider else None
-        action = monitor_tick(
-            manager,
-            factor.factor_id,
-            factor.version,
-            observation=observation,
-            drift_pct=drift_pct,
-        )
+        # 绩效轴漂移：仅当有真源（perf_provider，真实周期收益序列）才喂；无真源 → None（不伪造）。
+        perf_drift = perf_provider(factor.factor_id, factor.version) if perf_provider else None
+        # 仅在有真实绩效信号时才把 perf_drift 入参传给 monitor_tick：保持「无真源=不喂」的诚实语义、
+        # 也让既有范畴红线白名单测试（无 perf_provider 时入参不含 perf_drift）保持不破。
+        tick_kwargs: dict[str, Any] = {"observation": observation, "drift_pct": drift_pct}
+        if perf_drift is not None:
+            tick_kwargs["perf_drift"] = perf_drift
+        action = monitor_tick(manager, factor.factor_id, factor.version, **tick_kwargs)
         actions.append(action)
         if action.lifecycle_event is not None:
             logger.info(
@@ -102,9 +129,118 @@ def run_weekly_monitor_pass(
                 action.lifecycle_event.to_state,
                 action.lifecycle_event.reason,
             )
-        elif action.drift_breach:
+        elif action.drift_breach or action.perf_drift_breach:
             logger.warning("weekly_monitor 因子 %s v%d %s", factor.factor_id, factor.version, action.alert)
     return actions
+
+
+# 收益序列源契约：给 (factor_id, version) 返回该因子**真实周期收益序列**（per-period，非年化），或 None。
+ReturnsSource = Callable[[str, int], Sequence[float] | np.ndarray | None]
+# 冻结基准源契约：给 (factor_id, version) 返回晋级期 OOS 冻结 (μ0, σ0)，或 None（无冻结基准 → CUSUM/PH 不可判定）。
+FrozenBaselineSource = Callable[[str, int], tuple[float, float] | None]
+
+
+def build_returns_perf_drift_provider(
+    returns_source: ReturnsSource,
+    baseline_source: FrozenBaselineSource | None = None,
+    *,
+    psr_floor: float = PSR_FLOOR_DEFAULT,
+    require_confirmation: bool = False,
+) -> PerfDriftProvider:
+    """把真实周期收益序列接成 `perf_provider`：rolling-PSR 主告警 + CUSUM/PH 确证（绩效轴）。
+
+    残余①的**生产可用实现**：4 个绩效轴检测器此前零生产调用方，本工厂让它们在生产真被求值。
+    - rolling-PSR = **主告警**（GOAL §12「performance primary alert」+ finding「rolling-PSR 才是主告警」）；
+      只接固定 `sr_benchmark`、**绝不暴露 n_trials**（命门：暴露即退化为 DSR 晋级闸，违 M-AUTHORITY=A1）。
+    - CUSUM / Page-Hinkley = **确证**：须晋级期 OOS 冻结基准 μ0/σ0（`baseline_source`；温水煮青蛙 E2——
+      绝不用监控窗自身均值）。无 `baseline_source`/无冻结基准 → 确证信息不可得，退化为纯 PSR 主告警（诚实）。
+    - `require_confirmation`（用户方法学旋钮·默认 False=PSR 主告警单独触发）：True 时 breach 须 PSR 越阈
+      **且** CUSUM/PH 任一确证（更特异、误报更少）——摆代价不替拍。
+
+    诚实：`returns_source` 返回 None（无真实周期收益序列）→ provider 返回 None（不伪造绩效轴信号，
+    与 `ic_provider` 同范式）。返回类型恒 `PerfDriftSignal`（axis="performance"）——**绝不**返回特征轴
+    PSI（结构上 monitor_tick 类型层即拒）。CUSUM/PH 状态落 `detail.confirmatory` 供问责。
+    """
+
+    def _provider(factor_id: str, version: int) -> PerfDriftSignal | None:
+        raw = returns_source(factor_id, version)
+        if raw is None:
+            return None  # 无真实周期收益 → 不喂绩效轴（诚实优先）
+        returns = np.asarray(raw, dtype=float)
+        psr = rolling_psr_drift(returns, psr_floor=psr_floor)  # 主告警（签名不暴露 n_trials）
+
+        confirmatory: dict[str, Any] = {}
+        cusum_breach = ph_breach = False
+        if baseline_source is not None:
+            base = baseline_source(factor_id, version)
+            if base is not None:
+                mu0, sd0 = float(base[0]), float(base[1])
+                cusum = cusum_drift(returns, baseline_mean=mu0, baseline_std=sd0)
+                ph = page_hinkley_drift(returns, baseline_mean=mu0, baseline_std=sd0)
+                cusum_breach, ph_breach = cusum.breach, ph.breach
+                confirmatory = {
+                    "cusum": cusum.status, "cusum_breach": cusum.breach,
+                    "page_hinkley": ph.status, "page_hinkley_breach": ph.breach,
+                }
+
+        breach = (psr.breach and (cusum_breach or ph_breach)) if require_confirmation else psr.breach
+        # status 与最终 breach 对齐：require_confirmation 降级时不留「status=breach 但 breach=False」的不一致。
+        if breach:
+            status = "breach"
+        elif psr.status == "insufficient_evidence":
+            status = "insufficient_evidence"
+        else:
+            status = "ok"
+        detail = {**psr.detail, "confirmatory": confirmatory}
+        if require_confirmation and psr.breach and not breach:
+            detail["psr_breach_unconfirmed"] = True
+        return replace(psr, status=status, breach=breach, detail=detail)
+
+    return _provider
+
+
+def build_ic_provider(
+    panel_source: Callable[[str, int], "pl.DataFrame | None"],
+    *,
+    factor_col: str = "factor_value",
+    horizon: int = 5,
+) -> ICProvider:
+    """把每周「因子面板」(ts, symbol, factor_value, forward_return) 接成 `ic_provider`：周度重算 IC。
+
+    残余②的**生产可用实现**：复用既有 `factor_factory.ic.compute_ic_report`（IC/RankIC/IC-IR +
+    Newey-West HAC t——重叠 forward 窗诱导自相关的诚实显著性口径，**不另造公式**），把 ICReport 转一条
+    周期绩效观测（`FactorObservation`）喂 lifecycle 权威。`sample_t` 取 NW HAC t（None→0.0，绝不虚高）。
+
+    诚实：`panel_source` 返回 None（生产当前无真实周期因子面板源——依赖 data/factor 评估管道、属本卡领地外）
+    → provider 返回 None → observation=None，**绝不**把注册期陈旧 IC 伪装成「本周观测」（paper-true 假绿灯）。
+    """
+
+    def _provider(factor_id: str, version: int) -> FactorObservation | None:
+        panel = panel_source(factor_id, version)
+        if panel is None:
+            return None  # 无真实周期面板 → 不喂（诚实，绝不伪造 IC）
+        from ..factor_factory.ic import compute_ic_report  # 懒导入：默认路径不把 polars 拖进 import 链
+
+        report = compute_ic_report(panel, factor_col, horizon=horizon)
+        if report.sample_count <= 0:
+            return None  # 面板无有效截面 → 无可信观测（诚实，不造 0 观测）
+        return FactorObservation(
+            factor_id=factor_id,
+            version=version,
+            observed_at_utc=datetime.now(UTC).isoformat(),
+            horizon=horizon,
+            ic_mean=report.ic_mean,
+            ic_ir=report.ic_ir,
+            rank_ic_mean=report.rank_ic_mean,
+            sample_t=report.ic_tstat_nw if report.ic_tstat_nw is not None else 0.0,
+            extra={
+                "source": "weekly_ic_recompute",
+                "sample_count": report.sample_count,
+                "ic_tstat_nw": report.ic_tstat_nw,
+            },
+        )
+
+    return _provider
 
 
 def collect_paper_audit_records(paper_desk: "PaperDeskService") -> list[dict[str, Any]]:
@@ -187,10 +323,15 @@ def build_weekly_monitor_dag() -> DAGDefinition:
 
 
 __all__ = [
+    "FrozenBaselineSource",
     "ICProvider",
+    "PerfDriftProvider",
+    "ReturnsSource",
     "WEEKLY_MONITOR_CRON",
     "WEEKLY_MONITOR_DAG_NAME",
     "WEEKLY_MONITOR_OP",
+    "build_ic_provider",
+    "build_returns_perf_drift_provider",
     "build_weekly_monitor_dag",
     "collect_paper_audit_records",
     "run_production_monitor_cycle",
