@@ -6,9 +6,6 @@
 
 | uuid8 | 标题 | status | area | 位置 |
 |---|---|---|---|---|
-| 872af176 | QRO 模型↔Factor library 完整语义切分——模型本体进 Model Registry/输出进 Signal Contract/因子在 Factor Library（A-QRO-2） | in_progress | qro | active |
-| e2afc5c2 | 三档成本预设接 sqrt-impact 默认 + 成交报告 impact 成本归因拆字段 | in_progress | execution-cost | active |
-| e4496023 | 因子收益归因接消费侧（组合台/归因报告 + UI 呈现） | in_progress | eval-methodology | active |
 | 0430cd78 | 数据更新写时强约束——dataset_version/checksum/lineage 升 block 门（B-VERSION-1） | done | data-pit | done |
 | 05d6f511 | 单人 self-approve 仅非真钱通道(冷却+留痕)，真钱硬双人 | done | approval | done |
 | 0781bb13 | RDP 聚合器——从真血统装配 RDP（DatasetVersion/LLMCallRecord/honest-N/verdict 真填）（D-RDP-2） | done | delivery | done |
@@ -54,6 +51,7 @@
 | 79ebe273 | 模拟台后端接线 — /api/paper/* 整层 + 晋级审批门 + 风险门冻结哈希链 | done | backend | done |
 | 7ac5a0fe | BacktestVenue.cost_summary —— per-fill 成本归因收口到 run 级 | done | execution-cost | done |
 | 82120b9c | agent 窗口前端核心（Web）——对话流 + 工具可视化 + 权限模式切换 | done | frontend | done |
+| 872af176 | QRO 模型↔Factor library 完整语义切分——模型本体进 Model Registry/输出进 Signal Contract/因子在 Factor Library（A-QRO-2） | done | qro | done |
 | 876a0c11 | CPCV 路径稳健性分布呈现到模型台 UI（能信·report-only·CPCV→用户闭环收尾） | done | frontend-trust | done |
 | 87ad21fc | R18 stacking 控制项 N/A 标注 + 实现时 OOF 约束（T-033 核验 gap） | done | signals | done |
 | 89e7be1e | CPCV 路径稳健性 q05 接进 overfit gate（report-only 默认 / cpcv_conservative opt-in·守不替方法学拍板） | done | eval-methodology | done |
@@ -116,7 +114,9 @@
 | e01bf12f | 回测/训练引擎消费 as_of_known——PIT 双时态全域闭合第一段（B-PIT-1） | done | data-pit | done |
 | e069d820 | 裁决卡后端接线 — verdict/overfit/cost-sensitivity/promote/热力 端点 + 措辞合规 | done | backend | done |
 | e1a98c41 | binance_vision_pull reload-merge schema bug 修——多日同年 try_parse_dates 崩 | done | data-connectors | done |
+| e2afc5c2 | 三档成本预设接 sqrt-impact 默认 + 成交报告 impact 成本归因拆字段 | done | execution-cost | done |
 | e2de3d32 | 前端测试设施基建 — vitest + React Testing Library + 对抗测试 harness | done | frontend-foundation | done |
+| e4496023 | 因子收益归因接消费侧（组合台/归因报告 + UI 呈现） | done | eval-methodology | done |
 | ec7a7d9a | 数据写门 scope 余项——11 字段 + data 级 lineage + on-disk manifest 自动接线（B-VERSION-1 余） | done | data-pit | done |
 | ecbd0eab | GOAL §7 文档对齐(M10 已接 run 闸门)+ 可证伪性/模式 教学文案 | done | docs | done |
 | edc1e326 | 主对话入口接 AgentRuntime + 无副作用工具 + 权限三态(ask/auto/bypass) | done | agent | done |
@@ -182,20 +182,20 @@
 | delivery | 9d593481 · done | dreaminate |
 | desktop | bc21c7c1 · done | dreaminate |
 | docs | ecbd0eab · done | dreaminate |
-| eval-methodology | e4496023 · in_progress | dreaminate |
 | eval-methodology | 41ea6e35 · done | dreaminate |
 | eval-methodology | 69e1cb16 · done | dreaminate |
 | eval-methodology | 6acbb499 · done | dreaminate |
 | eval-methodology | 89e7be1e · done | dreaminate |
 | eval-methodology | b1e4efdf · done | dreaminate |
 | eval-methodology | d4a324ae · done | dreaminate |
+| eval-methodology | e4496023 · done | dreaminate |
 | eval-methodology | f1bd08f2 · done | dreaminate |
 | eval-methodology | ff286f80 · done | dreaminate |
-| execution-cost | e2afc5c2 · in_progress | dreaminate |
 | execution-cost | 6e264c59 · done | dreaminate |
 | execution-cost | 7179ba36 · done | dreaminate |
 | execution-cost | 7ac5a0fe · done | dreaminate |
 | execution-cost | d9bf88b1 · done | dreaminate |
+| execution-cost | e2afc5c2 · done | dreaminate |
 | factor-lifecycle | 1b83a5c5 · done | dreaminate |
 | factor-lifecycle | b12de4f5 · done | dreaminate |
 | factor-lifecycle | b762da53 · done | dreaminate |
@@ -247,7 +247,7 @@
 | paper-fullstack | cfb7d950 · done | dreaminate |
 | portfolio | 46f1cb3c · done | dreaminate |
 | portfolio | ba59fb7b · done | dreaminate |
-| qro | 872af176 · in_progress | dreaminate |
+| qro | 872af176 · done | dreaminate |
 | qro | f19c5c19 · done | dreaminate |
 | research-graph | 76a611d3 · done | dreaminate |
 | review | 3d4a872e · done | dreaminate |

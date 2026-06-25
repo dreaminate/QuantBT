@@ -645,3 +645,12 @@
 - **GOAL-锚定成效**：3 线全无停工拍板（A-COMPILER 两边界 docstring 钉·drift 阈值=用户文献默认·W1 沿用已拍开关）。
 - **诚实残余**：接 Agent OS(Gateway/Orchestrator/Compiler)进 main.py+各台 Canvas 触发编译(领地外·中心做)·evidence 抽取适配·监控真实数据源待 data 管道·W1 领地外消费点·confirmatory 端点激活。
 - **land**：3 线整批 land main（用户授权）。推进 GOAL §1/§5/§15。**下一步**：中心接 Agent OS 进 main.py·A-QRO-2·老 P2·各残余接线。
+
+## 2026-06-26 · 第六波 3 线并行整合 land（A-QRO-2 语义切分 + 归因消费 + 成本 opt-in 桥·GOAL-first）
+
+- **派 3 deep-opus**（各 GOAL-first·领地不交叠 qro/ ‖ eval+frontend ‖ execution/）：A-QRO-2 模型↔Factor 切分(`872af176`·§1/§9) / 归因消费(`e4496023`·§0/§13) / 成本字段拆(`e2afc5c2`·§10)。
+- **验收**：批次全量 **2272 passed / 13 skipped / 0 failed / 135s**（基线 2190+95 新对抗测试全绿·flake 未触发·collect 2285 精确吻合）+ validate PASS。MUT 钉死：A-QRO-2×3 门(30 failed 精确归因) / 归因×(abstain 不渲绿/低 R² 不标已归因/加总恒等式/R7 措辞/冻结页) / 成本×MUT-A/B(impact 不并入 commission/不静默吞 opt-in)。前端真验(归因 vitest 17+tsc 0)。
+- **GOAL-锚定成效**：A-QRO-2 复用单一源(零第二黑名单·钉死 QRO==mining)·归因因子集口径=用户原样回显·成本字段拆 opus grep 实证②早已 done 没重做·只建①opt-in 桥。
+- **2 拍板项停报中心(保守默认 land·非阻塞·摆代价待用户)**：成本三档预设是否默认翻 size-aware(须先可信 Y 标定+无泄露管线否则没校准冲击当默认=另一种不诚实)·归因因子集/口径(原样回显·用户那摊)。
+- **诚实残余/中心补**：归因 main.py 薄路由+前端 FactorAttributionCard 挂载·成本三档预设生产 run 管线消费(producer wiring)·Agent OS 接 main.py·A-QRO-2 admit_signal/strategy 正路径 builder。
+- **land**：3 线整批 land main（用户授权）。推进 GOAL §1/§9/§0/§10。**下一步**：中心接 Agent OS+归因路由进 main.py·老 P2 剩·各残余。
