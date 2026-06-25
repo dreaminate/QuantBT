@@ -9,6 +9,7 @@
 | 05d6f511 | 单人 self-approve 仅非真钱通道(冷却+留痕)，真钱硬双人 | done | approval | done |
 | 07b10903 | DS-6 装机收口——跨平台一键启动 + mkdir（可缓·docker compose 兜底） | done | onboarding-docs | done |
 | 180a341e | 核验 agent tool_call 前端派发是否旁路受控翻译门（R11 前端缺口审计） | done | verification | done |
+| 1b83a5c5 | IC 持久性 AR(1) 半衰期接进 lifecycle 状态机（perf 轴·advisory） | done | factor-lifecycle | done |
 | 1e0e65b4 | 组合消费者——agent 可调组合三角 gate（SEQ-CONSUMER=A · C full-fat 触发器） | done | agent | done |
 | 381b6c18 | 实盘因子血统门——未过检验因子上真钱线 → 警告+知情确认 | done | security-invariant | done |
 | 3a8b2360 | R28 全库双时态（known_at 轴 + as-of 重述基本面）（T-033 核验 gap） | done | 数据 | done |
@@ -138,6 +139,7 @@
 | execution-cost | 6e264c59 · done | dreaminate |
 | execution-cost | 7179ba36 · done | dreaminate |
 | execution-cost | d9bf88b1 · done | dreaminate |
+| factor-lifecycle | 1b83a5c5 · done | dreaminate |
 | factor-lifecycle | b12de4f5 · done | dreaminate |
 | frontend | 3d95e0f6 · done | dreaminate |
 | frontend | 5e47b82f · done | dreaminate |

@@ -398,3 +398,10 @@
 - **测试套件防挂死（诚实纠错 + 加固）**：排查「测试跑了 7h/9h」发现两个 pytest 进程空挂——根因 `test_dag_kernel::test_effect_ledger_concurrent_same_key`（8 连接争 SQLite 锁）在我**多 full-suite 并行叠跑** + 后台**无 `--timeout`** 下被饿死挂死（单独 5.4s、全量单独 192s 绿=非生产 bug）；后台被 kill 后 harness 误报「exit 0」=假绿、识破未当真。修 pytest.ini 加全局 `timeout=120` + 并发测试 `daemon=True`（commit 443fca9）。**教训记 memory**：全量套件绝不并行叠跑、必带超时、凭真汇总行判绿别凭 exit code。
 - **验证**：`test_sqrt_impact_cost.py` 23 + test_dag_kernel 25 passed；**全量单独前台 1574 passed / 13 skipped / 0 failed / 192s**（基线 1571，净 +3）。
 - **land main 待用户授权**（本轮 loop「commit 不擅自 push」→ 本地 commit、未 push）。
+
+## 2026-06-25 · IC 持久性半衰期接 lifecycle 状态机（done 卡 1b83a5c5 / aa13c3b0 ①）
+- **价值闭环**：`ic_decay_half_life`（slice-4 建、lifecycle 状态机零消费）→ `LifecycleManager.decay_diagnostic`（perf 轴 advisory）+ evaluate() 事件 advisory 注解；硬转移逻辑零改。**关键修正**：它是 IC 持久性（自相关）半衰期 ≠ 现有转移测的 IC 水平衰减——两不同概念，故 advisory 不并入硬转移（避免数学↔实现混淆 + 守 slice-4「unstable 不作硬退役」自律）。
+- **命门**：M-AUTHORITY A1（转移只吃 perf 轴 IC 观测、注入 gate verdict 到 extra 不改判，MUT-M 验证有牙）+ 单一源（复用 ic_decay_half_life、多 ρ 区间扫描，MUT-S clip ρ>0.9 验证有牙）+ 诚实 status（随机游走→unstable 绝不 'ok'）。
+- **meta 教训应用 + 验证**：单一源测试初版只测 ρ=0.6 一点 → MUT-S 逃逸（「测单点 happy-path 不扫判别区间」盲区）→ 强化为 ρ∈{0.3,0.6,0.9,0.97}+reversal 扫描后必抓。
+- **验证**：`test_lifecycle_decay_advisory.py` 5 + test_alpha_lite_and_lifecycle 7 passed；**全量后端 1579 passed / 13 skipped / 0 failed / 180s**（基线 1574，净 +5）。aa13c3b0 ② 容量/拥挤→sizing 留池（方法学决策）。
+- **本轮 loop「commit 和 push 自动进行」→ 本地 commit + push 分支 worktree-autopolish-w1**（land main 仍仅用户）。

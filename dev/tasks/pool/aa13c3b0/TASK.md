@@ -14,6 +14,9 @@ depends_on: [b12de4f59b744065895c4c6bc9f06df7]
 
 # 因子机构级度量接 lifecycle 状态机/sizing 生产路径
 
+> **状态（2026-06-25）**：**① 衰减半衰期 → lifecycle 状态机 ✅ done**（done 卡 1b83a5c5·`decay_diagnostic` perf 轴 advisory、unstable/no_decay 不硬退役、M-AUTHORITY 守、MUT-S/MUT-M 验证有牙）。**修正**：`ic_decay_half_life` 是 IC **持久性**（自相关）半衰期、≠ 现有转移测的 IC **水平衰减**——两者不同概念，故 decay 作 **advisory 不并入硬转移**（避免数学↔实现混淆），硬退役阈值是用户方法学决策。
+> **② 容量/拥挤 → sizing 生产路径 留池待做**：方法学决策（如何按容量缩仓、Y 占位）+ 需 sizing 生产模块接线。
+
 ## Scope [必填]
 §3 度量库（`lifecycle_metrics.py`）已建并验证（衰减/容量/因子族/拥挤 + 命门），但**度量层与状态机/sizing 未接**。本卡合拢：
 ① **衰减半衰期** → 喂 lifecycle 退役判定（半衰期短/status=ok 才作硬退役依据；unstable/no_decay 只告警不硬退役）；
