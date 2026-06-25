@@ -11,9 +11,12 @@
 
 from __future__ import annotations
 
-from typing import Any
+from typing import TYPE_CHECKING, Any
 
 from ..models.catalog import get_model_card
+
+if TYPE_CHECKING:
+    import pandas as pd
 
 _HEADER = '''import os
 from pathlib import Path
@@ -25,6 +28,100 @@ from app.training.lib import emit, predict_with  # noqa: F401
 panel = pd.read_parquet(os.environ["QUANTBT_PANEL_PATH"])
 job_dir = Path(os.environ["QUANTBT_JOB_DIR"])
 '''
+
+
+# ============================================================
+# R28 双时态 PIT 透传：训练管线消费 field_catalog 单一 as-of 源、堵 look-ahead（B-PIT-1）
+# ============================================================
+#
+# 现状死接线：生成脚本裸 `pd.read_parquet` 全量读盘，不经任何 known_at as-of 边界——
+# panel parquet 里若带未来重述（known_at 晚于训练知识时点）会直接泄露进训练（前视）。
+# 修法：spec 带 `as_of_known` 时，header 改走 `load_pit_panel`，按 known_at<=as_of_known
+# 折叠点查（重述 as-of），与 `field_catalog.load_panel(as_of_known=...)` 折叠语义逐条对齐。
+# 向后兼容硬保：spec 无 as_of_known（或 None）→ header 逐字回退 `_HEADER`（既有训练一字不改）。
+
+
+def load_pit_panel(
+    panel_path: str,
+    *,
+    as_of_known: Any = None,
+    ts_col: str = "ts",
+    symbol_col: str = "symbol",
+    known_at_col: str = "known_at",
+) -> pd.DataFrame:
+    """训练管线的 R28 双时态 PIT 点查入口（消费 field_catalog 单一 as-of 源·堵 look-ahead）。
+
+    生成脚本里 ``panel = load_pit_panel(...)`` 取代裸 ``pd.read_parquet``。折叠语义与
+    ``field_catalog.load_panel(as_of_known=...)`` **逐条对齐**（见 ``catalog._materialize_sub``）：
+
+    - ``as_of_known=None`` → **逐字现状**：``pd.read_parquet``（向后兼容，绝不改既有训练行为）。
+    - ``as_of_known`` 给定但 panel **无 ``known_at`` 列** → 无知识轴可过滤 → 原样返回现状视图
+      （= ``_materialize_sub`` 同分支语义；绝不静默假装已过滤，也不报错）。
+    - ``as_of_known`` 给定且 panel **有 ``known_at`` 列** → 复用 ``universe.resolver.as_of_bound``
+      （单一 as-of 边界原语，不另造）过滤 ``known_at <= as_of_known``，再同 ``(ts,symbol)``
+      取最新已知重述、drop ``known_at``。**晚于 as_of_known 的未来 known_at 行必被挡在训练之外。**
+
+    诚实边界：panel parquet 是**已预解析面板**、非 ``FieldCatalog``，无法直接调 ``load_panel``；
+    这里复用其 as-of 边界原语并镜像其折叠语义（不重造边界/dtype 对齐逻辑）。非法 ``as_of_known``
+    由 ``as_of_bound`` 运行时 fail-loud 校验（单一源），绝不静默回落裸读绕过守卫。
+    """
+    import pandas as pd
+
+    if as_of_known is None:
+        return pd.read_parquet(panel_path)  # 逐字现状·向后兼容（既有训练行为不变）
+    pdf = pd.read_parquet(panel_path)
+    if known_at_col not in pdf.columns:
+        return pdf  # 无 known_at 轴 → as_of_known 无可过滤（mirror _materialize_sub，不假装过滤）
+    import polars as pl
+
+    from ..universe.resolver import as_of_bound  # 单一 as-of 边界源（read-only 复用，绝不改 resolver）
+
+    lf = pl.from_pandas(pdf)
+    bound = as_of_bound(as_of_known, lf.schema[known_at_col])
+    lf = lf.filter(pl.col(known_at_col) <= bound)
+    keys = [c for c in (ts_col, symbol_col) if c in lf.columns]
+    if keys:
+        # 同 (ts,symbol) 取 known_at 最大者 = 该知识时点的最新已知重述（= _materialize_sub 折叠）
+        lf = lf.sort(known_at_col).unique(subset=keys, keep="last", maintain_order=True)
+    return lf.drop(known_at_col).to_pandas()
+
+
+def _as_of_known_literal(value: Any) -> str:
+    """把 spec 的 as_of_known 安全烘进生成脚本的字面量。
+
+    date/datetime → ISO 字符串；其余 → ``repr(str(...))``（任何引号/代码都被转义成普通字符串字面量，
+    注入安全）。非法值不在此拦——留给运行时 ``as_of_bound`` 单一源校验（fail-loud，不静默跳守卫）。
+    """
+    from datetime import date, datetime
+
+    if isinstance(value, (date, datetime)):
+        value = value.isoformat()
+    return repr(str(value))
+
+
+def _panel_load_header(spec: dict[str, Any]) -> str:
+    """脚本顶部 panel 加载段（R28 双时态 PIT 透传 · 堵 look-ahead）。
+
+    - spec 无 ``as_of_known``（或 None）→ **逐字返回 ``_HEADER``**：裸 ``pd.read_parquet``，
+      向后兼容·additive·绝不改既有训练行为（``_HEADER`` 一字不动）。
+    - spec 有 ``as_of_known`` → 改走 ``load_pit_panel``：按 ``known_at<=as_of_known`` 折叠点查，
+      只让训练见「截至该知识时点已知」的行（重述 as-of），堵 look-ahead。
+    """
+    as_of_known = spec.get("as_of_known")
+    if as_of_known is None:
+        return _HEADER
+    return f'''import os
+from pathlib import Path
+
+import pandas as pd  # noqa: F401
+
+from app.training.codegen import load_pit_panel
+from app.training.lib import emit, predict_with  # noqa: F401
+
+panel = load_pit_panel(os.environ["QUANTBT_PANEL_PATH"], as_of_known={_as_of_known_literal(as_of_known)})
+job_dir = Path(os.environ["QUANTBT_JOB_DIR"])
+'''
+
 
 # 已实现 torch 训练模板的 DL 架构（与 app.models.dl.architectures 对齐）；
 # 卡片可收录更多 DL（tft/nbeats…），但未在此集合内 → codegen 明确提示模板排队。
@@ -59,7 +156,7 @@ model_spec = ModelSpec(
 res = train_model(model_spec, panel, artifact_dir=job_dir)
 emit(res.to_dict())
 '''
-    return _HEADER + body
+    return _panel_load_header(spec) + body
 
 
 def _dl_code(spec: dict[str, Any]) -> str:
@@ -85,7 +182,7 @@ res = train_dl(
 )
 emit(res)
 '''
-    return _HEADER + body
+    return _panel_load_header(spec) + body
 
 
 # ============================================================
@@ -272,4 +369,4 @@ def graph_to_code(graph: dict[str, Any]) -> str:
     )
 
 
-__all__ = ["GraphCodegenError", "graph_to_code", "spec_to_code"]
+__all__ = ["GraphCodegenError", "graph_to_code", "load_pit_panel", "spec_to_code"]
