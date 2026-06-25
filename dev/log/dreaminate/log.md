@@ -281,3 +281,13 @@
 - **对抗验证（10 条待办 claim · 每条独立 skeptic 默认当误报）**：真该现在修 3（OOS 已修 / agent-live-mock LIVE 批准门重放 mock 脚本 / jobsdeck selJob 卡 mock id，后两待拍）；**误报 2**（SharedStrategies 刷赞被后端 PK 去重推翻、PaperDesk 双击双审批被后端 self.lock+GateStateError+幂等三护栏推翻）；**死代码 1**（Runs WS 是 stub 永不触发）；其余 mock/低影响 later。**H3「Runs 涨跌色反转」确认误报**——A 股「红涨绿跌」正确惯例，不改（防回潮，见 D-FE-REVIEW）。
 - **入库纪律（D-GITIGNORE-ARTIFACTS）**：gitignore `graphify-out/`（52MB 生成产物）+ `data/strategy/`；demo 示例数据仍入库。push 前凭据扫描 0 命中。
 - **land**：**已 push origin/fullstack**（c213583 主体 + cb2a083 gitignore，138 文件；用户拍板「全部工作区一起推、去掉生成产物」）。dev/ 账本本次同步补记。
+
+## 2026-06-25 · Mathematical Spine 一致性硬门核心（头号 gap #3 命门 · 决策 D-MATH-SPINE）
+
+- **触发**：自主 loop 选切片——地基优先 + 数学先行 + correctness-critical 三判据下，最高杠杆 = gap #3「Mathematical Spine 未成为运行时脊柱」（北极星 #4 监管对齐命门，state 明说「当前不能声称数学一致性门已建」）。
+- **理论先行**：finding `research/findings/dreaminate/spine-consistency-gate/00-consistency-gate-theory.md`——形式化「升级健全谓词 Π」8 子句 + 逐条必要性证明（每条门省掉即有反例 = 对抗测试种的坏门）+ 用户放权语义（waiver 只改责任归属、不伪装未证明为已证明）。
+- **实装（扩展不替换 · 复用单一身份源）**：`lineage/spine.py`（MathematicalArtifact/TheoryImplementationBinding/ConsistencyCheck/MethodologyChoiceRecord，§6 字段全含，content-addressed id 走 `ids.content_hash`）+ `lineage/spine_gate.py`（`evaluate_promotion`：8 子句逐条对 §6/§8 一条「→ 拒」，frozen `SpineDecision`，拒绝口径自检越权词，降级映射给诚实标签）+ `lineage/spine_ledger.py`（`SpineLedger` append-only、复用 `ledger._ChainStore` 哈希链、刻意无 set_label/force_promote/delete 改小 API）+ 扩展 `lineage/__init__.py` 导出。
+- **对抗测试**：`tests/test_mathematical_spine_consistency_gate.py` **28 passed**——¬binding-exists/¬binding-complete/¬consistency-present/¬consistency-pass/¬fresh(真 content_hash staleness)/¬proof-honest(waiver+sketch)/¬pit-bound/¬claim-grounded 八条坏门全抓 + 全绿路径放行 proof_backed（门非一刀切）+ 弱标签不挡探索 + 拒绝口径无越权词 + 账本无改小 API + 篡改链可检。lineage 基线 33 passed 未破。
+- **全量验证**：后端全套 **1324 passed / 13 deselected**（139s，含我 28 新；testnet 13 deselect 预期）。凭真汇总行判绿。
+- **推进**：GOAL §6/§8 + 头号 gap #3：⬜→🟡（门核心已建并验证；data→…→monitor 全链贯穿 + PIT 连 R28 resolver 为后续切片）。
+- **交付**：worktree `auto/math-spine`（自 `fix-u2-synth` HEAD）；commit/push 自管、**land main 待用户**。⚠️ 双 state.md 对齐：主 checkout 有未提交的 GOAL-rebaseline 新版 state.md，land 时并入本进展防漂。

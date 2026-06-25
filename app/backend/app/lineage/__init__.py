@@ -25,6 +25,14 @@ from .ledger import (
     Ledger,
     LedgerEntry,
 )
+from .spine import (
+    ConsistencyCheck,
+    MathematicalArtifact,
+    MethodologyChoiceRecord,
+    TheoryImplementationBinding,
+)
+from .spine_gate import SpineDecision, evaluate_promotion
+from .spine_ledger import SpineLedger
 
 __all__ = [
     "CONFIG_HASH_PREFIX",
@@ -41,4 +49,12 @@ __all__ = [
     "node_id",
     "normalize_factor_ast",
     "strip_fixture_prefix",
+    # Mathematical Spine（数学贯穿 + 理论实现一致性硬门 · 决策 D-MATH-SPINE）
+    "MathematicalArtifact",
+    "TheoryImplementationBinding",
+    "ConsistencyCheck",
+    "MethodologyChoiceRecord",
+    "SpineDecision",
+    "evaluate_promotion",
+    "SpineLedger",
 ]

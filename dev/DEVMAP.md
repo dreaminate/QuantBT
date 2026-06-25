@@ -48,6 +48,7 @@
 | T-023 | T-023 | ? | - | done |
 | T-024 | T-024 | ? | - | done |
 | T-025 | T-025 | ? | - | done |
+| a00b3956 | Mathematical Spine 一致性硬门核心（数据模型 + 升级健全谓词门 + append-only 账） | done | math-spine | done |
 | a11e2aa5 | 因子台三纯库 + 暴力遍历挖掘 — 前端设计+实装（GOAL §3，无 handoff 稿，D-DESK-EPIC F1=B 路 b） | done | frontend | done |
 | a75c4beb | Agent 窗口产物工作区 — 8 产物卡 + Strategy.yaml + Report.md | done | frontend | done |
 | b106177f | 因子台后端接线 — 暴露已有 compute + 相关性/分层回测 + alpha审查 | done | backend | done |
@@ -137,6 +138,7 @@
 | frontend-foundation | e2de3d32 · done | dreaminate |
 | governance-ui | c631817e · done | dreaminate |
 | integration-test | 9a497bde · done | dreaminate |
+| math-spine | a00b3956 · done | dreaminate |
 | monitor | de764e1c · todo | dreaminate |
 | monitor | d0e5d208 · done | dreaminate |
 | onboarding-docs | 07b10903 · done | dreaminate |

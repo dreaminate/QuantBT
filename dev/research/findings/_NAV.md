@@ -15,6 +15,7 @@
 - `desk-handoff/sharedFoundation.md` — I now have a complete, verified picture across all desks plu
 
 ## dreaminate
+- `dreaminate/spine-consistency-gate/00-consistency-gate-theory.md` — FINDING · Mathematical Spine 一致性门 — 形式化模型与必要性证明
 - `dreaminate/spine-designs/00-contracts-and-coherence.md` — 00 · 脊柱跨部件契约一致性 + 测试真实性复核
 - `dreaminate/spine-designs/01-deterministic-kernel.md` — 01 · 确定性 DAG 内核 + checkpoint/replay/fork/rollback + 交易副作用不可幂
 - `dreaminate/spine-designs/02-llm-record-replay.md` — 02 · LLM 节点 record/replay 确定性 + 受控翻译层
