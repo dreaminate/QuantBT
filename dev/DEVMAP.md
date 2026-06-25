@@ -40,6 +40,7 @@
 | 87ad21fc | R18 stacking 控制项 N/A 标注 + 实现时 OOF 约束（T-033 核验 gap） | done | signals | done |
 | 89e7be1e | CPCV 路径稳健性 q05 接进 overfit gate（report-only 默认 / cpcv_conservative opt-in·守不替方法学拍板） | done | eval-methodology | done |
 | 8ab894cd | 审批 SLA 与 leverage_cap 可配置；杠杆不设硬上限；真钱超时永远 default_reject | done | config | done |
+| 8f9d79fd | 因子收益归因消费侧——per-period 因子收益 provider + ts 对齐器（数学岛接真实物料） | done | eval-methodology | done |
 | 9a497bde | 交付门 e2e 集成测试——陌生人 chat→backtest→裁决→paper 全后端路径真 | done | integration-test | done |
 | 9d5405ce | 模拟台前端 P0 — 5 视图 + PaperBoardCard(运行/持仓成交/风险门/复盘/晋升) | done | frontend | done |
 | 9fd4f1a6 | 策略台后端接线 — validate/版本/策略级fork/Live只读 端点 + 前端接真 | done | backend | done |
@@ -151,6 +152,7 @@
 | eval-methodology | 69e1cb16 · done | dreaminate |
 | eval-methodology | 6acbb499 · done | dreaminate |
 | eval-methodology | 89e7be1e · done | dreaminate |
+| eval-methodology | 8f9d79fd · done | dreaminate |
 | eval-methodology | b1e4efdf · done | dreaminate |
 | eval-methodology | d4a324ae · done | dreaminate |
 | eval-methodology | f1bd08f2 · done | dreaminate |

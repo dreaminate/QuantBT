@@ -115,4 +115,29 @@ def factor_return_attribution(
     )
 
 
-__all__ = ["AttributionResult", "factor_return_attribution"]
+def attribution_from_series(
+    portfolio_by_ts: dict[str, float] | Sequence[tuple[str, float]],
+    factor_series_by_name: dict[str, dict[str, float] | Sequence[tuple[str, float]]],
+) -> AttributionResult:
+    """ts-索引序列 → 按**公共 ts 内连接**对齐 → `factor_return_attribution`。
+
+    消除调用方手工位置对齐的 misalign 隐患（错位喂入 = 数学对、输入错 = 假绿灯）：本函数**只按 ts 键对齐**
+    （取组合与所有因子都覆盖的 ts、按 ts 升序），调用方无须保证插入顺序一致。`factor_return_series`
+    （factor_factory）产的 `[(ts, F_t)]` 可直接喂入。
+
+    诚实（方法学不替拍）：调用方须保证 `portfolio_by_ts` 与各因子序列**同收益口径/同期约定**（excess vs raw、
+    形成期 t→t+h 对齐等）——本函数只对齐 ts 键、不校验口径。公共 ts < K+2 → 底层返 insufficient（不出 β）。
+    """
+
+    pmap = dict(portfolio_by_ts)
+    fmaps: dict[str, dict[str, float]] = {nm: dict(s) for nm, s in factor_series_by_name.items()}
+    common: set[str] = set(pmap)
+    for m in fmaps.values():
+        common &= set(m)
+    ts_sorted = sorted(common)
+    y = [float(pmap[t]) for t in ts_sorted]
+    factor_returns = {nm: [float(fmaps[nm][t]) for t in ts_sorted] for nm in fmaps}
+    return factor_return_attribution(y, factor_returns)
+
+
+__all__ = ["AttributionResult", "attribution_from_series", "factor_return_attribution"]

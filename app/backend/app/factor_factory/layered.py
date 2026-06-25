@@ -73,14 +73,18 @@ def _is_monotonic(values: list[float]) -> bool:
     return inc or dec
 
 
-def layered_backtest(
+def _binned_factor_panel(
     market: str,
     formula: str,
-    *,
-    horizon: int = 5,
-    n_quantiles: int = 5,
-) -> LayeredReport:
-    """对单因子在 market 上做 N 分位分层回测。"""
+    horizon: int,
+    n_quantiles: int,
+) -> tuple[pl.DataFrame, str, int, int]:
+    """共享分层口径：factor_panel → 单一滞后 forward-return → 每截面 point-in-time N 分位赋值。
+
+    返回 `(binned[ts,symbol,factor_value,fwd_col,quantile], fwd_col, effective_q, min_breadth)`。
+    `layered_backtest`（跨期分位均值）与 `factor_return_series`（per-period 多空序列）**共用本函数**，
+    杜绝两路分桶口径漂移（前视/未来定桶/双滞后源）——单一来源即单一红线守点。
+    """
 
     if n_quantiles < 2:
         raise LayeredError("n_quantiles 必须 ≥ 2")
@@ -114,6 +118,56 @@ def layered_backtest(
             + 1
         ).alias("quantile")
     )
+    return binned, fwd_col, effective_q, min_breadth
+
+
+def _per_period_long_short(binned: pl.DataFrame, fwd_col: str, effective_q: int) -> list[tuple[str, float]]:
+    """每截面多空价差序列 F_t = QN_t − Q1_t（顶/底分位组内等权 fwd-return 之差），按 ts 升序。
+
+    只保留两端分位都齐备的 ts（inner join）；缺一端的截面不臆造 0（不假绿灯：无价差≠零价差）。
+    这是单因子的 **per-period 收益时序**，口径同 layered（诊断·无费用/冲击/容量·非可下注业绩）。
+    """
+
+    by_tsq = binned.group_by(["ts", "quantile"]).agg(pl.col(fwd_col).mean().alias("m"))
+    top = by_tsq.filter(pl.col("quantile") == effective_q).select(["ts", pl.col("m").alias("qn")])
+    bot = by_tsq.filter(pl.col("quantile") == 1).select(["ts", pl.col("m").alias("q1")])
+    joined = top.join(bot, on="ts", how="inner").sort("ts")
+    return [(str(r["ts"]), round(float(r["qn"] - r["q1"]), 10)) for r in joined.to_dicts()]
+
+
+def factor_return_series(
+    market: str,
+    formula: str,
+    *,
+    horizon: int = 5,
+    n_quantiles: int = 5,
+) -> list[tuple[str, float]]:
+    """单因子 **per-period 多空收益时序** F_t（北极星「归因」阶段的真实因子收益物料）。
+
+    F_t = 每截面 t 顶分位组内等权 forward-return − 底分位组内等权（point-in-time 分桶·单一滞后源·
+    不前视）。喂 `eval.attribution.attribution_from_series`（组合收益对因子收益回归）或双轨稳健性。
+
+    诚实边界（不假绿灯）：
+    - **诊断口径非可下注业绩**：无手续费/冲击/容量约束，与 `layered_backtest` 同源。
+    - **h>1 重叠窗**：forward-return 窗重叠 → 序列自相关，归因 β 的**统计精度**打折（标准误低估）；
+      加总恒等式与点分解不受影响。收益口径/回归窗是用户方法学，不替拍。
+    返回 `[(ts, F_t)]`（按 ts 升序，仅两端分位齐备的截面）。
+    """
+
+    binned, fwd_col, effective_q, _ = _binned_factor_panel(market, formula, horizon, n_quantiles)
+    return _per_period_long_short(binned, fwd_col, effective_q)
+
+
+def layered_backtest(
+    market: str,
+    formula: str,
+    *,
+    horizon: int = 5,
+    n_quantiles: int = 5,
+) -> LayeredReport:
+    """对单因子在 market 上做 N 分位分层回测。"""
+
+    binned, fwd_col, effective_q, min_breadth = _binned_factor_panel(market, formula, horizon, n_quantiles)
     # 每 (ts, quantile) 组内等权平均 → 每 quantile 跨期平均。
     by_q = (
         binned.group_by("quantile")
@@ -142,7 +196,7 @@ def layered_backtest(
     qn = buckets[-1].mean_return
     spread = round(qn - q1, 8)
     monotonic = _is_monotonic([b.mean_return for b in buckets])
-    sample_count = int(df.select("ts").n_unique())
+    sample_count = int(binned.select("ts").n_unique())
     note = _NOTE
     if effective_q != n_quantiles:
         note = (
@@ -161,4 +215,4 @@ def layered_backtest(
     )
 
 
-__all__ = ["LayeredBucket", "LayeredError", "LayeredReport", "layered_backtest"]
+__all__ = ["LayeredBucket", "LayeredError", "LayeredReport", "factor_return_series", "layered_backtest"]

@@ -14,6 +14,13 @@ depends_on: [ff286f80af1546bfaaea9ce0a6feb9b2]
 
 # 因子收益归因接消费侧
 
+> **状态（2026-06-25）**：**provider + 对齐器 ✅ done**（done 卡 8f9d79fd·D-ATTRIB-PROVIDER·审计 #2）：
+> `factor_factory.layered.factor_return_series`（单因子 per-period 多空收益时序 F_t·复用 layered 分位·leak-free·诊断口径）
+> + `eval.attribution.attribution_from_series`（ts 键 inner-join 对齐器·消除手工位置 misalign 假绿灯）→ 系统真能产因子收益物料喂归因
+> （此前 factor_returns 必手搓=输入假绿灯）。MUT-A（多空价差取错端）/MUT-B'（对齐各自独立顺序）双变异抓。
+> **剩 follow-on（③·用户方法学）**：① 组合台/归因报告**端点**（接真组合收益 + 用户选的因子集 → attribution_from_series）；
+> ② 前端贡献瀑布/堆叠 + R² + abstain 呈现；③ 因子集选择/收益口径(excess vs raw)/回归窗 = 用户方法学拍板。
+
 ## Scope [必填]
 `eval/attribution.py`（done 卡 ff286f80）已建并验证（加总恒等式命门 + 诚实 abstain），但**纯 math 件、无消费侧**。
 本卡合拢价值闭环：

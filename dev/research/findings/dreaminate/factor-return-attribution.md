@@ -26,7 +26,14 @@ $$\sum_t r_t = T\hat\alpha + \sum_k \hat\beta_k\sum_t F_{k,t} + \sum_t\hat\varep
 
 ## 接线点（本项目 file:line）[必填]
 - 新建 `app/backend/app/eval/attribution.py`：`factor_return_attribution` + `AttributionResult`。
-- 暂为独立数学件（消费侧——组合台/归因报告 UI——属后续，建 mint）；与 factor_factory IC 度量正交（IC=预测力、本件=已实现收益归因）。
+- **消费侧物料 + 对齐器 ✅ done（2026-06-25·done 卡 8f9d79fd·审计 #2）**：
+  - **per-period 因子收益 provider** `factor_factory.layered.factor_return_series(market, formula)` → 单因子多空收益时序
+    F_t = 顶分位组内等权 fwd-return − 底分位组内等权（Grinold-Kahn 分位价差·leak-free 复用抽出的 `_binned_factor_panel`
+    同 layered 单一滞后源+point-in-time 分桶·诊断口径非可下注·h>1 重叠窗 β 精度 caveat）。根治「factor_returns 必手搓=输入假绿灯」。
+  - **ts 对齐器** `attribution_from_series(portfolio_by_ts, factor_series_by_name)` 按 ts 键 inner-join 对齐 → factor_return_attribution
+    （两侧用同一 ts 列表查值·消除手工位置 misalign；MUT「各自独立顺序」被 teeth 抓）。
+  - **剩 follow-on（用户方法学·池卡 e4496023 ③）**：组合台/归因报告**端点** + 前端贡献瀑布/R²/abstain UI + 因子集选择/收益口径(excess/raw)/回归窗。
+- 与 factor_factory IC 度量正交（IC=预测力、本件=已实现收益归因）。
 
 ## §5 对抗测试要点（种已知 bug，门必抓）[必填]
 1. **命门加总恒等式**：Σ contrib_k + specific == total_return 逐位（1e-9，跨随机因子/多 seed）。种坏：漏截距/漏某因子 ΣF → 已知 β 恢复测试抓（恒等式因构造仍成立，故恒等式 + 已知β双测）。

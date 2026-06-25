@@ -6,6 +6,14 @@
 ## <日期> · <标题>
 - 建/改了什么 + 命门  - 验收：<对抗测试 + 变异 + 全量数字>  - 下一步：<…> -->
 
+## 2026-06-25 · 因子收益归因消费侧——per-period 因子收益 provider + ts 对齐器（卡 8f9d79fd · D-ATTRIB-PROVIDER）
+
+- **缘起**：autonomous-loop（ultracode）。correctness 审计 workflow（wm8x329vn）#2（lev 7）：attribution.py 纯岛、factor_returns 必手搓 → 命门恒等式对任意输入恒真、产『绿』归因但 β 对应合成因子收益=输入假绿灯。verifier 确认物料已存在（layered 分位权重 + ic.py forward returns）。
+- **数学先行**：单因子收益 F_{k,t} = 顶分位组内等权 fwd-return − 底分位组内等权（Grinold-Kahn 分位多空价差）；leak-free（forward 只经 attach_forward_returns 单一滞后源 + point-in-time 分桶）。归因对齐：r_t=α+Σβ_k F_{k,t}+ε 须逐期同序，按 ts 键对齐根除手工 misalign。
+- **实现（additive + 行为保持重构）**：抽 `_binned_factor_panel`（layered_backtest 改调它·real-data 回归守）+ 加 `_per_period_long_short`（纯·inner join 仅两端齐备截面·缺端不补 0）+ `factor_return_series`；`eval.attribution.attribution_from_series`（ts 键 inner-join 对齐 → factor_return_attribution）。**护栏=不替用户选因子集**（provider 纯工程·选因子/口径/回归窗=用户方法学）。
+- **验收**：provider 5（合成 binned 已知 F_t + 真数据 equity_cn 集成 + 端到端自归因 β≈1 加总恒等式闭合）+ aligner 4。**MUT-A**（多空取错端）→ known_values 红；**MUT-B'**（对齐用各自独立顺序）→ ts-对齐 teeth 红（β 偏 1.0+）。教训：初版 MUT（sorted→同列表插入序）未抓——y/factor 用同一 ts 列表、OLS 行序无关=等价变换非 bug；真 misalign 是两侧各自独立顺序，加强测试（组合逆序+因子乱序）才咬住。**全量后端 1635 passed / 13 skipped / 0 failed / 149s**（基线 1626，净 +9）。首跑机器负载高触已知 flaky test_effect_ledger_concurrent_same_key 120s 兜底（隔离 1.12s 绿·改动不碰 DAG/ledger 证非回归·复跑转闲全绿）。
+- **下一步**：e4496023 ③剩（组合台/归因报告端点 + 前端贡献瀑布/R²/abstain UI + 因子集选择=用户方法学）池卡留；分支续 land-ready，commit+push 自动。
+
 ## 2026-06-25 · CPCV q05→gate 最后一公里——promote 真实路径读 emit cpcv 透传 gate（卡 f1bd08f2 · D-CPCV-PROMOTE）
 
 - **缘起**：autonomous-loop（ultracode）。correctness 审计 workflow（wm8x329vn）#8（高假绿灯）：done 卡 89e7be1e 让 gate 接受 cpcv，但生产 promote 路径 `promote.py:_run_overfit_gate` 调 `evaluate_overfit_gate` 时从不传 cpcv → gate 恒 cpcv=None，cpcv_conservative 在真实晋级路径永远触发不了（我自己 cpcv→gate 工作的最后一公里断线）。
