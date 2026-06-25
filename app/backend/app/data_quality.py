@@ -186,6 +186,11 @@ class DatasetRegistry:
         metadata: dict[str, Any] | None = None,
         foreign_provider: dict[str, set[Any]] | None = None,
     ) -> DatasetVersion:
+        # 写时强约束（W3 · B-VERSION-1）：登记是数据落库的唯一单点（intake.py 等所有写
+        # 路径都汇到此处）。缺 dataset_version 必备身份 / 缺 checksum / checksum 被篡改 →
+        # 直接拒，绝不静默落账退化版本。单源校验在 FetchResult.validate_for_write
+        # （connectors/base.py），登记口只调用、不另造（复用既有 _sha256_of_frame）。
+        fetch_result.validate_for_write(dataset_id=dataset_id)
         ge_results = []
         if rules:
             ge_results = [r.to_dict() for r in run_ge_checks(fetch_result.frame, rules, foreign_provider)]
