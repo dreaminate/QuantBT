@@ -89,7 +89,8 @@ class HypothesisCardStore:
 
     def freeze(self, card_id: str, *, frozen_oos: dict[str, Any] | None = None,
                ledger=None, review: dict[str, Any] | None = None,
-               human_reviewed: bool = False, override_note: str | None = None) -> HypothesisCard:
+               human_reviewed: bool = False, override_note: str | None = None,
+               registry=None) -> HypothesisCard:
         """冻结 confirmatory 卡。强制门：三必填非空 + 可证伪性 + 验证官 + honest-N 实读。幂等。
 
         可证伪性 confidence=low（D-T024-FALS · 硬透明 + 软决定）：默认 `human_reviewed=False` → 拒并
@@ -97,6 +98,11 @@ class HypothesisCardStore:
         ——**启发式绝不自动硬挡晋级**，但 override 留痕进卡（multiplicity.falsifiability_override，进
         content_hash 防篡改）+ needs_human_review 永不静音。保留的硬边界：结构空机制（三必填空白）与
         验证官 blocked 仍硬拒，不被 human_reviewed 放过。
+
+        `registry`（B-PIT-CONFIRMATORY · confirmatory 数据身份门，GOAL §16 line1759/line2028）：传入
+        `DatasetRegistry` 单一源时，额外校验 `frozen_oos.dataset_version` 必须解析到一条【已注册且带
+        known_at(PIT)】的 version，否则 FreezeRejected（无 PIT/无注册的 OOS 切片冻进 confirmatory =
+        前视 + 不可追溯）。**registry=None → 不强制**（既有 freeze 调用逐字不变·向后兼容）。
         """
 
         with self._freeze_lock:
@@ -112,6 +118,15 @@ class HypothesisCardStore:
             # 复核 #11：必须绑非空 frozen_oos（含 dataset_version），否则 consumed BLOCK 形同虚设。
             if not (frozen_oos or {}).get("dataset_version"):
                 raise FreezeRejected("confirmatory 冻结必须绑定 frozen_oos.dataset_version（一次性消费需有切片可盖戳）")
+            # B-PIT-CONFIRMATORY: 接 registry 单一源时，frozen_oos.dataset_version 必须是【已注册 + 带
+            # known_at(PIT)】的 version（GOAL §16 line1759/line2028）。registry=None → 不强制（向后兼容）。
+            if registry is not None:
+                from ..eval.confirmatory_data_gate import check_confirmatory_data
+                _dv_verdict = check_confirmatory_data(
+                    (frozen_oos or {}).get("dataset_version"), registry=registry
+                )
+                if not _dv_verdict.allow:
+                    raise FreezeRejected(f"confirmatory 冻结数据身份门：{_dv_verdict.reason}")
             # 复核 #9：冻结绑的 OOS 切片不得是源卡探索期碰过的（防 promote 后 freeze 重绑污染数据）。
             polluted = self._ancestor_touched_versions(card)
             if (frozen_oos or {}).get("dataset_version") in polluted:

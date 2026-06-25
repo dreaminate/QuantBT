@@ -407,6 +407,21 @@ class DatasetRegistry:
         )
         return versions[-1] if versions else None
 
+    def find_version(self, version_id: str) -> DatasetVersion | None:
+        """按 version_id 精确查一条【已注册】DatasetVersion（confirmatory 数据身份门用）。
+
+        version_id 全库唯一（``make_version_id`` = fetched_at + sha256[:8]）；遍历 ``list_versions``
+        取首个匹配。confirmatory 边界门（``eval.confirmatory_data_gate``）据此把 dataset_version
+        映回注册身份 + known_at(PIT) + lineage，验证「无 PIT/无注册 数据不得进 confirmatory」。
+        未命中 / 空 version_id → None（由调用方判拒，不在此造异常）。"""
+
+        if not (version_id or "").strip():
+            return None
+        for v in self.list_versions():
+            if v.version_id == version_id:
+                return v
+        return None
+
     def list_dataset_ids(self) -> list[str]:
         return sorted({v.dataset_id for v in self.list_versions()})
 
