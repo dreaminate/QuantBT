@@ -6,6 +6,14 @@
 ## <日期> · <标题>
 - 建/改了什么 + 命门  - 验收：<对抗测试 + 变异 + 全量数字>  - 下一步：<…> -->
 
+## 2026-06-25 · CPCV q05→gate 最后一公里——promote 真实路径读 emit cpcv 透传 gate（卡 f1bd08f2 · D-CPCV-PROMOTE）
+
+- **缘起**：autonomous-loop（ultracode）。correctness 审计 workflow（wm8x329vn）#8（高假绿灯）：done 卡 89e7be1e 让 gate 接受 cpcv，但生产 promote 路径 `promote.py:_run_overfit_gate` 调 `evaluate_overfit_gate` 时从不传 cpcv → gate 恒 cpcv=None，cpcv_conservative 在真实晋级路径永远触发不了（我自己 cpcv→gate 工作的最后一公里断线）。
+- **实现（additive）**：`_run_overfit_gate` 读 `result.get("cpcv_distribution")`（退 meta 内·须 dict status=ok）+ `meta.cpcv_policy`（默认 report_only·非法值回落·守不替方法学拍板）→ 透传 evaluate_overfit_gate。verdict.to_dict() 经 asdict 含 cpcv → run.json gate_verdict 携带。缺则 None（不编造·向后兼容逐位不变）。
+- **验收**：test_gate_wiring +3（T-GW-7：emit 带 cpcv→verdict.cpcv 非空 fragile=True+policy 真读 / 不带→None / 非法 policy 回落 report_only 不降级）。MUT（promote 丢透传）→ 透传+非法回落 2 测试红、缺则 None 测试仍绿（精准）；定点反向 edit 后还原。**全量后端 1626 passed / 13 skipped / 0 failed / 149s**（基线 1623，净 +3）。
+- **CPCV 全链端到端贯通**：库→消费(regression+二分类)→train_model opt-in→result.json→eval 端点→UI 卡→gate(run/gate_runner)→**promote 真实路径**。剩 861182e6 ③（cv_scheme UI 选项+双轨 report+Sharpe/DSR 转换=用户方法学）池卡留。
+- **下一步**：分支续 land-ready，commit+push 自动；候选下一切片见审计残余（attribution provider / 信号组合器 / 监控绩效轴 554cdcf2）+ 池卡。
+
 ## 2026-06-25 · 监控调度 driver 接线——补缺失生产 tick loop 让 weekly cron 真 fire（卡 698a3c60 · D-MONITOR-DRIVER）
 
 - **缘起 + 选片**：autonomous-loop（ultracode on）。先跑只读 correctness 审计 workflow（wm8x329vn·7 方法学域并行+对抗证伪·24 agent·全程 graphify+Read 不跑 pytest，不违「套件不叠跑」红线），排出 16 真缺口；取 #1（lev 8·不卡用户·最清晰假绿灯）。

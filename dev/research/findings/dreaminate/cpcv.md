@@ -87,4 +87,5 @@ $$\text{剔除 iff}\quad \exists j:\ t0_i\le t1_j\ \wedge\ t1_i\ge t0_j$$
 |---|---|---|---|
 | (本切片) | CPCV splits+路径重建+分布数学对齐理论、φ/覆盖/purge 不变量守门、PBO 红线、爆炸/边界拒、双轨 caveat | P1 | — |
 | 89e7be1e ✅done | CPCV q05 保守分位接进 overfit gate（report_only 默认 / cpcv_conservative opt-in·绝不硬 red/不升级·守不替拍板） | P2 | 本切片 |
+| f1bd08f2 ✅done | 最后一公里：promote_ide_run 真实路径读 emit cpcv 透传 gate（此前恒 cpcv=None 死接线·审计 #8）→ CPCV 全链端到端贯通至生产晋级 | P2 | 89e7be1e |
 | 861182e6 ③ 池卡留 | cv_scheme UI 选项 + 双轨 report 不自动判赢 + Sharpe/DSR prediction→收益转换（用户方法学） | P2 | 89e7be1e |

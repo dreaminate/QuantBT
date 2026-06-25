@@ -197,3 +197,60 @@ def test_gate_runner_forwards_cpcv_conservative_policy(tmp_path: Path):
     assert cons_frag.verdict.cpcv["downgraded_green_to_yellow"] is True
     cons_rob = evaluate_overfit_gate(**common, record=False, cpcv_distribution=rob, cpcv_policy="cpcv_conservative")
     assert cons_rob.verdict.color == "green" and cons_rob.verdict.cpcv["fragile"] is False  # 稳健 → 不降级
+
+
+# ── T-GW-7 CPCV q05→promote 真实路径（done 卡 89e7be1e 最后一公里）：promote 读 emit cpcv 透传 gate ─
+def test_promote_passes_cpcv_to_gate_when_present(tmp_path: Path):
+    """promote_ide_run 把 emit 的 cpcv_distribution + meta cpcv_policy 透传给 gate（此前 promote 恒 cpcv=None=死接线）。
+
+    MUT：promote._run_overfit_gate 丢 cpcv 透传 → gate_verdict.cpcv 恒 None，本测崩。
+    """
+    led = Ledger(tmp_path / "ledger")
+    store = _MemStore()
+    result = {
+        "equity_curve": _curve(300, daily=0.0008, seed=1),
+        "metadata": {"strategy_name": "cpcvp", "market": "crypto_perp", "frequency": "1d",
+                     "research_theme_id": "theme_cpcvp", "cpcv_policy": "cpcv_conservative"},
+        "cpcv_distribution": {"status": "ok", "metric": "r2", "baseline": 0.0, "q05": -0.12, "n_paths": 5},
+    }
+    live = promote_ide_run(ide_run_id="x", owner_username="a", strategy_name="cpcvp",
+                           strategy_code="code", result=result, run_root=tmp_path / "live",
+                           ledger=led, returns_store=store)
+    gv = json.loads((live.run_dir / "run.json").read_text(encoding="utf-8"))["gate_verdict"]
+    assert gv["cpcv"] is not None, "promote 没把 emit 的 cpcv 透传给 gate（最后一公里死接线复发）"
+    assert gv["cpcv"]["fragile"] is True                    # q05<baseline 脆弱被识别
+    assert gv["cpcv"]["policy"] == "cpcv_conservative"      # cpcv_policy 从 emit metadata 真读出（非硬写 report_only）
+
+
+def test_promote_cpcv_none_when_emit_absent(tmp_path: Path):
+    """emit 不带 cpcv → gate_verdict.cpcv=None（不编造·未算≠已算·向后兼容）。"""
+    led = Ledger(tmp_path / "ledger")
+    store = _MemStore()
+    result = {
+        "equity_curve": _curve(300, daily=0.0008, seed=2),
+        "metadata": {"strategy_name": "nocpcv", "market": "crypto_perp", "frequency": "1d",
+                     "research_theme_id": "theme_nocpcv"},
+    }
+    live = promote_ide_run(ide_run_id="y", owner_username="a", strategy_name="nocpcv",
+                           strategy_code="code", result=result, run_root=tmp_path / "live2",
+                           ledger=led, returns_store=store)
+    gv = json.loads((live.run_dir / "run.json").read_text(encoding="utf-8"))["gate_verdict"]
+    assert gv.get("cpcv") is None                           # 不带 cpcv → None（不编造）
+
+
+def test_promote_cpcv_invalid_policy_falls_back_report_only(tmp_path: Path):
+    """emit 给非法 cpcv_policy → 回落 report_only（绝不因脏输入误降级）。"""
+    led = Ledger(tmp_path / "ledger")
+    store = _MemStore()
+    result = {
+        "equity_curve": _curve(300, daily=0.0008, seed=3),
+        "metadata": {"strategy_name": "badpol", "market": "crypto_perp", "frequency": "1d",
+                     "research_theme_id": "theme_badpol", "cpcv_policy": "force_red_lol"},
+        "cpcv_distribution": {"status": "ok", "metric": "r2", "baseline": 0.0, "q05": -0.12, "n_paths": 5},
+    }
+    live = promote_ide_run(ide_run_id="z", owner_username="a", strategy_name="badpol",
+                           strategy_code="code", result=result, run_root=tmp_path / "live3",
+                           ledger=led, returns_store=store)
+    gv = json.loads((live.run_dir / "run.json").read_text(encoding="utf-8"))["gate_verdict"]
+    assert gv["cpcv"] is not None and gv["cpcv"]["policy"] == "report_only"  # 非法值回落 report_only
+    assert "downgraded_green_to_yellow" not in gv["cpcv"]                    # report_only 绝不降级
