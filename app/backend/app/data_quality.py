@@ -15,9 +15,12 @@
 
 from __future__ import annotations
 
+import dataclasses
 import json
+import os
+import re
 import threading
-from dataclasses import asdict, dataclass, field
+from dataclasses import asdict, dataclass, field, fields as _dc_fields
 from datetime import UTC, datetime, time, timedelta
 from pathlib import Path
 from typing import Any, Literal
@@ -25,6 +28,9 @@ from typing import Any, Literal
 import polars as pl
 
 from .connectors.base import FetchResult
+
+# manifest 落点的 dataset_id 目录名清洗（version_id 自身已是 fs-safe）。
+_SAFE_PATH = re.compile(r"[^A-Za-z0-9._-]+")
 
 
 GE_RuleType = Literal["not_null", "unique", "monotonic", "value_range", "foreign_key"]
@@ -149,13 +155,33 @@ class DatasetVersion:
     file_paths: list[str] = field(default_factory=list)
     ge_results: list[dict[str, Any]] = field(default_factory=list)
     metadata: dict[str, Any] = field(default_factory=dict)
+    # —— DataUpdate 信封补字段（GOAL §11「每次数据更新记录」· 卡 B-VERSION-1 余）——
+    # 全 optional·默认空：① 旧 registry.jsonl 行（无这些键）经 from_dict 仍解析（缺键填默认）；
+    # ② version_id / sha256 不由这些字段决定 → 既有合法写入身份字节不变（向后兼容验收）。
+    # 字段↔§11 信封：source_ref / ingestion_skill_version(skill_version) / secret_ref(引用) /
+    # known_at·effective_at(PIT) / quality_verdict(由 ge_results 派生) / lineage_id(=lineage) /
+    # schema_drift_status(信封槽位)。checksum=sha256、dataset_version=version_id、freshness_status
+    # 见下方 note（活算不冻结）。
+    source_ref: str | None = None
+    ingestion_skill_version: str | None = None
+    secret_ref: str | None = None          # 凭据【引用】，绝不明文 key（写时已被 validate_for_write 守门）
+    known_at_utc: str | None = None
+    effective_at_utc: str | None = None
+    quality_verdict: str | None = None     # pass / fail / unknown（None=未跑 GE）
+    schema_drift_status: str | None = None  # 信封槽位；真 drift 检测非本卡 scope（诚实留 None）
+    lineage_id: str | None = None          # data 级谱系 id（register 内 ids.content_hash 自动派生·恒在场）
+    manifest_path: str | None = None       # on-disk manifest 落点（有真实 file_paths 时）
+    # 说明：freshness_status 不冻结进不可变记录——它随时间变化，由 compute_freshness(registry)
+    # 活算（见本模块 compute_freshness）。把瞬时 freshness 写进不可变行会自欺，故刻意不存。
 
     def to_dict(self) -> dict[str, Any]:
         return asdict(self)
 
     @classmethod
     def from_dict(cls, data: dict[str, Any]) -> "DatasetVersion":
-        return cls(**data)
+        # 向后/向前兼容：旧行缺新键→默认补；未知键→忽略（不让一行炸全 registry 读取）。
+        known = {f.name for f in _dc_fields(cls)}
+        return cls(**{k: v for k, v in data.items() if k in known})
 
 
 def make_version_id(fetched_at_utc: str, sha256: str) -> str:
@@ -185,38 +211,183 @@ class DatasetRegistry:
         rules: list[GERule] | None = None,
         metadata: dict[str, Any] | None = None,
         foreign_provider: dict[str, set[Any]] | None = None,
+        *,
+        source_ref: str | None = None,
+        ingestion_skill_version: str | None = None,
+        secret_ref: str | None = None,
+        known_at_utc: str | None = None,
+        effective_at_utc: str | None = None,
+        upstream_lineage: list[str] | tuple[str, ...] | None = None,
+        schema_drift_status: str | None = None,
+        require_provenance: bool = False,
     ) -> DatasetVersion:
-        # 写时强约束（W3 · B-VERSION-1）：登记是数据落库的唯一单点（intake.py 等所有写
-        # 路径都汇到此处）。缺 dataset_version 必备身份 / 缺 checksum / checksum 被篡改 →
-        # 直接拒，绝不静默落账退化版本。单源校验在 FetchResult.validate_for_write
-        # （connectors/base.py），登记口只调用、不另造（复用既有 _sha256_of_frame）。
-        fetch_result.validate_for_write(dataset_id=dataset_id)
+        """数据落库唯一单点（intake.py 等所有写路径都汇于此）。扩展不替换：新增信封参数全为
+        keyword-only·默认空 → 既有调用（``register(did, fr, file_paths=…, metadata=…)``）字节级不变。
+
+        写时强约束（缺 dataset_version/checksum/篡改 → 拒）+ on-disk manifest 不可变门 +
+        data 级 lineage 自动派生，全在 ``self._append`` 落账【之前】完成——任一拒绝即不落账。
+        """
+
+        # 1) 把 register 级信封覆盖回写进 FetchResult 的副本 —— 让【单一写时校验源】
+        #    validate_for_write 读它自己的字段（含 secret_ref 引用守门 + 可选 provenance 门）。
+        overrides: dict[str, Any] = {}
+        if source_ref is not None:
+            overrides["source_ref"] = source_ref
+        if ingestion_skill_version is not None:
+            overrides["ingestion_skill_version"] = ingestion_skill_version
+        if secret_ref is not None:
+            overrides["secret_ref"] = secret_ref
+        if known_at_utc is not None:
+            overrides["known_at_utc"] = known_at_utc
+        if effective_at_utc is not None:
+            overrides["effective_at_utc"] = effective_at_utc
+        fr = dataclasses.replace(fetch_result, **overrides) if overrides else fetch_result
+
+        # 2) 写时强约束（单源 gate，复用既有 _sha256_of_frame·绝不另造哈希）：
+        #    缺身份/缺 checksum/篡改 → 拒；secret_ref 非引用 → 拒；require_provenance 开则缺凭据 → 拒。
+        fr.validate_for_write(dataset_id=dataset_id, require_provenance=require_provenance)
+
+        # version_id 只由 frame 内容(sha256) + fetched_at 决定（与既有完全一致），先算出供 manifest/lineage 用。
+        version_id = make_version_id(fr.fetched_at_utc, fr.sha256)
+
         ge_results = []
         if rules:
-            ge_results = [r.to_dict() for r in run_ge_checks(fetch_result.frame, rules, foreign_provider)]
+            ge_results = [r.to_dict() for r in run_ge_checks(fr.frame, rules, foreign_provider)]
+        # quality_verdict（§11 信封）由 GE 结果诚实派生：未跑→None，全过→pass，有失败→fail。
+        quality_verdict: str | None = None
+        if ge_results:
+            quality_verdict = "pass" if all(r.get("passed") for r in ge_results) else "fail"
+
         # 数据平台 v2：把数据集真实列清单落进 metadata["columns"]（FieldCatalog 的真相源之一）。
-        # 用 metadata 既有扩展点，不改 DatasetVersion 字段，旧 jsonl 行不受影响。
         meta = dict(metadata or {})
         if "columns" not in meta:
             try:
-                meta["columns"] = list(fetch_result.frame.columns)
+                meta["columns"] = list(fr.frame.columns)
             except Exception:  # noqa: BLE001
                 pass
+
+        # 3) data 级 lineage 自动派生（复用 ids.content_hash·恒在场 → 满足 §16「缺 lineage 即停」：
+        #    lineage 是身份的派生属性，不可能缺，无须额外拒绝路径）。
+        from .lineage.data_lineage import derive_dataset_lineage  # 惰性 import：零改 data_quality import-time 行为
+
+        lineage_node = derive_dataset_lineage(
+            dataset_id=dataset_id,
+            dataset_version=version_id,
+            checksum=fr.sha256,
+            source_ref=fr.source_ref,
+            ingestion_skill_version=fr.ingestion_skill_version,
+            upstream=tuple(upstream_lineage or ()),
+        )
+
+        # 4) on-disk manifest 自动落 + 校验（仅对真实存在的 file_paths）。同 version 内容漂移 →
+        #    不可变门 raise DatasetIntegrityError（接活已建门·种坏门必抓）。在落账【前】，拒则不落账。
+        manifest_path = self._write_and_verify_manifest(dataset_id, version_id, file_paths)
+
         version = DatasetVersion(
             dataset_id=dataset_id,
-            version_id=make_version_id(fetch_result.fetched_at_utc, fetch_result.sha256),
-            source_name=fetch_result.source_name,
-            fetched_at_utc=fetch_result.fetched_at_utc,
-            row_count=fetch_result.row_count,
-            coverage_start_utc=fetch_result.coverage_start_utc,
-            coverage_end_utc=fetch_result.coverage_end_utc,
-            sha256=fetch_result.sha256,
+            version_id=version_id,
+            source_name=fr.source_name,
+            fetched_at_utc=fr.fetched_at_utc,
+            row_count=fr.row_count,
+            coverage_start_utc=fr.coverage_start_utc,
+            coverage_end_utc=fr.coverage_end_utc,
+            sha256=fr.sha256,
             file_paths=list(file_paths or []),
             ge_results=ge_results,
             metadata=meta,
+            source_ref=fr.source_ref,
+            ingestion_skill_version=fr.ingestion_skill_version,
+            secret_ref=fr.secret_ref,
+            known_at_utc=fr.known_at_utc,
+            effective_at_utc=fr.effective_at_utc,
+            quality_verdict=quality_verdict,
+            schema_drift_status=schema_drift_status,
+            lineage_id=lineage_node.lineage_id,
+            manifest_path=manifest_path,
         )
         self._append(version)
         return version
+
+    def _manifest_path(self, dataset_id: str, version_id: str) -> Path:
+        """on-disk manifest 落点：``<registry 同级>/manifests/<safe dataset_id>/<version_id>.json``。
+        与 registry.jsonl 同根、与数据文件目录隔离（不污染 FieldCatalog 的目录扫描）。"""
+
+        safe = _SAFE_PATH.sub("_", str(dataset_id)).strip("._") or "ds"
+        return self._path.parent / "manifests" / safe / f"{version_id}.json"
+
+    def _write_and_verify_manifest(
+        self, dataset_id: str, version_id: str, file_paths: list[str] | None
+    ) -> str | None:
+        """对真实存在的 file_paths 落 on-disk manifest（per-file sha256）并校验。
+
+        - 复用 ``data_hash.dataset_hash`` 的 create_manifest/write_manifest/verify_manifest
+          （内部 ``_sha256_file`` = 单源文件哈希，**绝不另造**文件哈希），不改 dataset_hash。
+        - **不可变门**：``write_manifest`` 对同 (dataset_id, version_id) 若文件 sha256 漂移 →
+          raise ``DatasetIntegrityError``（López de Prado §1：dataset_version 内容不可变）。
+        - **向后兼容**：无 file_paths / 路径不存在（如既有测试传 ``["a.parquet"]`` 占位）→ no-op、
+          返 None，绝不因占位路径炸既有写入。
+        """
+
+        from .data_hash.dataset_hash import (  # 惰性 import：零改 import-time 行为·无循环依赖
+            DatasetManifest,
+            FileEntry,
+            create_manifest,
+            verify_manifest,
+            write_manifest,
+        )
+
+        existing = [Path(fp) for fp in (file_paths or []) if Path(fp).is_file()]
+        if not existing:
+            return None
+
+        # 稳定 root：单文件=父目录；多文件=commonpath。保证 relative_path 跨次登记一致
+        # （不可变比对按 relative_path→sha256 配对，key 必须稳定才抓得住同 version 漂移）。
+        if len(existing) == 1:
+            root = existing[0].parent
+        else:
+            root = Path(os.path.commonpath([str(p) for p in existing]))
+            if not root.is_dir():
+                root = root.parent
+
+        entries: list[FileEntry] = []
+        total_bytes = 0
+        total_rows = 0
+        has_rows = False
+        for p in existing:
+            # 逐文件复用 create_manifest（root=父目录, glob=文件名）拿单源 sha256/size/row_count。
+            sub = create_manifest(dataset_id, version_id, root_dir=p.parent, glob_pattern=p.name, recursive=False)
+            if not sub.files:
+                continue
+            fe = sub.files[0]
+            rel = p.relative_to(root).as_posix()
+            entries.append(FileEntry(relative_path=rel, sha256=fe.sha256, size_bytes=fe.size_bytes, row_count=fe.row_count))
+            total_bytes += fe.size_bytes
+            if fe.row_count is not None:
+                has_rows = True
+                total_rows += fe.row_count
+        if not entries:
+            return None
+
+        manifest = DatasetManifest(
+            dataset_id=dataset_id,
+            version=version_id,
+            files=entries,
+            created_at_utc=datetime.now(UTC).isoformat(),
+            total_size_bytes=total_bytes,
+            total_row_count=total_rows if has_rows else None,
+        )
+        manifest_path = self._manifest_path(dataset_id, version_id)
+        # 不可变门（同 version 漂移 → raise）。首登记=新写；篡改后再登记同 version → 拒。
+        write_manifest(manifest, manifest_path)
+        # 落后即校验（重算磁盘 vs manifest）——双保险，措辞诚实：检出 sha256 不符即拒。
+        ok, mismatches = verify_manifest(manifest_path, root)
+        if not ok:
+            from .data_hash.dataset_hash import DatasetIntegrityError
+
+            raise DatasetIntegrityError(
+                f"on-disk manifest 落后自校验失败 dataset_id={dataset_id} version={version_id}: {mismatches}"
+            )
+        return str(manifest_path)
 
     def list_versions(self, dataset_id: str | None = None) -> list[DatasetVersion]:
         items: list[DatasetVersion] = []
