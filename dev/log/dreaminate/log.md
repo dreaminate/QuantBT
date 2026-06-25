@@ -291,3 +291,14 @@
 - **全量验证**：后端全套 **1324 passed / 13 deselected**（139s，含我 28 新；testnet 13 deselect 预期）。凭真汇总行判绿。
 - **推进**：GOAL §6/§8 + 头号 gap #3：⬜→🟡（门核心已建并验证；data→…→monitor 全链贯穿 + PIT 连 R28 resolver 为后续切片）。
 - **交付**：worktree `auto/math-spine`（自 `fix-u2-synth` HEAD）；commit/push 自管、**land main 待用户**。⚠️ 双 state.md 对齐：主 checkout 有未提交的 GOAL-rebaseline 新版 state.md，land 时并入本进展防漂。
+
+## 2026-06-25 · Spine 全链贯穿第一段——DSR 估计器真实绑定 + 漂移对账门（gap #3 · 依赖 a00b3956）
+
+- **触发**：自主 loop 续推 gap #3——门核心已建（上轮）但未接真数学点，选信任层核心估计器 DSR 为第一个真实绑定（correctness-critical：DSR 实现漂移则整个 promote 信任层失真）。
+- **理论先行**：finding `spine-consistency-gate/01`——DSR 数学定义（Bailey-LdP False Strategy Theorem）+ z 公式 + 假设/适用域/失败条件；可证伪主张「impl 偏离定义超容差 → 对账 fail → 门拒」。
+- **实装（扩展不替换 · 复用单一身份源）**：`lineage/spine_binder.py`（可复用范式：`code_fingerprint(*fns)` 用 `inspect.getsource` 取整条实现链真源码 + `ids.content_hash` 冻结指纹；`numerical_consistency_check` impl vs 独立 oracle 在 fixtures 对账产 ConsistencyCheck）+ `eval/spine_bindings.py`（DSR proof_backed artifact §6 字段全含 + `dsr_oracle` 走 scipy 矩独立重算 + `build_dsr_binding`/`dsr_consistency_check`/`verify_dsr_consistency` 跑通 artifact→binding→check→门全链）+ 扩展 `lineage/__init__.py` 导出 binder。只 import `eval/dsr.py` 不改其实现。
+- **对抗测试**：`tests/test_spine_dsr_binding.py` **10 passed**——独立 oracle 忠实重算(≤1e-6) + 正确 impl 过门 proof_backed(pit-bound+consistency-pass matched) + **命门：种漂移 impl(丢 E[max] 通缩+denom)→oracle 对账 fail→门拒 granted=challenged** + 真源码指纹==content_hash(getsource 链) + 整链入指纹(改 helper 也变,防绕过) + staleness(指纹漂移→fresh 子句拒) + 落账 append-only verify_chain。
+- **全量验证**：eval+spine+lineage 组 **94 passed**；全量后端 **1334 passed / 13 deselected**（127s，上切片 1324 + 本 10 DSR，精确吻合 0 破坏）。凭真汇总行判绿。
+- **推进**：GOAL §6/§9 + 头号 gap #3「全链贯穿」第一个真数学点（DSR）已绑并验证漂移被门抓。
+- **残余（诚实边界）**：`verify_dsr_consistency()` 未接生产 promote 路径（run_verdict/overfit_gate/ide.promote）= 下一切片；oracle 独立性在矩计算层（scipy vs 手算），不判定义本身对错（靠 Verifier/Critic+文献）；factor/model/signal/portfolio/execution/attribution/monitor 其余数学点逐个绑后续。
+- **交付**：同 worktree `auto/math-spine`；commit/push 自管、**land main 待用户**。

@@ -31,6 +31,7 @@ from .spine import (
     MethodologyChoiceRecord,
     TheoryImplementationBinding,
 )
+from .spine_binder import code_fingerprint, numerical_consistency_check
 from .spine_gate import SpineDecision, evaluate_promotion
 from .spine_ledger import SpineLedger
 
@@ -57,4 +58,6 @@ __all__ = [
     "SpineDecision",
     "evaluate_promotion",
     "SpineLedger",
+    "code_fingerprint",
+    "numerical_consistency_check",
 ]

@@ -13,6 +13,7 @@
 | e1a98c41 | binance_vision_pull reload-merge schema bug 修——多日同年 try_parse_dates 崩 | todo | data-connectors | active |
 | 05d6f511 | 单人 self-approve 仅非真钱通道(冷却+留痕)，真钱硬双人 | done | approval | done |
 | 07b10903 | DS-6 装机收口——跨平台一键启动 + mkdir（可缓·docker compose 兜底） | done | onboarding-docs | done |
+| 11b0a3ab | Spine 全链贯穿第一段——DSR 估计器经 Mathematical Spine 真实绑定 + 漂移对账门 | done | math-spine | done |
 | 180a341e | 核验 agent tool_call 前端派发是否旁路受控翻译门（R11 前端缺口审计） | done | verification | done |
 | 1e0e65b4 | 组合消费者——agent 可调组合三角 gate（SEQ-CONSUMER=A · C full-fat 触发器） | done | agent | done |
 | 381b6c18 | 实盘因子血统门——未过检验因子上真钱线 → 警告+知情确认 | done | security-invariant | done |
@@ -138,6 +139,7 @@
 | frontend-foundation | e2de3d32 · done | dreaminate |
 | governance-ui | c631817e · done | dreaminate |
 | integration-test | 9a497bde · done | dreaminate |
+| math-spine | 11b0a3ab · done | dreaminate |
 | math-spine | a00b3956 · done | dreaminate |
 | monitor | de764e1c · todo | dreaminate |
 | monitor | d0e5d208 · done | dreaminate |
