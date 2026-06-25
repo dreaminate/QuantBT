@@ -579,3 +579,14 @@
 - **全量验证**：spine 组 **58 passed**、model_eval/conformal **62 passed**；**全量后端 1713 passed / 13 deselected / 0 failed**（flake 本次通过；1713=真基线 1712+inf-upper 回归 1）。凭真汇总行判绿。
 - **推进**：GOAL §4 + gap #3/#7：脊柱覆盖从信任层三角 + MinTRL 扩到**验证纵深 conformal** + **第三个生产消费点**（model_eval band）。**残余**：cqr/aci/drift/attribution 等其余数学点逐个绑。
 - **交付**：worktree `auto/math-spine`（已同步 main）；commit/push 自管、**land main 待用户**。
+
+## 2026-06-26 · 并行 campaign 施工图 + 第一波 pool 卡 + 红线止血（一中心+5并发筹备）
+
+- **触发**：用户拍板转「一中心 + 5 并发 deep-opus」并行开发范式（拆分在本会话外部做完、用户新开会话 loop）。
+- **GOAL canonical 修复**：发现真 §0-§17 契约（2076 行）一直只在本地未提交、committed 分支只有 85 行精炼 §0-§9 → commit §0-§17 进 main（beb1b2f·授权 land）。
+- **三方研究施工图**：中心 + deep-opus（代码 file:line 核验·36min）+ codex(gpt-5.5·xhigh) 三方独立拆 GOAL→DAG，取并集。落 `dev/research/findings/dreaminate/construction-map.md`（7 LINE + territory + 依赖 + 文件争用 + 波次 + 11 拍板项 + 红线）。
+- **致命红线止血（commit 7311c6b·C-MODELGOV-1 第一刀）**：`training/lib.py` 裸 pickle.load + torch.load(weights_only=False)=外来 artifact RCE（§15 做反了）→ RestrictedUnpickler 拦 RCE gadget（os/subprocess/pydoc/marshal…）+ weights_only=True。codex 复核处置（补 gadget·诚实标 blocklist≠safe-pickle·完整门 carded）。对抗测试 8 passed。
+- **第一波 pool 卡 mint**：`36f88f6b`(C-MODELGOV-1 完整门) `e01bf12f`(B-PIT-1 回测消费 as_of_known) `0430cd78`(B-VERSION-1 数据写门) `9d593481`(D-RDP-1 RDP schema) `f19c5c19`(A-QRO-1 对象信封地基)；W5=已有 `de764e1c`。各带文件领地 + 对抗验收 + depends_on。validate PASS（DAG 无环）。
+- **集成 land**：auto/math-spine（spine 全套 + GOAL + 红线修·9 ahead·origin/main 祖先=ff）land 进 main（用户授权）。fix-u2-synth(47d79a9) 已是 main 祖先无需 land。
+- **land 前终验**：全量后端 **1721 passed / 0 failed / 13 deselected**（1713 + 红线 8·flake 本次通过）。
+- **下一步**：用户新开会话用新版 loop 提示词（中心+5并发·活的任务池·可新开卡/线）驱动 fleet。

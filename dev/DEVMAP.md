@@ -109,13 +109,18 @@
 
 | uuid8 | 标题 | status | area |
 |---|---|---|---|
+| 0430cd78 | 数据更新写时强约束——dataset_version/checksum/lineage 升 block 门（B-VERSION-1） | todo | data-pit |
 | 31289338 | 冷启动 gate/UI 接 MinTRL：DSR=N/A + PSR + "需 N 期"渐进披露（R25/R27 呈现层） | todo | eval-methodology |
+| 36f88f6b | 模型 artifact 安全完整门——producer-run + hash 绑定 + allowlist + safetensors（C-MODELGOV-1 full） | todo | model-governance |
 | 554cdcf2 | 监控绩效轴真闭环——4 个 drift 检测器接 run_weekly_monitor_pass + per-factor IC 真源 + 观测落盘（审计残余） | todo | monitor |
 | 861182e6 | CPCV 接 promote/overfit gate + cv_scheme 双轨 report（价值闭环） | todo | eval-methodology |
 | 92a2182f | conformal 区间消费侧接线——模型台/信号层预测附校准区间 + abstain UI 呈现 | todo | eval-methodology |
+| 9d593481 | RDP 开放格式 schema + manifest 规范（fail-closed 导出器·D-RDP-1） | todo | delivery |
 | aa13c3b0 | 因子机构级度量接 lifecycle 状态机/sizing 生产路径 | todo | factor-lifecycle |
+| e01bf12f | 回测/训练引擎消费 as_of_known——PIT 双时态全域闭合第一段（B-PIT-1） | todo | data-pit |
 | e2afc5c2 | 三档成本预设接 sqrt-impact 默认 + 成交报告 impact 成本归因拆字段 | todo | execution-cost |
 | e4496023 | 因子收益归因接消费侧（组合台/归因报告 + UI 呈现） | todo | eval-methodology |
+| f19c5c19 | QRO 统一对象信封 + 状态四/五轴——对象脊柱地基（A-QRO-1） | todo | qro |
 
 ## 按 area 功能索引
 

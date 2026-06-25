@@ -16,6 +16,7 @@
 
 ## dreaminate
 - `dreaminate/conformal-intervals.md` — FINDING · R23 不确定性预测区间（split conformal / CQR / ACI）+ abstain
+- `dreaminate/construction-map.md` — 施工图 · GOAL §0-§17 → task DAG（一中心 + 5 并发 deep-opus）
 - `dreaminate/cpcv.md` — FINDING · R4 CPCV（Combinatorial Purged Cross-Validation）多路径回
 - `dreaminate/drift-detectors.md` — FINDING · §5 生产期漂移检测器（rolling-PSR / CUSUM / Page-Hinkley / P
 - `dreaminate/factor-lifecycle-institutional.md` — FINDING · §3 因子机构级生命周期度量（衰减半衰期 / 容量 / 因子族 / 拥挤）
@@ -26,6 +27,7 @@
 - `dreaminate/spine-consistency-gate/02-pbo-bootstrap-binding.md` — FINDING · PBO + Bootstrap CI 经脊柱绑定（property-based 一致性·三角补齐）
 - `dreaminate/spine-consistency-gate/03-mintrl-psr-binding.md` — FINDING · MinTRL + PSR 经脊柱绑定（交叉校验恒等式·接 run verdict cold_star
 - `dreaminate/spine-consistency-gate/04-conformal-binding.md` — FINDING · Conformal 预测区间经脊柱绑定（覆盖定理 property）+ 接 model_eval b
+- `dreaminate/spine-consistency-gate/05-drift-detectors-binding.md` — FINDING · 绩效轴漂移检测器经脊柱绑定（frozen-baseline √t 命门 property）
 - `dreaminate/spine-designs/00-contracts-and-coherence.md` — 00 · 脊柱跨部件契约一致性 + 测试真实性复核
 - `dreaminate/spine-designs/01-deterministic-kernel.md` — 01 · 确定性 DAG 内核 + checkpoint/replay/fork/rollback + 交易副作用不可幂
 - `dreaminate/spine-designs/02-llm-record-replay.md` — 02 · LLM 节点 record/replay 确定性 + 受控翻译层
