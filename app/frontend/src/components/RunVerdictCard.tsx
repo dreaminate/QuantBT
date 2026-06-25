@@ -57,6 +57,32 @@ export interface CostCell {
   excess: number;
 }
 
+/**
+ * R27 冷启动业绩期证据（MinTRL / track-record-length 轴）——镜像后端
+ * run_verdict._cold_start_evidence 契约。**与过拟合门样本充分性是不同轴**（axis 字段区分），
+ * 防两个「证据不足」混读。`note` 由后端措辞守门（R7 禁词 runtime 防御）产出=单一源，
+ * 前端**原样渲染、绝不在 UI 重拼措辞**（防绕过 R7 扫描门）。
+ */
+export interface ColdStartEvidence {
+  /** 已观测业绩期长度 N。 */
+  n_observed: number;
+  /** PSR（概率化 Sharpe）。 */
+  psr: number;
+  /** ⌈MinTRL⌉ 所需最小业绩期；null = never_significant / insufficient（无有限解）。 */
+  min_trl_obs: number | null;
+  min_trl_status: "ok" | "never_significant" | "insufficient";
+  /**
+   * 业绩期是否充分。**短业绩期=false → UI 绝不上成功绿**（不假绿灯：证据不足≠达标）。
+   */
+  sufficient: boolean;
+  /** 仅 ok（能估 Sharpe）才谈 DSR。 */
+  dsr_applicable: boolean;
+  axis: "track_record_length";
+  confidence: number;
+  /** 后端合规措辞（R7 守门单一源）——原样渲染。 */
+  note: string;
+}
+
 export interface RunVerdictData {
   runId: string;
   verdict: Verdict;
@@ -84,6 +110,11 @@ export interface RunVerdictData {
    * 健康判据：下界 > 0（区间不跨零 → 显著）。缺省/NaN → 第三格显示「N/A」（诚实，不假绿灯）。
    */
   bootstrapCI?: [number, number] | null;
+  /**
+   * R27 冷启动业绩期证据（来自后端 project_overfit 的 cold_start）。缺省/null → 不渲染该格
+   * （不假绿灯：无数据不编造「达标」）。短业绩期 sufficient=false → 渲染「证据不足」警示色、绝不绿。
+   */
+  coldStart?: ColdStartEvidence | null;
   /**
    * 合规裁决说明（一致/存疑/不一致 + 适用域 + 未验证项）。
    * 落地须由后端 verifier._verdict_note 供给——前端 mock 仅占位、禁绝对化措辞。
@@ -465,6 +496,7 @@ export function RunVerdictCard({
             healthy={(v) => v > 0}
           />
           <BootstrapStat ci={data.bootstrapCI} />
+          {data.coldStart && <ColdStartStat cs={data.coldStart} />}
         </div>
         <div style={{ display: "flex", alignItems: "center", gap: 10 }}>
           <div
@@ -626,6 +658,30 @@ function BootstrapStat({ ci }: { ci?: [number, number] | null }) {
       value={`[${lo.toFixed(2)}, ${hi.toFixed(2)}]`}
       hint="下界>0 显著"
       valueColor={lo > 0 ? "var(--desk-success)" : "var(--desk-danger)"}
+    />
+  );
+}
+
+/**
+ * R27 冷启动业绩期格（track-record-length 轴，与 PBO/DSR 并列）。
+ * **不假绿灯**：sufficient=false → 「证据不足」警示色（绝不绿）；sufficient=true → 「充分」**中性色非成功绿**
+ * （够数据 ≠ 策略好——质量看 PBO/DSR/裁决，本格只说业绩期长度够不够估）。措辞为业绩期长度事实陈述、非信任结论
+ * （不触 R7 禁词）；完整合规说明在后端 cold_start.note（单一源）。
+ */
+function ColdStartStat({ cs }: { cs: ColdStartEvidence }) {
+  const insufficient = !cs.sufficient;
+  const needTxt =
+    cs.min_trl_obs != null
+      ? `需 ~${cs.min_trl_obs} 期`
+      : cs.min_trl_status === "never_significant"
+        ? "任意长度不显著"
+        : "样本不足";
+  return (
+    <StatPair
+      label="业绩期"
+      value={`${insufficient ? "证据不足" : "充分"} · N=${cs.n_observed}`}
+      hint={needTxt}
+      valueColor={insufficient ? "var(--desk-warning)" : "var(--desk-text-soft)"}
     />
   );
 }
@@ -1367,6 +1423,17 @@ export const MOCK_RUN_VERDICT: RunVerdictData = {
   pbo: 0.18,
   dsr: 1.34,
   bootstrapCI: [0.21, 1.97],
+  coldStart: {
+    n_observed: 312,
+    psr: 0.98,
+    min_trl_obs: 120,
+    min_trl_status: "ok",
+    sufficient: true,
+    dsr_applicable: true,
+    axis: "track_record_length",
+    confidence: 0.95,
+    note: "业绩期 N=312 ≥ 按当前估计所需 120 期（95% 置信）：达最小业绩期（PSR=0.98）。",
+  },
   verdictNote:
     "双目标在容差内、PBO 0.18 / DSR 1.34 未触发熔断。适用域：中证500 成分、周频、2019–2024；未验证项：制度变更稳健性、实盘冲击成本。建议 pessimistic 成本下纸面跟踪 4 周再决定动钱。",
   promoteState: "candidate",

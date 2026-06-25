@@ -76,6 +76,55 @@ afterEach(() => {
   vi.restoreAllMocks();
 });
 
+describe("LiveRunVerdictCard · R27 冷启动业绩期映射（/overfit cold_start → 卡）", () => {
+  it("后端 cold_start(sufficient=false) → 渲染「证据不足」（真闭环·不假绿灯）", async () => {
+    routeHappy({
+      "/overfit": jsonRes({
+        ...OVERFIT_OK,
+        cold_start: {
+          n_observed: 20,
+          psr: 0.4,
+          min_trl_obs: 90,
+          min_trl_status: "ok",
+          sufficient: false,
+          dsr_applicable: true,
+          axis: "track_record_length",
+          confidence: 0.95,
+          note: "业绩期长度不足：N=20 < 按当前估计所需 90 期（95% 置信）：证据不足。",
+        },
+      }),
+    });
+    renderWithDesk(<LiveRunVerdictCard runId="run_x" />);
+    await waitFor(() =>
+      expect(screen.getByTestId("live-run-verdict-card")).toBeInTheDocument(),
+    );
+    const row = screen.getByText("业绩期").parentElement as HTMLElement;
+    expect(within(row).getByText(/证据不足 · N=20/)).toHaveStyle({
+      color: "var(--desk-warning)",
+    });
+  });
+
+  it("后端无 cold_start → 不渲染「业绩期」格（缺数据不编造达标）", async () => {
+    routeHappy(); // OVERFIT_OK 无 cold_start
+    renderWithDesk(<LiveRunVerdictCard runId="run_x" />);
+    await waitFor(() =>
+      expect(screen.getByTestId("live-run-verdict-card")).toBeInTheDocument(),
+    );
+    expect(screen.queryByText("业绩期")).toBeNull();
+  });
+
+  it("cold_start 形状坏（缺 sufficient/非法 status）→ coldStartOrNull=null、不渲染（不假绿灯）", async () => {
+    routeHappy({
+      "/overfit": jsonRes({ ...OVERFIT_OK, cold_start: { n_observed: 20, min_trl_status: "weird" } }),
+    });
+    renderWithDesk(<LiveRunVerdictCard runId="run_x" />);
+    await waitFor(() =>
+      expect(screen.getByTestId("live-run-verdict-card")).toBeInTheDocument(),
+    );
+    expect(screen.queryByText("业绩期")).toBeNull();
+  });
+});
+
 describe("LiveRunVerdictCard · 切真拉端点", () => {
   it("拉 verdict/overfit/cost-sensitivity + run metrics 并渲染裁决卡", async () => {
     routeHappy();

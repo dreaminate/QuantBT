@@ -2,6 +2,7 @@ import { useEffect, useState } from "react";
 import { authFetch } from "../lib/auth";
 import {
   RunVerdictCard,
+  type ColdStartEvidence,
   type CostCell,
   type PromoteState,
   type RunVerdictData,
@@ -40,6 +41,8 @@ interface OverfitResp {
   dsr_optimistic?: number | null;
   // 多证据三角第三腿：GateVerdict.to_dict() 返 [下界, 上界]（NaN→无效，前端显 N/A）。
   bootstrap_ci?: [number, number] | number[];
+  // R27 冷启动业绩期证据（project_overfit 的 cold_start）；缺/null → 卡不渲染该格（不假绿灯）。
+  cold_start?: ColdStartEvidence | null;
 }
 interface CostResp {
   cost?: Array<{ preset: string; sharpe: number; excess: number }>;
@@ -65,6 +68,23 @@ function num(v: unknown, d = 0): number {
  */
 function numOrNull(v: unknown): number | null {
   return typeof v === "number" && Number.isFinite(v) ? v : null;
+}
+
+/**
+ * R27 冷启动证据解析：仅当形状最小完备（sufficient:boolean + n_observed:number + min_trl_status 合法）
+ * 才放行；否则 null → 卡不渲染该格（不假绿灯：后端形状坏绝不编造「达标」）。
+ */
+function coldStartOrNull(v: unknown): ColdStartEvidence | null {
+  if (!v || typeof v !== "object") return null;
+  const o = v as Record<string, unknown>;
+  const statusOk =
+    o.min_trl_status === "ok" ||
+    o.min_trl_status === "never_significant" ||
+    o.min_trl_status === "insufficient";
+  if (typeof o.sufficient !== "boolean" || typeof o.n_observed !== "number" || !statusOk) {
+    return null;
+  }
+  return v as ColdStartEvidence;
 }
 
 /** Bootstrap CI 解析：仅当 [下界,上界] 均为有限数才有效；否则 null（前端显 N/A，不假绿灯）。 */
@@ -135,6 +155,7 @@ function mapToData(
     pbo: numOrNull(overfit.pbo),
     dsr: numOrNull(overfit.dsr_conservative ?? overfit.dsr_optimistic),
     bootstrapCI: ciOrNull(overfit.bootstrap_ci),
+    coldStart: coldStartOrNull(overfit.cold_start),
     // note 一律后端供给；缺失用合规占位（不杜撰绝对化措辞）。
     verdictNote:
       verdict.verdictNote ||

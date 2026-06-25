@@ -14,6 +14,8 @@ depends_on: [6acbb499f5b94fe3b77c4de79bb43982]
 
 # 冷启动 gate/UI 接 MinTRL
 
+> **状态（2026-06-25）**：**gate 投影侧 ✅ done**（卡 b1e4efdf·project_overfit 加 cold_start 证据充分性字段）；**UI 裁决卡呈现 ✅ done**（done 卡 c5960022·RunVerdictCard + LiveRunVerdictCard 真闭环「业绩期」格，不假绿灯：证据不足非绿/充分中性/缺数据不渲染，MUT-cs 验证有牙）。**剩**：DSR=N/A + PSR 渐进披露的更细 UI（如需）留池。
+
 ## Scope [必填]
 MinTRL 数学（`dsr.py`）已建并验证，但冷启动判定未接 gate/UI。本卡合拢 R27 呈现层：
 ① gate/裁决层在 N 小时把 DSR 标 **N/A**（N=1 DSR 退化 PSR=范畴误用）、给 PSR 显著性 + MinTRL；

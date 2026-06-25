@@ -128,6 +128,66 @@ describe("U3 RunVerdictCard · PBO/DSR null 诚实（§3 不假绿灯）", () =>
   });
 });
 
+describe("R27 RunVerdictCard · 冷启动业绩期（track-record-length 轴·不假绿灯）", () => {
+  const insufficientCS = {
+    n_observed: 20,
+    psr: 0.4,
+    min_trl_obs: 90,
+    min_trl_status: "ok" as const,
+    sufficient: false,
+    dsr_applicable: true,
+    axis: "track_record_length" as const,
+    confidence: 0.95,
+    note: "业绩期长度不足：N=20 < 按当前估计所需 90 期（95% 置信）：证据不足。",
+  };
+
+  it("sufficient=false → 「证据不足」警示色，**绝不成功绿**（不假绿灯·核心）", () => {
+    renderWithDesk(<RunVerdictCard data={makeData({ coldStart: insufficientCS })} />);
+    const label = screen.getByText("业绩期");
+    const row = label.parentElement as HTMLElement;
+    const valueCell = within(row).getByText(/证据不足 · N=20/);
+    expect(valueCell).toHaveStyle({ color: "var(--desk-warning)" });
+    expect(valueCell).not.toHaveStyle({ color: "var(--desk-success)" }); // 种坏：短业绩期渲染成绿=假绿灯
+    expect(within(row).getByText("需 ~90 期")).toBeInTheDocument();
+  });
+
+  it("sufficient=true → 「充分」**中性色、非成功绿**（够数据≠策略好：质量看 PBO/DSR）", () => {
+    renderWithDesk(<RunVerdictCard data={makeData()} />); // MOCK coldStart sufficient=true N=312
+    const label = screen.getByText("业绩期");
+    const row = label.parentElement as HTMLElement;
+    const valueCell = within(row).getByText(/充分 · N=312/);
+    expect(valueCell).toHaveStyle({ color: "var(--desk-text-soft)" });
+    expect(valueCell).not.toHaveStyle({ color: "var(--desk-success)" }); // 充分≠达标绿
+  });
+
+  it("never_significant（min_trl_obs=null）→ 证据不足 + 「任意长度不显著」（最严·绝不绿）", () => {
+    const cs = {
+      ...insufficientCS,
+      n_observed: 15,
+      min_trl_obs: null,
+      min_trl_status: "never_significant" as const,
+      dsr_applicable: false,
+      note: "业绩期 N=15：实盘 Sharpe 未超基准，任何样本长度都不显著（证据不足）。",
+    };
+    renderWithDesk(<RunVerdictCard data={makeData({ coldStart: cs })} />);
+    const row = screen.getByText("业绩期").parentElement as HTMLElement;
+    expect(within(row).getByText(/证据不足 · N=15/)).not.toHaveStyle({
+      color: "var(--desk-success)",
+    });
+    expect(within(row).getByText("任意长度不显著")).toBeInTheDocument();
+  });
+
+  it("coldStart 缺省/null → 不渲染「业绩期」格（无数据不编造达标·不假绿灯）", () => {
+    renderWithDesk(<RunVerdictCard data={makeData({ coldStart: undefined })} />);
+    expect(screen.queryByText("业绩期")).toBeNull();
+  });
+
+  it("note 走后端单一源、不触 R7 禁词（含 insufficient/never_significant 文案）", () => {
+    expect(scanForbiddenWords(insufficientCS.note)).toEqual([]);
+    expect(scanForbiddenWords(MOCK_RUN_VERDICT.coldStart?.note ?? "")).toEqual([]);
+  });
+});
+
 describe("R1 RunVerdictCard · 对抗测试①：禁止 import 冻结页", () => {
   it("源码不含 frontend-run-detail 冻结 RunDetailPage 的 import", () => {
     expect(() => assertNoFrozenPageImport(SOURCE)).not.toThrow();

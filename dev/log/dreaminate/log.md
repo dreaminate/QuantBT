@@ -413,3 +413,11 @@
 - **CPCV→gate（861182e6）勘察**：判为需独立 Plan（train_model 单路径 OOS→组合多路径重构跨 3 层 + 成本×C(N,k)；**CPCV paths≠cscv_pbo 跨策略矩阵、不可误喂**），scope 已落卡供后续。
 - **验证**：`test_conformal_abstain_signal.py` 6 + test_signals 7 + test_dag_kernel 25 passed；**全量后端 1585 passed / 13 skipped / 0 failed / 164s**（基线 1579，净 +6）。
 - **本轮 loop「commit 和 push 自动进行」→ 本地 commit + push 分支 worktree-autopolish-w1**（land main 仍仅用户）。
+
+## 2026-06-25 · 冷启动 MinTRL 业绩期证据接裁决卡 UI（done 卡 c5960022 / 31289338 UI · 能信）
+- **价值闭环（能信·首个前端切片）**：后端 cold_start（卡 b1e4efdf 建于 project_overfit、UI 零呈现）→ `RunVerdictCard` 首类「业绩期」格 `ColdStartStat` + `LiveRunVerdictCard` mapToData 真映射（/overfit cold_start → `coldStartOrNull` 形状校验 → RunVerdictData.coldStart → 渲染）。小白看见「证据不足·需 N 期」而非在短业绩期上信 PBO/DSR。
+- **不假绿灯在 UI**：sufficient=false→「证据不足」警示色非绿、sufficient=true→「充分」中性色非绿（够数据≠策略好、质量看 PBO/DSR）、缺省/坏形状→不渲染（不编造达标）。R7：UI 只渲业绩期长度事实、合规措辞走后端 cold_start.note 单一源（harness R7 扫描门覆盖）。
+- **门有牙**：MUT-cs（冷启动恒渲成功绿）→ 3 冷启动测试 FAIL（不假绿灯有牙）。
+- **worktree 前端验证**：worktree 无 node_modules（git worktree 不带 gitignored）→ symlink 主仓库 app/frontend/node_modules 跑 tsc/vitest/build，验后清理（symlink+dist 不入库）。
+- **验证**：tsc 无类型错；`RunVerdictCard.test` 28 + `LiveRunVerdictCard.test` 15 passed；**全前端 288 passed / 23 文件**（基线 280，净 +8）；vite build ✓。
+- **本轮 loop「commit 和 push 自动进行」→ 本地 commit + push 分支 worktree-autopolish-w1**（land main 仍仅用户）。
