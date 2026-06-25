@@ -12,7 +12,7 @@ import { type PaperRun, type PaperMarket, type SchedRow } from "../types";
 
 /**
  * 运行盘：头部状态 + 4 指标 + 净值曲线 + 调度器 KV + 持仓速览。
- * 接真：传 liveSched（来自 /api/paper/status）即用后端 PaperSchedulerState；未传回退 mock。
+ * 真实后端：传 liveSched（来自 /api/paper/status）即用后端 PaperSchedulerState；未传回退 mock。
  */
 export function RunView({
   run,

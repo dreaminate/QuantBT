@@ -5,7 +5,7 @@ import { AgentWorkbenchPage } from "./AgentWorkbenchPage";
 import { streamAgentWorkbench } from "./agentLive";
 
 /**
- * A4 接真测试：agent 工作台 LIVE 模式（真 /api/agent/workbench/stream）+ handoff
+ * A4 真实流测试：研究执行台 LIVE 模式（真 /api/agent/workbench/stream）+ handoff
  * 真调 /api/strategy/submit_candidate（止于模拟盘）。
  *
  * 治理红线（与后端对抗测试对齐）：
@@ -108,9 +108,9 @@ describe("agentLive · SSE 事件投影（纯逻辑，无真网络）", () => {
   });
 });
 
-describe("AgentWorkbenchPage · 接真开关 + handoff 真端点", () => {
+describe("AgentWorkbenchPage · 真实流开关 + handoff 真端点", () => {
   beforeEach(() => {
-    // 给个安全的 fetch 兜底（默认接真挂载即起真流；mock 它避免真网络）。
+    // 给个安全的 fetch 兜底（默认真实流挂载即起真流；mock 它避免真网络）。
     vi.stubGlobal(
       "fetch",
       vi.fn().mockResolvedValue(
@@ -122,7 +122,7 @@ describe("AgentWorkbenchPage · 接真开关 + handoff 真端点", () => {
     vi.unstubAllGlobals();
   });
 
-  it("DS-2 默认接真：LIVE badge 在、顶栏 MockBadge（「MOCK 数据」）不在 + 挂载即调真 stream", async () => {
+  it("DS-2 默认真实流：LIVE badge 在、顶栏 MockBadge（「MOCK 数据」）不在 + 挂载即调真 stream", async () => {
     const fetchMock = vi.fn().mockResolvedValue(
       sseResponse(['event: done\ndata: {"final_message":"","succeeded":true}']),
     );
@@ -130,7 +130,7 @@ describe("AgentWorkbenchPage · 接真开关 + handoff 真端点", () => {
     const { container } = renderWithDesk(<AgentWorkbenchPage />);
     expect(container.querySelector("[data-live-badge]")).not.toBeNull();
     expect(screen.queryByText("MOCK 数据")).toBeNull();
-    // 默认接真 → 挂载即调真 workbench stream 端点（不放 mock 假绿灯）。
+    // 默认真实流 → 挂载即调真 workbench stream 端点（不放 mock 假绿灯）。
     await waitFor(() => {
       const called = fetchMock.mock.calls.map((c) => String(c[0]));
       expect(called.some((u) => u.includes("/api/agent/workbench/stream"))).toBe(true);
@@ -175,8 +175,8 @@ describe("AgentWorkbenchPage · 接真开关 + handoff 真端点", () => {
     });
   });
 
-  // DS-2 blocker #1 回归门：默认接真态下发消息绝不落 mock 块（不假绿灯）。
-  it("对抗：接真态发真消息 → 驱动真流（调 stream 端点），绝不注入 mock 「看演示」ack 块", async () => {
+  // DS-2 blocker #1 回归门：默认真实流态下发消息绝不落 mock 块（不假绿灯）。
+  it("对抗：真实流态发真消息 → 驱动真流（调 stream 端点），绝不注入 mock 「看演示」ack 块", async () => {
     const fetchMock = vi.fn().mockResolvedValue(
       sseResponse(['event: done\ndata: {"final_message":"","succeeded":true}']),
     );
@@ -201,7 +201,7 @@ describe("AgentWorkbenchPage · 接真开关 + handoff 真端点", () => {
     expect(screen.queryByText(/看演示 mock：策略台脚本已跑到回测拍板/)).toBeNull();
   });
 
-  it("对抗：接真态 /clear → 重起真流（不铺 mock 剧本，不出现首条 mock prompt）", async () => {
+  it("对抗：真实流态 /clear → 重起真流（不铺 mock 剧本，不出现首条 mock prompt）", async () => {
     const fetchMock = vi.fn().mockResolvedValue(
       sseResponse(['event: done\ndata: {"final_message":"","succeeded":true}']),
     );

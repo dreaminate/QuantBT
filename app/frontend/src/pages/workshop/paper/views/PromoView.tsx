@@ -13,9 +13,9 @@ import { type PaperRun, type PromoCheck } from "../types";
 
 /**
  * 晋升通道 · live ladder 的 paper→OBSERVATION 段。
- * INV-5：Agent 永不自动晋级，须人工审批 + 验证背书。审批按钮三态：
+ * INV-5：系统不会自动晋级，须人工审批 + 验证背书。审批按钮三态：
  *   ready=可点（人工触发）/ promoted=已晋级只读 / blocked=不可点（禁用），不一键自动晋级。
- * 接真：liveChecks 来自后端 4 门聚合（/api/paper/promotion）；onApprove 由页面接 POST 审批端点。
+ * 真实后端：liveChecks 来自后端 4 门聚合（/api/paper/promotion）；onApprove 由页面接 POST 审批端点。
  *
  * §3 不假绿灯：审批须填验证背书(endorsement_ref) + 理由(reason)——后端 INV-5 必拒空，
  * 前端同样硬拦（空背书/空理由不发请求），失败显式报错、绝不乐观伪「已晋级」绿态。

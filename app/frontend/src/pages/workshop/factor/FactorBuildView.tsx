@@ -15,7 +15,7 @@ export interface BuildChatMsg {
   code?: string;
 }
 
-/** 后端 /api/factors/validate 返回（接真时注入）。 */
+/** 后端 /api/factors/validate 返回（接入真实数据时注入）。 */
 export interface FactorValidateLive {
   valid: boolean;
   stage: string;        // compile | lookahead | ok
@@ -36,7 +36,7 @@ export interface FactorBuildViewProps {
   onGate: () => void;
   onGateClose: () => void;
   onGateConfirm: () => void;
-  /** 接真即时校验（编译/前视门 + IC）；存在则覆盖 mock 预览并改挂 LIVE。 */
+  /** 真实后端即时校验（编译/前视门 + IC）；存在则覆盖 mock 预览并改挂 LIVE。 */
   live?: FactorValidateLive | null;
 }
 
@@ -150,15 +150,15 @@ export function FactorBuildView(props: FactorBuildViewProps) {
   } = props;
 
   const balanced = isBalanced(expr);
-  // 注册门：表达式配平 +（未接真则演示放行 / 已接真则必须 live.valid）。
+  // 注册门：表达式配平 +（未接入真实后端则演示放行 / 已接入真实后端则必须 live.valid）。
   // 绝不在后端判前视未过时仍放行注册（不假绿灯）。
   const canRegister = balanced && (!live || live.valid);
-  // 接真：编译/前视门状态用后端 validate 真结果（前视未过 = 红，绝不假绿灯）。
+  // 真实后端：编译/前视门状态用后端 validate 真结果（前视未过 = 红，绝不假绿灯）。
   let validTxt = balanced ? "✓ 括号配平 · 编译通过" : "✕ 括号未配平";
   let validColor = balanced ? "var(--desk-success)" : "var(--desk-danger)";
   if (live) {
     if (live.valid) {
-      validTxt = "✓ 编译通过 · 前视门通过（接真）";
+      validTxt = "✓ 编译通过 · 前视门通过（真实后端）";
       validColor = "var(--desk-success)";
     } else if (live.stage === "lookahead") {
       validTxt = "✕ 前视门未通过 · 引入未来函数";
@@ -207,7 +207,7 @@ export function FactorBuildView(props: FactorBuildViewProps) {
     return out;
   }, [previewSeed]);
   const previewBars = svgBars(previewSeries, 300, 70, 35);
-  // 接真：IC/IR 用后端 validate 的真实 IC 报告；否则 mock。
+  // 真实后端：IC/IR 用后端 validate 的真实 IC 报告；否则 mock。
   const previewIc =
     live?.ic?.ic_mean != null ? live.ic.ic_mean.toFixed(3) : (0.03 + (nz(previewSeed) - 0.5) * 0.03).toFixed(3);
   const previewIr =
@@ -219,7 +219,7 @@ export function FactorBuildView(props: FactorBuildViewProps) {
     { icon: "△", color: "var(--desk-warning)", t: "换手提示：含 1 日窗口，预计周换手偏高" },
   ];
 
-  // 接真后：live 存在且未过校验时，前视/重名门不得再显示绿 ✓（否则与第一门红 ✕ 自相矛盾、假绿灯）。
+  // 接入真实后端后：live 存在且未过校验时，前视/重名门不得再显示绿 ✓（否则与第一门红 ✕ 自相矛盾、假绿灯）。
   const liveFailed = !!live && !live.valid;
   const gateChecks = [
     { icon: balanced ? "✓" : "✕", color: validColor, t: "表达式编译通过（polars 计算图）" },
@@ -411,7 +411,7 @@ export function FactorBuildView(props: FactorBuildViewProps) {
                         padding: "1px 6px",
                       }}
                     >
-                      {live.valid ? "LIVE · 即时 IC 接真" : `校验未过 · ${live.stage}`}
+                      {live.valid ? "LIVE · 即时 IC 真实后端" : `校验未过 · ${live.stage}`}
                     </span>
                   ) : (
                     <MockBadge label="MOCK 数据 · 即时 IC（待接 /api/factors/validate）" />

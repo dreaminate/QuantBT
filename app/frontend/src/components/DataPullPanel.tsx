@@ -92,7 +92,7 @@ export function DataPullPanel({ domain, onGoToBrowser, onGoToTaskCenter }: DataP
   const [end, setEnd] = useState("");
   const [refreshMode, setRefreshMode] = useState<"incremental" | "full">("incremental");
   const [binanceInterval, setBinanceInterval] = useState("1h");
-  /** 一键全量拉取传给后端的 default_interval（K 线柱宽，非历史长度） */
+  /** 批量全量拉取传给后端的 default_interval（K 线柱宽，非历史长度） */
   const [fullPullDefaultInterval, setFullPullDefaultInterval] = useState("1h");
   const [jobId, setJobId] = useState<string | null>(null);
   const [lastRefreshedJobId, setLastRefreshedJobId] = useState<string | null>(null);
@@ -292,19 +292,19 @@ export function DataPullPanel({ domain, onGoToBrowser, onGoToTaskCenter }: DataP
         {market === "binanceusdm" ? (
           <div className="data-pull-full-banner panel-soft" style={{ marginBottom: "1rem", padding: "0.75rem 1rem", borderRadius: "8px" }}>
             <p style={{ margin: "0 0 0.5rem", fontSize: "0.9rem", lineHeight: 1.5 }}>
-              一键按顺序全量拉取<strong>全部加密 data_kind</strong>：Vision 覆盖{" "}
+              按顺序批量拉取<strong>全部加密 data_kind</strong>：Vision 覆盖{" "}
               <a href="https://data.binance.vision/?prefix=data/" target="_blank" rel="noreferrer">
                 data.binance.vision
               </a>{" "}
               下 USDM/CM 日频、现货日频、期权 BVOL/EOH；REST 为 USDT 永续。
               <strong>「周期」</strong>指 K 线柱宽（如 <code>1m</code>、<code>1h</code>），
               <em>不是</em>
-              只拉「一小时历史」——历史跨度由起止日期决定（一键里 Vision 默认从 <code>2019-09-01</code> 到<strong>今天</strong>）。
-              下方可选一键使用的周期（与 UM REST klines / 需周期的 Vision 共用）；<code>1m</code> 等比 <code>1h</code> 量大得多。任务可能极长，请勿关闭标签。
+              只拉「一小时历史」——历史跨度由起止日期决定（批量任务里 Vision 默认从 <code>2019-09-01</code> 到<strong>今天</strong>）。
+              下方可选批量任务使用的周期（与 UM REST klines / 需周期的 Vision 共用）；<code>1m</code> 等比 <code>1h</code> 量大得多。任务可能极长，请勿关闭标签。
             </p>
             <div style={{ display: "flex", flexWrap: "wrap", gap: "0.75rem", alignItems: "center", marginBottom: "0.5rem" }}>
               <label className="data-pull-field" style={{ margin: 0, minWidth: "min(100%, 16rem)" }}>
-                <span className="data-pull-label">一键全量 · K 线/周期</span>
+                <span className="data-pull-label">批量全量 · K 线/周期</span>
                 <select
                   value={fullPullDefaultInterval}
                   onChange={(e) => setFullPullDefaultInterval(e.target.value)}
@@ -325,7 +325,7 @@ export function DataPullPanel({ domain, onGoToBrowser, onGoToTaskCenter }: DataP
                 onClick={() => {
                   if (
                     !window.confirm(
-                      `确定开始一键全量拉取？周期=${fullPullDefaultInterval}，将依次执行所有加密 data_kind（全市场），耗时极长，并可能触发 API 限频。`
+                      `确定开始批量全量拉取？周期=${fullPullDefaultInterval}，将依次执行所有加密 data_kind（全市场），耗时极长，并可能触发 API 限频。`
                     )
                   ) {
                     return;
@@ -334,7 +334,7 @@ export function DataPullPanel({ domain, onGoToBrowser, onGoToTaskCenter }: DataP
                   fullPullMutation.mutate();
                 }}
               >
-                {fullPullMutation.isPending ? "一键全量进行中…" : "一键全量拉取加密"}
+                {fullPullMutation.isPending ? "批量全量进行中…" : "批量全量拉取加密"}
               </button>
             </div>
           </div>

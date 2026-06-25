@@ -6,9 +6,9 @@ import {
 import { type RunVerdictData } from "../../../components/RunVerdictCard";
 
 /**
- * Agent 工作台 mock 数据 + 类型（agentDeck.md / QuantBT Agent.dc.html →React）。
+ * 研究执行台 mock 数据 + 类型（agentDeck.md / QuantBT Agent.dc.html →React）。
  *
- * P0：纯 mock 剧本，未接真后端 SSE/agent_runtime——故页面常驻 <MockBadge/>，不假绿灯。
+ * P0：纯 mock 剧本，未连到真实后端 SSE/agent_runtime，故页面常驻 <MockBadge/>，不假绿灯。
  *
  * 治理真值原则（D-PERM / R25）：
  *  · tool/gate 的 side_effect 是**受控真值**（来自后端 tool_status），mock 这里只占位、

@@ -26,8 +26,8 @@ import { OverviewDeskPage } from "./pages/overview/OverviewDeskPage";
  * - `/runs/:runId` RunDetailPage 是 GOAL §M15 冻结的 jq-* 旧 SPA：完全跳过 cc-* shell。唯一冻结例外。
  * - desk 台（总览/策略/因子/Model/模拟/Agent）是 DeskShell 全屏、自带顶栏 + 台切换器，跳过 cc Shell。
  * - 其它路由（Home / 社区 / 设置 / 定价）统一用 cc Shell。
- * - 旧的分散页（回测列表/对比/数据/策略索引/工坊/IDE/教练/模板/交易/实验/训练/旧Agent）已搬进对应台，
- *   其旧路由统一【重定向】到新台落点（防外部直链 404）；旧 Agent 对话页 /agent 已退役并入 Agent台。
+ * - 旧的分散页（回测列表/对比/数据/策略索引/工坊/IDE/诊断/模板/交易/实验/训练/旧研究执行页）已搬进对应台，
+ *   其旧路由统一【重定向】到新台落点（防外部直链 404）；旧 /agent 对话页已退役并入研究执行台。
  */
 
 const DESK_PREFIXES = ["/overview", "/strategy", "/factors", "/models", "/paper", "/agent-workbench"];

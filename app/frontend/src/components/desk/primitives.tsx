@@ -55,7 +55,7 @@ export function Pill({
 /** MOCK 数据诚实角标（蓝、常驻可见、不可折叠藏起）。 */
 export function MockBadge({ label = "MOCK 数据" }: { label?: string }) {
   return (
-    <Pill tone="mock" title="非真实后端数据，待接真">
+    <Pill tone="mock" title="非真实后端数据，待接入真实后端">
       {label}
     </Pill>
   );

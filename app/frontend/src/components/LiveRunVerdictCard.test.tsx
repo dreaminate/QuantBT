@@ -116,7 +116,7 @@ describe("LiveRunVerdictCard · 切真拉端点", () => {
     expect(screen.getByText("N/A")).toBeInTheDocument();
   });
 
-  it("dataSource=live：header 不再挂 MockBadge（卡顶已接真）", async () => {
+  it("dataSource=live：header 不再挂 MockBadge（卡顶已接入真实后端）", async () => {
     routeHappy();
     renderWithDesk(<LiveRunVerdictCard runId="run_x" />);
     await waitFor(() =>

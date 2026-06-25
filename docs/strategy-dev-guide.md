@@ -1,6 +1,6 @@
 # 策略开发指南
 
-> 从「我有个想法」到「跑出一份 report」的最短路径 + 最佳实践。
+> 从「我有个想法」到「跑出一份 report」的实操路径。
 
 ---
 
@@ -262,13 +262,13 @@ write_run_artifacts(
 
 ---
 
-## 11. Agent 写策略（DIY 大杀器）
+## 11. 研究执行台生成候选策略
 
-进 `/agent` 工作台，一句话：「我想做 A股 周频 选股，回撤 20%」。
-Agent 会调 `strategy_goal.create` 工具帮你写 StrategyGoal，然后串联 factor → label → model → backtest。
+进 `/agent` 研究执行台，一句话：「我想做 A股 周频 选股，回撤 20%」。
+系统会调 `strategy_goal.create` 工具生成 StrategyGoal 候选，然后串联 factor → label → model → backtest。
 
-支持代码复刻：粘 vnpy / backtrader / pandas / qlib 策略代码，Agent 用 AST 改写到
-QuantBT predict 模板。
+支持代码复刻：粘 vnpy / backtrader / pandas / qlib 策略代码，系统用 AST 改写到
+QuantBT predict 模板。改写结果是候选实现，必须跑完评估和审批链后才能晋级。
 
 ---
 

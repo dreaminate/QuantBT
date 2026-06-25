@@ -14,7 +14,7 @@ export function PaperBoardCard({
   mock = true,
 }: {
   board?: Partial<PaperBoardData>;
-  /** 数据是否为 mock（默认 true，挂角标）。接真后由调用方传 false。 */
+  /** 数据是否为 mock（默认 true，挂角标）。接入真实后端后由调用方传 false。 */
   mock?: boolean;
 }) {
   const data: PaperBoardData = { ...defaultBoardData(), ...board };

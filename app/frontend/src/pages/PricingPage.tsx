@@ -62,8 +62,8 @@ const TIERS: Tier[] = [
       "A股 paper trading",
       "加密 paper trading",
       "Glossary 30+ 全 L1-L4 + 独立专页",
-      "RunDetail ⓘ 字段 + Coach 主动建议",
-      "Mode 2 教练每日 20 次",
+      "RunDetail ⓘ 字段 + 诊断建议",
+      "诊断台每日 20 次",
       "导出 run JSON/CSV + 数据所有权",
       "策略模板 fork + 复现实验提交",
     ],
@@ -85,7 +85,7 @@ const TIERS: Tier[] = [
       "Fernet AES keyring 加密落盘",
       "Mainnet 二次确认 + 5 级 live ladder",
       "Kill switch + 异常断连保护",
-      "IDE 代码助手 · 真实模型调用，每月 100 次",
+      "IDE 代码生成 · 真实模型调用，每月 100 次",
       "私域 copy-trade follower beta (waitlist)",
     ],
     anchor: "年付是 BigQuant 旗舰 ¥5499 的 27%；月付是聚宽 SVIP ¥378 的 39%",
@@ -154,7 +154,7 @@ export function PricingPage() {
         <div>
           <h1 className="cc-page-title">{"// 价格"}</h1>
           <div className="cc-soft">
-            QuantBT 不是收益机器。三档订阅，每档对应一段"信任阶梯"。先跑通流程，再看你能不能证明策略有效。
+            QuantBT 不是收益机器。三档订阅对应不同的研究、验证和运行权限。先跑通流程，再看证据是否支持策略进入下一步。
           </div>
           {sub && (
             <div style={{ marginTop: 8, fontSize: 13 }}>
@@ -251,7 +251,7 @@ export function PricingPage() {
                 </button>
               )}
               <div className="cc-dim" style={{ fontSize: 10, marginTop: 6, textAlign: "center" }}>
-                信任阶梯 {t.level}
+                权限层级 {t.level}
               </div>
             </div>
           </div>
@@ -262,8 +262,8 @@ export function PricingPage() {
         <div className="cc-section-title">不上 Live Pro 我能做什么？</div>
         <div className="cc-soft" style={{ fontSize: 13 }}>
           Community 和 Learn 已经覆盖完整研究流程：拉数据 → 写因子 → 跑回测 → 看 PBO/DSR/MaxDD →
-          Mode 2 教练复盘 → 改一个变量 → 重新跑 → 社区分享。Live Pro 只是把这个研究流程的产出，
-          通过 SafeKey + testnet + live ladder 安全地接到 Binance 小资金实盘。<strong>
+          诊断台复盘 → 改一个变量 → 重新跑 → 社区分享。Live Pro 只是把这个研究流程的产出，
+          通过 SafeKey + testnet + live ladder 接到 Binance 小资金实盘。<strong>
             没过 SafeKey 不给 mainnet，这是产品原则不是付费墙。</strong>
         </div>
       </div>

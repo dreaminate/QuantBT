@@ -46,7 +46,7 @@ export function ChatComposer(props: ChatComposerProps) {
     draft,
     onDraftChange,
     onSend,
-    placeholder = "> 给 agent 下达任务…",
+    placeholder = "> 输入研究任务…",
     model,
     permissionMode,
     branch,

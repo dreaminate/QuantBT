@@ -9,7 +9,7 @@ import {
 
 /**
  * 持仓与成交：余额条 + 持仓表 + 成交回报表。
- * 接真：传 live* 即用后端 /api/paper/* 派生数据；未传则回退 mock（调用方挂 MockBadge）。
+ * 真实后端：传 live* 即用后端 /api/paper/* 派生数据；未传则回退 mock（调用方挂 MockBadge）。
  */
 export function BookView({
   market,

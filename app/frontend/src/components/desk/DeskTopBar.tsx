@@ -9,7 +9,7 @@ const DESKS: { key: DeskKey; label: string; to: string }[] = [
   { key: "factor", label: "因子台", to: "/factors" },
   { key: "model", label: "Model台", to: "/models" },
   { key: "paper", label: "模拟台", to: "/paper" },
-  { key: "agent", label: "Agent台", to: "/agent-workbench" },
+  { key: "agent", label: "研究执行台", to: "/agent-workbench" },
 ];
 
 /** 台切换器：当前台实心 accent，可跳台为 <Link>，soon 台灰占位（不渲染链接，防死链）。 */

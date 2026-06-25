@@ -22,7 +22,7 @@ export interface AuditCheck {
   detail: string;
 }
 
-/** 后端 /api/factors/{id}/audit 返回（接真时注入）。 */
+/** 后端 /api/factors/{id}/audit 返回（接入真实数据时注入）。 */
 export interface FactorAuditLive {
   verdict: "consistent" | "concern" | "blocked";
   verdict_note: string;
@@ -44,7 +44,7 @@ export interface FactorResearchViewProps {
   draft: string;
   onDraft: (v: string) => void;
   onSend: () => void;
-  /** 接真审查报告；存在则覆盖 mock 裁决/检查并改挂 LIVE。 */
+  /** 真实后端审查报告；存在则覆盖 mock 裁决/检查并改挂 LIVE。 */
   live?: FactorAuditLive | null;
 }
 
@@ -175,7 +175,7 @@ export function FactorResearchView({
   live,
 }: FactorResearchViewProps) {
   const peakH = sel.decay.reduce((a, b) => (Math.abs(b.ic) > Math.abs(a.ic) ? b : a)).h;
-  // 接真：裁决/检查/摘要全用后端 audit；否则 mock。
+  // 真实后端：裁决/检查/摘要全用后端 audit；否则 mock。
   const liveVd = live ? liveVerdictLabel(live.verdict) : null;
   const verdict = live ? liveVd!.label : auditVerdict(sel);
   const vc = live ? liveVd!.color : verdictColor(verdict as AuditVerdict);
@@ -265,7 +265,7 @@ export function FactorResearchView({
                     padding: "1px 6px",
                   }}
                 >
-                  LIVE · 审查接真（{live.tier} 档）
+                  LIVE · 审查真实数据（{live.tier} 档）
                 </span>
                 {/* 多证据三角硬指标行（DSR/PBO/N_eff/Bootstrap/IC-NW） */}
                 <div style={{ display: "grid", gridTemplateColumns: "repeat(5,1fr)", gap: 8 }}>

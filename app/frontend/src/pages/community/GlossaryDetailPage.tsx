@@ -6,7 +6,7 @@ import { trackEvent } from "../../features/glossary/trackEvent";
 /**
  * v0.8.5 · Glossary 词条独立全文页 (/glossary/:slug)
  *
- * patch2 §C W3 / patch1 §D Mode 2 教学层：
+ * patch2 §C W3 / patch1 §D 诊断台教学层：
  * - 全文 L1+L2+L3+L4 渲染
  * - related 词条侧栏
  * - frontmatter 元数据卡（公式、典型范围、来源）

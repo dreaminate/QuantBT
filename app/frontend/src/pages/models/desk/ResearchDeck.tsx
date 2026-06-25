@@ -16,7 +16,7 @@ import {
 
 /**
  * 研究台（research · DC §D）：理论判定 + 论文，两栏。
- * 左：研究助手 chat · 右：workspace（∑公式工作台 / ▤论文）。
+ * 左：研究面板 · 右：workspace（∑公式工作台 / ▤论文）。
  * 治理：理论判定只「提炼/判定」不下结论；文章观点须先在因子台 IC 检验（M11，见结论文案）。P0 mock。
  */
 
@@ -42,7 +42,7 @@ export function ResearchDeck(props: ResearchDeckProps) {
 
   return (
     <div style={{ flex: 1, minHeight: 0, display: "flex" }}>
-      {/* 左：研究助手 */}
+      {/* 左：研究面板 */}
       <CollapsiblePanel
         open={props.chatOpen}
         onToggle={props.onToggleChat}

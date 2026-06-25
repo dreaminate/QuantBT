@@ -48,7 +48,7 @@ import { streamAgentWorkbench } from "./agentLive";
 import { authFetch } from "../../../lib/auth";
 
 /**
- * Agent 工作台（独立 Agent台 · DeskShell data-desk="agent" 橙 accent · 顶层子标签 workbench/coach）。
+ * 研究执行台（独立 agent desk · DeskShell data-desk="agent" 橙 accent · 顶层子标签 workbench/diagnostics）。
  *
  * 覆盖四卡：T-040（对话流+工具可视化+权限三态）· A1（产物工作区）· A2（里程碑+台switcher）
  * · A3（D-PERM 反例 + self-approve 二次确认）。规格 = agentDeck.md + QuantBT Agent.dc.html。
@@ -71,7 +71,7 @@ const CTX_USED = 18;
 type GateState = "pending" | "resolved-once" | "resolved-always" | "resolved-no";
 
 export function AgentWorkbenchPage() {
-  // 顶层子标签：workbench（默认 · 原 agent 工作台）/ coach（Mode2 量化教练）。
+  // 顶层子标签：workbench（默认工作台）/ coach（诊断台）。
   const [view, setView] = useState<"workbench" | "coach">("workbench");
 
   // 权限三态（D-PERM 权限轴）。
@@ -119,14 +119,14 @@ export function AgentWorkbenchPage() {
   // 知情确认留痕回执（acknowledge 后的诚实记账文案）。
   const [teachNote, setTeachNote] = useState<string | null>(null);
 
-  // 接真：LIVE 模式（真 /api/agent/workbench/stream SSE）默认开（DS-2：陌生人默认接真，不放假绿灯 mock）。
+  // 真实流：LIVE 模式（真 /api/agent/workbench/stream SSE）默认开（DS-2：陌生人默认走真实流，不放假绿灯 mock）。
   // mock 剧本退居「看演示」显式入口——仅当用户主动点「看演示」(demoMode) 才铺脚本、且全程挂 MockBadge。
   const [liveMode, setLiveMode] = useState(true);
-  // demoMode：显式「看演示」（mock 剧本回放）入口。默认 false（默认接真，不自动放 mock）。
+  // demoMode：显式「看演示」（mock 剧本回放）入口。默认 false（默认真实流，不自动放 mock）。
   const [demoMode, setDemoMode] = useState(false);
   const [liveErr, setLiveErr] = useState<string | null>(null);
   // 真回测 run_id：从 LIVE 流 backtest.run 的 tool_end result 里读取（business_tools 产真 run_id）。
-  // 存在 → 裁决卡走 LiveRunVerdictCard 接真三端点；缺 → 回退 mock + MockBadge（诚实，不假绿灯）。
+  // 存在 → 裁决卡走 LiveRunVerdictCard 三个真实端点；缺 → 回退 mock + MockBadge（诚实，不假绿灯）。
   const [liveRunId, setLiveRunId] = useState<string | null>(null);
   const liveAbort = useRef<(() => void) | null>(null);
   // handoff 提交回执（真 /api/strategy/submit_candidate）。
@@ -196,7 +196,7 @@ export function AgentWorkbenchPage() {
   }, [permMode]);
 
   // 「看演示」入口：mock autoplay 只在 demoMode 下铺到第一道 gate（StrictMode 双挂载守卫，只跑一次）。
-  // 默认接真（liveMode=true / demoMode=false）→ 不自动放 mock 剧本（DS-2 blocker #1：不放假绿灯 mock）。
+  // 默认真实流（liveMode=true / demoMode=false）→ 不自动放 mock 剧本（DS-2 blocker #1：不放假绿灯 mock）。
   useEffect(() => {
     if (!demoMode) return;
     if (didInit.current) return;
@@ -224,7 +224,7 @@ export function AgentWorkbenchPage() {
     anchorIds.current = {};
   }, []);
 
-  // 回「接真」：关 demoMode、开 LIVE（liveMode effect 会启动真流）。
+  // 回到真实流：关 demoMode、开 LIVE（liveMode effect 会启动真流）。
   const enterLive = useCallback(() => {
     setDemoMode(false);
     didInit.current = false;
@@ -327,7 +327,7 @@ export function AgentWorkbenchPage() {
     [reached],
   );
 
-  // 接真：启动真 SSE 流（替代 mock 剧本）。结构化事件投影成 blocks + 里程碑。
+  // 真实流：启动真 SSE 流（替代 mock 剧本）。结构化事件投影成 blocks + 里程碑。
   const startLive = useCallback(
     (prompt: string) => {
       liveAbort.current?.();
@@ -347,7 +347,7 @@ export function AgentWorkbenchPage() {
             if (typeof rid === "string" && rid) setLiveRunId(rid);
           }
           setBlocks((prev) => {
-            // 更新最近 running tool 块的 summary（接真结果）。
+            // 更新最近 running tool 块的 summary（真实流结果）。
             const next = [...prev];
             for (let i = next.length - 1; i >= 0; i--) {
               if (next[i].type === "tool" && next[i].toolStatus === "running") {
@@ -397,7 +397,7 @@ export function AgentWorkbenchPage() {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [liveMode]);
 
-  // 接真：handoff 提交真调 /api/strategy/submit_candidate（止于模拟盘）。
+  // 真实流：handoff 提交真调 /api/strategy/submit_candidate（止于模拟盘）。
   // §3 不假绿灯：仅后端【明确 ok】才显「已提交」；失败（未登录/网络/后端错）→
   // 不 submitted、显式报错（绝不「（mock 回执）已提交」伪成功）。
   const submitHandoff = useCallback(async () => {
@@ -440,7 +440,7 @@ export function AgentWorkbenchPage() {
     setSlashOpen(false);
     if (d === "/permissions") return;
 
-    // 接真态（默认）：消息驱动真流——不落任何 mock 块（§3 不假绿灯，blocker #1）。
+    // 真实流态（默认）：消息驱动真流，不落任何 mock 块（§3 不假绿灯，blocker #1）。
     if (liveMode) {
       if (d === "/clear" || d === "/restart") {
         // 真流重置：清空并用首条 prompt 重起真 SSE 流。
@@ -510,7 +510,7 @@ export function AgentWorkbenchPage() {
             ~/strategies/weekly-cn
           </span>
           <div style={{ flex: 1 }} />
-          {/* 默认接真（DS-2）：LIVE = 真 /api/agent/workbench/stream；「看演示」= 显式 mock 剧本回放。
+          {/* 默认真实流（DS-2）：LIVE = 真 /api/agent/workbench/stream；「演示」= 显式 mock 剧本回放。
               切到演示即关 LIVE、挂 MockBadge（诚实角标）；回 LIVE 即关演示、起真流。 */}
           <button
             data-live-toggle
@@ -520,7 +520,7 @@ export function AgentWorkbenchPage() {
             title={
               liveMode
                 ? "切到「看演示」：mock 剧本回放（全程 MockBadge，不是真流）"
-                : "回「接真」：真 agent 流（/api/agent/workbench/stream）"
+                : "回到真实流：/api/agent/workbench/stream"
             }
             style={{
               background: liveMode ? "var(--desk-accent)" : "transparent",
@@ -534,7 +534,7 @@ export function AgentWorkbenchPage() {
               cursor: "pointer",
             }}
           >
-            {liveMode ? "● LIVE · 接真" : "▶ 看演示（mock）"}
+            {liveMode ? "● LIVE · 真实流" : "▶ 演示回放（mock）"}
           </button>
           {liveMode ? (
             <span
@@ -550,7 +550,7 @@ export function AgentWorkbenchPage() {
           ) : (
             <MockBadge />
           )}
-          {/* 「↻ 重放」仅在演示模式有意义（重铺 mock 剧本）；接真态隐藏（真流靠对话推进）。 */}
+          {/* 「↻ 重放」仅在演示模式有意义（重铺 mock 剧本）；真实流隐藏（由消息推进）。 */}
           {demoMode && (
             <button
               onClick={restart}
@@ -575,7 +575,7 @@ export function AgentWorkbenchPage() {
           <SubTabBar<"workbench" | "coach">
             tabs={[
               { value: "workbench", label: "工作台" },
-              { value: "coach", label: "量化教练" },
+              { value: "coach", label: "诊断台" },
             ]}
             value={view}
             onChange={setView}
@@ -630,7 +630,7 @@ export function AgentWorkbenchPage() {
                           "color-mix(in srgb, var(--desk-danger) 8%, transparent)",
                       }}
                     >
-                      LIVE 流错误（诚实呈现，不假绿灯）：{liveErr}
+                      实时流错误（诚实呈现，不假绿灯）：{liveErr}
                     </div>
                   )}
                   {blocks.map((b) => (
@@ -1117,7 +1117,7 @@ function WorkspaceInner({
   cowork: CoworkKind | null;
   unlocked: Set<CoworkKind>;
   reached: MilestoneKey[];
-  /** 真回测 run_id（LIVE 流产）——贯穿到裁决卡接真；缺省走 mock + MockBadge。 */
+  /** 真回测 run_id（LIVE 流产），贯穿到裁决卡真实端点；缺省走 mock + MockBadge。 */
   liveRunId?: string;
   onClose: () => void;
 }) {

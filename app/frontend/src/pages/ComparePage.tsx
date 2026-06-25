@@ -272,7 +272,7 @@ export function ComparePage() {
                   <tr>
                     <th>{text.comparePage.run}</th>
                     <th>{text.comparePage.strategy}</th>
-                    <th>可信度</th>
+                    <th>证据状态</th>
                     <th>{text.comparePage.totalReturn}</th>
                     <th>{text.comparePage.sharpe}</th>
                     <th>{text.comparePage.maxDrawdown}</th>
@@ -308,7 +308,7 @@ export function ComparePage() {
                               ok: "#1f9a52", caution: "#c98a14", high_risk: "#cc3344", insufficient_data: "#888",
                             };
                             const labelMap: Record<string, string> = {
-                              ok: "可信", caution: "存疑", high_risk: "高风险", insufficient_data: "信息不足",
+                              ok: "证据一致", caution: "存疑", high_risk: "高风险", insufficient_data: "信息不足",
                             };
                             const color = colorMap[rs.trust_level || "insufficient_data"];
                             const label = labelMap[rs.trust_level || "insufficient_data"];

@@ -9,7 +9,7 @@ import {
 } from "./RunVerdictCard";
 
 /**
- * LiveRunVerdictCard · 裁决卡接真（R2 后端接线）。
+ * LiveRunVerdictCard · 裁决卡真实后端接线（R2）。
  *
  * 拉真后端三端点合成 RunVerdictData，喂给纯展示的 RunVerdictCard：
  *   GET /api/runs/{id}/verdict          → 验证官三态 + 合规 note（_verdict_note 供给）
@@ -22,7 +22,7 @@ import {
  *  ② verdictNote 一律用后端供给（禁前端杜撰绝对化措辞）；后端无则用合规占位（未验证 ≠ 已验证）。
  *  ③ promote 为写动作 → POST /api/runs/{id}/promote（经审批门 approver≠creator），
  *     前端不伪造写盘；后端 422（自审/缺要件）原样上抛父层处理。
- *  ④ dataSource="live"：卡顶区块已接真 → 不挂 mock 角标（modal 内仍 mock → 角标恒挂）。
+ *  ④ dataSource="live"：卡顶区块已接入真实后端 → 不挂 mock 角标（modal 内仍 mock → 角标恒挂）。
  */
 
 const THREE_STATE: Verdict[] = ["consistent", "concern", "blocked"];
@@ -214,7 +214,7 @@ export function LiveRunVerdictCard({
               marginBottom: 6,
             }}
           >
-            裁决卡接真失败，回退示例数据：{error}
+            裁决卡真实后端失败，回退示例数据：{error}
           </div>
           <RunVerdictCard
             data={fallback}

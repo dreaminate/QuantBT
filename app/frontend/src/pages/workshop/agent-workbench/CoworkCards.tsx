@@ -586,7 +586,7 @@ export interface CoworkAreaProps {
   /** 已解锁的产物卡集合——未解锁时即便选中也回落空态。 */
   unlocked: Set<CoworkKind>;
   /**
-   * 真回测 run_id（可选）：提供则回测裁决卡接真后端（authFetch verdict/overfit/cost-sensitivity）；
+   * 真回测 run_id（可选）：提供则回测裁决卡接入真实后端（authFetch verdict/overfit/cost-sensitivity）；
    * 缺省（mock 剧本）则裁决卡走 mock + MockBadge。
    */
   liveRunId?: string;

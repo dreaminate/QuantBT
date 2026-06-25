@@ -1,5 +1,5 @@
 /**
- * 策略台后端封装（S2 接真）。authFetch 自动带 Bearer。
+ * 策略台真实后端封装（S2）。authFetch 自动带 Bearer。
  *
  * 对接 main.py 的 4 个端点：
  *  - POST /api/ide/strategies/{name}/validate     图校验（B6 三层，后端权威）

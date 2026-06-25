@@ -3,7 +3,7 @@
  *
  * 范围（复用单一源，绝不另造端点 / 不自实现 OAuth）：
  *   1. 选 provider（anthropic / openai / qwen / custom）+ 填 api_key / base_url / model → configure。
- *   2. **Hermes 预设**（Fork1）：一键把 provider 切成 custom 并预填 `http://localhost:<port>/v1`，
+ *   2. **Hermes 预设**（Fork1）：一次性把 provider 切成 custom 并预填 `http://localhost:<port>/v1`，
  *      引导用户跑 Hermes 等本地 OAuth 代理、用 Claude Code/Codex 订阅额度——本页只配 OpenAI 兼容端点，
  *      OAuth 全程在 Hermes 侧，QuantBT 不碰 token。
  *   3. GET /api/llm/status 实时回显每个 provider 是否就绪（不回显 key）。
@@ -139,17 +139,17 @@ export function LLMSettingsPage() {
 
   return (
     <div style={{ display: "flex", flexDirection: "column", gap: 16, maxWidth: 900 }}>
-      <h1>LLM 配置 · 接通对话生成策略</h1>
+      <h1>模型连接配置</h1>
       <p className="cc-dim" style={{ fontSize: 13, margin: 0 }}>
-        填一个 LLM provider，Agent 工作台的「接真」对话才会用真模型组装策略。没填任何 provider
-        时后端自动回退到开发期本地模型（DevLocalLLM）—— 能跑通流程，但能力有限。
+        填一个 LLM provider，研究执行台才会用真实模型参与意图结构化和候选实现。没填任何 provider
+        时后端回退到开发期本地模型（DevLocalLLM）——能跑通流程，但能力有限。
       </p>
 
       {/* === Hermes 预设（Fork1：用订阅额度，经本地 OAuth 代理）=== */}
       <section className="cc-card" data-hermes-preset>
         <h2 style={{ marginTop: 0 }}>用订阅额度（Hermes 本地 OAuth 代理）</h2>
         <p className="cc-dim" style={{ fontSize: 13 }}>
-          已有 Claude Code / Codex 订阅？跑一个本地 OAuth 代理（如 Hermes），把订阅额度暴露成 OpenAI
+          已有 Claude Code / Codex 订阅？运行一个本地 OAuth 代理（如 Hermes），把订阅额度暴露成 OpenAI
           兼容端点，QuantBT 指向它即可——无需把 API key 交给本应用，OAuth 全程在代理侧。
         </p>
         <button
@@ -161,7 +161,7 @@ export function LLMSettingsPage() {
           套用 Hermes 预设（custom + {HERMES_BASE_URL}）
         </button>
         <p className="cc-dim" style={{ fontSize: 12, marginTop: 8 }}>
-          套用后下方表单会切成 custom 并预填本地代理地址；按你的 Hermes 端口 / 模型别名改，再点保存。
+          套用后下方表单会切成 custom 并预填本地代理地址；按你的 Hermes 端口 / 模型别名修改后保存。
           完整步骤见仓库文档 <code>docs/hermes-subscription-proxy.md</code>。
         </p>
       </section>

@@ -15,7 +15,7 @@ QuantBT 是一个面向 A股（仅 paper trading）+ 加密（Binance 现货/USD
 3. **执行 + 审计**：BacktestVenue / PaperVenue / BinanceSpot/UM Futures + 风控 + Kill Switch
 
 每个 run 自动产出 `data/artifacts/experiments/{run_id}/` 标准目录（report.md /
-portfolio.csv / metrics.json …），可以被 RunDetailPage 一键加载。
+portfolio.csv / metrics.json …），可以被 RunDetailPage 直接加载。
 
 ---
 
@@ -32,7 +32,7 @@ docker compose up -d
 ## 2. 配 secrets
 
 参见 [secrets-guide.md](secrets-guide.md)。最少配置：填 `~/.quantbt/secrets.yaml`
-里的 `llm.anthropic.api_key`（或 custom + base_url + model）就能让 Agent 工作台跑。
+里的 `llm.anthropic.api_key`（或 custom + base_url + model）就能让研究执行台调用真实模型。
 更多：Tushare token / Binance testnet key。
 
 ---
@@ -49,7 +49,7 @@ docker compose up -d
 
 ### 工坊
 - `/workshop` 策略工坊：自然语言 → StrategyGoal slot-fill
-- `/agent` Agent 工作台：跟 LLM 对话；可看 provider 状态 + 一键测试
+- `/agent` 研究执行台：结构化研究意图、生成候选实现；可看 provider 状态 + 连接测试
 - `/factors` 因子市场：30 alpha_lite + 用户表达式因子，按 lifecycle_state 分组
 - `/trading` Binance 交易台：keystore + testnet/mainnet 顶部色块 + 二次确认 + Kill Switch
 - `/experiments` 实验追踪：experiments + runs + lineage
@@ -124,7 +124,7 @@ python scripts/weekly_cost_drift.py --audit-log data/audit/audit.jsonl --asset c
 # secrets 热加载
 curl -X POST http://127.0.0.1:8000/api/security/reload_secrets
 
-# 一键导出"我的所有数据"
+# 导出"我的所有数据"
 curl http://127.0.0.1:8000/api/data/export -o my-quantbt-export.tar.gz
 ```
 

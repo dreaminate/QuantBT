@@ -1,4 +1,4 @@
-# 喂给 GPT Pro 的提示词（QuantBT Mode 2 词条生成）
+# 喂给 GPT Pro 的提示词（QuantBT 诊断台词条生成）
 
 把下面整段 prompt 一次性贴到 GPT Pro，让它一次出 5 条；分 6 批生成全 30 条。每批末尾让它**给出可直接保存为 .md 文件**的纯文本。
 

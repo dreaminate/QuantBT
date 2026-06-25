@@ -45,7 +45,7 @@ import { ReviewView } from "./paper/views/ReviewView";
 import { PromoView } from "./paper/views/PromoView";
 import { BinanceTradingPage } from "./BinanceTradingPage";
 
-/** 接真后的 LIVE 角标（绿，区别于 MOCK 蓝）。 */
+/** 接入真实后端后的 LIVE 角标（绿，区别于 MOCK 蓝）。 */
 function LiveBadge() {
   return (
     <span
@@ -56,9 +56,9 @@ function LiveBadge() {
         borderRadius: "var(--desk-radius-pill)",
         padding: "1px 8px",
       }}
-      title="已接 /api/paper/* 后端真数据"
+      title="已接入 /api/paper/* 后端真实数据"
     >
-      LIVE 已接真
+      LIVE 真实数据
     </span>
   );
 }
@@ -111,7 +111,7 @@ export function PaperDeskPage() {
   // 仅 fetch 失败/无后端（liveRuns === null，如单测）才回退 mock RUNS（诚实标 MockBadge）。
   const runList = liveRuns !== null ? runsToList(liveRuns, selRun) : buildRunList(selRun);
 
-  // 侧栏列表接真：拉 /api/paper/runs（真候选/真 run）。失败/无后端 → 保留 mock 回退。
+  // 侧栏列表真实后端：拉 /api/paper/runs（真候选/真 run）。失败/无后端 → 保留 mock 回退。
   useEffect(() => {
     let alive = true;
     (async () => {
@@ -127,7 +127,7 @@ export function PaperDeskPage() {
     };
   }, []);
 
-  // 接真：拉 status/positions/fills/balance/promotion，映射成视图形状。
+  // 真实后端：拉 status/positions/fills/balance/promotion，映射成视图形状。
   // 失败/无后端（如单测）→ live=null → 视图回退 mock + 保留 MockBadge（诚实不假绿灯）。
   useEffect(() => {
     let alive = true;
@@ -229,8 +229,8 @@ export function PaperDeskPage() {
     </DeskTopBar>
   );
 
-  // 已接真的 tab（run/book/promo）在 live 数据就位后挂 LIVE 角标；review/risk 仍 mock 挂 MockBadge。
-  // §3 空壳不假绿：仅当后端真喂进 bar（bars_fed>0）才算「LIVE 已接真」——
+  // 已接入真实后端的 tab（run/book/promo）在 live 数据就位后挂 LIVE 角标；review/risk 仍 mock 挂 MockBadge。
+  // §3 空壳不假绿：仅当后端真喂进 bar（bars_fed>0）才算「LIVE 真实数据」——
   // 接了端点但 bars_fed===0（空壳净值）绝不盖 LIVE 绿标，回退 MockBadge 显诚实状态。
   // （run/book/promo 全 wired tab 一律 bars_fed>0 才 LIVE，取 DS-5 §3 严格版。）
   const wiredTab = view === "run" || view === "book" || view === "promo";

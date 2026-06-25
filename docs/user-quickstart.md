@@ -3,7 +3,7 @@
 ## 0. 你将得到什么
 
 - 一个能跑的本地全栈量化软件（FastAPI + Vite + DuckDB/Parquet）
-- 内置 30 个 alpha 因子 + 5 个数据 connector + 完整 Agent 工作台
+- 内置 30 个 alpha 因子 + 5 个数据 connector + 完整研究执行台
 - A股仅 paper trading（不接券商）；加密支持 Binance Spot + USDM Futures 实盘
 - 所有产物以 Parquet/CSV/JSON/MD 落盘，可独立审计
 
@@ -58,16 +58,16 @@ npm run dev
 
 ## 3. 跑示例策略
 
-### 路线 A：用 Agent 自然语言生成（推荐）
+### 路线 A：用研究执行台结构化想法
 
-打开 `http://127.0.0.1:5173/workbench` → 「Agent 工作台」，输入：
+打开 `http://127.0.0.1:5173/workbench` → 「研究执行台」，输入：
 
 > 我想做一个 A股 周频 选股策略，回撤 15%，单标的 5%
 
-Agent (DevLocalLLM 模板驱动) 会：
+研究执行流（DevLocalLLM 模板驱动）会：
 1. 返回一份建议（IR 目标 / 池子建议 / 数据范围）
 2. 触发 `strategy_goal.create` 工具，给你 StrategyGoal JSON
-3. （连上 Anthropic/OpenAI 后）自动接力跑因子 IC → 训模型 → 回测
+3. （连上 Anthropic/OpenAI 后）生成候选实现，并按流程继续跑因子 IC → 训模型 → 回测
 
 ### 路线 B：直接看现有 demo run
 
@@ -110,8 +110,8 @@ A股策略额外加：
   [`app/backend/app/execution/generic_trading.py`](app/backend/app/execution/generic_trading.py)。
 - **新因子**：在「工坊」→ 表达式编辑器（M16 计划）粘入 `rank(ts_corr(close,volume,20))`
   这样的表达式。当前可直接调 `POST /api/factors`（M16 接入后）。
-- **新策略 (代码复刻)**：粘 vnpy / backtrader / pandas / qlib 代码到「Agent 工作台」，
-  Agent 用 AST 改写到 QuantBT 标准模板。
+- **新策略 (代码复刻)**：粘 vnpy / backtrader / pandas / qlib 代码到「研究执行台」，
+  系统用 AST 改写到 QuantBT 标准模板，产物仍需跑验证链。
 
 ---
 

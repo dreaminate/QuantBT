@@ -95,7 +95,7 @@ export function CopyTradePage() {
         <div>
           <h1 className="cc-page-title"><span className="cc-prompt">$</span>copy-trade</h1>
           <p className="cc-page-subtitle">
-            带单大厅 · master 发信号 → follower 一键跟单（走 follower 自己 keystore 真下单）· 私域支持 invite_code
+            带单大厅 · master 发信号 → follower 确认后跟随（走 follower 自己 keystore 真下单）· 私域支持 invite_code
           </p>
         </div>
         {me && !myMaster && (
@@ -234,7 +234,7 @@ function SubsSummaryCard({ subs }: { subs: Subscription[] }) {
     <div className="cc-card">
       <div className="cc-section-title" style={{ marginBottom: 8 }}>// 我跟的 master ({subs.length})</div>
       {subs.length === 0 ? (
-        <div className="cc-dim" style={{ fontSize: 13 }}>你还没跟任何 master。在下面挑一个一键跟单。</div>
+        <div className="cc-dim" style={{ fontSize: 13 }}>你还没跟任何 master。在下面选择一个并确认跟随。</div>
       ) : (
         <ul style={{ listStyle: "none", padding: 0, margin: 0 }}>
           {subs.map((s) => (

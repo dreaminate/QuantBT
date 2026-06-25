@@ -9,7 +9,7 @@ export interface CorrPair {
   rho: number;
 }
 
-/** 后端 /api/factors/correlation 返回（接真时注入）。 */
+/** 后端 /api/factors/correlation 返回（接入真实数据时注入）。 */
 export interface FactorCorrLive {
   factor_ids: string[];
   matrix: number[][];
@@ -23,7 +23,7 @@ export interface FactorCorrViewProps {
   market: Market;
   pair: CorrPair | null;
   onPair: (p: CorrPair | null) => void;
-  /** 接真相关矩阵；存在则覆盖合成矩阵并改挂 LIVE。 */
+  /** 真实后端相关矩阵；存在则覆盖合成矩阵并改挂 LIVE。 */
   live?: FactorCorrLive | null;
 }
 
@@ -51,7 +51,7 @@ function cellBg(v: number): string {
 
 /** 相关性 view：相关矩阵 + 配对详情 + 去冗余簇 + 拥挤度。 */
 export function FactorCorrView({ factors, market, pair, onPair, live }: FactorCorrViewProps) {
-  // 接真：矩阵的因子顺序与值来自后端 factor_ids/matrix；否则用 mock 9 因子合成。
+  // 真实后端：矩阵的因子顺序与值来自后端 factor_ids/matrix；否则用 mock 9 因子合成。
   const liveIndex = useMemo(() => {
     if (!live) return null;
     const idx = new Map<string, number>();
@@ -69,7 +69,7 @@ export function FactorCorrView({ factors, market, pair, onPair, live }: FactorCo
     }
     return factors.slice(0, 9);
   }, [factors, live]);
-  // 接真单元格值：从后端矩阵按 factor_ids 索引取；缺则回落合成。
+  // 真实后端单元格值：从后端矩阵按 factor_ids 索引取；缺则回落合成。
   const cellValue = (a: MockFactor, b: MockFactor): number => {
     if (a.id === b.id) return 1;
     if (live && liveIndex) {
@@ -108,7 +108,7 @@ export function FactorCorrView({ factors, market, pair, onPair, live }: FactorCo
       ],
     },
   ];
-  // 接真：冗余簇来自后端 redundant_pairs（|ρ|≥阈值的对）；留 1 = mock IR 更高者（IR 仍 mock，
+  // 真实后端：冗余簇来自后端 redundant_pairs（|ρ|≥阈值的对）；留 1 = mock IR 更高者（IR 仍 mock，
   // 后端无组合 IR——R25 诚实：建议非自动删，只摆证据）。否则 mock 簇。
   const irOf = (id: string): number => factors.find((f) => f.id === id)?.icIr ?? 0;
   const clusters = live
@@ -166,7 +166,7 @@ export function FactorCorrView({ factors, market, pair, onPair, live }: FactorCo
                   padding: "1px 6px",
                 }}
               >
-                LIVE · 矩阵接真（{live.sample_count} 期）
+                LIVE · 矩阵真实数据（{live.sample_count} 期）
               </span>
             ) : (
               <MockBadge label="MOCK 数据 · 相关矩阵合成（待接 /api/factors/correlation）" />

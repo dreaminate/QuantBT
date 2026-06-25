@@ -268,7 +268,7 @@ export type RunDetail = {
   analysis_start?: string | null;
   analysis_end?: string | null;
   duration_seconds?: number | null;
-  /** v0.8.4 · 服务端计算的可信度风险摘要（不入 run.json on-disk） */
+  /** v0.8.4 · 服务端计算的证据状态风险摘要（不入 run.json on-disk） */
   risk_summary?: RiskSummary | null;
 };
 
