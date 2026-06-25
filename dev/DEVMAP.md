@@ -6,9 +6,6 @@
 
 | uuid8 | 标题 | status | area | 位置 |
 |---|---|---|---|---|
-| 26c795c1 | Governed Compiler——canonical command+IR→deterministic run→evidence verdict（A-COMPILER·§1 链 capstone） | in_progress | compiler | active |
-| 554cdcf2 | 监控绩效轴真闭环——4 个 drift 检测器接 run_weekly_monitor_pass + per-factor IC 真源 + 观测落盘（审计残余） | in_progress | monitor | active |
-| ccb4f333 | artifact enforce 覆盖自由代码子进程路——submit_code/train_now_code 子进程也过信任门（§15 残余） | in_progress | model-governance | active |
 | 0430cd78 | 数据更新写时强约束——dataset_version/checksum/lineage 升 block 门（B-VERSION-1） | done | data-pit | done |
 | 05d6f511 | 单人 self-approve 仅非真钱通道(冷却+留痕)，真钱硬双人 | done | approval | done |
 | 0781bb13 | RDP 聚合器——从真血统装配 RDP（DatasetVersion/LLMCallRecord/honest-N/verdict 真填）（D-RDP-2） | done | delivery | done |
@@ -18,6 +15,7 @@
 | 1b83a5c5 | IC 持久性 AR(1) 半衰期接进 lifecycle 状态机（perf 轴·advisory） | done | factor-lifecycle | done |
 | 1e0e65b4 | 组合消费者——agent 可调组合三角 gate（SEQ-CONSUMER=A · C full-fat 触发器） | done | agent | done |
 | 25247eb4 | confirmatory 计算路径强制 PIT/注册数据门——无 PIT 语义数据进 confirmatory→拒（B-PIT-CONFIRMATORY） | done | data-pit | done |
+| 26c795c1 | Governed Compiler——canonical command+IR→deterministic run→evidence verdict（A-COMPILER·§1 链 capstone） | done | compiler | done |
 | 29258b77 | conformal 校准区间 + OOS 真留出覆盖接进模型台 UI（能信·不假绿灯） | done | frontend-trust | done |
 | 2da39479 | CPCV 作 cv_scheme 产 per-path OOS 指标分布（report-only · 命门最深件 ①） | done | models-methodology | done |
 | 36f88f6b | 模型 artifact 安全完整门——producer-run + hash 绑定 + allowlist + safetensors（C-MODELGOV-1 full） | done | model-governance | done |
@@ -33,6 +31,7 @@
 | 4562d903 | Model台后端接线 — JobDetail/IoSpec/walkforward/promote字段/图codegen/研究判定 | done | backend | done |
 | 46f1cb3c | 组合层 M8 多证据三角守门（T-033 核验 gap 升级） | done | portfolio | done |
 | 51271d38 | 因子台三纯库+挖掘 后端 — 信号契约 + ML/DL 登记 + 暴力遍历守门引擎 | done | backend | done |
+| 554cdcf2 | 监控绩效轴真闭环——4 个 drift 检测器接 run_weekly_monitor_pass + per-factor IC 真源 + 观测落盘（审计残余） | done | monitor | done |
 | 5e47b82f | 因子台前端 P0 — 5 视图像素还原 + mock(库/相关/评测/构建DSL/研究) | done | frontend | done |
 | 6144bd61 | artifact 信任门生产激活——producer 落盘接 register + 翻 enforce + safetensors 入依赖（C-MODELGOV-1 activate） | done | model-governance | done |
 | 6403b9bf | 诚实残余核验——监控尾部闭环 + 组合层三角 + D2 四残余 | done | verification | done |
@@ -97,6 +96,7 @@
 | c86be35e | MinTRL+PSR 经脊柱绑定（交叉校验恒等式）+ 接 run verdict cold_start | done | math-spine | done |
 | ca3ab3ec | Agent 窗口里程碑进度线 + 跨台台 switcher | done | frontend | done |
 | cb463286 | DS-5 §3 假绿灯修——乐观假成功改诚实失败（correctness） | done | frontend | done |
+| ccb4f333 | artifact enforce 覆盖自由代码子进程路——submit_code/train_now_code 子进程也过信任门（§15 残余①） | done | model-governance | done |
 | cfb0fea9 | 整套台前端实装 epic（Claude Design handoff → React，DC→React 治理界面投影） | done | frontend-epic | done |
 | cfb7d950 | DS-4 paper 接真——submit→register_run + POST 端点 + 真 provider 产净值 | done | paper-fullstack | done |
 | d0e5d208 | 监控→自动降级/退役/问责 尾部闭环接线（T-033 核验 gap 升级） | done | monitor | done |
@@ -168,7 +168,7 @@
 | backend | b106177f · done | dreaminate |
 | backend | e069d820 · done | dreaminate |
 | canonical-command | 8abde88e · done | dreaminate |
-| compiler | 26c795c1 · in_progress | dreaminate |
+| compiler | 26c795c1 · done | dreaminate |
 | config | 8ab894cd · done | dreaminate |
 | data-connectors | e1a98c41 · done | dreaminate |
 | data-pit | 0430cd78 · done | dreaminate |
@@ -227,13 +227,13 @@
 | math-spine | a00b3956 · done | dreaminate |
 | math-spine | b85e34cc · done | dreaminate |
 | math-spine | c86be35e · done | dreaminate |
-| model-governance | ccb4f333 · in_progress | dreaminate |
 | model-governance | 36f88f6b · done | dreaminate |
 | model-governance | 6144bd61 · done | dreaminate |
+| model-governance | ccb4f333 · done | dreaminate |
 | models-methodology | 2da39479 · done | dreaminate |
 | models-methodology | 74f93771 · done | dreaminate |
 | models-methodology | c43c6301 · done | dreaminate |
-| monitor | 554cdcf2 · in_progress | dreaminate |
+| monitor | 554cdcf2 · done | dreaminate |
 | monitor | 698a3c60 · done | dreaminate |
 | monitor | d0e5d208 · done | dreaminate |
 | monitor | d718d5c5 · done | dreaminate |

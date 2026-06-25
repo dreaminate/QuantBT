@@ -636,3 +636,12 @@
 - **里程碑**：**QRO→ResearchGraph→CanonicalCommand 三段对象脊柱通** + **LINE-A-AGENT(LLM Gateway+Orchestrator)通** + **§17 RDP 真血统聚合通**。role agent 不读 key·role 节点 kind=pure 不动钱·实盘 key 不进 RDP。
 - **诚实残余**：A-COMPILER(消费命令→Run→Verdict·完成 §1 链)·Orchestrator/Gateway 接 main.py+前端·record/replay store·RDP 端到端常开(待用户)·命名对象 typed 化。
 - **land**：3 线整批 land main（用户授权）。推进 GOAL §1/§2/§7/§17。**下一步**：A-COMPILER(完成 QRO→Graph→Command→Compiler→Run→Verdict 整脊柱)·A-QRO-2·各残余接线。
+
+## 2026-06-26 · 第五波 3 线并行整合 land·🏛 LINE-A 整脊柱贯通 capstone（GOAL-first）
+
+- **派 3 deep-opus**（各 GOAL-first·领地不交叠 compiler/ ‖ training/ ‖ monitor/）：A-COMPILER Governed Compiler(`26c795c1`·§1 capstone) / W1 子进程 enforce(`ccb4f333`·§15) / drift→monitor(`554cdcf2`·绩效轴闭环)。
+- **验收**：批次全量 **2177 passed / 13 skipped / 0 failed / 135s**（基线 2138+52 新对抗测试全绿·flake 未触发·collect 2190 精确吻合）+ validate PASS。MUT 钉死：A-COMPILER×4 命门(命令未经 compiler 落 run/run 无内核身份/verdict 绕 verifier/promotion 绕 approval) / W1 子进程×2(外来 .pkl 子进程拒) / drift→monitor×2(断接线 perf 不触发/观测落盘重启) + 范畴红线钉死(PSI/gate/dsr 经类型层拒入)。
+- **🏛 里程碑：QRO→Graph→Command→Compiler→Run→Verdict 整脊柱贯通**——A-COMPILER 收编 dag/kernel(确定性内核·独立 re-derive 身份不绕)+verifier+三角门(evidence verdict 不伪造绑本 run)+approval(approver≠creator) 零改重造，GOAL §1 范式链 Quant Intent→QRO→Research Graph→Governed Compiler→Deterministic Run→Evidence Verdict→Promotion 完整成型。
+- **GOAL-锚定成效**：3 线全无停工拍板（A-COMPILER 两边界 docstring 钉·drift 阈值=用户文献默认·W1 沿用已拍开关）。
+- **诚实残余**：接 Agent OS(Gateway/Orchestrator/Compiler)进 main.py+各台 Canvas 触发编译(领地外·中心做)·evidence 抽取适配·监控真实数据源待 data 管道·W1 领地外消费点·confirmatory 端点激活。
+- **land**：3 线整批 land main（用户授权）。推进 GOAL §1/§5/§15。**下一步**：中心接 Agent OS 进 main.py·A-QRO-2·老 P2·各残余接线。
