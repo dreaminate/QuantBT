@@ -6,6 +6,10 @@
 
 | uuid8 | 标题 | status | area | 位置 |
 |---|---|---|---|---|
+| 0850cc54 | InstrumentSpec 本体 + MarketCapabilityMatrix——多资产 typed（期权 expiry/strike/期货 roll/债 duration/FX）（§11） | in_progress | instruments | active |
+| 0d7c9511 | 信任层硬约束门 + ResponsibilityDisclosureRecord——反谄媚/诚实硬约束/waiver 不绕 safety（§13） | in_progress | trust | active |
+| 2bac27d3 | Document EvidenceSpan 抽取——DocumentBlock/TableArtifact/FormulaArtifact/EvidenceSpan/ExtractedStrategySpec（§6 续） | in_progress | documents | active |
+| d904b8d9 | 治理脊柱收口门——§8 硬不变量统一核查（CanvasMutation⇒canonical command/SecretPlaintext⇒Settings/AgentDataAccess⇒SecretRef）（§8） | in_progress | governance | active |
 | 0430cd78 | 数据更新写时强约束——dataset_version/checksum/lineage 升 block 门（B-VERSION-1） | done | data-pit | done |
 | 05d6f511 | 单人 self-approve 仅非真钱通道(冷却+留痕)，真钱硬双人 | done | approval | done |
 | 0781bb13 | RDP 聚合器——从真血统装配 RDP（DatasetVersion/LLMCallRecord/honest-N/verdict 真填）（D-RDP-2） | done | delivery | done |
@@ -186,6 +190,7 @@
 | delivery | 9d593481 · done | dreaminate |
 | desktop | bc21c7c1 · done | dreaminate |
 | docs | ecbd0eab · done | dreaminate |
+| documents | 2bac27d3 · in_progress | dreaminate |
 | documents | 66195b71 · done | dreaminate |
 | eval-methodology | 41ea6e35 · done | dreaminate |
 | eval-methodology | 69e1cb16 · done | dreaminate |
@@ -226,7 +231,9 @@
 | frontend-trust | 29258b77 · done | dreaminate |
 | frontend-trust | 876a0c11 · done | dreaminate |
 | frontend-trust | c5960022 · done | dreaminate |
+| governance | d904b8d9 · in_progress | dreaminate |
 | governance-ui | c631817e · done | dreaminate |
+| instruments | 0850cc54 · in_progress | dreaminate |
 | integration-test | 9a497bde · done | dreaminate |
 | llm-gateway | 640b66a0 · done | dreaminate |
 | math-spine | 11b0a3ab · done | dreaminate |
@@ -263,6 +270,7 @@
 | signals | 87ad21fc · done | dreaminate |
 | signals-methodology | ee3b8dbd · done | dreaminate |
 | strategy | 61053f3d · done | dreaminate |
+| trust | 0d7c9511 · in_progress | dreaminate |
 | verification | 180a341e · done | dreaminate |
 | verification | 6403b9bf · done | dreaminate |
 | 数据 | 3a8b2360 · done | dreaminate |
