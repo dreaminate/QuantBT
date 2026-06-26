@@ -62,6 +62,7 @@ def promote_ide_run(
     ledger: Any = None,
     returns_store: Any = None,
     extra_metadata: dict[str, Any] | None = None,
+    execution_blocks: list[dict[str, Any]] | None = None,
     registry: Any = None,
 ) -> PromotedRun:
     """把 IDE 沙箱结果落到 runs/<id>/，跑 metrics，返回新 run_id。
@@ -75,6 +76,13 @@ def promote_ide_run(
     M1 诚实接线（**opt-in，向后兼容**）：传入 `extra_metadata`（如 agent 组装的
     factor_set/model_id/signal_id/portfolio_id/cost_preset）时原样写进 run.json 的
     `assembly_inputs`——让组装意图可追溯、不被静默丢弃。不传 → 不写该键，行为与既有一致。
+
+    §16 执行诚实接线（**opt-in，向后兼容**）：传入 `execution_blocks`（调用方按【真实执行诚实】
+    构造的块字典：`mode`∈live/mock/fallback/template + `result_grade` + 诚实标识 mock_marked/
+    live_source_ref/fallback_reason/note）时原样写进 run.json 的 `execution_blocks`，供
+    `release_gate.promote_assembler` 组装→`evaluate_release` 的 Mock 诚实门核查（§16 致命
+    「未注入资产却声称已采用 / template false success」在此被 R4/R5 抓）。不传 → 不写该键、
+    行为与既有一致。本函数仅诚实【落数据】，绝不重造分类/判定（单一源 = mock_honesty + evaluate_release）。
     """
 
     equity_curve = result.get("equity_curve")
@@ -130,6 +138,11 @@ def promote_ide_run(
     # M1：落 agent 组装意图（factor_set/model_id/...）于 run.json，使其可追溯、不静默丢弃。
     if extra_metadata:
         manifest["assembly_inputs"] = dict(extra_metadata)
+    # §16：落【真实执行诚实】块（live/mock/fallback/template + result_grade）于 run.json，让
+    # release_gate.promote_assembler 组装→evaluate_release 能抓「未注入资产却声称已采用 / 模板基线
+    # 冒充生产」。纯透传（与 assembly_inputs 同范式·不分类不判定）；不传 → 不写该键、行为不变。
+    if execution_blocks:
+        manifest["execution_blocks"] = [dict(b) for b in execution_blocks]
 
     (run_dir / "run.json").write_text(
         json.dumps(manifest, ensure_ascii=False, indent=2),

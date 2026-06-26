@@ -31,6 +31,54 @@ def _short_id(prefix: str, *parts: Any) -> str:
     return f"{prefix}_{content_hash(list(parts))[:10]}"
 
 
+def _synth_execution_blocks(
+    *,
+    market: str,
+    has_assembly: bool,
+    assembly_injected: bool,
+    live_source_ref: str = "",
+) -> list[dict[str, Any]] | None:
+    """把一次合成回测的【执行诚实】映射成 run.json `execution_blocks`（字段镜像 mock_honesty.ExecutionBlock，
+    由 release_gate.promote_assembler 组装→evaluate_release 的 Mock 诚实门核查）。
+
+    §16 诚实映射（判定单一源仍在 evaluate_release·本函数只产【诚实数据】、绝不自裁）：
+    - has_assembly & 未注入 → 回测是动量模板基线却被当作所选组装结果 → `template`+`production` 块：
+      正撞 §16 致命「未注入资产却声称已采用 / template 不生成 production success」→ R4/R5 硬拒。
+    - has_assembly & 真注入 → 所选组装从 live source 真注入合成策略 → `live`+`live_source_ref` 块
+      （R3 须有源）。DS-1 当前不走此路；保留为注入落地后的诚实映射、由单测覆盖（非死码）。
+    - 无组装 → 诚实动量基线、无「已采用」假声明 → 返回 None 不写块（向后兼容·不污染既有 run.json；
+      组装器会把「无执行诚实标识」surface 成软 gap，而非静默当作已核 live）。
+
+    绝不为未注入的合成块伪造 mode=live/伪 source 蒙混过门——那正是本门要抓的坏门（写成 live 冒充
+    → 致命门平凡过）。
+    """
+
+    if not has_assembly:
+        return None
+    # 复用 §16 Mock 诚实词汇表【单一源】(mock_honesty)·不在 agent 层另造 mode/grade 字面量。
+    # 懒导入：避开 release_gate 包 __init__ 重依赖污染 business_tools 模块导入（且无组装路径不触发）。
+    from ..release_gate.mock_honesty import GRADE_PRODUCTION, MODE_LIVE, MODE_TEMPLATE
+
+    block_id = f"synth_{market}"
+    if assembly_injected:
+        return [{
+            "block_id": block_id,
+            "mode": MODE_LIVE,
+            "result_grade": GRADE_PRODUCTION,
+            "live_source_ref": live_source_ref,
+            "note": "所选组装从 live source 真注入合成策略（DS-1 注入落地后路径）",
+        }]
+    return [{
+        "block_id": block_id,
+        "mode": MODE_TEMPLATE,
+        "result_grade": GRADE_PRODUCTION,
+        "note": (
+            f"DS-1 合成器未注入所选组装；本回测为 {market} 动量模板基线，"
+            "不得作为所选策略的生产结果（§16：no template false success / 未注入资产却声称已采用）"
+        ),
+    }]
+
+
 def _synth_and_promote(
     *,
     args: dict,
@@ -91,6 +139,16 @@ def _synth_and_promote(
             assembly_inputs[_k] = _v
     has_assembly = bool(assembly_inputs)
 
+    # §16 执行诚实：DS-1 合成器仍按 market 套确定性动量模板、未把组装注入策略码（assembly_injected 恒 False）。
+    # 故用户做了组装却走 promote 时，回测的是模板基线而非所选组装——正撞 §16 致命「未注入资产却声称已采用 /
+    # 模板基线冒充生产」。把这层执行诚实映射成 execution_blocks（template+production）落进 run.json，让组装器→
+    # evaluate_release 的 R4/R5 硬拒（门有牙）。未来 DS-1 真注入后置 assembly_injected=True，helper 自然改出
+    # live+source 块（R3 满足）。无组装 → helper 返回 None → promote 不写该键（向后兼容）。
+    assembly_injected = False
+    execution_blocks = _synth_execution_blocks(
+        market=synth.market, has_assembly=has_assembly, assembly_injected=assembly_injected,
+    )
+
     # §3 诚实：样本未捆 → 显式失败（绝不伪造回测）。错误信息清晰引导前端诚实展示（H1）。
     if not has_sample(synth.market, data_root=eff_root):
         return {
@@ -133,6 +191,8 @@ def _synth_and_promote(
             returns_store=returns_store,
             # M1：把用户组装意图落进 run.json（assembly_inputs），不静默丢弃。
             extra_metadata=(assembly_inputs or None),
+            # §16：把执行诚实块（未注入=template+production）落进 run.json，供组装器→R4/R5 硬拒模板冒充。
+            execution_blocks=execution_blocks,
         )
     except PromoteError as exc:
         return {"error": f"落盘 promote 失败: {exc}", "synthesis_method": synth.method}
