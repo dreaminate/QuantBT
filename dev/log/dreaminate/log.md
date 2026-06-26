@@ -684,3 +684,12 @@
 - **收敛阶段判断（诚实·非进度焦虑）**：29+ 线建完对象脊柱 + 各门 building blocks·可并行纯 greenfield 基本耗尽·剩余收敛 = "接 main.py/orchestrator 真生产路径"为主(需输入管线·中心串行·部分需用户方法学决策)·波次自然从"5 opus 扇出"收窄为"中心精细串行 + 少量孤立后端残余 opus"。这是收敛的真实形态·不为满载而满载。
 - **诚实残余/follow-on**：production sizing 端点硬强制接 main.py(optimize_portfolio 零调用方)·factor advisory UI surface·各门接 promote 真晋级(需 ReleaseCandidate 输入管线)·归因数据源管线(per-run 因子矩阵)·no_edge 生产 sizing 政策(用户方法学待拍·摆代价非阻塞)。
 - **进程**：push 门控 validate PASS(应用上波教训)。**land**：D 线 + AssetClass guard 整批 land main(用户授权·回滚兜底)。推进 GOAL §3/§9/§11。**下一步**：production sizing/factor advisory 接 main.py·各门接 promote(需输入管线)·LINE-G 执行监控·归因数据源管线。
+
+## 2026-06-26 · 第十波 · 1 opus 线 land（各门接 promote 的输入管线第一块·自动循环·不等用户）
+- **派发**：1 deep-opus 线（卡 f2a9c4e1·promote 证据组装器·后台·独立 worktree）。用户明确"别等我继续·loop 自动循环"→改为自维持：每波 ≥1 后台 opus 线·完成通知即自动 fetch+merge+全量+validate+land+派下一波。
+- **Line（promote 证据组装器·§16/§0）**：`wave10/promote-assembler`(682da76)·新建 `release_gate/promote_assembler.py`(run.json→ReleaseCandidate 诚实映射·三入口·只组装输入判定全委派 evaluate_release·缺证据留 None 不编造·执行块缺/非法 mode fail-closed raise)+28 对抗测·**MUT 两门三态**(占位 checksum/空壳 binding)·未触禁区(main.py/ide.promote/release_gate 内部/approval 全未碰)。**意义**：已建 evaluate_release 八门聚合此前无生产调用方·now 有诚实组装器喂它=各门接 promote 的前置输入管线。
+- **★ opus 暴露 §16 致命真实未闭合处（高价值发现·KNOWN_RUN_GAPS）**：ide/promote.py 写的 run.json 不带执行诚实标识/dataset checksum/LLMCallRecord/**injection 状态**；尤其 business_tools._synth_and_promote 的 assembly_injected=False 只进返回 dict 不进 run.json → 组装器无从核「声称注入但实为模板基线」（§16 致命「未注入却声称已采用」）。**这精确指明第十一波中心活**：先把 injection 状态写进 run.json（最高优先·§16 致命），组装器才能映射 MODE_TEMPLATE 经 R4 硬拒。
+- **验收**：批次全量 **2660 passed / 13 skipped / 0 failed / 118s**（基线 2645 + 28·collect 2673 精确吻合·flake 未触发·凭真汇总行）+ validate PASS。
+- **GOAL-锚定+不建空壳**：组装器缺证据绝不编造（缺即标缺·MUT 两门证非纸门）·复用 evaluate_release 零重写判定·单一身份源 ids.content_hash 不另造。工程取舍 ratify：assembly_inputs 在 ReleaseCandidate(禁改)无字段→AssembledRelease 包装(不静默丢·不碰 ReleaseCandidate)。
+- **收敛策略（自动循环·诚实）**：进"接 main.py 真生产路径"阶段·把大活拆「opus 建孤立输入管线 lib + 中心串行接 main.py」两步——本波 opus 建组装器（孤立可测·不碰禁区）·十一波中心串行接 promote + 补 run.json 证据落账。
+- **进程**：push 门控 validate PASS。codex 复核抓 wave10 卡 status「doing」非法（已修 in_progress）+ 视图过期（已重建）·体现 push-validate 门控价值。**land**：opus 线 land main（用户授权·回滚兜底）。推进 GOAL §16/§0。**下一步（十一波·中心串行）**：① 补 run.json injection 状态/执行诚实/dataset 身份落账（injection 最高优先·§16 致命）② evaluate_run_releasable advisory-first 接 promote 端点 ③ 继续各门接 promote/LINE-G(§12)。

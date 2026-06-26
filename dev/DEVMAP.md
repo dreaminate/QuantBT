@@ -6,7 +6,6 @@
 
 | uuid8 | 标题 | status | area | 位置 |
 |---|---|---|---|---|
-| f2a9c4e1 | 发版门禁接 promote 证据组装器（run→ReleaseCandidate·诚实有/缺·LINE-E·§16/§0） | in_progress | release-gate | active |
 | 0430cd78 | 数据更新写时强约束——dataset_version/checksum/lineage 升 block 门（B-VERSION-1） | done | data-pit | done |
 | 05d6f511 | 单人 self-approve 仅非真钱通道(冷却+留痕)，真钱硬双人 | done | approval | done |
 | 0781bb13 | RDP 聚合器——从真血统装配 RDP（DatasetVersion/LLMCallRecord/honest-N/verdict 真填）（D-RDP-2） | done | delivery | done |
@@ -133,6 +132,7 @@
 | ee3b8dbd | conformal 校准区间接进信号层弃权（消费侧·不对噪声下单） | done | signals-methodology | done |
 | f19c5c19 | QRO 统一对象信封 + 状态六轴（四核心轴不混单绿灯）——对象脊柱地基（A-QRO-1） | done | qro | done |
 | f1bd08f2 | CPCV q05→gate 最后一公里——promote_ide_run 真实路径读 emit cpcv 透传 gate（死接线修复） | done | eval-methodology | done |
+| f2a9c4e1 | 发版门禁接 promote 证据组装器（run→ReleaseCandidate·诚实有/缺·LINE-E·§16/§0） | done | release-gate | done |
 | f6bb5e8e | DS-1 run_id 脊梁——agent backtest 接真引擎写 RUN_ROOT + run_id 贯穿（Fork3=A） | done | agent-backend | done |
 | ff286f80 | 因子收益归因（returns-based attribution）—— 北极星「归因」阶段建库 | done | eval-methodology | done |
 
@@ -264,8 +264,8 @@
 | portfolio | ba59fb7b · done | dreaminate |
 | qro | 872af176 · done | dreaminate |
 | qro | f19c5c19 · done | dreaminate |
-| release-gate | f2a9c4e1 · in_progress | dreaminate |
 | release-gate | 785c79c6 · done | dreaminate |
+| release-gate | f2a9c4e1 · done | dreaminate |
 | research-graph | 76a611d3 · done | dreaminate |
 | review | 3d4a872e · done | dreaminate |
 | security-invariant | 381b6c18 · done | dreaminate |
