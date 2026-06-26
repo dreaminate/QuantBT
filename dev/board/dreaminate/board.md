@@ -4,4 +4,4 @@
 
 | uuid8 | 标题 | status | area | 优先级 | 依赖(uuid8) |
 |---|---|---|---|---|---|
-| _（名下无 active 卡）_ | | | | | |
+| b7e3d9a1 | promote 时把执行诚实(injection 状态)落进 run.json·闭 §16 致命「声称已采用却未注入/模板基线」(LINE-E·§16) | in_progress | release-gate | P1 | f2a9c4e1 |
