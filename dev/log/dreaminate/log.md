@@ -664,3 +664,13 @@
 - **2 拍板项停报中心(保守默认 land·非阻塞·摆代价待用户)**：PDF/OOXML 解析库选型(Document 立沙箱+stub)·方法学 standard 档是否 cap(GOAL §10 放宽语义·已 GOAL-consistent)。
 - **诚实残余/中心补**：发版门禁/方法学接 main.py 真 promote+RDP·Document EvidenceSpan 抽取+真解析库·Forecast runtime 执行接线·InstrumentSpec 本体·归因 main.py 路由·Agent OS 接 main.py。
 - **land**：4 线整批 land main（用户授权）。推进 GOAL §16/§6/§10/§9。**下一步**：LINE-G 执行监控/runtime profile/governance 收口/各接线。
+
+## 2026-06-26 · 第八波 4 线并行整合 land（InstrumentSpec + EvidenceSpan + 信任层硬约束门 + governance 收口门·GOAL-first）
+
+- **派 4 deep-opus**（各 GOAL-first·greenfield 非交叠 instruments/ ‖ documents/扩 ‖ trust/ ‖ governance/）：InstrumentSpec(`0850cc54`·§11) / Document EvidenceSpan(`2bac27d3`·§6) / 信任层硬约束门(`0d7c9511`·§13) / governance 收口门(`d904b8d9`·§8)。
+- **验收**：批次全量 **2615 passed / 13 skipped / 0 failed / 113s**（基线 2460+168 新对抗测试全绿·flake 未触发·collect 2628 精确吻合）+ validate PASS。MUT 钉死：InstrumentSpec(期权缺 expiry/A股 live 恒拒/跨币种缺 base currency) / EvidenceSpan(缺追溯/未标未验证/span-support 抗伪造/真实 MUT 8 例) / 信任层(waiver 绕 safety→拒命门/反谄媚/弱点隐藏/伪造强标签) / governance(七条硬不变量各违反→拒)。
+- **GOAL-锚定成效**：4 线全无停工拍板·复用单一源(InstrumentSpec 复用 classify A股硬墙·信任层复用 spine.MCR·governance 收编已建零重写 ENFORCEMENT_BINDINGS 实证·EvidenceSpan 独立链账不污染 honest-N)。补缺口:ResponsibilityDisclosureRecord(rdp.py 早有 string-ref 无类)。
+- **安全里程碑**:waiver 绝不可绕 secret/OrderGuard/kill switch/no-silent-mock(§13 命门 fail-closed)·governance §8 七条硬不变量统一核查·A股 live 恒拒(InstrumentSpec)。
+- **2 拍板项停报中心(已 GOAL-anchored 自决)**:ExtractionRun 落账归属(独立链账·延续 intake 先例)·信任层 waiver-safety 硬 raise(§13 命门+release_gate 先例)。
+- **诚实残余/中心补**:各门接 main.py 真 promote(发版门禁/方法学/信任层/governance/confirmatory)·真 PDF 库选型·AssetClass 双枚举收敛·归因 main.py 路由·Agent OS 接 main.py。
+- **进程**:push 门控 validate PASS(上波教训应用)。**land**:4 线整批 land main(用户授权)。推进 GOAL §11/§6/§13/§8。**下一步**:各门接真 promote·LINE-G 执行监控·归因路由。
