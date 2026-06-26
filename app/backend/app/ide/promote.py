@@ -144,6 +144,21 @@ def promote_ide_run(
     if execution_blocks:
         manifest["execution_blocks"] = [dict(b) for b in execution_blocks]
 
+    # §16 advisory-first（中心接线·D-RELEASE-ADVISORY）：让已建 release gate（§16 八门聚合）
+    # **真正在 promote 路径上跑**，把裁决落进 run.json 的 `release_verdict`——使每个 promoted run
+    # 携带可追溯的发版门状态（ok + 缺口）。**只记录、绝不在此 reject 晋级**（是否硬卡晋级 = 后续
+    # 显式 enforce 决策·守不预先削弱方法学也不破基线）。防御式：release 自检任何异常都不得破坏
+    # promote 主流程（落账诚实标 available:False，不静默吞、不假绿灯）。
+    try:
+        from ..release_gate.promote_assembler import evaluate_run_releasable
+
+        manifest["release_verdict"] = evaluate_run_releasable(manifest).to_dict()
+    except Exception as exc:  # noqa: BLE001 — advisory 不得破坏 promote 主流程
+        manifest["release_verdict"] = {
+            "available": False,
+            "error": f"release 自检未运行: {type(exc).__name__}",
+        }
+
     (run_dir / "run.json").write_text(
         json.dumps(manifest, ensure_ascii=False, indent=2),
         encoding="utf-8",

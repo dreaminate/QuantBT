@@ -702,3 +702,12 @@
 - **★ 中心第十二波接端点须知**：template 块固定 result_grade=production→R4+R5 标签无关触发→组装器接 promote 端点后，带组装入参但 DS-1 真注入前的 synth run 会被发版门硬拒(任何标签)=§16 正解(模板冒充不可发版)·接线预期此拒·DS-1 真注入时喂 assembly_injected=True+真 source 自然过门。
 - **诚实残余/follow-on**：IDE 沙箱直接 promote 路径 execution_blocks 未填(参数就位·端点未填)·dataset_versions+checksum/LLMCallRecord 仍不带 run.json(KNOWN_RUN_GAPS)。
 - **进程**：push 门控 validate PASS。**land**：opus 线 land main(用户授权·回滚兜底)。推进 GOAL §16/§0。**下一步（十二波·中心串行+并行 opus 保活）**：① 中心 evaluate_run_releasable advisory-first 接 promote 端点(main.py 专属) ② 并行孤立 opus：dataset_version/LLMCallRecord 落 run.json·或 IDE 直接 promote 执行诚实·或 LINE-G(§12)。
+
+## 2026-06-26 · 第十二波 · 中心串行 land（§16 发版门 advisory-first 接进 promote 路径·自动循环）
+- **中心串行（main.py/promote 专属·无 opus·我自己做）**：把第十波 evaluate_run_releasable 接进 promote_ide_run——§16 发版门真在 promote 路径上跑。`ide/promote.py` 写 run.json 前防御式 advisory：evaluate_run_releasable(manifest)→release_verdict 落 run.json·try/except 兜底(异常落 available:False·绝不破 promote)·默认开·+1 文件 additive。新测试 test_promote_release_advisory.py(5 例)。
+- **advisory-first 核心不变量**：模板基线冒充→§16 裁 ok=False(mock 诚实门 R4/R5)且记录·但 promote **仍成功落盘**(只记录绝不 reject 晋级·守不预先削弱方法学也不破基线)。MUT 三态：advisory 改洗白(恒 ok=True 不真跑门)→模板基线测试转红→复原。
+- **链条闭合**：§16 八门聚合 release gate(七波)→组装器 run→ReleaseCandidate(十波)→执行诚实落账(十一波)→advisory 接 promote(本波)。**至此已建 §16 发版门从「无生产调用方的孤岛」变成「每个 promoted run 携带可追溯 release_verdict」**——推进 §0 可上线(发版门真跑生产路径)。
+- **验收**：全量批次 **2675 passed / 13 skipped / 0 failed / 116s**（基线 2683 + 5·collect 2688 精确吻合·flake 未触发·凭真汇总行）+ validate PASS。**改 promote_ide_run(众多 promote 测试共用)零回归** = advisory 真 additive 非破坏。
+- **GOAL-锚定+不建空壳**：advisory 只记录不 reject(不预先削弱·不破基线)·防御式不破 promote·复用 evaluate_release 零重写·MUT 证门有牙·异常落诚实标不假绿灯。
+- **诚实残余/follow-on**：enforce(硬卡晋级)=后续显式决策(需先补 dataset/LLM/IDE 直接 promote 证据否则误拒合法 run·摆代价待定)·dataset_versions+checksum/LLMCallRecord/IDE 直接 promote execution_blocks 续补(KNOWN_RUN_GAPS)·main.py GET release_check 只读端点暴露给前端。
+- **进程**：push 门控 validate PASS。**land**：中心串行 land main(用户授权·回滚兜底)。推进 GOAL §16/§0。**下一步（自动循环）**：派孤立 opus 续补 run.json 证据(dataset/LLM/IDE 路径)保活循环 + 中心评估 GET release_check 端点/enforce 时机。

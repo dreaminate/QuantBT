@@ -110,6 +110,7 @@
 | cfb7d950 | DS-4 paper 接真——submit→register_run + POST 端点 + 真 provider 产净值 | done | paper-fullstack | done |
 | d0e5d208 | 监控→自动降级/退役/问责 尾部闭环接线（T-033 核验 gap 升级） | done | monitor | done |
 | d11d1426 | 暗色台地基 — desk 壳件 + design tokens + per-desk accent + 路由边界 | done | frontend-foundation | done |
+| d2c5e8f3 | §16 发版门 advisory-first 接进 promote 路径（D-RELEASE-ADVISORY·中心串行·LINE-E） | done | release-gate | done |
 | d41b167d | Agent 窗口 D-PERM 反例 UI + self-approve 二次确认 | done | frontend | done |
 | d4a324ae | conformal 校准区间接进 model_eval（价值闭环·OOS 真留出覆盖率） | done | eval-methodology | done |
 | d4cb88f4 | DS-3 裁决接真——run_id 贯穿真裁决卡 + Bootstrap 第三腿前端补全 | done | frontend | done |
@@ -267,6 +268,7 @@
 | qro | f19c5c19 · done | dreaminate |
 | release-gate | 785c79c6 · done | dreaminate |
 | release-gate | b7e3d9a1 · done | dreaminate |
+| release-gate | d2c5e8f3 · done | dreaminate |
 | release-gate | f2a9c4e1 · done | dreaminate |
 | research-graph | 76a611d3 · done | dreaminate |
 | review | 3d4a872e · done | dreaminate |
