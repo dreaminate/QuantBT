@@ -17,8 +17,9 @@
 - **23/24 可见事件投影**到 user 工作流（`EventProjector`）。
 - **五形态**：Plan / ReAct / Review / Replay / Repair。
 
-五形态对应方法：`plan()`（Plan）· `dispatch()`（ReAct）· `review()` / `admit_verifier_challenge()`（Review）·
-`replay()`（Replay）· `repair()`（Repair）。
+五形态对应方法：`plan()`（Plan）· `dispatch()`（ReAct）· `admit_verifier_challenge()` / `advise_trust()`（Review）·
+`replay()`（Replay）· `repair()`（Repair）。Review 形态两道：`admit_verifier_challenge`（结构独立性）+
+`advise_trust`（§13 信任层 **advisory**：反谄媚 / 诚实 / 弱点披露·只标记不阻断·命门仍硬守·见 `trust_advisory.py`）。
 
 诚实边界（卡面非目标）：不建前端工作流可视化（事件后端投影即可）；不重建 LLM Gateway（已建·只调）；
 record/replay store 的深接线（RecordingLLMClient fixture 后端）另卡——本核的 Replay 形态依赖 **kernel
@@ -88,11 +89,14 @@ from .plan import (
     assert_methodology_user_decided,
 )
 from .roles import (
+    ROLE_VERIFIER,
     TOOL_RAG_SEARCH,
     TOOL_RAISE_CHALLENGE,
     TOOL_READ_ASSET,
     get_role,
 )
+from ...trust import TrustContext
+from .trust_advisory import TrustAdvisory, run_trust_advisory
 
 # orchestrator 投放进 kernel context 的句柄键（context 只携非身份基础设施句柄·见 kernel 契约）。
 ORCH_CONTEXT_KEY = "_agent_orchestrator_bundle"
@@ -497,6 +501,33 @@ class AgentOrchestrator:
                 f"（未标独立性不足）——GOAL §7 → 拒：{verdict.reason}"
             )
         return verdict
+
+    def advise_trust(
+        self,
+        ctx: TrustContext,
+        *,
+        role: str = ROLE_VERIFIER,
+        node_id: str = "",
+        target_ref: str = "",
+    ) -> TrustAdvisory:
+        """Review 形态 · §13 信任层 **advisory**（GOAL §13 + §7）——把第八波 `trust/` 门接进 agent 审查路径。
+
+        对一条待审 agent 产出（研究结论 / 推荐 / review·由 `ctx: TrustContext` 描述其 §13 姿态）跑信任层
+        全部硬约束门。**判定零重写**：全权委派 `app.trust.evaluate_trust`（reuse·本层只接线 + 投影）。
+
+        advisory-first（本波纪律）：诚实 / 反谄媚 / 弱点披露 / 责任 / 用户自主等**软门**只**标记**
+        （`TrustAdvisory.flagged`）+ 投影一枚 `VerifierChallengeRaised`，**绝不阻断**本编排核既有主流程
+        （不改 dispatch/plan/replay/repair 行为·不 block agent）。硬卡 agent = 后续显式决策。
+
+        命门例外（**不在此削弱**·复用 trust 命门）：若 `ctx` 路径带 waiver 触及安全不变量
+        （secret / OrderGuard / kill switch / no-silent-mock），`evaluate_trust` 内部 `raise SafetyWaiverError`
+        —— 本方法**不吞**（吞 = 把 fail-closed 硬墙降级成 advisory = 削弱命门），投影 `FailureDetected`
+        （只投不变量名）后**原样抛出**。安全不变量不在 advisory 域。
+        """
+
+        return run_trust_advisory(
+            ctx, self._projector, role=role, node_id=node_id, target_ref=target_ref
+        )
 
     # ───────────────────────── Repair 形态 ─────────────────────────
     def repair(self, *, failure_ref: str, code_change: AgentCodeChange) -> AgentCodeChange:
