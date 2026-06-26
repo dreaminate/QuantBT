@@ -17,9 +17,11 @@
 - **23/24 可见事件投影**到 user 工作流（`EventProjector`）。
 - **五形态**：Plan / ReAct / Review / Replay / Repair。
 
-五形态对应方法：`plan()`（Plan）· `dispatch()`（ReAct）· `admit_verifier_challenge()` / `advise_trust()`（Review）·
-`replay()`（Replay）· `repair()`（Repair）。Review 形态两道：`admit_verifier_challenge`（结构独立性）+
-`advise_trust`（§13 信任层 **advisory**：反谄媚 / 诚实 / 弱点披露·只标记不阻断·命门仍硬守·见 `trust_advisory.py`）。
+五形态对应方法：`plan()`（Plan）· `dispatch()`（ReAct）·
+`admit_verifier_challenge()` / `advise_trust()` / `advise_governance()`（Review）·
+`replay()`（Replay）· `repair()`（Repair）。Review 形态三道：`admit_verifier_challenge`（结构独立性）+
+`advise_trust`（§13 信任层 **advisory**：反谄媚 / 诚实 / 弱点披露·只标记不阻断·命门仍硬守·见 `trust_advisory.py`）+
+`advise_governance`（§8 治理脊柱 **advisory**：七条硬不变量只标记不阻断·secret 不回显·见 `governance_advisory.py`）。
 
 诚实边界（卡面非目标）：不建前端工作流可视化（事件后端投影即可）；不重建 LLM Gateway（已建·只调）；
 record/replay store 的深接线（RecordingLLMClient fixture 后端）另卡——本核的 Replay 形态依赖 **kernel
@@ -95,7 +97,9 @@ from .roles import (
     TOOL_READ_ASSET,
     get_role,
 )
+from ...governance import GovernanceSpineGate, SpineEvidence
 from ...trust import TrustContext
+from .governance_advisory import GovernanceAdvisory, run_governance_advisory
 from .trust_advisory import TrustAdvisory, run_trust_advisory
 
 # orchestrator 投放进 kernel context 的句柄键（context 只携非身份基础设施句柄·见 kernel 契约）。
@@ -527,6 +531,33 @@ class AgentOrchestrator:
 
         return run_trust_advisory(
             ctx, self._projector, role=role, node_id=node_id, target_ref=target_ref
+        )
+
+    def advise_governance(
+        self,
+        evidence: SpineEvidence,
+        *,
+        gate: GovernanceSpineGate | None = None,
+        role: str = ROLE_VERIFIER,
+        node_id: str = "",
+        node_ref: str = "",
+    ) -> GovernanceAdvisory:
+        """Review 形态 · §8 治理脊柱 **advisory**（GOAL §8 治理脊柱 + §7）。
+
+        把 `GovernanceSpineGate` 接进 agent 审查路径。调用方显式构造 `SpineEvidence` 描述待审动作的
+        §8 姿态；本方法只做接线和事件投影，判定全权委派 `GovernanceSpineGate.evaluate`。
+
+        advisory-first：canvas / agent_action / plan / code_change / role_action / secret / data_access 任一违反
+        只标记 `GovernanceAdvisory.flagged` 并投影 `VerifierChallengeRaised`，不阻断现有 plan / dispatch /
+        replay / repair 主流程。硬 enforce 留给后续显式决策。
+
+        secret 可见性边界：`GovernanceSpineGate.evaluate` 当前对 secret 违反返回 `SpineVerdict(allowed=False)`；
+        接线层只投 clause id 和计数，不投 evidence surface / verdict_text / violation 文本。若未来底层门以
+        `SecretLeakError` 硬停，本层不吞，投不变量名后原样抛出。
+        """
+
+        return run_governance_advisory(
+            evidence, self._projector, gate=gate, role=role, node_id=node_id, node_ref=node_ref
         )
 
     # ───────────────────────── Repair 形态 ─────────────────────────

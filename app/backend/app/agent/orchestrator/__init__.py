@@ -35,6 +35,12 @@ from .governance import (
     ToolPermissionError,
     ToolViolation,
 )
+from .governance_advisory import (
+    GOVERNANCE_ADVISORY_SOURCE,
+    GovernanceAdvisory,
+    run_governance_advisory,
+    summarize_governance_for_event,
+)
 from .llm_adapter import GatewayBypassError, GatewayLLMAdapter, assert_llm_admissible
 from .orchestrator import (
     MODES,
@@ -101,6 +107,11 @@ __all__ = [
     "ToolPermissionError",
     "ToolCallRecord",
     "ToolViolation",
+    # §8 governance advisory wiring
+    "GovernanceAdvisory",
+    "GOVERNANCE_ADVISORY_SOURCE",
+    "run_governance_advisory",
+    "summarize_governance_for_event",
     # llm adapter
     "GatewayLLMAdapter",
     "GatewayBypassError",

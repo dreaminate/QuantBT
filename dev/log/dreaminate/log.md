@@ -6,6 +6,12 @@
 ## <日期> · <标题>
 - 建/改了什么 + 命门  - 验收：<对抗测试 + 变异 + 全量数字>  - 下一步：<…> -->
 
+## 2026-06-26 · §8 治理脊柱门 advisory 接进 agent orchestrator Review（卡 a8f3c1d2 · D-GOV-ADVISORY）
+
+- **实现**：新增 `agent/orchestrator/governance_advisory.py`，把已建 `GovernanceSpineGate.evaluate(SpineEvidence)` 接进 orchestrator Review 形态；`AgentOrchestrator` 新增 `advise_governance`，包导出同步。判定零重写，全委派 §8 门；事件 / `to_dict()` 只投 clause id、bool、计数，不投 evidence surface、`verdict_text`、`violation` 文本，secret 不回显。advisory-first：违反只 flag + `VerifierChallengeRaised`，不阻断 `plan/dispatch/replay/repair`；若底层 future `SecretLeakError` 硬停，本层只投 `INV_SECRET_PLAINTEXT` 后 re-raise。
+- **验收**：新增对抗测试 14 passed；相邻回归 `test_trust_orchestrator_advisory` 17 passed、`test_governance_spine` 30 passed、`test_agent_orchestrator` 47 passed。MUT：临时洗白 `flagged=False` -> 目标测试 1 failed；恢复后新增测试 14 passed。后端全量 `2706 passed / 13 skipped / 0 failed / 117.30s`。
+- **下一步**：free-text -> `SpineEvidence`/`TrustContext` 上游映射仍未做；`advise_trust/advise_governance/evaluate_run_releasable` 接 main.py 真 agent/promote 端点仍是中心串行 follow-on；硬 enforce 晋级需先评估证据输入完整度。
+
 ## 2026-06-25 · CPCV q05→gate 最后一公里——promote 真实路径读 emit cpcv 透传 gate（卡 f1bd08f2 · D-CPCV-PROMOTE）
 
 - **缘起**：autonomous-loop（ultracode）。correctness 审计 workflow（wm8x329vn）#8（高假绿灯）：done 卡 89e7be1e 让 gate 接受 cpcv，但生产 promote 路径 `promote.py:_run_overfit_gate` 调 `evaluate_overfit_gate` 时从不传 cpcv → gate 恒 cpcv=None，cpcv_conservative 在真实晋级路径永远触发不了（我自己 cpcv→gate 工作的最后一公里断线）。

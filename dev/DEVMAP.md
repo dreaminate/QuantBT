@@ -6,7 +6,6 @@
 
 | uuid8 | 标题 | status | area | 位置 |
 |---|---|---|---|---|
-| a8f3c1d2 | §8 治理脊柱门 advisory 接进 agent orchestrator Review 路径（D-GOV-ADVISORY·孪生 §13·LINE-§8） | in_progress | governance | active |
 | 0430cd78 | 数据更新写时强约束——dataset_version/checksum/lineage 升 block 门（B-VERSION-1） | done | data-pit | done |
 | 05d6f511 | 单人 self-approve 仅非真钱通道(冷却+留痕)，真钱硬双人 | done | approval | done |
 | 0781bb13 | RDP 聚合器——从真血统装配 RDP（DatasetVersion/LLMCallRecord/honest-N/verdict 真填）（D-RDP-2） | done | delivery | done |
@@ -87,6 +86,7 @@
 | a11e2aa5 | 因子台三纯库 + 暴力遍历挖掘 — 前端设计+实装（GOAL §3，无 handoff 稿，D-DESK-EPIC F1=B 路 b） | done | frontend | done |
 | a367bfc8 | paper testnet 真喂 provider——加密 testnet 实时 bar/mark（用户「都做」可选档） | done | paper | done |
 | a75c4beb | Agent 窗口产物工作区 — 8 产物卡 + Strategy.yaml + Report.md | done | frontend | done |
+| a8f3c1d2 | §8 治理脊柱门 advisory 接进 agent orchestrator Review 路径（D-GOV-ADVISORY·孪生 §13·LINE-§8） | done | governance | done |
 | aa13c3b0 | 因子机构级度量接 lifecycle 状态机/sizing 生产路径 | done | factor-lifecycle | done |
 | b106177f | 因子台后端接线 — 暴露已有 compute + 相关性/分层回测 + alpha审查 | done | backend | done |
 | b12de4f5 | §3 因子机构级生命周期度量（衰减半衰期/容量/因子族/拥挤）+ 命门 | done | factor-lifecycle | done |
@@ -237,7 +237,7 @@
 | frontend-trust | 29258b77 · done | dreaminate |
 | frontend-trust | 876a0c11 · done | dreaminate |
 | frontend-trust | c5960022 · done | dreaminate |
-| governance | a8f3c1d2 · in_progress | dreaminate |
+| governance | a8f3c1d2 · done | dreaminate |
 | governance | d904b8d9 · done | dreaminate |
 | governance-ui | c631817e · done | dreaminate |
 | instruments | 0850cc54 · done | dreaminate |

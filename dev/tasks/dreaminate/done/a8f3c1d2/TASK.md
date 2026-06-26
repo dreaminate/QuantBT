@@ -1,10 +1,10 @@
 ---
 uuid: a8f3c1d29e7b4f0c8a1d3e6b2f9c5d04
 title: §8 治理脊柱门 advisory 接进 agent orchestrator Review 路径（D-GOV-ADVISORY·孪生 §13·LINE-§8）
-status: in_progress
+status: done
 owner: dreaminate
 assigned_by: dreaminate
-review_status: 0
+review_status: 1
 priority: P1
 area: governance
 source: goal-gap
@@ -40,3 +40,31 @@ depends_on: [d904b8d998d249728db742a62d12c350, e4f1a2b3c5d64e7f8a9b0c1d2e3f4a5b]
 
 ## 验收一句话 [必填]
 §8 治理脊柱门真接进 orchestrator Review 路径（advisory-first·软门只标记不阻断·命门硬守不降级·secret 不回显），判定零重写全委派 GovernanceSpineGate，不破基线与现有闸门。
+
+## 完成纪要（done · 第十四波 · 中心整合）
+**攻入点**：orchestrator 的 Review 形态新增 `advise_governance(evidence: SpineEvidence) -> GovernanceAdvisory`，与第十三波 `advise_trust` 平行。
+
+**交付**：
+- 新增 `app/backend/app/agent/orchestrator/governance_advisory.py`：`run_governance_advisory` 全权委派 `GovernanceSpineGate.evaluate`，只负责 advisory 标记和事件投影。
+- 扩展 `app/backend/app/agent/orchestrator/orchestrator.py`：新增 `AgentOrchestrator.advise_governance`，不改 `plan / dispatch / replay / repair` 主流程。
+- 扩展 `app/backend/app/agent/orchestrator/__init__.py`：导出 `GovernanceAdvisory / GOVERNANCE_ADVISORY_SOURCE / run_governance_advisory / summarize_governance_for_event`。
+- 新增 `app/backend/tests/test_governance_orchestrator_advisory.py`：14 条对抗测试。
+
+**advisory-first 纪律**：
+- §8 七条硬不变量违反只 `flagged=True` + 投影 `VerifierChallengeRaised`，不阻断 orchestrator 主流程。
+- 判定零重写：不重写 clause 逻辑，全部委派已建 `GovernanceSpineGate.evaluate`。
+- secret 不回显：事件和 `to_dict()` 只暴露 clause id、bool、计数；不投 evidence surface、`verdict_text`、`violation` 文本。
+- defense-in-depth：若底层未来以 `SecretLeakError` 硬停，本层投 `FailureDetected` 且只投 `INV_SECRET_PLAINTEXT` 后原样 re-raise，不吞成 advisory。
+
+**scoped 验证（中心实跑）**：
+- `python -m pytest tests/test_governance_orchestrator_advisory.py -q --timeout=120` -> 14 passed。
+- `python -m pytest tests/test_trust_orchestrator_advisory.py -q --timeout=120` -> 17 passed。
+- `python -m pytest tests/test_governance_spine.py -q --timeout=120` -> 30 passed。
+- `python -m pytest tests/test_agent_orchestrator.py -q --timeout=120` -> 47 passed。
+- MUT 三态：临时把 `run_governance_advisory` 返回值改为 `flagged=False` -> `test_advisory_flags_plan_missing_acceptance_gates` 红（1 failed），恢复 `flagged=not verdict.allowed` -> 新增测试 14 passed。
+- 后端全量：`python -m pytest -q --timeout=120` -> 2706 passed, 13 skipped, 284 warnings in 117.30s。
+
+**诚实残余 / follow-on**：
+- free-text -> `SpineEvidence` 映射未做；本层只吃调用方显式构造的结构化 evidence。
+- 接 main.py 真 agent / promote 端点未做；本卡只把 §8 门接进 Review 形态。
+- 硬 enforce 晋级未做；当前仍是 advisory-first，后续须等输入证据完整后单独评估。
