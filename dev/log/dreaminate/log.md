@@ -654,3 +654,13 @@
 - **2 拍板项停报中心(保守默认 land·非阻塞·摆代价待用户)**：成本三档预设是否默认翻 size-aware(须先可信 Y 标定+无泄露管线否则没校准冲击当默认=另一种不诚实)·归因因子集/口径(原样回显·用户那摊)。
 - **诚实残余/中心补**：归因 main.py 薄路由+前端 FactorAttributionCard 挂载·成本三档预设生产 run 管线消费(producer wiring)·Agent OS 接 main.py·A-QRO-2 admit_signal/strategy 正路径 builder。
 - **land**：3 线整批 land main（用户授权）。推进 GOAL §1/§9/§0/§10。**下一步**：中心接 Agent OS+归因路由进 main.py·老 P2 剩·各残余。
+
+## 2026-06-26 · 第七波 4 线并行整合 land（发版门禁 + Document 安全栈 + 方法学控制面 + Forecast/StrategyBook·GOAL-first）
+
+- **派 4 deep-opus**（各 GOAL-first·全新 greenfield territory 不交叠 release_gate/ ‖ documents/ ‖ methodology/ ‖ strategy/）：发版门禁(`785c79c6`·§16) / Document 摄入安全栈(`66195b71`·§6) / 方法学控制面 6 档(`e62a8933`·§10) / Forecast+StrategyBook typed(`61053f3d`·§9)。
+- **验收**：批次全量 **2447 passed / 13 skipped / 0 failed / 233s**（基线 2285+175 新对抗测试全绿·flake 未触发·collect 2460 精确吻合）+ validate PASS。MUT 钉死：发版门禁(silent mock/template 标生产/缺 binding/缺 MCR/伪造封印各→拒·3 MUT) / Document(伪装扩展名/SSRF 16 种/联网解析器/zip bomb/隔离真生效) / 方法学(放宽后仍显强证据→拒 15 红/未记录 tradeoffs→拒) / Forecast(未绑 Signal Contract→拒/A股 short 硬拒 R13)。
+- **GOAL-锚定成效**：4 线全无停工拍板·全靠锚 GOAL+已决决策自决。复用单一源纪律：发版门禁委派已建门不重造·方法学复用 spine.MethodologyChoiceRecord(is 断言)·Forecast 复用 signal_contract/strategy_goal.Constraints·Document 复用 ids.content_hash。
+- **安全里程碑**：Document 外来文档攻击面(quarantine/sandbox/no-network/SSRF/zip bomb)与 artifact RCE 同级防护立死·发版门禁 no silent mock+no template false success 硬拒。
+- **2 拍板项停报中心(保守默认 land·非阻塞·摆代价待用户)**：PDF/OOXML 解析库选型(Document 立沙箱+stub)·方法学 standard 档是否 cap(GOAL §10 放宽语义·已 GOAL-consistent)。
+- **诚实残余/中心补**：发版门禁/方法学接 main.py 真 promote+RDP·Document EvidenceSpan 抽取+真解析库·Forecast runtime 执行接线·InstrumentSpec 本体·归因 main.py 路由·Agent OS 接 main.py。
+- **land**：4 线整批 land main（用户授权）。推进 GOAL §16/§6/§10/§9。**下一步**：LINE-G 执行监控/runtime profile/governance 收口/各接线。

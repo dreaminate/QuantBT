@@ -6,10 +6,6 @@
 
 | uuid8 | 标题 | status | area | 位置 |
 |---|---|---|---|---|
-| 61053f3d | Forecast typed 对象 + StrategyBook typed——模型输出→Signal Contract / payoff·constraints·capital accounting（§9） | in_progress | strategy | active |
-| 66195b71 | Document Intelligence 摄入安全栈——quarantine/parser sandbox/no network/mime check/URL allowlist（§6·安全红线） | in_progress | documents | active |
-| 785c79c6 | 发版门禁套件——工程标准 release gate（no silent mock/no template false success/required bindings→拒）（LINE-E·D-RELEASE-GATE） | in_progress | release-gate | active |
-| e62a8933 | 方法学控制面 6 档——strict/standard/loose/exploratory/custom/user_waived + MethodologyChoiceRecord（§10·系统提供用户运行时选） | in_progress | methodology | active |
 | 0430cd78 | 数据更新写时强约束——dataset_version/checksum/lineage 升 block 门（B-VERSION-1） | done | data-pit | done |
 | 05d6f511 | 单人 self-approve 仅非真钱通道(冷却+留痕)，真钱硬双人 | done | approval | done |
 | 0781bb13 | RDP 聚合器——从真血统装配 RDP（DatasetVersion/LLMCallRecord/honest-N/verdict 真填）（D-RDP-2） | done | delivery | done |
@@ -37,10 +33,12 @@
 | 51271d38 | 因子台三纯库+挖掘 后端 — 信号契约 + ML/DL 登记 + 暴力遍历守门引擎 | done | backend | done |
 | 554cdcf2 | 监控绩效轴真闭环——4 个 drift 检测器接 run_weekly_monitor_pass + per-factor IC 真源 + 观测落盘（审计残余） | done | monitor | done |
 | 5e47b82f | 因子台前端 P0 — 5 视图像素还原 + mock(库/相关/评测/构建DSL/研究) | done | frontend | done |
+| 61053f3d | Forecast typed 对象 + StrategyBook typed——模型输出→Signal Contract / payoff·constraints·capital accounting（§9） | done | strategy | done |
 | 6144bd61 | artifact 信任门生产激活——producer 落盘接 register + 翻 enforce + safetensors 入依赖（C-MODELGOV-1 activate） | done | model-governance | done |
 | 6403b9bf | 诚实残余核验——监控尾部闭环 + 组合层三角 + D2 四残余 | done | verification | done |
 | 640b66a0 | LLM Gateway——唯一调用入口 + ModelRoutingPolicy(混合自适应) + CredentialPool + LLMCallRecord（A-AGENT-GW） | done | llm-gateway | done |
 | 64717fe6 | paper provider 真回放捆绑样本——替换确定性合成游走（§3 增强） | done | paper | done |
+| 66195b71 | Document Intelligence 摄入安全栈——quarantine/parser sandbox/no network/mime check/URL allowlist（§6·安全红线） | done | documents | done |
 | 67b42025 | RDP 接线——接现导出器 6 字段 + 接真 promote 路径 require_valid_rdp（D-RDP-1 wire） | done | delivery | done |
 | 698a3c60 | 监控调度 driver 接线——补缺失的生产 tick loop，让 weekly cron 真 fire（修复端到端假绿灯） | done | monitor | done |
 | 69e1cb16 | R23 不确定性预测区间（split conformal/CQR/ACI）+ abstain + 覆盖定理命门 | done | eval-methodology | done |
@@ -51,6 +49,7 @@
 | 7179ba36 | R18 平方根市场冲击 回测成本项（size-aware）+ 容量交叉校验命门 | done | execution-cost | done |
 | 74f93771 | CPCV 路径分布 opt-in 集成进 train_model（cpcv_distribution 入 TrainResult·report-only） | done | models-methodology | done |
 | 76a611d3 | ResearchGraph IR——QRO 节点 typed 图 + 各台 typed projection + 单一真相源（A-GRAPH-1） | done | research-graph | done |
+| 785c79c6 | 发版门禁套件——工程标准 release gate（no silent mock/no template false success/required bindings→拒）（LINE-E·D-RELEASE-GATE） | done | release-gate | done |
 | 79673e0d | Conformal 预测区间经脊柱绑定（覆盖定理 property）+ 接 model_eval band | done | math-spine | done |
 | 79ebe273 | 模拟台后端接线 — /api/paper/* 整层 + 晋级审批门 + 风险门冻结哈希链 | done | backend | done |
 | 7ac5a0fe | BacktestVenue.cost_summary —— per-fill 成本归因收口到 run 级 | done | execution-cost | done |
@@ -121,6 +120,7 @@
 | e2afc5c2 | 三档成本预设接 sqrt-impact 默认 + 成交报告 impact 成本归因拆字段 | done | execution-cost | done |
 | e2de3d32 | 前端测试设施基建 — vitest + React Testing Library + 对抗测试 harness | done | frontend-foundation | done |
 | e4496023 | 因子收益归因接消费侧（组合台/归因报告 + UI 呈现） | done | eval-methodology | done |
+| e62a8933 | 方法学控制面 6 档——strict/standard/loose/exploratory/custom/user_waived + MethodologyChoiceRecord（§10·系统提供用户运行时选） | done | methodology | done |
 | ec7a7d9a | 数据写门 scope 余项——11 字段 + data 级 lineage + on-disk manifest 自动接线（B-VERSION-1 余） | done | data-pit | done |
 | ecbd0eab | GOAL §7 文档对齐(M10 已接 run 闸门)+ 可证伪性/模式 教学文案 | done | docs | done |
 | edc1e326 | 主对话入口接 AgentRuntime + 无副作用工具 + 权限三态(ask/auto/bypass) | done | agent | done |
@@ -186,7 +186,7 @@
 | delivery | 9d593481 · done | dreaminate |
 | desktop | bc21c7c1 · done | dreaminate |
 | docs | ecbd0eab · done | dreaminate |
-| documents | 66195b71 · in_progress | dreaminate |
+| documents | 66195b71 · done | dreaminate |
 | eval-methodology | 41ea6e35 · done | dreaminate |
 | eval-methodology | 69e1cb16 · done | dreaminate |
 | eval-methodology | 6acbb499 · done | dreaminate |
@@ -235,7 +235,7 @@
 | math-spine | a00b3956 · done | dreaminate |
 | math-spine | b85e34cc · done | dreaminate |
 | math-spine | c86be35e · done | dreaminate |
-| methodology | e62a8933 · in_progress | dreaminate |
+| methodology | e62a8933 · done | dreaminate |
 | model-governance | 36f88f6b · done | dreaminate |
 | model-governance | 6144bd61 · done | dreaminate |
 | model-governance | ccb4f333 · done | dreaminate |
@@ -255,14 +255,14 @@
 | portfolio | ba59fb7b · done | dreaminate |
 | qro | 872af176 · done | dreaminate |
 | qro | f19c5c19 · done | dreaminate |
-| release-gate | 785c79c6 · in_progress | dreaminate |
+| release-gate | 785c79c6 · done | dreaminate |
 | research-graph | 76a611d3 · done | dreaminate |
 | review | 3d4a872e · done | dreaminate |
 | security-invariant | 381b6c18 · done | dreaminate |
 | security-invariant | 6e4eee54 · done | dreaminate |
 | signals | 87ad21fc · done | dreaminate |
 | signals-methodology | ee3b8dbd · done | dreaminate |
-| strategy | 61053f3d · in_progress | dreaminate |
+| strategy | 61053f3d · done | dreaminate |
 | verification | 180a341e · done | dreaminate |
 | verification | 6403b9bf · done | dreaminate |
 | 数据 | 3a8b2360 · done | dreaminate |
