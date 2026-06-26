@@ -67,6 +67,13 @@ from .roles import (
     get_role,
     is_verifier,
 )
+from .trust_advisory import (
+    TRUST_ADVISORY_SOURCE,
+    TrustAdvisory,
+    run_trust_advisory,
+    safety_bypass_invariants,
+    summarize_trust_for_event,
+)
 
 __all__ = [
     # orchestrator
@@ -117,4 +124,10 @@ __all__ = [
     "UnknownRoleError",
     "get_role",
     "is_verifier",
+    # §13 信任层 advisory 接线（trust_advisory）
+    "TrustAdvisory",
+    "TRUST_ADVISORY_SOURCE",
+    "run_trust_advisory",
+    "summarize_trust_for_event",
+    "safety_bypass_invariants",
 ]
