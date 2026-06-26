@@ -2,7 +2,14 @@
 
 from __future__ import annotations
 
+from .capacity_sizing import (
+    CapacitySizingDecision,
+    SizingMode,
+    SizingReason,
+    capacity_sizing_cap,
+)
 from .constraints import PortfolioConstraints, apply_constraints
+from .independence import independent_bet_count
 from .optimizers import (
     OptimizerKind,
     PortfolioResult,
@@ -14,12 +21,17 @@ from .optimizers import (
 )
 
 __all__ = [
+    "CapacitySizingDecision",
     "OptimizerKind",
     "PortfolioConstraints",
     "PortfolioResult",
+    "SizingMode",
+    "SizingReason",
     "apply_constraints",
+    "capacity_sizing_cap",
     "equal_weight",
     "hrp_weights",
+    "independent_bet_count",
     "mean_variance",
     "optimize_portfolio",
     "risk_parity",

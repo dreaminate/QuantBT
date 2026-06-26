@@ -406,6 +406,28 @@ def register_business_tools(
         except Exception as exc:  # noqa: BLE001
             return {"error": f"组合 gate 失败: {type(exc).__name__}: {exc}"}
         v = res.verdict
+        # ③ 组合成分独立 bet 计数（descriptor·**只读·不改 gate verdict**）：相关成分坍缩成同一 bet、
+        #    同族不重复计独立性（复用**锁定** n_eff 口径）。接组合三角呈现；**绝不**喂 DSR 的 honest_n 通缩
+        #    （那是过拟合保守端兜底、honest-N 不可改小——本计数是 descriptor、非 deflation floor）。
+        independent_bets = None
+        try:
+            from ..portfolio.independence import independent_bet_count
+
+            w_norm = {str(k): float(x) for k, x in weights.items()}
+            ar_norm = {str(k): [float(z) for z in seq] for k, seq in asset_returns.items()}
+            held_syms = [s for s in w_norm if s in ar_norm and ar_norm[s]]
+            if held_syms:
+                length = min(len(ar_norm[s]) for s in held_syms)
+                if length > 0:
+                    mat = np.array([[ar_norm[s][t] for s in held_syms] for t in range(length)], dtype=float)
+                    wv = np.array([w_norm[s] for s in held_syms], dtype=float)
+                    neff = independent_bet_count(mat, weights=wv)
+                    independent_bets = {
+                        "point": neff.point, "low": neff.low, "high": neff.high,
+                        "n_held": neff.n_observed, "disclaimer": neff.disclaimer,
+                    }
+        except Exception:  # noqa: BLE001  # descriptor 失败绝不拖垮 gate 预览
+            independent_bets = None
         return {
             "portfolio_id": str(pid),
             "color": v.color,
@@ -413,9 +435,10 @@ def register_business_tools(
             "dsr_conservative": v.dsr_conservative,
             "bootstrap_ci": list(v.bootstrap_ci),
             "honest_n": res.honest_n,
+            "independent_bets": independent_bets,
             "config_hash": res.config_hash,
             "verdict_phrasing": v.verdict_phrasing,
-            "note": "组合层多证据三角守门（预览/只读、不记账）。冷启动 PBO=N/A，A2 凭 DSR+CI 双正放行、过拟合仍 red；honest-N 记账走 promote 治理流。",
+            "note": "组合层多证据三角守门（预览/只读、不记账）。冷启动 PBO=N/A，A2 凭 DSR+CI 双正放行、过拟合仍 red；honest-N 记账走 promote 治理流。independent_bets=组合成分独立 bet 计数（去重族数·descriptor·不改 verdict·不喂 honest_n）。",
         }
 
     # ── 6. backtest.run（接真）：组装→回测产 run 摘要（无副作用，本地 run 目录可重置） ──
