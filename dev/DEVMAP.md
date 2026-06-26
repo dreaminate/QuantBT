@@ -86,6 +86,7 @@
 | a11e2aa5 | 因子台三纯库 + 暴力遍历挖掘 — 前端设计+实装（GOAL §3，无 handoff 稿，D-DESK-EPIC F1=B 路 b） | done | frontend | done |
 | a367bfc8 | paper testnet 真喂 provider——加密 testnet 实时 bar/mark（用户「都做」可选档） | done | paper | done |
 | a75c4beb | Agent 窗口产物工作区 — 8 产物卡 + Strategy.yaml + Report.md | done | frontend | done |
+| aa13c3b0 | 因子机构级度量接 lifecycle 状态机/sizing 生产路径 | done | factor-lifecycle | done |
 | b106177f | 因子台后端接线 — 暴露已有 compute + 相关性/分层回测 + alpha审查 | done | backend | done |
 | b12de4f5 | §3 因子机构级生命周期度量（衰减半衰期/容量/因子族/拥挤）+ 命门 | done | factor-lifecycle | done |
 | b1e4efdf | 冷启动 MinTRL 接进 run /overfit 投影（价值闭环·呈现层不动治理） | done | eval-methodology | done |
@@ -141,7 +142,6 @@
 | 31289338 | 冷启动 gate/UI 接 MinTRL：DSR=N/A + PSR + "需 N 期"渐进披露（R25/R27 呈现层） | todo | eval-methodology |
 | 861182e6 | CPCV 接 promote/overfit gate + cv_scheme 双轨 report（价值闭环） | todo | eval-methodology |
 | 92a2182f | conformal 区间消费侧接线——模型台/信号层预测附校准区间 + abstain UI 呈现 | todo | eval-methodology |
-| aa13c3b0 | 因子机构级度量接 lifecycle 状态机/sizing 生产路径 | todo | factor-lifecycle |
 
 ## 按 area 功能索引
 
@@ -207,6 +207,7 @@
 | execution-cost | d9bf88b1 · done | dreaminate |
 | execution-cost | e2afc5c2 · done | dreaminate |
 | factor-lifecycle | 1b83a5c5 · done | dreaminate |
+| factor-lifecycle | aa13c3b0 · done | dreaminate |
 | factor-lifecycle | b12de4f5 · done | dreaminate |
 | factor-lifecycle | b762da53 · done | dreaminate |
 | frontend | 3d95e0f6 · done | dreaminate |

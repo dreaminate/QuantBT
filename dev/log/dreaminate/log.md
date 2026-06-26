@@ -674,3 +674,13 @@
 - **2 拍板项停报中心(已 GOAL-anchored 自决)**:ExtractionRun 落账归属(独立链账·延续 intake 先例)·信任层 waiver-safety 硬 raise(§13 命门+release_gate 先例)。
 - **诚实残余/中心补**:各门接 main.py 真 promote(发版门禁/方法学/信任层/governance/confirmatory)·真 PDF 库选型·AssetClass 双枚举收敛·归因 main.py 路由·Agent OS 接 main.py。
 - **进程**:push 门控 validate PASS(上波教训应用)。**land**:4 线整批 land main(用户授权)。推进 GOAL §11/§6/§13/§8。**下一步**:各门接真 promote·LINE-G 执行监控·归因路由。
+
+## 2026-06-26 · 第九波 · 1 opus 线 + 中心 drift-guard land（收敛进入"最后一公里生产接线"阶段）
+- **派发**：1 deep-opus 线（D 卡 aa13c3b0·因子度量接生产路径剩余 ②③④·后台·独立 worktree）。**未满载 5 线——诚实判断**：读 pool 4 张"消费侧接线"卡发现核心工程价值闭环大都已在前几波关闭（done 卡内联状态注），残余多是用户方法学(B CPCV cv_scheme 双轨 report)/前端 UI(C conformal abstain 呈现)/live(C ACI)味道，盲派 opus 工程线不对；只 D 卡有清晰孤立后端残余。
+- **Line D（因子度量→生产路径·§3/§9）**：`wave9/factor-metrics-wiring`(3543aeb)·8 文件·`portfolio/capacity_sizing.py`(容量→sizing 上限·硬上限仅 ok∧真Y∧proposed>cap·占位只示意·运行期逐槽拒 CrowdingAdvisory)+`independence.py`(独立 bet 计数·复用锁定 n_eff·剔零权恒等)+`factor_advisory.py`(只读呈现·crowding 无动作字段)·扩展 closure(只读附证·M-AUTHORITY)+business_tools(portfolio.gate 非禁区路径)·14 对抗测+MUT 三门(placeholder/剔零权/类型隔离·in-place Edit 非 checkout)。**未触禁区**(main.py/instruments/signals/eval.model_eval/training/run_verdict 全未碰)。
+- **中心 drift-guard（AssetClass 双枚举单一源·§11）**：勘察发现 wave-8 作者已写死设计——广 instruments.spec.AssetClass(§0 全目录 19 值) ⊇ 窄 strategy_goal.AssetClass(4 值·成本派发)·"token 兼容超集·扩展不替换不改既有窄枚举"。"收敛"真残余=把注释声明钉成机器可证不变量。`tests/test_asset_class_single_source.py`(子集不变量·MUT 加越界 token→转红)·纯 additive 零源码改。下游回填广目录=作者刻意 deferred 大 ripple·留 follow-on(不管太宽·守扩展不替换)。
+- **验收**：批次全量 **2632 passed / 13 skipped / 0 failed / 122s**（基线 2628 + D 14 + AssetClass 3·collect 2645 精确吻合·flake 未触发·凭真汇总行非 exit code）+ validate PASS。
+- **GOAL-锚定+不建空壳成效（重要）**：勘察否决两个原计划中心活——①归因 main.py 薄路由：`build_factor_attribution_report` 全仓无消费方且 run 无 per-run 因子收益矩阵源·硬接 GET=永远 available:False 空壳；②各门接 promote：release_gate 等需 ReleaseCandidate 全字段输入管线·硬接=空壳/改测试态。按"不建空壳/不假绿灯/不要管太宽"**本波不强接**·诚实记为"需真输入管线的中心串行大活·非一行薄路由"。
+- **收敛阶段判断（诚实·非进度焦虑）**：29+ 线建完对象脊柱 + 各门 building blocks·可并行纯 greenfield 基本耗尽·剩余收敛 = "接 main.py/orchestrator 真生产路径"为主(需输入管线·中心串行·部分需用户方法学决策)·波次自然从"5 opus 扇出"收窄为"中心精细串行 + 少量孤立后端残余 opus"。这是收敛的真实形态·不为满载而满载。
+- **诚实残余/follow-on**：production sizing 端点硬强制接 main.py(optimize_portfolio 零调用方)·factor advisory UI surface·各门接 promote 真晋级(需 ReleaseCandidate 输入管线)·归因数据源管线(per-run 因子矩阵)·no_edge 生产 sizing 政策(用户方法学待拍·摆代价非阻塞)。
+- **进程**：push 门控 validate PASS(应用上波教训)。**land**：D 线 + AssetClass guard 整批 land main(用户授权·回滚兜底)。推进 GOAL §3/§9/§11。**下一步**：production sizing/factor advisory 接 main.py·各门接 promote(需输入管线)·LINE-G 执行监控·归因数据源管线。
