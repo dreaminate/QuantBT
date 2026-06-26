@@ -6,7 +6,6 @@
 
 | uuid8 | 标题 | status | area | 位置 |
 |---|---|---|---|---|
-| b7e3d9a1 | promote 时把执行诚实(injection 状态)落进 run.json·闭 §16 致命「声称已采用却未注入/模板基线」(LINE-E·§16) | in_progress | release-gate | active |
 | 0430cd78 | 数据更新写时强约束——dataset_version/checksum/lineage 升 block 门（B-VERSION-1） | done | data-pit | done |
 | 05d6f511 | 单人 self-approve 仅非真钱通道(冷却+留痕)，真钱硬双人 | done | approval | done |
 | 0781bb13 | RDP 聚合器——从真血统装配 RDP（DatasetVersion/LLMCallRecord/honest-N/verdict 真填）（D-RDP-2） | done | delivery | done |
@@ -93,6 +92,7 @@
 | b1e4efdf | 冷启动 MinTRL 接进 run /overfit 投影（价值闭环·呈现层不动治理） | done | eval-methodology | done |
 | b2682edc | Model台前端 P0 — 4 子台像素还原 + mock(作业/注册表/构建draw.io/研究) | done | frontend | done |
 | b762da53 | ic_decay 诚实 status 精修——ρ̂≈0 弱负判 no_persistence 而非过claim reversal | done | factor-lifecycle | done |
+| b7e3d9a1 | promote 时把执行诚实(injection 状态)落进 run.json·闭 §16 致命「声称已采用却未注入/模板基线」(LINE-E·§16) | done | release-gate | done |
 | b85e34cc | 信任层三角补齐——PBO + Bootstrap 经脊柱 property-based 绑定 + 接生产 gate | done | math-spine | done |
 | b961f08b | Agent 后端工具补全 — 4 schema+handler + stream 结构化事件 + handoff | done | agent | done |
 | b9af7c82 | 共享画布引擎 — GraphCanvas / NodeCard / EdgeLayer / MiniMap（pan·zoom·连线·框选） | done | frontend-foundation | done |
@@ -265,8 +265,8 @@
 | portfolio | ba59fb7b · done | dreaminate |
 | qro | 872af176 · done | dreaminate |
 | qro | f19c5c19 · done | dreaminate |
-| release-gate | b7e3d9a1 · in_progress | dreaminate |
 | release-gate | 785c79c6 · done | dreaminate |
+| release-gate | b7e3d9a1 · done | dreaminate |
 | release-gate | f2a9c4e1 · done | dreaminate |
 | research-graph | 76a611d3 · done | dreaminate |
 | review | 3d4a872e · done | dreaminate |

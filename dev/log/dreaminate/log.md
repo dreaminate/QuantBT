@@ -693,3 +693,12 @@
 - **GOAL-锚定+不建空壳**：组装器缺证据绝不编造（缺即标缺·MUT 两门证非纸门）·复用 evaluate_release 零重写判定·单一身份源 ids.content_hash 不另造。工程取舍 ratify：assembly_inputs 在 ReleaseCandidate(禁改)无字段→AssembledRelease 包装(不静默丢·不碰 ReleaseCandidate)。
 - **收敛策略（自动循环·诚实）**：进"接 main.py 真生产路径"阶段·把大活拆「opus 建孤立输入管线 lib + 中心串行接 main.py」两步——本波 opus 建组装器（孤立可测·不碰禁区）·十一波中心串行接 promote + 补 run.json 证据落账。
 - **进程**：push 门控 validate PASS。codex 复核抓 wave10 卡 status「doing」非法（已修 in_progress）+ 视图过期（已重建）·体现 push-validate 门控价值。**land**：opus 线 land main（用户授权·回滚兜底）。推进 GOAL §16/§0。**下一步（十一波·中心串行）**：① 补 run.json injection 状态/执行诚实/dataset 身份落账（injection 最高优先·§16 致命）② evaluate_run_releasable advisory-first 接 promote 端点 ③ 继续各门接 promote/LINE-G(§12)。
+
+## 2026-06-26 · 第十一波 · 1 opus 线 land（§16 致命「未注入却声称已采用」数据层闭合·自动循环）
+- **Line（promote 执行诚实·§16 致命·依赖第十波组装器）**：`wave11/promote-execution-honesty`(8110f99)·+73/-0 纯 additive opt-in 向后兼容。ide/promote.py promote_ide_run 加 opt-in execution_blocks 透传 + business_tools._synth_and_promote 把执行诚实(未注入/模板基线)映射成 {mode:template,result_grade:production} 落进 run.json → 组装器→R4+R5 标签无关硬拒。10 对抗测+MUT 三态(未注入→MODE_TEMPLATE→改 MODE_LIVE 冒充→2 failed→复原)·未触禁区(main.py/release_gate 内部/组装器内部/approval 未碰)。
+- **意义**：第十波组装器能读 run.json execution_blocks 判 §16，但 producer 不写=门平凡过。本波 producer 补上→**§16 致命「未注入资产却声称已采用/模板基线冒充生产」在数据生产层闭合**(agent synth 路径)。producer↔consumer 键对齐(mode/result_grade/mock_marked/live_source_ref)。
+- **验收**：批次全量 **2670 passed / 13 skipped / 0 failed / 116s**（基线 2673 + 10·collect 2683 精确吻合·flake 未触发·凭真汇总行）+ validate PASS。定向回归 164 passed。
+- **GOAL-锚定+不建空壳**：未注入绝不写 live 冒充(MUT 证致命门有牙)·复用 mock_honesty mode/grade 单一源·判定全委派 evaluate_release 零重写·向后兼容(不传块既有全绿)。
+- **★ 中心第十二波接端点须知**：template 块固定 result_grade=production→R4+R5 标签无关触发→组装器接 promote 端点后，带组装入参但 DS-1 真注入前的 synth run 会被发版门硬拒(任何标签)=§16 正解(模板冒充不可发版)·接线预期此拒·DS-1 真注入时喂 assembly_injected=True+真 source 自然过门。
+- **诚实残余/follow-on**：IDE 沙箱直接 promote 路径 execution_blocks 未填(参数就位·端点未填)·dataset_versions+checksum/LLMCallRecord 仍不带 run.json(KNOWN_RUN_GAPS)。
+- **进程**：push 门控 validate PASS。**land**：opus 线 land main(用户授权·回滚兜底)。推进 GOAL §16/§0。**下一步（十二波·中心串行+并行 opus 保活）**：① 中心 evaluate_run_releasable advisory-first 接 promote 端点(main.py 专属) ② 并行孤立 opus：dataset_version/LLMCallRecord 落 run.json·或 IDE 直接 promote 执行诚实·或 LINE-G(§12)。
