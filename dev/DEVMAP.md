@@ -6,6 +6,7 @@
 
 | uuid8 | 标题 | status | area | 位置 |
 |---|---|---|---|---|
+| a8f3c1d2 | §8 治理脊柱门 advisory 接进 agent orchestrator Review 路径（D-GOV-ADVISORY·孪生 §13·LINE-§8） | in_progress | governance | active |
 | 0430cd78 | 数据更新写时强约束——dataset_version/checksum/lineage 升 block 门（B-VERSION-1） | done | data-pit | done |
 | 05d6f511 | 单人 self-approve 仅非真钱通道(冷却+留痕)，真钱硬双人 | done | approval | done |
 | 0781bb13 | RDP 聚合器——从真血统装配 RDP（DatasetVersion/LLMCallRecord/honest-N/verdict 真填）（D-RDP-2） | done | delivery | done |
@@ -236,6 +237,7 @@
 | frontend-trust | 29258b77 · done | dreaminate |
 | frontend-trust | 876a0c11 · done | dreaminate |
 | frontend-trust | c5960022 · done | dreaminate |
+| governance | a8f3c1d2 · in_progress | dreaminate |
 | governance | d904b8d9 · done | dreaminate |
 | governance-ui | c631817e · done | dreaminate |
 | instruments | 0850cc54 · done | dreaminate |

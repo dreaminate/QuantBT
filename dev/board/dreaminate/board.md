@@ -4,4 +4,4 @@
 
 | uuid8 | 标题 | status | area | 优先级 | 依赖(uuid8) |
 |---|---|---|---|---|---|
-| _（名下无 active 卡）_ | | | | | |
+| a8f3c1d2 | §8 治理脊柱门 advisory 接进 agent orchestrator Review 路径（D-GOV-ADVISORY·孪生 §13·LINE-§8） | in_progress | governance | P1 | d904b8d9 e4f1a2b3 |
