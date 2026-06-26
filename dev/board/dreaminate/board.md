@@ -4,4 +4,4 @@
 
 | uuid8 | 标题 | status | area | 优先级 | 依赖(uuid8) |
 |---|---|---|---|---|---|
-| _（名下无 active 卡）_ | | | | | |
+| f2a9c4e1 | 发版门禁接 promote 证据组装器（run→ReleaseCandidate·诚实有/缺·LINE-E·§16/§0） | in_progress | release-gate | P1 | - |

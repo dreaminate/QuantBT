@@ -6,6 +6,7 @@
 
 | uuid8 | 标题 | status | area | 位置 |
 |---|---|---|---|---|
+| f2a9c4e1 | 发版门禁接 promote 证据组装器（run→ReleaseCandidate·诚实有/缺·LINE-E·§16/§0） | in_progress | release-gate | active |
 | 0430cd78 | 数据更新写时强约束——dataset_version/checksum/lineage 升 block 门（B-VERSION-1） | done | data-pit | done |
 | 05d6f511 | 单人 self-approve 仅非真钱通道(冷却+留痕)，真钱硬双人 | done | approval | done |
 | 0781bb13 | RDP 聚合器——从真血统装配 RDP（DatasetVersion/LLMCallRecord/honest-N/verdict 真填）（D-RDP-2） | done | delivery | done |
@@ -263,6 +264,7 @@
 | portfolio | ba59fb7b · done | dreaminate |
 | qro | 872af176 · done | dreaminate |
 | qro | f19c5c19 · done | dreaminate |
+| release-gate | f2a9c4e1 · in_progress | dreaminate |
 | release-gate | 785c79c6 · done | dreaminate |
 | research-graph | 76a611d3 · done | dreaminate |
 | review | 3d4a872e · done | dreaminate |
