@@ -711,3 +711,11 @@
 - **GOAL-锚定+不建空壳**：advisory 只记录不 reject(不预先削弱·不破基线)·防御式不破 promote·复用 evaluate_release 零重写·MUT 证门有牙·异常落诚实标不假绿灯。
 - **诚实残余/follow-on**：enforce(硬卡晋级)=后续显式决策(需先补 dataset/LLM/IDE 直接 promote 证据否则误拒合法 run·摆代价待定)·dataset_versions+checksum/LLMCallRecord/IDE 直接 promote execution_blocks 续补(KNOWN_RUN_GAPS)·main.py GET release_check 只读端点暴露给前端。
 - **进程**：push 门控 validate PASS。**land**：中心串行 land main(用户授权·回滚兜底)。推进 GOAL §16/§0。**下一步（自动循环）**：派孤立 opus 续补 run.json 证据(dataset/LLM/IDE 路径)保活循环 + 中心评估 GET release_check 端点/enforce 时机。
+
+## 2026-06-26 · 第十三波 · 1 opus 线 land（§13 信任层接 agent orchestrator advisory）+ 会话交接
+- **Line（§13 信任层接 orchestrator·§13/§7）**：`wave13/trust-orchestrator-advisory`(970e255)·+586/-2 additive。攻入点=orchestrator Review 形态新增 advise_trust(ctx:TrustContext)→TrustAdvisory·新建 trust_advisory.py(判定零重写全委派 app.trust.evaluate_trust)。未触禁区(main.py/trust 内部/release_gate/governance/GovernedToolDispatcher 全未碰)。
+- **advisory-first + ★ 命门不降级（关键正确处理·已入 experience 思路）**：软门(诚实/反谄媚/弱点披露/责任/用户自主)只 flag+投影 VerifierChallengeRaised·不阻断 orchestrator 主流程；§13 命门(secret/OrderGuard/kill switch/no-silent-mock 被 waiver 绕)=fail-closed 硬墙·evaluate_trust raise SafetyWaiverError·本层不吞(吞=降级削弱命门)·投不变量名(不回显 target 文本免泄 secret)后原样 re-raise。
+- **验收**：批次全量 **2692 passed / 13 skipped / 0 failed / 118s**（基线 2675 + 17·collect 2705·flake 未触发·凭真汇总行）+ validate PASS。opus scoped+回归 157 passed(含 4 对抗+MUT 三态)。
+- **诚实残余/follow-on**：free-text→TrustContext 映射(不自动抽姿态·避脆弱启发式越权重判·上游另卡)·接 main.py 真 agent 端点·§8 governance 接 orchestrator(平行另卡)。
+- **进程**：push 门控 validate PASS。**land**：opus 线 land main。推进 GOAL §13/§7。
+- **━━ 会话交接 ━━**：用户开新会话接续编排·本会话止于第十三波·**不派十四波**(新会话从 state 顶部块就绪前沿起步)。已存：dev/experience 两条工程经验(land 913af35)·项目 memory feedback_central_orchestrator_autoloop(协作模式+接续)·更新版编排提示词(给用户)。下一波候选见 state 顶部块(§8 governance 接 orchestrator / free-text→TrustContext / 接 main.py 端点 / §16 enforce 时机 / LINE-G §12 / §10 消费侧 / AssetClass 回填)。

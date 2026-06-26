@@ -1,7 +1,7 @@
 ---
 uuid: e4f1a2b3c5d64e7f8a9b0c1d2e3f4a5b
 title: §13 信任层硬约束 advisory 接进 agent orchestrator 输出/审查路径（反谄媚·诚实·弱点不隐藏在 agent 路径生效）
-status: in_progress
+status: done
 owner: dreaminate
 assigned_by: dreaminate
 review_status: 0
@@ -44,3 +44,27 @@ advisory 只标记不阻断（不预先削弱·不破基线）·复用 trust_con
 - 跑 scoped + 触及 orchestrator 测试定向回归（**绝不叠跑全量**·中心统一跑）。凭真汇总行判绿。
 - 自建分支 `wave13/trust-orchestrator-advisory`（基于 origin/main）·commit（省略 Claude co-author 行）+ push·**不 land**。
 - 回报：分支+commit、文件清单、攻入点选择理由、真测试汇总行+collect+定向回归、对抗 4 条逐条、MUT 三态、红线合规、**触禁区冲突/诚实残余/follow-on**（含：若无清晰攻入点的诚实说明）。review_status 留 0。
+
+## 完成纪要（done · 第十三波 · deep-opus 线 + 中心整合 land）
+**分支**：`wave13/trust-orchestrator-advisory`（基于 origin/main）·commit `970e255`·中心 merge 进 center-integ。
+
+**攻入点（opus 勘察选定·有清晰落点）**：orchestrator 的 **Review 形态**新增 `advise_trust(ctx: TrustContext) → TrustAdvisory` 方法（与 plan/dispatch/admit_verifier_challenge 并列），把第八波 `trust/` 门接进 agent 审查路径。
+**交付（+586/-2·additive 扩展不替换）**：
+- 新建 `agent/orchestrator/trust_advisory.py`（188 行·TrustContext 姿态→trust 门裁定→TrustAdvisory 结果 + 可见事件投影·**判定零重写全委派 app.trust.evaluate_trust**）。
+- `agent/orchestrator/orchestrator.py`（+35/-2·加 advise_trust 方法 + import·不改既有 DAG/dispatch 行为）+ `__init__.py` 导出。
+- 新测试 `tests/test_trust_orchestrator_advisory.py`（352 行）。
+
+**advisory-first 纪律 + ★ 命门不降级（关键正确处理）**：
+- **软门**（诚实/反谄媚/弱点披露/责任/用户自主）：只 `flagged=not ok` + 投影 `VerifierChallengeRaised`·**绝不阻断 orchestrator 主流程**（不 raise·不改既有行为）。硬卡 agent=后续显式决策（本波非目标）。
+- **§13 命门**（secret/OrderGuard/kill switch/no-silent-mock 被 waiver 绕过）= fail-closed 硬墙：`evaluate_trust` 内 `raise SafetyWaiverError`·本层**不吞**（吞=把硬墙降级成 advisory=削弱命门）·投一枚 `FailureDetected`（**只投不变量名·不投原始 target 文本**·免回显 user 自由文本/潜在 secret）后**原样 re-raise**。安全不变量不在 advisory 域。
+
+**对抗 4 条 + MUT 三态**：谄媚/弱点隐藏产出被标记 / 诚实产出不误伤 / advisory 不阻断 agent 主流程 / waiver 不绕 safety 命门（命门 re-raise 不吞）。MUT 削弱核心 §13 advisory 门→RED→手工复原→GREEN（绝不 git checkout）。
+**测试**：opus scoped+定向回归 `157 passed`（含 4 对抗）；**中心全量批次 2692 passed / 13 skipped / 0 failed / 118s**（基线 2675 + 17·collect 2705·flake 未触发）+ validate PASS。
+**数学↔实现**：无新公式→未造 MathematicalArtifact。复用 trust.evaluate_trust 零重写·未碰 GovernedToolDispatcher（工具派发治理与 §13 无关）。
+
+**红线合规**：advisory 软门只标记不阻断（不预先削弱·不破基线）·命门 fail-closed re-raise 不降级·复用 trust 判定零重写·扩展不替换·未碰 main.py/trust 内部/release_gate/governance 内部。诚实（no 假绿灯·命门投影不回显 secret）。
+
+**诚实残余 / follow-on（→ 中心/下游）**：
+- **free-text→TrustContext 映射**：本层吃调用方显式构造的结构化 TrustContext，**不**从 role agent 自由文本产出自动抽 §13 姿态（避免脆弱启发式 + 越权重判风险）。free-text→TrustContext 的上游映射=另卡/中心。
+- **接 main.py**：advise_trust 接进真 agent 运行端点 = 中心后续。
+- **§8 governance spine_invariants 接 orchestrator** = 平行另卡（本卡只 §13 trust）。

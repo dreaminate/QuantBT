@@ -6,7 +6,6 @@
 
 | uuid8 | 标题 | status | area | 位置 |
 |---|---|---|---|---|
-| e4f1a2b3 | §13 信任层硬约束 advisory 接进 agent orchestrator 输出/审查路径（反谄媚·诚实·弱点不隐藏在 agent 路径生效） | in_progress | trust-layer | active |
 | 0430cd78 | 数据更新写时强约束——dataset_version/checksum/lineage 升 block 门（B-VERSION-1） | done | data-pit | done |
 | 05d6f511 | 单人 self-approve 仅非真钱通道(冷却+留痕)，真钱硬双人 | done | approval | done |
 | 0781bb13 | RDP 聚合器——从真血统装配 RDP（DatasetVersion/LLMCallRecord/honest-N/verdict 真填）（D-RDP-2） | done | delivery | done |
@@ -128,6 +127,7 @@
 | e2afc5c2 | 三档成本预设接 sqrt-impact 默认 + 成交报告 impact 成本归因拆字段 | done | execution-cost | done |
 | e2de3d32 | 前端测试设施基建 — vitest + React Testing Library + 对抗测试 harness | done | frontend-foundation | done |
 | e4496023 | 因子收益归因接消费侧（组合台/归因报告 + UI 呈现） | done | eval-methodology | done |
+| e4f1a2b3 | §13 信任层硬约束 advisory 接进 agent orchestrator 输出/审查路径（反谄媚·诚实·弱点不隐藏在 agent 路径生效） | done | trust-layer | done |
 | e62a8933 | 方法学控制面 6 档——strict/standard/loose/exploratory/custom/user_waived + MethodologyChoiceRecord（§10·系统提供用户运行时选） | done | methodology | done |
 | ec7a7d9a | 数据写门 scope 余项——11 字段 + data 级 lineage + on-disk manifest 自动接线（B-VERSION-1 余） | done | data-pit | done |
 | ecbd0eab | GOAL §7 文档对齐(M10 已接 run 闸门)+ 可证伪性/模式 教学文案 | done | docs | done |
@@ -279,7 +279,7 @@
 | signals-methodology | ee3b8dbd · done | dreaminate |
 | strategy | 61053f3d · done | dreaminate |
 | trust | 0d7c9511 · done | dreaminate |
-| trust-layer | e4f1a2b3 · in_progress | dreaminate |
+| trust-layer | e4f1a2b3 · done | dreaminate |
 | verification | 180a341e · done | dreaminate |
 | verification | 6403b9bf · done | dreaminate |
 | 数据 | 3a8b2360 · done | dreaminate |
