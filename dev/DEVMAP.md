@@ -6,6 +6,7 @@
 
 | uuid8 | 标题 | status | area | 位置 |
 |---|---|---|---|---|
+| e4f1a2b3 | §13 信任层硬约束 advisory 接进 agent orchestrator 输出/审查路径（反谄媚·诚实·弱点不隐藏在 agent 路径生效） | in_progress | trust-layer | active |
 | 0430cd78 | 数据更新写时强约束——dataset_version/checksum/lineage 升 block 门（B-VERSION-1） | done | data-pit | done |
 | 05d6f511 | 单人 self-approve 仅非真钱通道(冷却+留痕)，真钱硬双人 | done | approval | done |
 | 0781bb13 | RDP 聚合器——从真血统装配 RDP（DatasetVersion/LLMCallRecord/honest-N/verdict 真填）（D-RDP-2） | done | delivery | done |
@@ -278,6 +279,7 @@
 | signals-methodology | ee3b8dbd · done | dreaminate |
 | strategy | 61053f3d · done | dreaminate |
 | trust | 0d7c9511 · done | dreaminate |
+| trust-layer | e4f1a2b3 · in_progress | dreaminate |
 | verification | 180a341e · done | dreaminate |
 | verification | 6403b9bf · done | dreaminate |
 | 数据 | 3a8b2360 · done | dreaminate |
