@@ -19,6 +19,7 @@ from dataclasses import dataclass
 from datetime import UTC, datetime
 
 from ..factor_factory.lifecycle import FactorObservation, LifecycleEvent, LifecycleManager
+from ..factor_factory.lifecycle_metrics import CapacityEstimate
 from .drift import PerfDriftSignal
 
 # 成本漂移降级阈值（与 cost_drift.py 的 0.30 告警阈同口径）。
@@ -37,6 +38,8 @@ class MonitorAction:
     lifecycle_event: LifecycleEvent | None  # A1 权威单一 PROV；None=本次无迁移
     perf_drift_breach: bool = False         # 绩效轴统计漂移(rolling-PSR/CUSUM/PH)是否 breach
     perf_drift_detector: str | None = None  # 触发的绩效轴检测器名
+    capacity_advisory: CapacityEstimate | None = None  # ② 容量**只读附证**（advisory）：绝不驱动退役、
+    #                                                     绝非 degrade 观测——仅供监控/UI 呈现容量上下文
 
 
 def _drift_degrade_observation(factor_id: str, version: int, drift_pct: float) -> FactorObservation:
@@ -68,6 +71,7 @@ def monitor_tick(
     drift_pct: float | None = None,
     drift_threshold: float = DRIFT_DEGRADE_THRESHOLD,
     perf_drift: PerfDriftSignal | None = None,
+    capacity_estimate: CapacityEstimate | None = None,
 ) -> MonitorAction:
     """一次监控闭环：记绩效观测/漂移信号 → lifecycle 权威评估迁移 → 返回动作 + 单一 PROV。
 
@@ -82,6 +86,10 @@ def monitor_tick(
 
     **证据合并语义**：成本轴 breach 与绩效轴 breach **各记一条**降级观测——同一 tick 同时超阈
     可贡献 2 条负观测（多轴独立证据叠加，由 lifecycle 权威按其连续期规则裁决，非本函数去重）。
+
+    **`capacity_estimate`（②·只读附证）**：可选；给定则**纯附着**到 `MonitorAction.capacity_advisory` 供
+    监控/UI 呈现，**绝不**喂观测、**绝不**影响迁移（capacity ≠ 绩效/成本轴、绝非退役触发器；硬上限由
+    `portfolio.capacity_sizing` 单独管，不在监控侧动作）。默认 None = 零行为变化、与历史逐位一致。
     """
 
     breach = drift_pct is not None and abs(drift_pct) > drift_threshold
@@ -111,6 +119,8 @@ def monitor_tick(
             manager.record_observation(perf_drift.to_lifecycle_observation(factor_id, version))
 
     event = manager.evaluate(factor_id, version)
+    # ② 容量**只读附证**：在权威 evaluate() **之后**纯附着到输出，**绝不**记成观测、**绝不**进退役评估
+    #    （capacity 驱动退役 = 范畴错误，同 decay 只 advisory 不硬退役的纪律）。仅供监控/UI 呈现容量上下文。
     return MonitorAction(
         factor_id=factor_id,
         version=version,
@@ -120,6 +130,7 @@ def monitor_tick(
         lifecycle_event=event,
         perf_drift_breach=perf_drift_breach,
         perf_drift_detector=perf_drift_detector,
+        capacity_advisory=capacity_estimate,
     )
 
 

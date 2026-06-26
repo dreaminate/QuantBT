@@ -10,6 +10,7 @@ from .correlation import (
     correlation_matrix,
 )
 from .expression import ExpressionError, compile_expression, evaluate_on_panel, parse_expression
+from .factor_advisory import FactorAdvisoryReport, factor_advisory_report
 from .factor_audit import (
     DEFAULT_THRESHOLDS,
     AuditCheck,
@@ -88,8 +89,10 @@ __all__ = [
     "CorrPair",
     "CrowdingAdvisory",
     "DecayEstimate",
+    "FactorAdvisoryReport",
     "FactorFamilies",
     "crowding_advisory",
+    "factor_advisory_report",
     "factor_families",
     "ic_decay_half_life",
     "strategy_capacity",
