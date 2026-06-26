@@ -9,6 +9,16 @@
 ## <领域> · <一句话坑>
 - **坑**：<现象 / 为什么咬人>  - **正解**：<正确处理>  - **出处**：<task / commit / 文件> -->
 
+## dev/OS 卡操作 · validate 四连坑（status / 视图过期 / depends_on / 字面量）
+- **坑**：① 卡 `status: doing` 非法（只认 `todo|in_progress|done`）→ validate FAIL；② mint/move 卡后没跑 `build_*.py` → "生成视图过期(DEVMAP/board)" FAIL；③ done 卡 `depends_on` 手写 32-hex uuid 抄错尾巴（抄成别张卡的尾）→ 悬空依赖 FAIL；④ 卡散文写 `[需拍板` 方括号字面量 → validate `_pending` 子串计数误报成待拍。
+- **正解**：status 用 `in_progress`；加/动卡后必跑 `build_card_counters/build_board/build_dev_map/build_log_index/build_ledger` 重建视图再 validate；`depends_on` 从依赖卡 `grep ^uuid:` 复制核对（别凭记忆抄尾）；散文写"需拍板项"不带方括号。**push 必门控 `validate_dev PASS && push`**（别让 push 跑在 validate 之后无门控·否则会推出 FAIL 的树）。
+- **出处**：中心整合多波 + Stop-hook codex 复核（抓出 status doing / 视图过期 / depends_on 悬空）。
+
+## 接生产路径 · 能力超前于数据源时硬接=空壳/假绿灯
+- **坑**：库建好但生产侧无对应数据源（`build_factor_attribution_report` 无 per-run 因子收益矩阵 / `evaluate_release` 无填满的 ReleaseCandidate / synth 走确定性模板本就无 LLM·dataset）→ 硬接 GET 路由变"永远 available:False"空壳，或要大改输入管线却产假证据。
+- **正解**：**不建空壳**；缺即诚实记缺口（如 KNOWN_RUN_GAPS）；大活拆「opus 建孤立输入管线 lib（**producer 写 consumer 读的键**·字段名端到端核对，曾把组装器 `_block_from_dict` 误记成 `_execution_block_from_dict`）+ 中心串行接生产路径」两步；门接生产路径用 **advisory-first**（evaluate→attach verdict 到 run.json·**只记录不 reject**·enforce 留后续显式决策）→ 改 `promote_ide_run`（众多 promote 测试共用）零回归；MUT 把 advisory 改洗白（恒 `ok=True` 不真跑门）验门真在跑非桩（模板基线测试转红）。
+- **出处**：promote 证据组装器 / 执行诚实落账 / §16 发版门 advisory 接 promote（链：八门聚合→组装器→执行诚实→advisory）。
+
 ## honest-N · 计数单键会把不同主题的同配置试验静默吞掉
 - **坑**：试验账本计数键用 `config_hash` 单键 → 第二个主题里同 config 的试验撞行被吞 → honest-N 被洗白(漏报多重检验)。
 - **正解**：复合键 `(config_hash, strategy_goal_ref)`;读路径 == 被核验路径,删 payload 旁路。
