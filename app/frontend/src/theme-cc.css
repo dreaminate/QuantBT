@@ -69,6 +69,42 @@
   --cc-info-soft: rgba(44, 110, 156, 0.10);
 }
 
+:root[data-theme="dark"] {
+  color-scheme: dark;
+  --bg: #191815;
+  --bg-alt: #201f1c;
+  --panel: #1d1c19;
+  --panel-soft: #1b1a17;
+  --line: #302d29;
+  --text: #e6e1d6;
+  --muted: #8f897c;
+  --accent: #d97757;
+  --accent-strong: #e08868;
+  --accent-light: rgba(217, 119, 87, 0.14);
+  --shadow: 0 1px 0 rgba(0, 0, 0, 0.35);
+  --shadow-sm: 0 1px 0 rgba(0, 0, 0, 0.28);
+  --topbar-bg: #201f1c;
+  --topbar-text: #cfc8ba;
+}
+
+:root[data-theme="light"] {
+  color-scheme: light;
+  --bg: #f0f2f5;
+  --bg-alt: #e8eaed;
+  --panel: #ffffff;
+  --panel-soft: #fafbfc;
+  --line: #e5e8ed;
+  --text: #333333;
+  --muted: #999999;
+  --accent: #4a7cf7;
+  --accent-strong: #2c6fef;
+  --accent-light: rgba(74, 124, 247, 0.08);
+  --shadow: 0 2px 8px rgba(0, 0, 0, 0.06);
+  --shadow-sm: 0 1px 4px rgba(0, 0, 0, 0.04);
+  --topbar-bg: #1a2b4a;
+  --topbar-text: rgba(255, 255, 255, 0.85);
+}
+
 /* ---- font stack 共享 ---- */
 :root {
   --cc-mono: "SF Mono", "JetBrains Mono", "Menlo", "Consolas", monospace;
@@ -160,6 +196,117 @@
   100% { box-shadow: 0 0 0 7px rgba(217, 119, 87, 0); }
 }
 
+:root[data-theme="light"] .desk-root {
+  --desk-bg: #f5f6f7;
+  --desk-topbar: #ffffff;
+  --desk-panel: #ffffff;
+  --desk-canvas: #f6f7f8;
+  --desk-card: #ffffff;
+  --desk-input: #ffffff;
+  --desk-soft-btn: #eef0f3;
+  --desk-hover: #e8eaed;
+  --desk-border: #d9dde3;
+  --desk-border-soft: #e6e8ec;
+  --desk-border-strong: #c4cad3;
+  --desk-border-hover: #aab3bf;
+  --desk-text: #202327;
+  --desk-text-soft: #3d444d;
+  --desk-text-dim: #69717d;
+  --desk-text-muted: #858d98;
+  --desk-text-faint: #a4abb4;
+  --desk-accent-ink: #ffffff;
+  --desk-grid-dot: #d9dde3;
+  --desk-minimap-bg: rgba(255, 255, 255, 0.86);
+  --desk-minimap-view: rgba(217, 119, 87, 0.12);
+}
+
+:root[data-theme="dark"] .overview-embed {
+  background: var(--desk-canvas);
+  color: var(--desk-text);
+  --bg: var(--desk-canvas);
+  --bg-alt: var(--desk-bg);
+  --panel: var(--desk-card);
+  --panel-soft: var(--desk-panel);
+  --line: var(--desk-border);
+  --text: var(--desk-text);
+  --muted: var(--desk-text-muted);
+  --accent: var(--desk-accent);
+  --accent-strong: var(--desk-accent);
+  --accent-light: rgba(217, 119, 87, 0.14);
+  --color-accent: var(--desk-accent);
+  --text-muted: var(--desk-text-muted);
+  --panel-bg: var(--desk-panel);
+  --bg-subtle: var(--desk-bg);
+  --hover-bg: var(--desk-hover);
+}
+
+:root[data-theme="dark"] .overview-embed .cc-page-header,
+:root[data-theme="dark"] .overview-embed .cc-card,
+:root[data-theme="dark"] .overview-embed .panel,
+:root[data-theme="dark"] .overview-embed .table-wrap,
+:root[data-theme="dark"] .overview-embed .data-center-sidebar,
+:root[data-theme="dark"] .overview-embed .data-center-main,
+:root[data-theme="dark"] .overview-embed .job-progress-banner,
+:root[data-theme="dark"] .overview-embed .data-browser-pools-details,
+:root[data-theme="dark"] .overview-embed .jq-run-chart-body {
+  background: var(--desk-card);
+  border-color: var(--desk-border);
+  color: var(--desk-text);
+}
+
+:root[data-theme="dark"] .overview-embed .cc-input,
+:root[data-theme="dark"] .overview-embed input,
+:root[data-theme="dark"] .overview-embed select,
+:root[data-theme="dark"] .overview-embed textarea,
+:root[data-theme="dark"] .overview-embed .toggle-button,
+:root[data-theme="dark"] .overview-embed .tab-button,
+:root[data-theme="dark"] .overview-embed .table-sort-button {
+  background: var(--desk-input);
+  border-color: var(--desk-border);
+  color: var(--desk-text);
+}
+
+:root[data-theme="dark"] .overview-embed .data-table {
+  background: var(--desk-card);
+  color: var(--desk-text);
+}
+
+:root[data-theme="dark"] .overview-embed .data-table thead th {
+  background: var(--desk-panel);
+  color: var(--desk-text-soft);
+  border-bottom-color: var(--desk-border);
+}
+
+:root[data-theme="dark"] .overview-embed .data-table th,
+:root[data-theme="dark"] .overview-embed .data-table td {
+  border-bottom-color: var(--desk-border-soft);
+}
+
+:root[data-theme="dark"] .overview-embed .data-table tbody tr:hover {
+  background: var(--desk-hover);
+}
+
+:root[data-theme="dark"] .overview-embed .row-subtitle,
+:root[data-theme="dark"] .overview-embed .table-footer,
+:root[data-theme="dark"] .overview-embed .toolbar-grid span,
+:root[data-theme="dark"] .overview-embed .table-controls span {
+  color: var(--desk-text-muted);
+}
+
+:root[data-theme="dark"] .overview-embed .cc-tab,
+:root[data-theme="dark"] .overview-embed .domain-tab,
+:root[data-theme="dark"] .overview-embed .data-center-nav-item,
+:root[data-theme="dark"] .overview-embed .ghost-button {
+  color: var(--desk-text-dim);
+}
+
+:root[data-theme="dark"] .overview-embed .cc-tab.active,
+:root[data-theme="dark"] .overview-embed .domain-tab.active,
+:root[data-theme="dark"] .overview-embed .data-center-nav-item.active {
+  color: var(--desk-accent);
+  background: rgba(217, 119, 87, 0.14);
+}
+
 /* ============== Shell 框架 ============== */
 
 .cc-app {
@@ -226,6 +373,44 @@
   display: flex;
   align-items: center;
   gap: 8px;
+}
+.cc-theme-switcher {
+  display: inline-flex;
+  align-items: center;
+  flex: 0 0 auto;
+  gap: 2px;
+  padding: 2px;
+  border: 1px solid var(--cc-border);
+  border-radius: var(--cc-radius);
+  background: var(--cc-bg-soft);
+  white-space: nowrap;
+}
+.desk-root .cc-theme-switcher {
+  border-color: var(--desk-border);
+  background: var(--desk-soft-btn);
+}
+.cc-theme-switcher button {
+  border: 0;
+  border-radius: calc(var(--cc-radius) - 2px);
+  padding: 2px 7px;
+  background: transparent;
+  color: var(--cc-text-dim);
+  font: inherit;
+  font-size: 11px;
+  cursor: pointer;
+}
+.desk-root .cc-theme-switcher button {
+  color: var(--desk-text-dim);
+  font-family: var(--desk-mono);
+}
+.cc-theme-switcher button.active {
+  background: var(--cc-accent);
+  color: #ffffff;
+  font-weight: 600;
+}
+.desk-root .cc-theme-switcher button.active {
+  background: var(--desk-accent);
+  color: var(--desk-accent-ink);
 }
 
 /* sidebar：左侧二级菜单 */

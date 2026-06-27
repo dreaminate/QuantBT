@@ -25,6 +25,7 @@ interface StrategyFile {
   asset_class: string;
   description: string;
   updated_at_utc: string;
+  market_data_use_validation_refs?: string[];
 }
 
 interface IDERun {
@@ -33,6 +34,7 @@ interface IDERun {
   owner_username: string;
   status: string;
   started_at_utc: string;
+  market_data_use_validation_refs?: string[];
   finished_at_utc: string | null;
   exit_code: number | null;
   error: string | null;
@@ -78,6 +80,13 @@ quantbt.emit_result({
 })
 `;
 
+function splitMarketDataUseValidationRefs(raw: string): string[] {
+  return raw
+    .split(/[,\n]/)
+    .map((ref) => ref.trim())
+    .filter(Boolean);
+}
+
 interface GenerationContext {
   connectors: { name: string; asset_class?: string; kind?: string }[];
   factors: { factor_id: string; lifecycle_state?: string; description?: string }[];
@@ -98,6 +107,7 @@ export function IDEPage() {
   const [code, setCode] = useState(DEFAULT_TEMPLATE);
   const [assetClass, setAssetClass] = useState("crypto_perp");
   const [description, setDescription] = useState("");
+  const [marketDataUseValidationRefs, setMarketDataUseValidationRefs] = useState("");
   const [recentRuns, setRecentRuns] = useState<IDERun[]>([]);
   const [activeRun, setActiveRun] = useState<IDERun | null>(null);
   const [running, setRunning] = useState(false);
@@ -142,6 +152,7 @@ export function IDEPage() {
     setCode(s.code);
     setAssetClass(s.asset_class);
     setDescription(s.description || "");
+    setMarketDataUseValidationRefs((s.market_data_use_validation_refs || []).join("\n"));
     setActiveRun(null);
   };
 
@@ -152,30 +163,39 @@ export function IDEPage() {
     setCode(DEFAULT_TEMPLATE);
     setAssetClass("crypto_perp");
     setDescription("");
+    setMarketDataUseValidationRefs("");
     setActiveRun(null);
   };
 
-  const save = async () => {
+  const save = async (): Promise<string | null> => {
     let targetName = currentName;
     if (!targetName) {
       const name = prompt("策略名 (字母数字 - _):", "my_strategy_v1");
-      if (!name) return;
+      if (!name) return null;
       setCurrentName(name);
       targetName = name;
     }
+    const validationRefs = splitMarketDataUseValidationRefs(marketDataUseValidationRefs);
     setSaving(true);
     try {
       const res = await authFetch("/api/ide/strategies", {
         method: "POST",
         headers: { "content-type": "application/json" },
-        body: JSON.stringify({ name: targetName, code, asset_class: assetClass, description }),
+        body: JSON.stringify({
+          name: targetName,
+          code,
+          asset_class: assetClass,
+          description,
+          market_data_use_validation_refs: validationRefs,
+        }),
       });
       if (!res.ok) {
         const err = await res.json().catch(() => ({ detail: "save 失败" }));
         alert(err.detail || "save 失败");
-        return;
+        return null;
       }
       await reload();
+      return targetName;
     } finally {
       setSaving(false);
     }
@@ -191,8 +211,15 @@ export function IDEPage() {
     setRightTab("output");
     try {
       // 自动 save then run
-      await save();
-      const res = await authFetch(`/api/ide/strategies/${currentName}/run`, { method: "POST" });
+      const savedName = await save();
+      if (!savedName) return;
+      const res = await authFetch(`/api/ide/strategies/${savedName}/run`, {
+        method: "POST",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify({
+          market_data_use_validation_refs: splitMarketDataUseValidationRefs(marketDataUseValidationRefs),
+        }),
+      });
       if (!res.ok) {
         const err = await res.json().catch(() => ({ detail: "run 失败" }));
         alert(err.detail || "run 失败");
@@ -224,7 +251,12 @@ export function IDEPage() {
       const res = await authFetch("/api/ide/ai_complete", {
         method: "POST",
         headers: { "content-type": "application/json" },
-        body: JSON.stringify({ prompt: generationPrompt, context_code: code, mode: generationMode }),
+        body: JSON.stringify({
+          prompt: generationPrompt,
+          context_code: code,
+          mode: generationMode,
+          market_data_use_validation_refs: splitMarketDataUseValidationRefs(marketDataUseValidationRefs),
+        }),
       });
       if (!res.ok) {
         const err = await res.json().catch(() => ({ detail: "模型调用失败" }));
@@ -248,10 +280,14 @@ export function IDEPage() {
     }
     setPromoting(true);
     try {
+      const validationRefs =
+        activeRun.market_data_use_validation_refs && activeRun.market_data_use_validation_refs.length > 0
+          ? activeRun.market_data_use_validation_refs
+          : splitMarketDataUseValidationRefs(marketDataUseValidationRefs);
       const res = await authFetch(`/api/ide/runs/${activeRun.run_id}/promote`, {
         method: "POST",
         headers: { "content-type": "application/json" },
-        body: JSON.stringify({}),
+        body: JSON.stringify({ market_data_use_validation_refs: validationRefs }),
       });
       if (!res.ok) {
         const err = await res.json().catch(() => ({ detail: "promote 失败" }));
@@ -384,6 +420,16 @@ export function IDEPage() {
                 value={description}
                 onChange={(e) => setDescription(e.target.value)}
                 placeholder="策略描述（可选）"
+                className="cc-input cc-input--sm"
+                style={{ flex: 1, fontSize: 11 }}
+              />
+            </div>
+            <div className="cc-row" style={{ padding: "6px 10px", borderBottom: "1px solid var(--cc-border, rgba(255,255,255,0.08))", gap: 8 }}>
+              <span className="cc-mono cc-dim" style={{ fontSize: 11, flexShrink: 0 }}>MarketDataUse refs</span>
+              <input
+                value={marketDataUseValidationRefs}
+                onChange={(e) => setMarketDataUseValidationRefs(e.target.value)}
+                placeholder="market_data_use:...（逗号或换行分隔）"
                 className="cc-input cc-input--sm"
                 style={{ flex: 1, fontSize: 11 }}
               />

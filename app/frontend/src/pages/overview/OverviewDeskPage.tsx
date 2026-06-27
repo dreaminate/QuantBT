@@ -27,9 +27,9 @@ const SUB_HINT: Record<View, string> = {
   data: "数据域拉取 / 字段 / 池 / 任务中心",
 };
 
-/** 内嵌真后端查看页用的可滚动容器（不重写各页，接受暗背景下的视觉差异）。 */
+/** 内嵌真后端查看页用的可滚动容器；暗色适配由 .overview-embed 作用域控制。 */
 function Scroll({ children }: { children: ReactNode }) {
-  return <div style={{ flex: 1, minHeight: 0, overflow: "auto" }}>{children}</div>;
+  return <div className="overview-embed" style={{ flex: 1, minHeight: 0, overflow: "auto" }}>{children}</div>;
 }
 
 /**

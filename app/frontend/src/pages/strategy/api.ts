@@ -11,6 +11,7 @@
  */
 
 import { authFetch } from "../../lib/auth";
+import { type EdgeView, type NodeView } from "../../components/desk/canvas";
 import { type DomainNode, type DomainEdge } from "./mockGraph";
 
 /** 后端 validate 返回（与 strategy_graph.validate_graph 一致）。 */
@@ -63,6 +64,212 @@ export interface BackendLiveSnapshot {
     result_keys: string[];
   }[];
   run_count?: number;
+}
+
+export interface ResearchGraphCanvasProjection {
+  total: number;
+  limit: number;
+  filters: Record<string, string>;
+  read_only: boolean;
+  source_projection_refs: string[];
+  nodes: NodeView[];
+  edges: EdgeView[];
+}
+
+export interface ResearchGraphCanvasProjectionParams {
+  limit?: number;
+  qro_type?: string;
+  owner?: string;
+  market?: string;
+  universe?: string;
+  definition_status?: string;
+  evidence_status?: string;
+  runtime_status?: string;
+  lineage_token?: string;
+}
+
+export interface CanvasAssetMutationRequest {
+  command_ref: string;
+  source_desk: string;
+  actor_source: "user_manual" | "agent" | "user_confirmed_agent" | "scheduled_agent";
+  target_asset_type: string;
+  target_ref: string;
+  field_path: string;
+  operation: "set_ref" | "set_hash" | "append_ref";
+  canonical_command_ref: string;
+  audit_ref: string;
+  value_ref?: string;
+  value_hash?: string;
+  evidence_refs?: string[];
+  tool_record_refs?: string[];
+}
+
+export interface CanvasAssetMutationResponse {
+  accepted: boolean;
+  command_type: string;
+  mutation_command_id: string;
+  qro_command_id: string;
+  qro_id: string;
+  qro_version: number;
+  projection_ref: string;
+  updated_field_path: string;
+  recorded_by: string;
+}
+
+export interface CanvasLayoutRequest {
+  command_ref: string;
+  source_desk: string;
+  actor_source: "user_manual" | "agent" | "user_confirmed_agent" | "scheduled_agent";
+  target_asset_type: string;
+  target_ref: string;
+  node_id: string;
+  x: number;
+  y: number;
+  w: number;
+  canonical_command_ref: string;
+  audit_ref: string;
+  evidence_refs?: string[];
+  tool_record_refs?: string[];
+}
+
+export interface CanvasLayoutResponse {
+  accepted: boolean;
+  command_type: "record_canvas_layout";
+  layout_command_id: string;
+  layout_ref: string;
+  layout_hash: string;
+  mutation_command_id: string;
+  qro_command_id: string;
+  qro_id: string;
+  qro_version: number;
+  projection_ref: string;
+  updated_field_path: string;
+  recorded_by: string;
+}
+
+export interface GraphEdgeRequest {
+  command_ref: string;
+  source_desk: string;
+  actor_source: "user_manual" | "agent" | "user_confirmed_agent" | "scheduled_agent";
+  from_qro_id: string;
+  to_qro_id: string;
+  relation_type: string;
+  canonical_command_ref: string;
+  audit_ref: string;
+  evidence_refs?: string[];
+  tool_record_refs?: string[];
+}
+
+export interface GraphEdgeResponse {
+  accepted: boolean;
+  command_type: "record_graph_edge";
+  graph_edge_command_id: string;
+  edge_ref: string;
+  from_qro_id: string;
+  to_qro_id: string;
+  relation_type: string;
+  projection_edge_id: string;
+  recorded_by: string;
+}
+
+export interface GraphEdgeDeletionRequest {
+  command_ref: string;
+  source_desk: string;
+  actor_source: "user_manual" | "agent" | "user_confirmed_agent" | "scheduled_agent";
+  edge_ref: string;
+  canonical_command_ref: string;
+  audit_ref: string;
+  evidence_refs?: string[];
+  tool_record_refs?: string[];
+}
+
+export interface GraphEdgeDeletionResponse {
+  accepted: boolean;
+  command_type: "delete_graph_edge";
+  graph_edge_deletion_command_id: string;
+  edge_ref: string;
+  deletion_ref: string;
+  projection_edge_id: string;
+  recorded_by: string;
+}
+
+export interface QROTombstoneRequest {
+  command_ref: string;
+  source_desk: string;
+  actor_source: "user_manual" | "agent" | "user_confirmed_agent" | "scheduled_agent";
+  qro_id: string;
+  canonical_command_ref: string;
+  audit_ref: string;
+  evidence_refs?: string[];
+  tool_record_refs?: string[];
+}
+
+export interface QROTombstoneResponse {
+  accepted: boolean;
+  command_type: "tombstone_qro";
+  qro_tombstone_command_id: string;
+  qro_id: string;
+  tombstone_ref: string;
+  projection_node_id: string;
+  recorded_by: string;
+}
+
+export interface GraphPatchApplicationRequest {
+  command_ref: string;
+  source_desk: string;
+  actor_source: "user_manual" | "agent" | "user_confirmed_agent" | "scheduled_agent";
+  target_qro_id: string;
+  patch_kind: "ghost" | "auto";
+  patch_ref: string;
+  patch_hash: string;
+  canonical_command_ref: string;
+  audit_ref: string;
+  evidence_refs?: string[];
+  tool_record_refs?: string[];
+}
+
+export interface GraphPatchApplicationResponse {
+  accepted: boolean;
+  command_type: "apply_graph_patch";
+  patch_application_command_id: string;
+  patch_qro_command_id: string;
+  graph_edge_command_id: string;
+  application_ref: string;
+  patch_qro_id: string;
+  target_qro_id: string;
+  patch_kind: "ghost" | "auto";
+  projection_node_id: string;
+  projection_edge_id: string;
+  recorded_by: string;
+}
+
+export interface CanvasParameterValueRequest {
+  command_ref: string;
+  source_desk: string;
+  actor_source: "user_manual" | "agent" | "user_confirmed_agent" | "scheduled_agent";
+  target_qro_id: string;
+  target_asset_type: string;
+  param_key: string;
+  param_value: string;
+  canonical_command_ref: string;
+  audit_ref: string;
+  evidence_refs?: string[];
+  tool_record_refs?: string[];
+}
+
+export interface CanvasParameterValueResponse {
+  accepted: boolean;
+  command_type: "set_canvas_parameter";
+  parameter_command_id: string;
+  qro_command_id: string;
+  qro_id: string;
+  qro_version: number;
+  projection_ref: string;
+  param_key: string;
+  parameter_ref: string;
+  value_hash: string;
+  updated_field_path: string;
+  recorded_by: string;
 }
 
 async function unwrap<T>(res: Response): Promise<T> {
@@ -126,4 +333,86 @@ export async function forkStrategy(name: string, forkName?: string): Promise<Bac
 export async function fetchLiveSnapshot(name: string): Promise<BackendLiveSnapshot> {
   const res = await authFetch(`/api/ide/strategies/${encodeURIComponent(name)}/live_snapshot`);
   return unwrap<BackendLiveSnapshot>(res);
+}
+
+export async function fetchResearchGraphCanvasProjection(
+  params: ResearchGraphCanvasProjectionParams = {},
+): Promise<ResearchGraphCanvasProjection> {
+  const query = new URLSearchParams();
+  for (const [key, value] of Object.entries(params)) {
+    if (value !== undefined && value !== null && value !== "") query.set(key, String(value));
+  }
+  const suffix = query.toString();
+  const res = await authFetch(`/api/research-os/graph/canvas_projection${suffix ? `?${suffix}` : ""}`);
+  return unwrap<ResearchGraphCanvasProjection>(res);
+}
+
+export async function executeResearchGraphCanvasAssetMutation(
+  payload: CanvasAssetMutationRequest,
+): Promise<CanvasAssetMutationResponse> {
+  const res = await authFetch("/api/research-os/graph/canvas_asset_mutations", {
+    method: "POST",
+    body: JSON.stringify(payload),
+  });
+  return unwrap<CanvasAssetMutationResponse>(res);
+}
+
+export async function recordResearchGraphCanvasLayout(
+  payload: CanvasLayoutRequest,
+): Promise<CanvasLayoutResponse> {
+  const res = await authFetch("/api/research-os/graph/canvas_layouts", {
+    method: "POST",
+    body: JSON.stringify(payload),
+  });
+  return unwrap<CanvasLayoutResponse>(res);
+}
+
+export async function recordResearchGraphEdge(
+  payload: GraphEdgeRequest,
+): Promise<GraphEdgeResponse> {
+  const res = await authFetch("/api/research-os/graph/edges", {
+    method: "POST",
+    body: JSON.stringify(payload),
+  });
+  return unwrap<GraphEdgeResponse>(res);
+}
+
+export async function deleteResearchGraphEdge(
+  payload: GraphEdgeDeletionRequest,
+): Promise<GraphEdgeDeletionResponse> {
+  const res = await authFetch("/api/research-os/graph/edge_deletions", {
+    method: "POST",
+    body: JSON.stringify(payload),
+  });
+  return unwrap<GraphEdgeDeletionResponse>(res);
+}
+
+export async function tombstoneResearchGraphQro(
+  payload: QROTombstoneRequest,
+): Promise<QROTombstoneResponse> {
+  const res = await authFetch("/api/research-os/graph/qro_tombstones", {
+    method: "POST",
+    body: JSON.stringify(payload),
+  });
+  return unwrap<QROTombstoneResponse>(res);
+}
+
+export async function applyResearchGraphPatch(
+  payload: GraphPatchApplicationRequest,
+): Promise<GraphPatchApplicationResponse> {
+  const res = await authFetch("/api/research-os/graph/patch_applications", {
+    method: "POST",
+    body: JSON.stringify(payload),
+  });
+  return unwrap<GraphPatchApplicationResponse>(res);
+}
+
+export async function saveResearchGraphCanvasParameterValue(
+  payload: CanvasParameterValueRequest,
+): Promise<CanvasParameterValueResponse> {
+  const res = await authFetch("/api/research-os/graph/canvas_parameter_values", {
+    method: "POST",
+    body: JSON.stringify(payload),
+  });
+  return unwrap<CanvasParameterValueResponse>(res);
 }

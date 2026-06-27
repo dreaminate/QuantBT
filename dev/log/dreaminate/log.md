@@ -143,6 +143,400 @@
 - **§5 治理终审**：A股恒拒 live（attempt_live_order 对 equity_cn 恒 AShareLiveForbidden）、INV-5、止模拟盘、market 派生不伪造标的——全不破，且更准。
 - **验收**：**全量后端 1311 passed / 13 skipped**（基线 1292 + ~19 新回归种坏门）+ 前端 **280 passed + tsc/build 绿** + e2e/治理测试全过。每 finding 配回归测试（修前红/修后绿对照验证）。
 - **下一步**：land main（用户授权全修+land）。
+## 2026-06-27 · Agent/API/IDE QRO producer compiler coverage（4056a87f）
+
+- **取前沿**：StrategyGoal、IDE save/run/promote/AI complete 已写业务 QRO/Graph，但未自动进入 Governed Compiler / GOAL entrypoint coverage。新卡把这些高频入口从 QRO/Graph 推到 compiler IR/pass/coverage。
+- **runtime/API**：新增 `_compile_entrypoint_qro`；Agent Shell `strategy_goal.create` 与 direct `POST /api/strategy_goals` 改走 `_create_strategy_goal_with_compiler_coverage`；IDE save/run/promote/AI complete QRO helper 写 Graph 后自动生成 compiler refs 和 entrypoint coverage refs。
+- **坏门**：direct API coverage 绑定 `api:strategy_goals`；Agent Shell coverage 绑定 `agent_shell:strategy_goal.create`；IDE coverage 绑定 `ide:strategy.save` / `ide:strategy.run` / `ide:run.promote` / `ide:ai_complete`；compiler audit 不复制 prompt/code/description/stdout/stderr/result/LLM output/secret。
+- **测试**：`test_ds2_strategy_goal_persist.py` + `test_agent_runtime_research_graph.py` + `test_strategy_console_s2.py` **58 passed / 2 warnings**；`compileall app/backend/app` **PASS**。
+- **落档**：新增 done 卡 `4056a87f`。边界：这是 Agent/API/IDE 已有 QRO producer 的 compiler coverage 自动化，不是完整 compiler、全入口 producer、CI、线上或用户验收。
+
+## 2026-06-27 · Compiler artifact Mathematical Spine hard reference gate（0b3f6a91）
+
+- **取前沿**：`ecc6b957` 已有 MathematicalSpineChain registry/API，`41b7c9e2` 已让 compiler artifact 写 entrypoint coverage；artifact manifest 仍未强制引用已登记 Mathematical Spine chain。新卡补 artifact-level hard ref gate。
+- **runtime/API**：`CompilerArtifactRecord` 新增 `mathematical_spine_chain_refs`；`POST /api/research-os/compiler/artifacts` 解析/summary/response 暴露该字段，写 artifact 前确认每个 chain ref 已在 `MATHEMATICAL_SPINE_CHAIN_REGISTRY` 登记。
+- **对抗门**：缺 `mathematical_spine_chain_refs` 被 compiler validator 拒绝；unknown chain ref 422 且不写 artifact、不新增 coverage；artifact replay/summary/coverage lifecycle refs 保留 chain ref。
+- **测试**：`tests/test_governed_compiler.py` **20 passed / 2 warnings**；goal/compiler scoped **33 passed / 2 warnings**；goal/compiler/spine/methodology/trust adjacent **72 passed / 2 warnings**。
+- **落档**：新增 done 卡 `0b3f6a91`。边界：这是 compiler artifact 对 Mathematical Spine chain 的硬引用门，不是所有 producer 自动写 chain、完整 compiler/codegen、CI、线上或用户验收。
+
+## 2026-06-27 · Compiler artifact entrypoint coverage producer（41b7c9e2）
+
+- **取前沿**：`173405ef` 已让 `compile_qro` 和 direct compiler pass 写 entrypoint coverage；compiler artifact endpoint 仍只写 artifact audit。新卡把 artifact manifest 成功路径接到 refs-only entrypoint coverage。
+- **runtime/API**：新增 `_goal_entrypoint_coverage_from_compiler_artifact()`；`POST /api/research-os/compiler/artifacts` 现在先验证 artifact 和 coverage candidate，再写 artifact JSONL 与 coverage JSONL，响应返回 `entrypoint_coverage_ref`。
+- **对抗门**：artifact coverage 绑定已记录 IR/pass、QRO refs、Research Graph command refs、evidence/validation/permission/replay refs；fake codegen/executable artifact claim 不新增 artifact coverage；历史 silent mock IR 进入 artifact endpoint 时 422，且不写 artifact/coverage partial record。
+- **测试**：goal/compiler scoped **32 passed / 2 warnings**；goal/compiler/spine/methodology/trust adjacent **71 passed / 2 warnings**；`python -m compileall -q app/backend/app` PASS。
+- **落档**：新增 done 卡 `41b7c9e2`。边界：这是 artifact manifest coverage producer，不是 executable compiler、strategy code generator、scheduler wiring、CI、线上或用户验收。
+
+## 2026-06-27 · Weekly monitor execution reconciliation action producer wiring（a91b0c63）
+
+- **取前沿**：`d4c9a2f0` 已有 refs-only reconciliation action producer API；§12 仍缺接入现有 production weekly monitor tick。新 mint `a91b0c63` 把 producer 接到 monitor endpoint 和 DAG result recorder。
+- **runtime/API**：抽出 `_run_pending_execution_reconciliation_actions()`；`/api/monitor/weekly_tick` 和 `_record_weekly_monitor_qro_from_scheduler()` 在记录 monitor QRO 后触发 action producer，响应/任务结果带 `execution_reconciliation_action_producer` 摘要。
+- **坏门**：pending reconciliation 首次 tick 创建 action；重复 tick 幂等 skip；测试把 execution registries patch 到 tmp_path，避免写真实 `DATA_ROOT`。
+- **测试**：monitor+execution scoped **33 passed / 2 warnings**；execution/monitor/portfolio/factor/realtime safety adjacent scoped **80 passed / 2 warnings**；expanded Research OS/coverage/standards/security scoped **147 passed / 2 warnings**；`compileall app/backend/app` **PASS**；`validate_dev` **49 ✅ / 0 ❌ / 0 ⚠️**（DAG 165）。
+- **落档**：新增 done 卡 `a91b0c63`。边界：这是本地 weekly monitor tick / DAG result_recorder 接线，不是 order emission、live trading、broker connector、venue API 连通、自动 remediation 或线上长期 scheduler 运行证明。
+
+## 2026-06-27 · Execution reconciliation action producer API（d4c9a2f0）
+
+- **取前沿**：`6e4a9b21` 已有 reconciliation action record/API/QRO；§12 仍缺把 pending reconciliations 批量转 action 的 producer。新 mint `d4c9a2f0` 补 refs-only action producer API。
+- **runtime/API**：新增 `/api/research-os/execution/reconciliation_actions/run_pending`，扫描 `EXECUTION_RECONCILIATIONS` 中 `action_required=true` 的记录，按状态映射默认 action kind，写 `DATA_ROOT/audit/execution_reconciliation_actions.jsonl` + `QROType.EXECUTION_POLICY`。
+- **坏门**：`needs_reconcile` -> `request_missing_reconcile`；terminal conflict / venue mismatch -> `escalate_manual_review`；其他 pending -> `investigate`；已有 open/acknowledged action 按 `(reconciliation_ref, action_kind)` 幂等 skip。
+- **测试**：`test_execution_boundary_contract.py` **26 passed / 2 warnings**；execution/portfolio/factor/realtime safety adjacent scoped **73 passed / 2 warnings**；expanded Research OS/coverage/standards/security scoped **140 passed / 2 warnings**；`compileall app/backend/app` **PASS**；`validate_dev` **49 ✅ / 0 ❌ / 0 ⚠️**（DAG 164）。
+- **落档**：新增 done 卡 `d4c9a2f0`。边界：这是 API-triggered reconciliation action producer，不是 order emission、live trading、broker connector、venue API 连通、自动 remediation 或部署级长期 scheduler。
+
+## 2026-06-27 · Execution reconciliation action QRO API（6e4a9b21）
+
+- **取前沿**：`0c4d71a9` 已能批量产 reconciliation records/QRO；§12 仍缺把 `action_required=true` 对账结果进入治理动作队列。新 mint `6e4a9b21` 补 refs-only reconciliation action record/API/QRO。
+- **runtime/API**：新增 `ExecutionReconciliationActionRecord`、`PersistentExecutionReconciliationActionRegistry`、`/api/research-os/execution/reconciliation_actions` record/summary API；成功路径写 `DATA_ROOT/audit/execution_reconciliation_actions.jsonl` 和 `QROType.EXECUTION_POLICY`。
+- **坏门**：只有 action_required reconciliation 可创建 action；`reconciled/action_required=false` 创建 action 会 422 且不写 JSONL/Graph；`halt_runtime` 必须有 `halt_plan_ref`，`waive_with_evidence` 必须有 `waiver_ref`。
+- **测试**：`test_execution_boundary_contract.py` **25 passed / 2 warnings**；execution/portfolio/factor/realtime safety adjacent scoped **72 passed / 2 warnings**；expanded Research OS/coverage/standards/security scoped **139 passed / 2 warnings**；`compileall app/backend/app` **PASS**；`validate_dev` **49 ✅ / 0 ❌ / 0 ⚠️**（DAG 163）。
+- **落档**：新增 done 卡 `6e4a9b21`。边界：这是 execution reconciliation action record/API/QRO，不是 order emission、live trading、broker connector、venue API 连通、自动 remediation 或部署级长期 scheduler。
+
+## 2026-06-27 · Execution reconciliation batch worker API（0c4d71a9）
+
+- **取前沿**：`4a7d2e90` 已有单笔 reconciliation record/API/QRO；§12 仍缺批量处理已记录 venue events 的 pending worker。新 mint `0c4d71a9` 补 refs-only batch worker API。
+- **runtime/API**：新增 `/api/research-os/execution/reconciliations/run_pending`，按 `(order_intent_ref, runtime_promotion_ref, venue_order_ref)` 分组扫描 `EXECUTION_VENUE_EVENTS`，生成 `ExecutionReconciliationRecord` 并写 `DATA_ROOT/audit/execution_reconciliations.jsonl` + `QROType.EXECUTION_POLICY`。
+- **坏门**：只处理已落库 refs；unknown upstream 组 skip；重复 run 按 event refs 幂等 skip；响应固定 `record_only=true`、`api_place_order_called=false`、`api_venue_call_called=false`。
+- **测试**：`test_execution_boundary_contract.py` **23 passed / 2 warnings**；execution/portfolio/factor/realtime safety adjacent scoped **70 passed / 2 warnings**；expanded Research OS/coverage/standards/security scoped **137 passed / 2 warnings**；`compileall app/backend/app` **PASS**；`validate_dev` **49 ✅ / 0 ❌ / 0 ⚠️**（DAG 162）。
+- **落档**：新增 done 卡 `0c4d71a9`。边界：这是 execution reconciliation batch worker/API/QRO，不是 order emission、live trading、broker connector、venue API 连通或部署级长期 scheduler。
+
+## 2026-06-27 · Execution reconciliation worker QRO API（4a7d2e90）
+
+- **取前沿**：`3b6e9c12` 已有 venue event audit/QRO，但缺把 fill/ack/reconciled 事件汇总成 execution reconciliation 状态的 worker。新 mint `4a7d2e90` 补 refs-only reconciliation worker/API。
+- **runtime/API**：新增 `ExecutionReconciliationRecord`、`PersistentExecutionReconciliationRegistry`、`reconcile_execution_venue_events()`、`/api/research-os/execution/reconciliations` record/summary API；成功路径写 `DATA_ROOT/audit/execution_reconciliations.jsonl` 和 `QROType.EXECUTION_POLICY`。
+- **坏门**：filled + reconciled -> `reconciled/action_required=false`；filled 但缺 reconciled -> `needs_reconcile/action_required=true`，不假绿；unknown order intent/runtime promotion 422 且不写 JSONL/Graph。
+- **测试**：`test_execution_boundary_contract.py` **22 passed / 2 warnings**；execution/portfolio/factor/realtime safety adjacent scoped **69 passed / 2 warnings**；expanded Research OS/coverage/standards/security scoped **136 passed / 2 warnings**；`compileall app/backend/app` **PASS**；`validate_dev` **49 ✅ / 0 ❌ / 0 ⚠️**（DAG 161）。
+- **落档**：新增 done 卡 `4a7d2e90`。边界：这是 execution reconciliation record/API/QRO，不是 order emission、live trading、broker connector、venue API 连通或后台调度循环。
+
+## 2026-06-27 · Execution venue event audit QRO API（3b6e9c12）
+
+- **取前沿**：`0d9a6e42` 已让 runtime promotion 写 registry/QRO；§12 仍缺 venue ack/fill/reconcile 证据面。新 mint `3b6e9c12` 补 refs-only venue event audit，不在 main 新增 `place_order`。
+- **runtime/API**：新增 `ExecutionVenueEventRecord`、`PersistentExecutionVenueEventRegistry`、`/api/research-os/execution/venue_events` record/summary API；成功路径写 `DATA_ROOT/audit/execution_venue_events.jsonl` 和 `QROType.EXECUTION_POLICY`。
+- **坏门**：fill event 缺 fill/quantity/price refs 422；unknown order intent/runtime promotion refs 422；payload 带 raw_event/raw_ack/raw_fill/raw_execution_report/filled_qty/fill_price/commission/raw_order 等 raw material 422；失败不写 JSONL/Graph。
+- **测试**：`test_execution_boundary_contract.py` **19 passed / 2 warnings**；execution/portfolio/factor/realtime safety adjacent scoped **66 passed / 2 warnings**；expanded Research OS/coverage/standards/security scoped **133 passed / 2 warnings**；`compileall app/backend/app` **PASS**；`validate_dev` **49 ✅ / 0 ❌ / 0 ⚠️**（DAG 160）。
+- **落档**：新增 done 卡 `3b6e9c12`。边界：这是 venue event audit record/API/QRO，不是 order emission、live trading、broker connector、venue API 连通或 fill reconciliation worker。
+
+## 2026-06-27 · Runtime promotion registry QRO API（0d9a6e42）
+
+- **取前沿**：`8f2d4b0c` 已让 order intent 成功路径写 ExecutionPolicy QRO；§12 runtime promotion 仍只有纯 validator，没有可 replay 的 record/API。新 mint `0d9a6e42` 补 runtime promotion append-only registry + QRO write-through。
+- **runtime/API**：新增 `RuntimePromotionRecord`、`PersistentRuntimePromotionRegistry`、`/api/research-os/execution/runtime_promotions` record/summary API；成功路径写 `DATA_ROOT/audit/runtime_promotions.jsonl` 和 `QROType.EXECUTION_POLICY`。
+- **坏门**：live ladder jump、A股 live、缺 approval/permission/OrderGuard/idempotency/audit/kill-switch/SecretRef/responsibility refs、silent mock profile、waiver execution invariant 均沿用 `validate_runtime_promotion()` fail-closed；失败不写 JSONL、不写 Graph。
+- **测试**：`test_execution_boundary_contract.py` **15 passed / 2 warnings**；execution/portfolio/factor/realtime safety adjacent scoped **62 passed / 2 warnings**；expanded Research OS/coverage/standards/security scoped **129 passed / 2 warnings**；`compileall app/backend/app` **PASS**；`validate_dev` **49 ✅ / 0 ❌ / 0 ⚠️**（DAG 159）。
+- **落档**：新增 done 卡 `0d9a6e42`。边界：这是 runtime promotion record/API/QRO，不是 order emission、live trading、broker connector、venue ack/fill/reconcile 或资金执行。
+
+## 2026-06-27 · Execution order intent QRO write-through（8f2d4b0c）
+
+- **取前沿**：`5e1d0a77` 已有 typed order intent registry/API，但成功路径尚未写入 QRO/Research Graph。新 mint `8f2d4b0c` 把 order intent 成功记录同步成 `QROType.EXECUTION_POLICY` 和 `upsert_qro` command。
+- **Graph 接线**：`/api/research-os/execution/order_intents` 成功后返回 `qro_id` / `research_graph_command_id`；QRO 带 market/universe/horizon/frequency/lineage/implementation_hash，output contract 保留 execution/risk/venue/permission/guard/audit/kill-switch/SecretRef/responsibility refs 和 `place_order_called=false`。
+- **坏门**：raw quantity/price/notional/secret/raw_order 仍在写入前 422；QRO output contract 不复制 raw order material。
+- **测试**：`test_execution_boundary_contract.py` **12 passed / 2 warnings**；execution/portfolio/factor/realtime safety adjacent scoped **59 passed / 2 warnings**；expanded Research OS/coverage/standards/security scoped **126 passed / 2 warnings**；`compileall app/backend/app` **PASS**；`validate_dev` **49 ✅ / 0 ❌ / 0 ⚠️**（DAG 158）。
+- **落档**：新增 done 卡 `8f2d4b0c`。边界：这是 order intent QRO write-through，不是 order emission、live trading、broker connector、venue ack/fill 或资金执行。
+
+## 2026-06-27 · StrategyConsole Research Graph Ghost and Auto intent ref write-back（aa74a817）
+
+- **取前沿**：`3a17e940` 已有 connect-intent ref/hash 写回；Ghost/Auto 在真实 projection 下仍只有“不改图”提示。新 mint `aa74a817`（review_status=1）把 Ghost/Auto 记录进 QRO intent 账。
+- **前端接线**：StrategyConsole 真实 projection 下，Ghost accept 写 `output_contract.canvas_ghost_ref/hash`，Auto send 写 `output_contract.canvas_auto_ref/hash`；两条路径都只发 ref/hash、canonical/audit/evidence refs，成功后重拉 projection，不应用本地 mock patch。
+- **后端验收**：补 Ghost/Auto patch-intent asset mutation 测试，确认 QRO version 递增、evidence refs 记录、projection audit 不泄露 ghost/auto ref/hash。
+- **验收**：StrategyConsole scoped → 1 file / 36 passed；Research Graph scoped → 18 passed / 2 warnings；Graph/Compiler/StrategyConsole/standards adjacent scoped → 69 passed / 2 warnings；frontend full → 26 files / 299 passed；frontend build → `tsc && vite build` PASS（既有 chunk size warning）。
+- **边界**：这是 Ghost/Auto intent ref/hash write-back，不是真实 patch application、完整 agent patch lifecycle、完整 graph database、完整 compiler pass、CI 或线上部署证明。
+
+## 2026-06-27 · StrategyConsole Research Graph connect intent ref write-back（3a17e940）
+
+- **取前沿**：`fbab2819` 已有 delete-intent ref/hash 写回；GraphCanvas 自由建边仍未接 canonical QRO。新 mint `3a17e940`（review_status=1）只做 connect-intent ref/hash 写回，不声称真实新增 Graph edge。
+- **前端接线**：StrategyConsole 真实 projection 下 `onConnect` 改成输出端口→输入端口两步 intent；调用 `/api/research-os/graph/canvas_asset_mutations` 写 `output_contract.canvas_connect_ref/hash`，只发 ref/hash、canonical/audit/evidence refs，成功后重拉 projection。
+- **后端验收**：补 `canvas_connect_ref/hash` asset mutation 测试，确认 QRO version +1、evidence refs 记录、projection audit 不泄露 connect ref/hash。
+- **验收**：StrategyConsole scoped → 1 file / 34 passed；Research Graph scoped → 17 passed / 2 warnings；Graph/Compiler/StrategyConsole/standards adjacent scoped → 68 passed / 2 warnings；frontend full → 26 files / 297 passed；frontend build → `tsc && vite build` PASS（既有 chunk size warning）。
+- **边界**：这是 connect-intent ref/hash write-back，不是真实 Graph edge 创建、完整连线预览、Ghost/Auto 写回、完整 graph database、完整 compiler pass、CI 或线上部署证明。
+
+## 2026-06-27 · StrategyConsole Research Graph delete intent ref write-back（fbab2819）
+
+- **取前沿**：`a63af9d7` 已有 QRO-node parameter ref/hash 写回；GraphCanvas 删除仍未接 canonical QRO。新 mint `fbab2819`（review_status=1）只做 delete-intent ref/hash 写回，不声称真实删除 QRO/Graph 拓扑。
+- **前端接线**：StrategyConsole 真实 projection 下，QRO 节点 Delete/Backspace 调用 `/api/research-os/graph/canvas_asset_mutations` 写 `output_contract.canvas_delete_ref/hash`；edge inspector 增加 `记录删除`，同样只发 ref/hash、canonical/audit/evidence refs，成功后重拉 projection。
+- **后端验收**：补 `canvas_delete_ref/hash` asset mutation 测试，确认 QRO version +1、evidence refs 记录、projection audit 不泄露 delete ref/hash。
+- **验收**：StrategyConsole scoped → 1 file / 33 passed；Research Graph scoped → 16 passed / 2 warnings；Graph/Compiler/StrategyConsole/standards adjacent scoped → 67 passed / 2 warnings；frontend full → 26 files / 296 passed；frontend build → `tsc && vite build` PASS（既有 chunk size warning）。
+- **边界**：这是 delete-intent ref/hash write-back，不是真实 QRO tombstone、Graph 拓扑删除、自由建边、Ghost/Auto 写回、完整 graph database、完整 compiler pass、CI 或线上部署证明。
+
+## 2026-06-27 · StrategyConsole Research Graph parameter ref write-back（a63af9d7）
+
+- **取前沿**：`ddec60c2` 已有 projection edge relation ref/hash 写回；GraphCanvas parameter/Ghost/Auto 仍是画布真实性残余。新 mint `a63af9d7`（review_status=1）只做 QRO-node parameter ref/hash 写回。
+- **前端接线**：StrategyConsole 真实 QRO 节点 inspector 增加 `记录参数` action；调用 `/api/research-os/graph/canvas_asset_mutations` 写 `output_contract.canvas_param_ref/hash`，带 canonical/audit/evidence refs，成功后重拉 `/api/research-os/graph/canvas_projection`。
+- **后端验收**：补 `canvas_param_ref/hash` asset mutation 测试，确认 QRO version +1、evidence refs 记录、projection audit 不泄露 parameter ref/hash。
+- **验收**：StrategyConsole scoped → 1 file / 31 passed；Research Graph scoped → 15 passed / 2 warnings；Graph/Compiler/StrategyConsole/standards adjacent scoped → 66 passed / 2 warnings；frontend full → 26 files / 294 passed；frontend build → `tsc && vite build` PASS（既有 chunk size warning）。
+- **边界**：这是 QRO-node parameter ref/hash write-back，不是自由参数编辑、Ghost/Auto 写回、删除、自由建边、完整 graph database、完整 compiler pass、CI 或线上部署证明。
+
+## 2026-06-27 · StrategyConsole QRO node drag canonical layout hash（74632fdf）
+
+- **取前沿**：`93f4027d` 已有 QRO-node inspector canonical edit；GraphCanvas 手势仍未写回。新 mint `74632fdf`（review_status=1）把真实 Research Graph QRO 节点拖拽接到 `canvas_asset_mutations`。
+- **前端手势接线**：StrategyConsole 在 Research Graph projection active 时，只允许 QRO 节点 head drag 进入写回；drag end 计算 `hash_canvas_layout_*`，POST `output_contract.canvas_layout_hash` / `operation=set_hash`，再重拉 `/canvas_projection`。command 节点、非 QRO 节点、删除、连线、参数、Ghost、Auto 仍走只读门。
+- **后端验收**：补 `set_hash` asset mutation 测试，不带 `value_ref` 也能 upsert 同一 QRO v+1，projection audit 不泄露 hash raw value。
+- **验收**：Graph/Desk scoped → 15 passed / 2 warnings；Graph/Desk/Compiler/StrategyConsole scoped → 59 passed / 2 warnings；StrategyConsole frontend scoped → 2 files / 41 passed；frontend build → `tsc && vite build` PASS（既有 chunk size warning）；frontend full → 26 files / 287 tests passed；backend full → 1560 passed / 13 skipped / 283 warnings。
+- **边界**：这是 QRO 节点布局 digest 写回，不是精确坐标 server replay、完整 GraphCanvas 手势 write-back、完整 graph database 或 strategy codegen。
+
+## 2026-06-27 · Research Graph canonical canvas asset mutation executor（93f4027d）
+
+- **取前沿**：`af535207`/`ef1f3f61` 已有只读 GraphCanvas projection，`8a0a6102` 已有 mutation audit command，但 StrategyConsole 还不能把真实 QRO 节点编辑写回 canonical asset。新 mint `93f4027d`（review_status=1）补第一条 QRO-node executor。
+- **后端执行器**：新增 `execute_canvas_asset_mutation()` 与 `POST /api/research-os/graph/canvas_asset_mutations`；endpoint 要求登录用户，先写 `record_canvas_mutation`，再 `upsert_qro` 同一 QRO 新版本，只允许 `_ref/_hash` 合同字段或 evidence/math ref，拒绝未知 QRO、target type mismatch、live QRO 和 raw value。
+- **前端接线**：StrategyConsole 真实 QRO 节点 inspector 增加 `记录编辑` action，调用执行型 endpoint 后重拉 `/canvas_projection`；测试断言 POST 不带 `raw_value`。
+- **验收**：Research Graph/Desk/Compiler/StrategyConsole backend scoped → 58 passed / 2 warnings；StrategyConsole frontend scoped → 2 files / 41 passed；frontend build → `tsc && vite build` PASS（既有 chunk size warning）；backend full → 1559 passed / 13 skipped / 283 warnings。
+- **边界**：这不是所有 GraphCanvas 手势可写、完整 graph database、strategy codegen、或所有 desk/API/scheduler edit path 全接线。
+
+## 2026-06-27 · Governed model artifact loader guard（051144a8）
+
+- **取前沿**：§15 要求 external pickle blocked、producer-run + hash binding、torch weights_only；现有 `training.lib.load_model()` 直接 `pickle.load`，DL 分支 `torch.load(..., weights_only=False)`。新 mint `051144a8`（review_status=1）补本地 loader guard。
+- **Loader guard**：`.pkl` / `.joblib` 加载前必须有同目录 `validation_dossier.json`，且 dossier `artifact_hash` 必须等于当前文件 sha256，symlink serialized artifact 拒绝；`.pt` checkpoint 改为 `torch.load(..., weights_only=True)`。
+- **验收**：loader/training/backtest/DL scoped → 49 passed / 2 warnings；training/model-desk/backtest/governance scoped → 118 passed / 2 warnings；compileall success；backend full → 1557 passed / 13 skipped / 283 warnings。
+- **边界**：这是本地训练产物 loader guard，不是独立 sandbox 进程、远程 artifact store、runtime auto-promotion 或 live model serving 安全证明。
+
+## 2026-06-27 · TrainingRun produces governed ModelPassport（fb378e42）
+
+- **取前沿**：`08ce677e` 已要求模型晋级必须引用 passport，但训练成功路径还不会自动生产 ValidationDossier / ModelPassport。新 mint `fb378e42`（review_status=1）把结构化训练成功产物接进 §15 governance metadata。
+- **Training producer**：`TrainingJob` 新增 `model_version`、`model_passport_ref`、`validation_dossier_ref`；`TrainingRequest` 新增 `dataset_id`；训练产物文件存在时计算 artifact sha256，写 `validation_dossier.json`，记录 `ModelGovernancePassport`，再把 passport/dossier refs 写入 `ModelVersion`。
+- **Backend API**：`POST /api/training/jobs` 透传 `dataset_id`，训练完成后的 job response 暴露 `model_passport_ref` / `validation_dossier_ref`，避免训练台产出无治理模型。
+- **验收**：training/model-governance/experiments scoped → 43 passed / 2 warnings；training/model-desk/backtest bridge scoped → 91 passed / 2 warnings；compileall success；backend full → 1555 passed / 13 skipped / 283 warnings。
+- **边界**：这不是 artifact loader/inference 安全加载实现、sandbox execution、runtime auto-promotion 或 live model serving；审批门仍控制 stage flip，自由代码无 artifact 不注册幽灵模型版本。
+
+## 2026-06-27 · Model Registry promotion requires governed model passport（08ce677e）
+
+- **取前沿**：`6a9e7626` 已能记录 ModelPassport，但旧 `MODEL_REGISTRY.promote()` 仍可开 staging/production gate 而不认识 passport。新 mint `08ce677e`（review_status=1）把 §15 ModelPassport 接进旧模型晋级路径。
+- **Model Registry gate**：`ModelVersion` 增加 `model_passport_ref` / `validation_dossier_ref`；`ModelRegistry.promote()` 对 staging/production fail-closed 校验已登记 passport，并要求 passport 的 `model_version_ref` 匹配当前 `model_id` + `version`。
+- **Backend API**：`MODEL_REGISTRY` 注入 `MODEL_GOVERNANCE_REGISTRY`；`POST /api/models/{model_id}/promote` 透传 `model_passport_ref`；通过后把 `model_passport_ref` 与 `validation_dossier_ref` 写入 approval gate evidence。
+- **验收**：`tests/test_model_governance.py` → 17 passed / 2 warnings；Model governance / approval / Model Desk / experiments / hypothesis scoped → 75 passed / 2 warnings；compileall success；backend full → 1554 passed / 13 skipped / 283 warnings。
+- **边界**：这不是训练执行、TrainingRun→Passport 自动生产、artifact loader、runtime auto-promotion 或训练台全链路接线；审批门仍控制实际 stage flip。
+
+## 2026-06-27 · Research OS model governance passport registry API（6a9e7626）
+
+- **取前沿**：§15 已有 promotion validator，但 ModelPassport 还不能作为 Research OS metadata 持久化、replay 或通过 API 查看。新 mint `6a9e7626`（review_status=1）补 ModelPassport registry/API，不替换旧 `MODEL_REGISTRY`。
+- **ModelPassport registry**：新增 `PersistentModelGovernanceRegistry`，append-only JSONL 记录通过 `validate_model_promotion` 的 `ModelGovernancePassport`；malformed history fail-closed；invalid passport 不写 partial file。
+- **Backend API**：新增 `POST /api/research-os/model_governance/passports` 和 `GET /api/research-os/model_governance/summary`。summary 只返回 passport metadata 和 artifact refs，不加载模型 artifact，不触发 runtime promotion。
+- **验收**：`tests/test_model_governance.py` → 12 passed / 2 warnings；§15 adjacent scoped → 52 passed / 2 warnings；compileall success；backend full → 1549 passed / 13 skipped / 283 warnings。
+- **边界**：这不是训练执行、旧 Model Registry 替换、artifact loader、runtime promotion、训练台接线或模型晋级端点全入口强制治理。
+
+## 2026-06-27 · Research OS settings LLM provider registry API（73e78014）
+
+- **取前沿**：§4 的 Settings / LLM Provider / SecretRef 还只有 contract validator 和旧 `/api/llm/configure` keystore 路径；新 mint `73e78014`（review_status=1）补 Research OS metadata registry，不保存明文 secret。
+- **Settings registry**：新增 `PersistentOnboardingRegistry`，append-only JSONL 记录 SecretRef metadata、LLMProvider metadata、LLMCredentialPool 和 ModelRoutingPolicy；provider/pool/policy 必须引用已登记上游 refs，malformed history fail-closed。
+- **Backend API**：新增 `/api/research-os/settings/secret_refs`、`llm_providers`、`credential_pools`、`routing_policies` 和 `summary`。API 统一扫描 payload，发现 `sk-*`、`api_key`、password、OAuth token 等明文 credential material 即 422，不写 partial。
+- **验收**：`tests/test_onboarding_gateway.py` → 13 passed / 2 warnings；§4 adjacent scoped → 64 passed / 2 warnings；compileall success；backend full → 1544 passed / 13 skipped / 283 warnings。
+- **边界**：这不是真实 secret value storage、provider adapter、Gateway runtime enforcement、Settings UI、connection test wizard 或 full connector integration。
+
+## 2026-06-27 · Governed Compiler artifact manifest audit layer（11470900）
+
+- **取前沿**：§1/§8 的 compiler output artifact 仍只有 IR/pass，没有可持久化的 compiler artifact manifest。新 mint `11470900`（review_status=1）补非可执行 manifest 审计层，不声称 codegen。
+- **Compiler artifact**：新增 `CompilerArtifactRecord` 与 `compiler_artifact_recorded` JSONL event。artifact 必须绑定已记录 IR/pass、Research Graph command、canonical command、run plan、environment lock、permission、output contract、manifest hash、evidence 和 validation refs；store 拒绝悬空 IR/pass 引用。
+- **Backend API**：新增 `POST /api/research-os/compiler/artifacts`，`GET /api/research-os/compiler/summary` 返回 `artifact_total` 和 artifact summaries。validator 拒绝 `strategy_source` / `executable_strategy`、`executable=true`、embedded source code、raw LLM output、plaintext secret 和 silent mock fallback。
+- **验收**：`tests/test_governed_compiler.py` → 16 passed / 2 warnings；Graph/Desk/Compiler/entrypoint scoped → 80 passed / 2 warnings；compileall success；backend full → 1539 passed / 13 skipped / 283 warnings。
+- **边界**：这是非可执行 compiler artifact manifest 审计层；不是完整 compiler pass implementation、策略代码生成、scheduler wiring 或 production compiler service。
+
+## 2026-06-27 · Research Graph governed canvas mutation command（8a0a6102）
+
+- **取前沿**：§2 的 writable canvas mutation engine 仍未闭合；新 mint `8a0a6102`（review_status=1）先补 canonical mutation audit/write-back command，不声称完整可写画布。
+- **Graph command**：新增 `CanvasMutationRecord` 与 `record_canvas_mutation` command type；`PersistentResearchGraphStore` 可持久化并 replay mutation command，且 mutation audit 不进入 QRO projection index。
+- **Backend API**：新增 `POST /api/research-os/graph/canvas_mutations`。API 要求 `canonical_command_ref`、`audit_ref`、`value_ref` 或 `value_hash`，拒绝 `value/raw_value/raw_payload/payload`，并复用 `validate_canvas_mutation` 阻止 strategy desk 写 Factor `formula.*`。
+- **验收**：Research Graph persistence → 6 passed / 2 warnings；Graph/Desk/Compiler/entrypoint scoped → 75 passed / 2 warnings；compileall success；backend full → 1534 passed / 13 skipped / 283 warnings。
+- **边界**：这不是完整 writable canvas mutation engine、frontend edit wiring、canonical asset mutation executor、完整 graph database、full compiler implementation 或 strategy codegen。
+
+## 2026-06-27 · Research Graph canvas projection frontend data flow（ef1f3f61）
+
+- **取前沿**：§2 仍有 frontend GraphCanvas 数据流 gap；新 mint `ef1f3f61`（review_status=1）把 StrategyConsole 画布接到后端只读 Research Graph projection，不声称可写 mutation engine。
+- **Frontend data flow**：`strategy/api.ts` 新增 `fetchResearchGraphCanvasProjection`；`StrategyConsolePage` mount 后请求 `/api/research-os/graph/canvas_projection?limit=24`，成功且非空时用真实 `nodes`/`edges` 替换 mock graph，并显示 `Research Graph` source/banner；失败、空投影或响应格式错时保留 mock fallback 并明示来源。
+- **只读门**：真实 projection active 时启用 `canvasReadOnly`，拖拽、连线、删除、参数编辑、Ghost patch、Auto patch 均不改图；UI 不渲染后端额外 raw 字段。
+- **验收**：StrategyConsole scoped → 2 files / 39 passed；frontend full → 26 files / 285 passed；frontend build → `tsc && vite build` PASS（保留既有 chunk size warning）。
+- **边界**：这不是 canvas mutation engine、canonical command 写回、完整 graph database、完整 compiler pass implementation 或 strategy codegen。
+
+## 2026-06-27 · Research Graph read-only canvas projection API（af535207）
+
+- **取前沿**：§2 仍有 canvas projection engine gap；新 mint `af535207`（review_status=1）做只读 Graph→GraphCanvas projection，不声称 canvas mutation engine 或前端接线。
+- **Canvas read model**：新增 `GET /api/research-os/graph/canvas_projection`，复用 QRO projection index filters，把每条 QRO projection 派生成 locked command node + locked QRO node，并以 command→QRO edge 连接。QRO type 映射到现有 GraphCanvas `NodeCat`，status axes 映射到 `NodeState`。
+- **对抗测试**：覆盖 filter 后 shape、locked read-only、edge port wiring、position/running 映射、raw prompt/output contract 不泄露。
+- **验收**：`tests/test_research_graph_persistence.py` → 3 passed / 2 warnings；Graph/Desk/Compiler/entrypoint scoped → 72 passed / 2 warnings；compileall success；backend full → 1531 passed / 13 skipped / 283 warnings。
+- **边界**：这不是 canvas mutation engine、前端 GraphCanvas 数据接线、完整 graph database 或 production graph query service。
+
+## 2026-06-27 · Governed Compiler compile QRO pass API（9d175460）
+
+- **取前沿**：§1/§7/§8/§14/§16 仍有 compiler pass implementation gap；新 mint `9d175460`（review_status=1）做第一条从 Research Graph QRO 派生 governed Compiler IR/pass 的 deterministic API。
+- **Compiler pass**：新增 `POST /api/research-os/compiler/compile_qro`。endpoint 从 `RESEARCH_GRAPH_STORE.commands()` 查已存在 `upsert_qro`，要求 `validation_refs`、`environment_lock_ref`、permission/evidence refs，派生 `CompilerIRRecord` + `CompilerPassRecord`，先 validate 两个 record，再写 `PersistentCompilerIRStore`。
+- **对抗测试**：成功路径钉住 qro id、graph command id、canonical command ref、validation refs、environment lock、tool record refs；未知 QRO 422 不写 store；QRO/command 无 evidence refs 422 不写 partial。
+- **验收**：`tests/test_governed_compiler.py` → 11 passed / 2 warnings；entrypoint/Graph/Compiler scoped → 66 passed / 2 warnings；compileall success；backend full → 1531 passed / 13 skipped / 283 warnings。
+- **边界**：这不是完整 compiler pass implementation、策略代码生成、canvas mutation engine、scheduler wiring 或 production compiler service。
+
+## 2026-06-27 · Research Graph QRO projection index API（7ba4a8b9）
+
+- **取前沿**：§1/§2/§7/§8/§14/§16 仍有 projection index gap；新 mint `7ba4a8b9`（review_status=1）做 QRO projection read model，不声称完整 graph database。
+- **Graph read model**：新增 `ResearchGraphProjectionRecord`。`ResearchGraphStore.apply(upsert_qro)` 写 QRO 时派生 projection index；`PersistentResearchGraphStore` replay command log 后自动重建。索引可按 QRO type、owner、market、universe、definition/evidence/runtime status 和 lineage token 过滤。
+- **Backend API**：新增 `GET /api/research-os/graph/projection_index`，只读返回 QRO identity、status axes、lineage、refs、contract keys/hash 和 command ref；不返回 raw input/output contracts、prompt、strategy ref 或 tool payload。
+- **验收**：Graph/Spine/Agent/Compiler scoped → 27 passed / 2 warnings；entrypoint/Graph/Compiler scoped → 63 passed / 2 warnings；compileall success；backend full → 1528 passed / 13 skipped / 283 warnings。
+- **边界**：这不是完整 graph database、canvas mutation/projection engine、全入口 compiler wiring、完整 compiler pass implementation 或 production graph query service。
+
+## 2026-06-27 · Document Intelligence safe local directory sync API（c4f3ac02）
+
+- **取前沿**：§5/§6 仍缺显式安全目录级 ingestion；新 mint `c4f3ac02`（review_status=1）做本地目录同步 API，不声称全域自动资产库同步。
+- **Backend API**：新增 `POST /api/research-os/documents/sync_local_directory`。调用方必须给 `asset_ref`、rights 和显式 `base_path`；后端只在 `project` 或 `data` root 下解析 `.md/.markdown/.txt/.rst/.pdf`，拒绝路径逃逸、hidden/sensitive 路径、symlink 和 plaintext secret。endpoint 先全量 prepare，再写 Document store/RAG index，失败不留 partial records；unsupported 文件进入 `skipped_paths`。
+- **对抗测试**：新增目录同步成功/RAG retrieval、secret-bearing file fail-closed、hidden/sensitive path fail-closed 三个测试，钉住 atomicity 与权限边界。
+- **验收**：`tests/test_document_intelligence_parser_rag.py` → 21 passed / 7 warnings；Document/RAG adjacent scoped → 45 passed / 7 warnings；compileall success；backend full → 1527 passed / 13 skipped / 283 warnings。
+- **边界**：这不是 HTML crawler、跨 registry/provider/scheduler 的真实资产库全域自动同步、dense embedding/vector DB、完整 graph database 或表格/版面理解。
+
+## 2026-06-27 · Document Intelligence scanned PDF OCR fallback（200435a6）
+
+- **取前沿**：§6 仍有 scanned PDF OCR extraction gap；新 mint `200435a6`（review_status=1）做本机 tesseract fallback，不声称 OCR 质量或表格/版面理解。
+- **Backend parser**：PDF parser 仍优先 PyMuPDF layout text blocks；当 PDF 无可抽取文本时，渲染临时 PNG 并调用 `tesseract stdout`，生成 `local_pdf_tesseract_ocr_no_network_v1` EvidenceSpan/RAG blocks，metadata 标 `layout_kind=pdf_ocr_page`，response 仍不返回 raw text。
+- **对抗测试**：新增 image-only scanned PDF test，stub OCR 输出，断言 parser id、layout_kind、RAG hit、no raw text；既有 text PDF test 继续钉住 PyMuPDF layout parser。
+- **验收**：`tests/test_document_intelligence_parser_rag.py` → 18 passed / 7 warnings；本机 tesseract smoke 可调用但 `PDF` 识别为 `POF`，只证明管线可调用；Document/RAG adjacent scoped → 42 passed / 7 warnings；compileall success；backend full → 1524 passed / 13 skipped / 283 warnings。
+- **边界**：这不是 OCR 质量保证、表格/版面理解、联网 OCR 服务、真实资产库自动扫描/全库同步、dense embedding/vector DB 或完整 graph database。
+
+## 2026-06-27 · Document Intelligence parser upload API and workbench UI（b1514408）
+
+- **取前沿**：§6 的 parser 上传 UI 仍缺；新 mint `b1514408`（review_status=1）做受限 upload，不放开 raw document preview。
+- **Backend API**：新增 `POST /api/research-os/documents/parse_upload`。上传只允许 text/Markdown/PDF/HTML 后缀，先 filename/size guard，再写 `DATA_ROOT/document_uploads/` 隔离区，随后复用 no-network parser、license rights、HTML URL allowlist、RAG permission 和 plaintext secret guard；缺 rights / secret-bearing body / bad filename 均 fail-closed，且本次隔离文件会清理。
+- **Frontend UI**：`ResearchRAGPanel` 新增 Parser upload 表单；`authFetch` 对 FormData 不再强制 JSON content-type，避免破坏 multipart boundary。
+- **验收**：`tests/test_document_intelligence_parser_rag.py` → 17 passed / 7 warnings；Document/RAG adjacent scoped → 41 passed / 7 warnings；frontend related scoped → 4 files / 53 tests passed；frontend full → 26 files / 281 tests passed；frontend build → tsc + vite PASS（chunk size warning）；backend full → 1523 passed / 13 skipped / 283 warnings。
+- **边界**：这不是 OCR/scanned PDF extraction、联网 crawler、真实资产库自动扫描/全库同步、dense embedding/vector DB 或 raw document preview。
+
+## 2026-06-27 · Document Intelligence frontend source summary browser（7a6fe037）
+
+- **取前沿**：§6 的 SourceDocument 浏览 UI 仍缺；新 mint `7a6fe037`（review_status=1）只做只读摘要浏览，不做 parser 上传。
+- **前端 UI**：`ResearchRAGPanel` 增加 `Document evidence` 区块，点击 `Load` 调用 `/api/research-os/documents/summary`，展示 sources/spans/claims 计数、`source_ref`、`parser_sandbox_ref`、`mime_magic_check_ref`，不展示 raw document payload。
+- **测试修复**：`RDPExportPanel.test.tsx` 等待 detail controls ready 后再读 source map/run id/download 按钮，修复前端全量并发下的异步 race。
+- **验收**：agent-workbench/RAG/RDP scoped → 3 files / 50 tests passed；`cd app/frontend && npm test -- --run` → 25 files / 278 tests passed；`cd app/frontend && npm run build` → tsc + vite build PASS（保留既有 chunk size warning）。
+- **边界**：这不是 parser 上传 UI、OCR/scanned PDF extraction、真实资产库自动扫描/全库同步或 dense embedding/vector DB。
+
+## 2026-06-27 · Document Intelligence layout-aware PDF text parser metadata（229e195d）
+
+- **取前沿**：§6 的 PDF parser 仍缺 layout-aware evidence block；本机有 PyMuPDF，缺 pytesseract，所以新 mint `229e195d`（review_status=1）只做 layout-aware text blocks，不声称 OCR。
+- **parser/API/RAG**：`parse_local_document` 的 PDF 分支优先使用 `local_pdf_pymupdf_layout_no_network_v1`，按 PyMuPDF text blocks 产生 EvidenceSpan，block metadata 增 `layout_bbox`、`layout_block_index`、`layout_kind=pdf_text_block`；pypdf 只作为 PyMuPDF 库缺失回退。RAG metadata 和 parse_local response 都带 layout refs，但仍不返回 raw text。
+- **对抗测试**：扩展 `test_parse_local_pdf_records_page_anchored_spans_and_rag_context`，断言 parser sandbox id、layout bbox/block index/kind、no raw text；既有 parser tests 继续覆盖 fake PDF、path escape、secret-bearing body、batch atomic 等 fail-closed。
+- **验收**：`cd app/backend && python -m pytest tests/test_document_intelligence_parser_rag.py -q` → 13 passed / 7 warnings；§5/§6 adjacent scoped → 37 passed / 7 warnings；`cd app/backend && python -m pytest -q` → 1519 passed / 13 skipped / 283 warnings。
+- **边界**：这不是 OCR/scanned PDF extraction、external PDF service、parser 上传 UI、真实资产库自动扫描/全库同步或完整 graph database。
+
+## 2026-06-27 · Research Asset RAG frontend candidate-context search UI（edf31a24）
+
+- **取前沿**：§5/§6 仍有前端 RAG UI gap；新 mint `edf31a24`（review_status=1）承接研究执行台只读查询面，不碰 active `review_status:0` 卡。
+- **前端 UI**：新增 `ResearchRAGPanel` 并挂入 agent-workbench 产物工作区 `RAG` tab。用户必须显式输入 `query`、`desk`、`visible_asset_refs`、`permission_tags`、`top_k`；UI 支持 lexical 与 deterministic sparse-vector search，分别调用 `/api/research-os/rag/retrieve` 和 `/api/research-os/rag/vector_search`。结果展示 source/version/asset/projection/score/context_role/evidence_label/applicability/snippet，命中只标 `candidate_context`，不包装成 verdict/proof。
+- **对抗测试**：新增 `ResearchRAGPanel.test.tsx`，覆盖无 visible assets 不请求后端、sparse-vector payload 必含显式权限范围、lexical endpoint + top_k clamp、后端 422 显错且不伪造命中。
+- **验收**：`cd app/frontend && npm test -- --run src/pages/workshop/agent-workbench/ResearchRAGPanel.test.tsx src/pages/workshop/agent-workbench/RDPExportPanel.test.tsx` → 9 passed；`cd app/frontend && npm test -- --run src/pages/workshop/agent-workbench/agentWorkbench.test.tsx` → 40 passed；`cd app/frontend && npm test -- --run` → 25 files / 277 tests passed；`cd app/frontend && npm run build` → tsc + vite build PASS（保留既有 chunk size warning）。
+- **边界**：这不是 dense embedding/vector DB、OCR/layout-aware PDF parser、parser 上传 UI、真实资产库自动扫描/全库同步或完整 graph database。
+
+## 2026-06-26 · RDP local package publish registry/API/UI
+
+- **本机 publish registry**：新增 `RDPPackagePublishRecord` / `RDPLocalPackagePublisher` / `PersistentRDPPackagePublishStore`。publish 必须先通过 `RDPPackageArchiveExporter.export()`；通过后将 zip 复制到 `DATA_ROOT/rdp_packages/_published/<package_id>/`，写 `publication.json` 和 append-only `DATA_ROOT/audit/rdp_package_publishes.jsonl`。
+- **Backend API + UI**：新增 `POST /api/research-os/rdp/manifests/{package_id}/publish` 和 `GET /api/research-os/rdp/publications`；`RDPExportPanel` 增加 `Publish local`，前端固定发 `{channel:"local_registry"}`，不接受外部 URL/对象存储目标。
+- **对抗测试**：新增 `tests/test_research_os_rdp_publish.py`，覆盖 local publish + replay、tampered archive、缺 source bundle、external channel、API publish/list、unknown manifest 404；前端 RDP 面板测试覆盖 publish body 和 publish_hash 展示。
+- **验收**：`cd app/backend && python -m pytest tests/test_research_os_rdp_publish.py -q` → 6 passed / 2 warnings；RDP package group → 53 passed / 2 warnings；Research OS scoped group → 185 passed / 2 warnings；`cd app/frontend && npm test -- RDPExportPanel.test.tsx` → 5 passed；`cd app/frontend && npm test -- agentWorkbench.test.tsx` → 40 passed；`cd app/frontend && npm run build` → tsc + vite build PASS（chunk size warning）；`cd app/backend && python -m pytest -q` → 1499 passed / 13 skipped / 278 warnings。
+- **边界**：这不是公网/对象存储发布、CI release、生产部署、实盘运行或重新回测；它只补本机 registry publish 和审计记录。
+
+## 2026-06-26 · RDP frontend export UI
+
+- **研究执行台 RDP.zip**：新增 `RDPExportPanel` 并挂入 agent-workbench 产物工作区。面板读取 RDP manifest registry/detail，按后端顺序调用 materialize、bundle_sources、source-run integrity attestation 和 archive 下载；workspace 顶栏在 RDP tab 显示 Backend，不沿用老产物 MOCK 角标。
+- **前端 guard**：`source_map` 默认只从 manifest `source_file_refs` 推导安全相对路径；`../`、绝对路径和空 run_id 先在 UI 层拦截，后端 RDP guard 仍是权威；archive 422 显示错误，不伪造下载成功。
+- **对抗测试**：新增 `RDPExportPanel.test.tsx`，覆盖空 registry、materialize→bundle→attest→archive 成功路径、archive 422、unsafe source ref 不自动映射、空 run_id 不发 attestation。
+- **验收**：`cd app/frontend && npm test -- RDPExportPanel.test.tsx` → 5 passed；`cd app/frontend && npm test -- agentWorkbench.test.tsx` → 40 passed；`cd app/frontend && npm run build` → tsc + vite build PASS（保留 chunk size warning）。
+- **边界**：这不是 live package publish、公网/对象存储上传、外部部署、自动 parser/RAG ingestion 或重新运行回测；它只把后端 RDP open package 导出链接到真实前端入口。
+
+## 2026-06-26 · RDP source-to-run integrity attestation/API
+
+- **RDP source-run integrity**：新增 `RDPSourceRunIntegrityRecord` / `PersistentRDPSourceRunIntegrityStore`，把已 materialize 且已完成 source-file bundle 的 RDP package、`RUN_ROOT/<run_id>/run.json`、`strategy.py`、`portfolio.csv` 和 manifest `artifact_hash` 绑定成 append-only 一致性证明。
+- **Backend API**：`app/backend/app/main.py` 新增 app-level `RDP_SOURCE_RUN_INTEGRITY_STORE` 和 `POST /api/research-os/rdp/manifests/{package_id}/source_run_integrity_attestations`。接口只收 `run_id` 和可选 `source_file_ref`，从服务端 `RUN_ROOT` 定位运行产物，不接受任意本地路径；unknown package 404，guard 失败 422。
+- **对抗测试**：新增 `tests/test_research_os_rdp_source_run_integrity.py`，覆盖 source bundle 缺失、run_id 未声明、`run.json` run_id mismatch、manifest `artifact_hash` mismatch、source bundle 与 run strategy mismatch、run_id path escape、API success 和 unknown package 404。
+- **验收**：`cd app/backend && python -m pytest tests/test_research_os_rdp_source_run_integrity.py -q` → 8 passed / 2 warnings；RDP package group → 47 passed / 2 warnings；Research OS scoped group → 177 passed / 2 warnings；`cd app/backend && python -m pytest -q` → 1493 passed / 13 skipped / 278 warnings。
+- **边界**：这不是前端导出 UI、live package publish、外部部署、重新运行回测或 deployment attestation 替代；它只补 RDP package source bundle 到真实 run artifacts 的本地后端证明链。
+
+## 2026-06-26 · RDP package archive export/API
+
+- **RDP archive export**：新增 `RDPPackageArchiveRecord` / `RDPPackageArchiveExporter`，把已 materialize 且按需完成 source-file bundle 的 RDP open package 导出为 deterministic zip，归档缓存写在 `DATA_ROOT/rdp_packages/_archives/`，不会卷回 package 目录。
+- **Backend API**：`app/backend/app/main.py` 新增 app-level `RDP_PACKAGE_ARCHIVE_EXPORTER` 和 `GET /api/research-os/rdp/manifests/{package_id}/archive`。接口返回 `application/zip`，带 archive sha256 / file count headers；unknown package 404，包 guard 失败 422。
+- **对抗测试**：新增 `tests/test_research_os_rdp_archive_export.py`，覆盖确定性 zip 重复导出、未物化包、reserved package id、声明 source refs 但缺 source bundle、tampered manifest、symlink escape、API zip 下载和 unknown package 404。
+- **验收**：`cd app/backend && python -m pytest tests/test_research_os_rdp_archive_export.py -q` → 8 passed / 2 warnings；RDP package group → 39 passed / 2 warnings；Research OS scoped group → 169 passed / 2 warnings；`cd app/backend && python -m pytest -q` → 1485 passed / 13 skipped / 278 warnings。
+- **边界**：这不是前端导出 UI、live package publish、外部部署或 source-to-run integrity attestation；它只补本地后端 open package 下载面。
+
+## 2026-06-26 · RDP deployment attestation/API
+
+- **RDP deployment attestation**：新增 `RDPDeploymentAttestationRecord` / `PersistentRDPDeploymentAttestationStore`，对已 materialize 的 RDP package 做只读一致性证明，写 append-only `DATA_ROOT/audit/rdp_deployment_attestations.jsonl`。记录 manifest hash、manifest file sha256、refs sha256、source bundle index sha256、deployment_ref、approval/monitor/rollback/retire refs 和 attestation hash。
+- **Backend API**：`app/backend/app/main.py` 新增 app-level `RDP_DEPLOYMENT_ATTESTATION_STORE` 和 `POST /api/research-os/rdp/manifests/{package_id}/deployment_attestations`。接口不 materialize、不 bundle、不发布；调用方必须先准备 package/source bundle，再提交已声明的 `deployment_ref`。
+- **对抗测试**：新增 `tests/test_research_os_rdp_deployment_attestation.py`，覆盖 live package attestation + restart replay、缺 source bundle、未声明 deployment_ref、tampered manifest、source bundle package_id mismatch、API success、unknown package 404。
+- **验收**：`cd app/backend && python -m pytest tests/test_research_os_rdp_deployment_attestation.py -q` → 7 passed / 2 warnings；RDP package group → 31 passed / 2 warnings；Research OS scoped group → 161 passed / 2 warnings；`cd app/backend && python -m pytest -q` → 1477 passed / 13 skipped / 278 warnings。
+- **边界**：这不是 frontend export、live package publish、外部部署或 source-to-run integrity attestation；它只证明当前本地 open package 与部署清单一致。
+
+## 2026-06-26 · RDP source-file content bundle/API
+
+- **RDP source bundle**：新增 `RDPSourceFileBundler` / `RDPSourceFileBundleEntry` / `RDPSourceFileBundleRecord`，在已 materialize 的 RDP package 下写 `source_files/` 和 bundle-relative `source_files_index.json`。只复制 `manifest.source_file_refs` 声明的源码文件；`manifest.json` / `refs.json` 仍不嵌 source payload。
+- **Backend API**：`app/backend/app/main.py` 新增 app-level `RDP_SOURCE_FILE_BUNDLER` 和 `POST /api/research-os/rdp/manifests/{package_id}/bundle_sources`。API 会先物化 manifest，再按 `source_map` 复制源码；unknown package 404，source guard 失败 422。
+- **对抗测试**：新增 `tests/test_research_os_rdp_source_bundle.py`，覆盖正常复制/index、未声明 ref、缺 mapping、`../` 逃逸、绝对路径、明文 secret、超限文件、非 UTF-8 和 API unknown package。复核修正：`source_files_index.json` 不写本机绝对 package path，只保留 bundle-relative path。
+- **验收**：`cd app/backend && python -m pytest tests/test_research_os_rdp_source_bundle.py -q` → 8 passed / 2 warnings；RDP package group → 24 passed / 2 warnings；Research OS scoped group → 154 passed / 2 warnings；`cd app/backend && python -m pytest -q` → 1470 passed / 13 skipped / 278 warnings。
+- **边界**：这不是前端导出、deployment attestation、live package publish，也不是 source-to-run integrity attestation；它只补第一版安全源码内容打包。
+
+## 2026-06-26 · RDP open package materializer
+
+- **RDP materializer**：新增 `RDPOpenPackageMaterializer` / `RDPPackageRecord`，接受已通过 manifest gate 的 `RDPManifest`，在 `DATA_ROOT/rdp_packages/<package_id>/` 写 deterministic `manifest.json` 和 `refs.json`。同一 manifest 反复 materialize 幂等；unsafe package id 拒绝；只保留 `source_file_refs`，不复制 source payload。
+- **Backend API**：`app/backend/app/main.py` 新增 app-level `RDP_PACKAGE_MATERIALIZER` 和 `POST /api/research-os/rdp/manifests/{package_id}/materialize`。unknown package 404；invalid manifest/materializer guard 422。
+- **对抗测试**：新增 `tests/test_research_os_rdp_materializer.py`，覆盖 manifest/refs 文件输出、source payload 不生成、幂等、路径穿越拒绝、API materialize、unknown package 404。第一次 scoped 跑出 idempotency 比较 bug（写入有换行、比较无换行），已修。
+- **验收**：`cd app/backend && python -m pytest tests/test_research_os_rdp.py tests/test_research_os_rdp_persistence.py tests/test_research_os_rdp_materializer.py -q` → 16 passed / 2 warnings；Research OS scoped group → 70 passed / 2 warnings；`cd app/backend && python -m pytest -q` → 1462 passed / 13 skipped / 278 warnings。
+- **边界**：这不是前端导出、source-file content bundle、deployment attestation 或 live package publish。
+
+## 2026-06-26 · Governed Compiler IR persistent store/API
+
+- **Compiler IR store**：新增 `app/backend/app/research_os/compiler.py`，定义 `CompilerIRRecord`、`CompilerPassRecord`、compiler validators 和 `PersistentCompilerIRStore`。compiler IR/pass audit records 以 append-only JSONL 写到 `DATA_ROOT/audit/compiler_ir.jsonl`，启动 replay，malformed history fail-closed。
+- **Backend API**：`app/backend/app/main.py` 新增 app-level `COMPILER_IR_STORE` 和 `POST /api/research-os/compiler/ir`、`POST /api/research-os/compiler/passes`、`GET /api/research-os/compiler/summary`。接口只记录 schema-constrained compiler audit records，不执行真实 compiler pass。
+- **对抗测试**：新增 `tests/test_governed_compiler.py`，覆盖 IR 缺 QRO/Research Graph/canonical command/evidence/validation refs；compiler pass direct graph mutation / permission bypass / raw LLM output-as-IR；unknown output IR；restart replay；malformed history；API no-write。
+- **验收**：`cd app/backend && python -m pytest tests/test_governed_compiler.py -q` → 8 passed / 2 warnings；Research OS scoped group → 65 passed / 2 warnings；`cd app/backend && python -m pytest -q` → 1457 passed / 13 skipped / 278 warnings。
+- **边界**：这不是完整 compiler pass 实现、projection index、canvas mutation engine、scheduler 或全入口 compiler wiring。
+
+## 2026-06-26 · RDP persistent package registry/API
+
+- **RDP store**：新增 `PersistentRDPStore`，把通过 `validate_rdp_manifest` 的 `RDPManifest` 以 append-only JSONL 写到 `DATA_ROOT/audit/rdp_manifests.jsonl`，启动 replay，malformed history fail-closed；invalid manifest 和 live runtime 缺 deployment/monitor/rollback/retire refs 均拒绝且不落盘。
+- **Backend API**：`app/backend/app/main.py` 新增 app-level `RDP_STORE` 和 `POST /api/research-os/rdp/manifests`、`GET /api/research-os/rdp/manifests`、`GET /api/research-os/rdp/manifests/{package_id}`。列表返回 package summary；详情返回 open manifest dict；不做 source-file payload materialization。
+- **对抗测试**：新增 `tests/test_research_os_rdp_persistence.py`，覆盖 restart replay、invalid manifest no-write、live refs guard、malformed history、API create/list/read、source file 仅 refs 不嵌 payload。
+- **验收**：`cd app/backend && python -m pytest tests/test_research_os_rdp.py tests/test_research_os_rdp_persistence.py -q` → 11 passed / 2 warnings；Research OS scoped group → 57 passed / 2 warnings；`cd app/backend && python -m pytest -q` → 1449 passed / 13 skipped / 278 warnings。
+- **边界**：这不是前端导出、source-file bundle、zip/package materialization、deployment attestation 或 live package publish。
+
+## 2026-06-26 · Document Intelligence persistent evidence store/API
+
+- **Document Intelligence store**：新增 `PersistentDocumentIntelligenceStore`，把 `SourceDocumentIntakeRecord`、`EvidenceSpanRecord`、`ExtractedResearchClaim`、`PrivilegedToolUseRequest` 以 append-only JSONL 写到 `DATA_ROOT/audit/document_intelligence.jsonl`，启动 replay，malformed history fail-closed；每次写入复用现有 validator，并补非空 record ref 守门。
+- **Backend API**：`app/backend/app/main.py` 新增 app-level `DOCUMENT_INTELLIGENCE_STORE` 和 `/api/research-os/documents/sources`、`/evidence_spans`、`/extracted_claims`、`/tool_requests`、`/summary`。接口只记录 schema-constrained evidence metadata，不接受 raw document payload。
+- **对抗测试**：新增 `tests/test_document_intelligence_store.py`，覆盖 safe source + verified span + confirmatory claim + schema-only tool request restart replay；unsafe source 不落盘；unverified span 不得进入 confirmatory claim；direct document payload 不得触发 privileged tool；empty refs 和 malformed history fail-closed。
+- **验收**：`cd app/backend && python -m pytest tests/test_document_intelligence_contract.py tests/test_document_intelligence_store.py -q` → 13 passed / 2 warnings；Research OS scoped group → 51 passed / 2 warnings；`cd app/backend && python -m pytest -q` → 1443 passed / 13 skipped / 278 warnings。
+- **边界**：这不是完整 PDF/web parser pipeline、前端 document 检索 UI、vector search、自动 Research Asset RAG ingestion 或完整 graph database。
+
+## 2026-06-26 · GOAL 0-17 第一主线 runtime contract + Vision reload-merge 修复落档
+
+- **Agent Shell 接线 + Graph 审计读面**：新增 `app/backend/tests/test_agent_runtime_research_graph.py`，扩展 `app/backend/app/agent/agent_runtime.py`，让 `AgentRuntime` 可选注入 `ResearchGraphStore`，每个 user/assistant/tool/system step 通过 `QRORecord` + `ResearchGraphCommand(upsert_qro)` 落图；QRO contracts 只放 content hash / 元数据，避免把原文或 tool payload secret 复制进 Graph。`app/backend/app/main.py` 新增 app-level `RESEARCH_GRAPH_STORE`，`_agent_runtime()` 注入它，`/api/agent/chat`、workbench done event、Mode2 chat metadata 暴露 `qro_ids` / `research_graph_command_ids`；新增 `GET /api/research-os/graph/commands` 只读审计摘要，返回 command/QRO refs、状态轴、lineage 和 allowlist hash 元数据，不返回 prompt/tool payload；`5ac0a71e` / `1668fc7c` done。这是真实 Agent Shell 入口接线和读面，不等于 canvas/API/IDE/scheduler/Settings/connectors/training/execution/CI 全入口已接。
+- **StrategyGoal / QuantIntent 业务 QRO**：新增 `QROType.QUANT_INTENT`，扩展 `StrategyGoalStore.create_from_args(..., research_graph=...)`，成功产 `strategy_goal_id` 时写 `QuantIntent` QRO；Agent Shell `strategy_goal.create` 注册点传入同一个 `RESEARCH_GRAPH_STORE`。QRO 只保存 arg hash/arg keys、goal hash、asset_class/objective/horizon/benchmark，不复制自然语言 description 或工具参数值；`59372285` done。这是第一条业务对象接线，不等于 factor/model/signal/strategy 全端点已接。
+- **StrategyGoal direct API 接线**：新增 `POST /api/strategy_goals` / `GET /api/strategy_goals` / `GET /api/strategy_goals/{goal_id}`。直接 API 成功创建 StrategyGoal 时复用同一个 `StrategyGoalStore` 和 `RESEARCH_GRAPH_STORE`，以 `entry_source=api` / `actor_source=user_manual` 写 `QuantIntent` QRO；缺槽位返回 422，不落 goal 文件，不加 Graph command；`b32dbcd8` done。这推进 API 入口，不等于 canvas/IDE/scheduler/Settings/training/execution 已接。
+- **IDE StrategyBook 入口接线**：`POST /api/ide/strategies` 成功保存策略草稿后写 `QROType.STRATEGY_BOOK`，返回 `qro_id` / `research_graph_command_id`。QRO 只保存 strategy_id/name、asset_class、code_hash、description_hash、content_hash、updated_at_utc；Graph 审计响应不暴露 Python 源码或 description 原文；非法 asset_class 等失败路径不写 Graph command；`b1b48097` done。这只覆盖 IDE strategy save，不等于 IDE run/promote/AI complete 或 compiler pass 已接。
+- **IDE BacktestRun 入口接线**：`POST /api/ide/strategies/{name}/run` 完成实际沙箱运行后写 `QROType.BACKTEST_RUN`，返回 `qro_id` / `research_graph_command_id`。QRO 只保存 strategy/run 身份、source hash、status、exit_code、duration、result_key_count 和时间；Graph 审计不暴露 stdout/stderr/result payload/result key names；unknown strategy 404 不写 Graph command；failed/timeout run 写 `evidence=insufficient`，ok run 写 `evidence=exploratory`，均不包装成验证结论；`a2a5b61b` done。这只覆盖 IDE run，不等于 IDE promote/AI complete 或 validation dossier 已接。
+- **IDE promoted BacktestRun 入口接线**：`POST /api/ide/runs/{run_id}/promote` 成功创建正式 run artifact 后写 promoted `QROType.BACKTEST_RUN`，返回 `qro_id` / `research_graph_command_id`。QRO 只保存 source/promoted run id、strategy hash、metric_count、gate_verdict_present；Graph 审计不暴露 strategy.py、equity_curve、trades、metrics payload、gate verdict 详情或 record_name；invalid result PromoteError 400 不写 Graph command；`18bb49e7` done。这只覆盖 IDE promote，不等于 IDE AI complete、approval 或 production readiness 已接。
+- **IDE LLMCallRecord 入口接线**：`POST /api/ide/ai_complete` 成功 LLM 调用后写 `QROType.LLM_CALL_RECORD`，返回 `qro_id` / `research_graph_command_id`。QRO 只保存 mode、provider、prompt_hash、context_hash、output_hash、output_char_count、market；Graph 审计不暴露 prompt/context/generated code 或 explanation；empty prompt 400 不写 Graph command；`4f4eab2a` done。这只覆盖 IDE AI complete，不等于 Settings/provider adapter/Gateway hard routing、完整 graph database 或其他 LLM 入口已接。
+- **Research Graph command/QRO 持久化**：新增 `PersistentResearchGraphStore`，把已接 `ResearchGraphCommand` 以 JSONL 写到 `DATA_ROOT/audit/research_graph_commands.jsonl`，启动时 replay，malformed history fail-closed；`app/backend/app/main.py` 的 `RESEARCH_GRAPH_STORE` 已换成持久化 store；`5bb5d9da` done。这只覆盖当前 command/QRO 持久化，不等于完整 graph database、RAG index、Canvas canonical mutation、Scheduler、Settings/provider adapter、training/execution 或 compiler pass 已接。
+- **建/改**：新增 `app/backend/app/research_os/spine.py` / 包入口，建立 QRO 类型、分离状态轴、Research Graph canonical command、Mathematical Spine binding/check、MethodologyChoice/Responsibility 记录和 promotion guard；把 `1d16328c` 自分配并落 done。该工作推进 GOAL §1/§6/§8/§10/§13/§16/§17 的第一条 runtime 契约，但尚未把 chat/canvas/API/IDE/scheduler 全入口接入。
+- **Research Asset RAG**：新增 `app/backend/app/research_os/asset_rag.py`，建立 §5 第一版资产级 RAG contract：user/desk/asset/tag 权限过滤、source/version/timestamp/permission/applicability hit 元数据、Agent hit usage 账、SecretRef 明文阻断、user-waived 不得显示强证据；`37729820` done。
+- **Research Asset RAG persistent backend**：新增 `PersistentResearchAssetRAGIndex`，把 RAG document 和 Agent usage event 以 JSONL 落 `DATA_ROOT/audit/research_asset_rag.jsonl`，启动 replay，malformed history fail-closed；新增 `POST /api/research-os/rag/documents`、`POST /api/research-os/rag/retrieve`、`GET /api/research-os/rag/agent_usage`。API 默认 document 限当前 user，保持 user/desk/asset/tag 过滤，拒绝 plaintext secret，agent-mode retrieve 记录 source/version/user_id usage，usage 查询只返回当前 user；`3f1dd2de` done。这只覆盖 RAG 持久化 backend seam，不等于前端 RAG UI、Agent Shell 自动调用、Document parser/source ingestion 或 vector search 已接。
+- **RDP gate**：新增 `app/backend/app/research_os/rdp.py`，把 §17 Research Delivery Package 的 manifest / DatasetVersion / IngestionSkill / math binding / MethodologyChoice / reproducibility command / artifact hash / 未验证残余 / live 清单做成可执行 validator；`bc412bbd` done。它是后端交付门，不等于前端导出或完整打包器已完成。
+- **Onboarding/Gateway**：新增 `app/backend/app/research_os/onboarding_gateway.py`，把 §4 的 SecretRef/IngestionSkill、DataSourceAsset export/share 限制、LLMProvider/Auth、CredentialPool、ModelRoutingPolicy、LLM Gateway call 做成 validator；`c637a97f` done。它是治理合约，不等于 Settings UI、connector 和 provider adapter 全接线已完成。
+- **Market Data Contract**：新增 `app/backend/app/research_os/market_data_contract.py`，把 §11 的 DatasetSemantics、InstrumentSpec、MarketCapabilityMatrix、跨币种资本账、期权语义、数据变换数学绑定做成 validator；`11c209b2` done。它是数据/标的合约，不等于所有 connector、strategy builder 或 execution path 已强制接入。
+- **Execution Boundary**：新增 `app/backend/app/research_os/execution_boundary.py`，把 §12 的 live ladder、A股 live 边界、OrderGuard/kill switch/SecretRef/idempotency/audit 不可 waiver、HALT/reconcile、drift action、execution math ConsistencyCheck、user risk responsibility 做成 validator；`f8da74ba` done。它是执行边界合约，不等于所有 runtime transition 和 execution endpoint 已接线。
+- **Trust Layer**：新增 `app/backend/app/research_os/trust_layer.py`，把 §13 的 strong claim evidence、反谄媚、弱点默认可见、cold-start N=1、functional independence、user autonomy、release gate 做成 validator；`2f4c8e91` done。它是信任层合约，不等于 UI 披露和发版流水线已全部接线。
+- **Model Governance**：新增 `app/backend/app/research_os/model_governance.py`，把 §15 的 ModelPassport / artifact manifest / safe loading policy / challenger / recertification 做成 promotion validator；`317bdbd4` done。它是后端晋级闸门，不等于训练台和 Model Registry 全入口已接入。
+- **Factor/Signal/Strategy Boundary**：新增 `app/backend/app/research_os/factor_strategy_boundary.py`，把 §9 的 generator/gatekeeper 解耦、模型本体不得进因子库、Signal OOF/purge/embargo/lock/honest-N、StrategyBook short 检查、retired factor、数学 run_config 绑定做成 boundary validator；`12f2d5ad` done。它是合约闸门，不等于所有 factor/model/signal/strategy 端点已强制接入。
+- **Desk/Lifecycle/Document/Methodology**：新增 `desk_projection.py` / `asset_lifecycle.py` / `document_intelligence.py` / `methodology_validation.py`，把 §2 多台 projection/DeskHandoff/canonical command、§3 全资产 lifecycle、§6 EvidenceSpan/文档 trust boundary、§10 methodology validation/control plane 做成 validator；`4e7a2c10` / `6b1d3f20` / `9c5e2a6d` / `a7d4f102` done。它们是运行时合约，不等于所有 canvas/registry/parser/validation producer 已接线。
+- **Agent OS / M1-M21 / Engineering Standards**：新增 `agent_os.py` / `platform_coverage.py` / `engineering_standards.py`，把 §7 visible event/plan/dispatch/code-change/tool/completion、§14 M1-M21 coverage manifest、§16 no silent mock/data/LLM replay/theory binding/fatal/perf baseline 做成 validator；`b8e1f37a` / `d2f9b604` / `f3a6c8d1` done。它们是合约和覆盖清单，不等于 live dashboard、CI/benchmark/provider/data 全入口已强制接线。
+- **GOAL coverage manifest**：新增 `app/backend/app/research_os/goal_coverage.py`，要求 §0–§17 每节都有 contract/test/task/evidence refs，并防止把 contract 覆盖误报成 full product implementation；`0f17c0de` done。它是总覆盖门，不等于真实入口自动接线。
+- **Vision 修复落档**：`e1a98c41` 已有代码和测试验证，`_reload_partition_csv(... try_parse_dates=False)` 保持 timestamp 字符串，防止多日同年增量 merge 出 String/Datetime schema crash；任务移入 done。
+- **验证发现并修复**：RDP 后第二轮全量在既有 `test_effect_ledger_concurrent_same_key` 卡住，线程在 `EffectLedger.__init__` 的 WAL 初始化处遇到 sqlite `database is locked` 且异常发生在 barrier 前；修 `EffectLedger` 并发 first-open retry，`8d40a946` done。`tests/test_dag_kernel.py::test_effect_ledger_concurrent_same_key -v` → 1 passed；`tests/test_dag_kernel.py -q` → 25 passed。
+- **验收**：`cd app/backend && python -m pytest tests/test_research_os_spine.py -v` → 8 passed；`cd app/backend && python -m pytest tests/test_research_os_rdp.py -v` → 5 passed；`cd app/backend && python -m pytest tests/test_research_asset_rag.py -v` → 6 passed；`cd app/backend && python -m pytest tests/test_onboarding_gateway.py -v` → 8 passed；`cd app/backend && python -m pytest tests/test_secrets_loader.py tests/test_llm_providers.py tests/test_onboarding_gateway.py -v` → 21 passed；`cd app/backend && python -m pytest tests/test_market_data_contract.py -v` → 6 passed；`cd app/backend && python -m pytest tests/test_data_contract.py tests/test_universe.py tests/test_paper_desk_api.py tests/test_market_data_contract.py -v` → 61 passed；`cd app/backend && python -m pytest tests/test_execution_boundary_contract.py -v` → 8 passed；`cd app/backend && python -m pytest tests/test_security_gate_adversarial.py tests/test_dag_kernel.py tests/test_paper_desk_api.py tests/test_execution_boundary_contract.py -v` → 82 passed；`cd app/backend && python -m pytest tests/test_model_governance.py -v` → 7 passed；`cd app/backend && python -m pytest tests/test_factor_strategy_boundary.py -v` → 7 passed；`cd app/backend && python -m pytest tests/test_factor_lab_endpoints.py tests/test_factor_strategy_boundary.py -v` → 22 passed；`cd app/backend && python -m pytest tests/test_trust_layer.py -v` → 10 passed；`cd app/backend && python -m pytest tests/test_desk_projection.py tests/test_asset_lifecycle.py -v` → 13 passed；`cd app/backend && python -m pytest tests/test_document_intelligence_contract.py tests/test_methodology_validation.py -v` → 13 passed；`cd app/backend && python -m pytest tests/test_agent_os_contract.py -v` → 8 passed；`cd app/backend && python -m pytest tests/test_platform_coverage.py tests/test_engineering_standards.py -v` → 12 passed；`cd app/backend && python -m pytest tests/test_goal_coverage.py -v` → 5 passed；`cd app/backend && python -m pytest tests/test_research_os_spine.py tests/test_research_os_rdp.py tests/test_research_asset_rag.py tests/test_model_governance.py tests/test_factor_strategy_boundary.py tests/test_onboarding_gateway.py tests/test_market_data_contract.py tests/test_execution_boundary_contract.py tests/test_trust_layer.py tests/test_desk_projection.py tests/test_asset_lifecycle.py tests/test_document_intelligence_contract.py tests/test_methodology_validation.py tests/test_agent_os_contract.py tests/test_platform_coverage.py tests/test_engineering_standards.py tests/test_goal_coverage.py -q` → 116 passed；`cd app/backend && python -m pytest tests/test_agent_runtime_research_graph.py -v` → 6 passed；`cd app/backend && python -m pytest tests/test_ds2_strategy_goal_persist.py tests/test_agent_runtime_research_graph.py -v` → 14 passed；`cd app/backend && python -m pytest tests/test_agent.py tests/test_agent_tool_status.py tests/test_agent_business_tools_a4.py tests/test_agent_permission_tristate.py tests/test_agent_runtime_research_graph.py tests/test_chat_conversations.py tests/test_ds2_strategy_goal_persist.py -q` → 89 passed；`cd app/backend && python -m pytest tests/test_strategy_console_s2.py -q` → 26 passed；`cd app/backend && python -m pytest tests/test_ide_promote.py tests/test_ide.py tests/test_agent_runtime_research_graph.py tests/test_ds2_strategy_goal_persist.py tests/test_research_os_spine.py -q` → 54 passed；`cd app/backend && python -m pytest tests/test_agent.py -v` → 9 passed；`cd app/backend && python -m pytest tests/test_vision_pull_merge.py -v` → 3 passed；`cd app/backend && python -m pytest -q` → 1428 passed / 13 skipped / 278 warnings。
+- **补充验收（IDE AI complete 后）**：`cd app/backend && python -m pytest tests/test_strategy_console_s2.py -q` → 28 passed / 2 warnings；`cd app/backend && python -m pytest tests/test_ide_promote.py tests/test_ide.py tests/test_agent_runtime_research_graph.py tests/test_ds2_strategy_goal_persist.py tests/test_research_os_spine.py -q` → 54 passed / 2 warnings；`cd app/backend && python -m pytest -q` → 1430 passed / 13 skipped / 278 warnings；runtime artifact check 确认 `data/artifacts/experiments`、`data/ide_runs`、`data/artifacts/strategy_goals`、`data/artifacts/llm_fixtures`、`data/verification` 无 git-visible 新变化。
+- **补充验收（Graph persistence 后）**：`cd app/backend && python -m pytest tests/test_research_graph_persistence.py -q` → 2 passed；`cd app/backend && python -m pytest tests/test_research_os_spine.py -q` → 8 passed；`cd app/backend && python -m pytest tests/test_agent_runtime_research_graph.py tests/test_ds2_strategy_goal_persist.py tests/test_strategy_console_s2.py tests/test_research_graph_persistence.py -q` → 44 passed / 2 warnings；`cd app/backend && python -m pytest -q` → 1432 passed / 13 skipped / 278 warnings。
+- **补充验收（RAG persistence 后）**：`cd app/backend && python -m pytest tests/test_research_asset_rag.py tests/test_research_asset_rag_persistence.py -q` → 10 passed / 2 warnings；Research OS contract group → 122 passed / 2 warnings；`cd app/backend && python -m pytest -q` → 1436 passed / 13 skipped / 278 warnings。
+- **下一步**：继续把 QRO/Graph/RAG contract 接进真实入口。当前事实状态是 §0–§17 第一版 contract 覆盖已建并有测试，Agent Shell / StrategyGoal API / IDE save / IDE run / IDE promote / IDE AI complete 已接，已接 command/QRO 可跨 store restart 恢复，Research Asset RAG 有 persistent backend seam；其余真实入口强制接线仍需按 TRACE 的下一层逐点推进。
+
+## 2026-06-25 · D-MATH-SPINE 入 GOAL
+
+- **拍板**：用户明确数学贯穿全流程，理论先证明，Agent 降实现门槛，理论到实现一致性是不可绕过的诚实门；方法学松紧和是否走流程由 user 选择，系统给代价、推荐、流程和责任边界。
+- **GOAL**：补 Mathematical Spine、TheorySpec、TheoryImplementationBinding、ConsistencyCheck、MethodologyChoiceRecord、ResponsibilityDisclosureRecord；覆盖 data→factor→model→signal→portfolio→execution→backtest→attribution→monitor。
+- **账本**：追加 `D-MATH-SPINE`；同步 `research/TRACE.md` 与 `state/dreaminate/state.md`，把数学脊柱标为新 GOAL gap，未写成已实现。
+
+## 2026-06-25 · GOAL 终态扩展 + dev 规则审计
+
+- **GOAL**：按用户最新终态口径扩展为所有公开二级市场、全资产生命周期、Research Asset RAG、多台 Canvas、Claude Code 式 Multi-Agent Research OS、数学/文档研究层、数据接入/IngestionSkill、LLM Provider/Auth/Gateway/ModelRoutingPolicy/LLMCallRecord。
+- **TRACE**：同步 `research/TRACE.md`，按 GOAL §0–§17 逐节补覆盖表，避免 GOAL 新节和溯源表脱节。
+- **规则修复**：补回 `dev/GOAL.md` 顶部 `格式·防跑偏` 骨架注释；dev 审计确认 OS 级文件未被改、未检出 secret 明文。
+- **验证**：`python dev/scripts/validate_dev.py` → 49✅/0❌/1⚠️；唯一警告仍是未确认卡 `64717fe6, a367bfc8, ba59fb7b, de764e1c`，取卡实现/落档前需过目。
 
 ## 2026-06-23 · 交付门垂直切片整波收官（DS-2~6 + e2e）· 6 worker 并行 + leader 整合 land main
 
@@ -725,3 +1119,1112 @@
 - **诚实残余/follow-on**：free-text→TrustContext 映射(不自动抽姿态·避脆弱启发式越权重判·上游另卡)·接 main.py 真 agent 端点·§8 governance 接 orchestrator(平行另卡)。
 - **进程**：push 门控 validate PASS。**land**：opus 线 land main。推进 GOAL §13/§7。
 - **━━ 会话交接 ━━**：用户开新会话接续编排·本会话止于第十三波·**不派十四波**(新会话从 state 顶部块就绪前沿起步)。已存：dev/experience 两条工程经验(land 913af35)·项目 memory feedback_central_orchestrator_autoloop(协作模式+接续)·更新版编排提示词(给用户)。下一波候选见 state 顶部块(§8 governance 接 orchestrator / free-text→TrustContext / 接 main.py 端点 / §16 enforce 时机 / LINE-G §12 / §10 消费侧 / AssetClass 回填)。
+## 2026-06-26 · Document Intelligence local parser-to-RAG ingestion（79b5e526）
+
+- **取前沿**：active 四卡仍为 `review_status:0`，未实现；按 GOAL/state/TRACE 的 §5/§6 明确 gap 新 mint `79b5e526`（review_status=1）承接 Document source ingestion。
+- **runtime**：`parse_local_text_document` 新增本地 no-network UTF-8 text/Markdown parser；拒绝 absolute/`..`/symlink/隐藏敏感路径/unsupported suffix/empty/oversized/NUL/non-UTF8；产 `SourceDocumentIntakeRecord` + verified `EvidenceSpanRecord`。
+- **API/RAG**：新增 `POST /api/research-os/documents/parse_local`，先构造 RAG candidate-context 文档并过 secret guard，再写 Document store + Research Asset RAG index；secret-bearing body 422 时不留 partial Document JSONL。
+- **测试**：新增 `tests/test_document_intelligence_parser_rag.py` 5 测；parser+Document/RAG scoped **16 passed / 2 warnings**，§5/§6 adjacent **28 passed / 2 warnings**，Research OS scoped **188 passed / 2 warnings**，后端全量 **1504 passed / 13 skipped / 278 warnings**。
+- **落档**：`79b5e526` moved done；更新 `state/dreaminate/state.md` 与 `research/TRACE.md`。边界仍诚实：这只是 local text/Markdown ingestion，不是 PDF/web parser、前端 document search UI、vector search 或 Agent Shell 自动检索。
+
+## 2026-06-26 · Research Asset RAG sparse vector search backend（6f5cad5c）
+
+- **取前沿**：§5 仍有 `vector search` gap；新 mint `6f5cad5c`（review_status=1）承接后端第一版 sparse-vector search seam。
+- **runtime/API**：`ResearchAssetRAGIndex.vector_search` 使用 deterministic sparse token-vector cosine over existing RAG documents；复用 projection filter、`_visible()` 权限门、`AssetRAGHit` candidate-context 形态；新增 `POST /api/research-os/rag/vector_search`，agent actor 复用 `AgentRAGUsage` source/version ledger。
+- **测试**：扩 `tests/test_research_asset_rag_persistence.py`，覆盖排序、unauthorized desk denied、candidate_context 不变和 agent usage；RAG scoped **11 passed / 2 warnings**，§5/§6 adjacent **29 passed / 2 warnings**，Research OS scoped **189 passed / 2 warnings**，后端全量 **1505 passed / 13 skipped / 278 warnings**。
+- **落档**：`6f5cad5c` moved done；更新 `state/dreaminate/state.md` 与 `research/TRACE.md`。边界仍诚实：这不是 dense embedding、外部 embedding provider、vector DB、frontend search UI 或 Agent Shell 自动检索。
+
+## 2026-06-26 · Document Intelligence local PDF text parser ingestion（038d2c8b）
+
+- **取前沿**：§6 仍有 PDF parser gap；本波先做 local PDF text extraction，不做 OCR、layout verification、web parser 或前端 UI。
+- **runtime/API**：`parse_local_document` 统一 text/Markdown/PDF；PDF path 要求 `%PDF-` magic，使用本地 `pypdf` no-network extraction，拒绝 encrypted PDF、page 超限和无文本 PDF；`parse_local` API 继续写 Document store + ResearchRAG candidate context，不返回 raw extracted text。
+- **测试**：`tests/test_document_intelligence_parser_rag.py` 增 generated-PDF success + fake-PDF magic fail-closed；parser scoped **7 passed / 2 warnings**，§5/§6 adjacent **31 passed / 2 warnings**，Research OS scoped **191 passed / 2 warnings**，后端全量 **1507 passed / 13 skipped / 278 warnings**。
+- **落档**：`038d2c8b` moved done；更新 `state/dreaminate/state.md` 与 `research/TRACE.md`。边界仍诚实：这不是 OCR、layout-aware PDF parser、web parser、frontend document UI、dense embedding 或外部 PDF service。
+
+## 2026-06-26 · Agent Shell automatic Research Asset RAG retrieval（d1b14723）
+
+- **取前沿**：active 四卡仍为 `review_status:0`，未实现；§5/§6/§7 的明确 gap 是 Agent Shell 自动 RAG。新 mint `d1b14723`（review_status=1）承接 `/api/agent/chat` 主入口。
+- **runtime/API**：`AgentRuntime` 新增 optional RAG context provider；`/api/agent/chat` 在 current user + `visible_asset_refs` 存在时按 user/desk/asset/tag permission 走 Research Asset RAG lexical/vector search，写 `AgentRAGUsage`，把 `rag:<source>@<version>:<asset>` 与 `rag_usage:<id>` 写入 QRO/ResearchGraphCommand evidence refs。无 current user 或无 visible assets 时不猜权限、不检索。
+- **测试**：`tests/test_agent_runtime_research_graph.py` 增 authorized auto retrieval + unauthorized desk denied；AgentRuntime scoped **8 passed / 2 warnings**，RAG+Agent scoped **19 passed / 2 warnings**，Agent scoped **77 passed / 2 warnings**，Research OS scoped **199 passed / 2 warnings**，后端全量 **1509 passed / 13 skipped / 278 warnings**。
+- **落档**：`d1b14723` moved done；更新 `state/dreaminate/state.md` 与 `research/TRACE.md`。边界仍诚实：只覆盖 `/api/agent/chat`，不等于 workbench stream、legacy Mode2 chat、前端 RAG UI、web/OCR parser、dense embedding/vector DB 或全资产批量 ingestion。
+
+## 2026-06-26 · Agent workbench stream Research Asset RAG retrieval（29a283af）
+
+- **取前沿**：`d1b14723` 只覆盖 `/api/agent/chat`；§7 workbench stream 仍未接 RAG。新 mint `29a283af`（review_status=1）承接 `/api/agent/workbench/stream`。
+- **runtime/API**：workbench SSE endpoint 新增 `desk`、`visible_asset_refs`、`permission_tags`、`projections`、`rag_search`、`rag_top_k` query params；只有显式 `visible_asset_refs` + current user 时才复用 `_agent_shell_rag_context_provider`。RAG refs 通过 AgentRuntime system step 投影为 `say` frame，done frame 增 `rag_hits`/`rag_usage_ids`。
+- **测试**：`tests/test_agent_business_tools_a4.py` 增 authorized workbench RAG SSE；workbench scoped **23 passed / 2 warnings**，RAG+Agent scoped **42 passed / 2 warnings**，Research OS scoped **222 passed / 2 warnings**，后端全量 **1510 passed / 13 skipped / 278 warnings**。
+- **落档**：`29a283af` moved done；更新 `state/dreaminate/state.md` 与 `research/TRACE.md`。边界仍诚实：不等于 legacy Mode2 chat、前端 RAG UI、web/OCR parser、dense embedding/vector DB 或全资产批量 ingestion。
+
+## 2026-06-27 · legacy Mode2 chat thread Research Asset RAG retrieval（199d3c00）
+
+- **取前沿**：active 四卡仍为 `review_status:0`，未实现；§5/§6/§7 的明确 gap 是 legacy Mode2 chat 自动 RAG。新 mint `199d3c00`（review_status=1）承接旧 thread chat non-stream + stream 两入口。
+- **runtime/API**：`POST /api/agent/chat/{thread_id}/message` 复用 `_agent_shell_rag_context_provider`；只有 current user + 显式 `visible_asset_refs` 时才检索，旧 glossary RAG 保留。metadata 新增 `research_asset_rag_hits` / `research_asset_rag_usage_ids`，non-stream 通过 AgentRuntime 把 `rag:<source>@<version>:<asset>` 和 `rag_usage:<id>` 写入 Research Graph evidence refs。`GET /api/agent/chat/{thread_id}/stream` 新增 `desk`、`visible_asset_refs`、`permission_tags`、`projections`、`rag_search`、`rag_top_k` query params；命中时注入 Mode2 prompt、发 `event: research_rag`，assistant metadata 记录命中与 usage。
+- **测试**：`tests/test_chat_conversations.py` 增 legacy non-stream authorized RAG、no-visible-assets 不检索、stream RAG SSE/metadata 三测；legacy chat scoped **25 passed / 2 warnings**，RAG+Agent legacy scoped **67 passed / 2 warnings**，后端全量 **1513 passed / 13 skipped / 278 warnings**。
+- **落档**：`199d3c00` moved done；更新 `state/dreaminate/state.md` 与 `research/TRACE.md`。边界仍诚实：不等于前端 RAG UI、web/OCR parser、dense embedding/vector DB、全资产批量 ingestion、完整 graph database 或所有 agent 入口贯通。
+
+## 2026-06-27 · Document Intelligence HTML/web snapshot parser-to-RAG ingestion（f27c07fb）
+
+- **取前沿**：§6 仍有 web parser gap；按 GOAL Source intake 的 `URL allowlist` + `no network parser` 约束，新 mint `f27c07fb`（review_status=1）承接本地 HTML/web snapshot parser，不做联网抓取。
+- **runtime/API**：`parse_local_document` 新增 `.html/.htm` 分支；调用方必须传 `source_url` 与 `allowed_url_hosts`。parser 只允许 https 且 host 命中 allowlist，拒绝 URL userinfo 和 path/query 中的 token/api_key/password/secret 等凭据；本地 UTF-8 snapshot 不联网、不执行脚本，跳过 script/style/noscript/svg/canvas/template，只把 visible text 切 EvidenceSpan。`POST /api/research-os/documents/parse_local` 透传 `source_url`/`allowed_url_hosts`，response 和 RAG metadata 带 source_url，但不返回 raw text。
+- **测试**：`tests/test_document_intelligence_parser_rag.py` 增 HTML snapshot success、host 不在 allowlist、tokenized URL fail-closed 三测；parser scoped **10 passed / 2 warnings**，§5/§6 adjacent scoped **90 passed / 2 warnings**，后端全量 **1516 passed / 13 skipped / 278 warnings**。
+- **落档**：`f27c07fb` moved done；更新 `state/dreaminate/state.md` 与 `research/TRACE.md`。边界仍诚实：这是 no-network web snapshot parser，不是 live URL fetch/crawler；仍未覆盖 OCR/layout-aware PDF parser、前端 RAG UI、dense embedding/vector DB、全资产批量 ingestion 或完整 graph database。
+
+## 2026-06-27 · Document Intelligence explicit batch parser-to-RAG ingestion（3f7b39d1）
+
+- **取前沿**：§5/§6 仍有批量 ingestion gap；新 mint `3f7b39d1`（review_status=1）承接显式 item list batch，不做自动扫目录或真实资产库全量同步。
+- **runtime/API**：新增 `POST /api/research-os/documents/parse_local_batch`；每个 item 复用单文档 text/Markdown/PDF/HTML snapshot parser、rights、URL allowlist、RAG permission 和 secret guard。endpoint 先 parse/build 全部 `AssetRAGDocument`，再统一写 `DOCUMENT_INTELLIGENCE_STORE` 与 `RESEARCH_ASSET_RAG_INDEX`；任一 item 失败时全批 422 且不写 partial；同批重复 `source_path/source_url` 422。
+- **测试**：`tests/test_document_intelligence_parser_rag.py` 增 mixed markdown+HTML batch success、bad second item atomic no partial、duplicate source path fail-closed 三测；parser scoped **13 passed / 2 warnings**，§5/§6 adjacent scoped **93 passed / 2 warnings**，后端全量 **1519 passed / 13 skipped / 278 warnings**。
+- **落档**：`3f7b39d1` moved done；更新 `state/dreaminate/state.md` 与 `research/TRACE.md`。边界仍诚实：这是显式 item list batch，不是自动扫描真实资产库或全库同步；仍未覆盖 OCR/layout-aware PDF parser、前端 RAG UI、dense embedding/vector DB 或完整 graph database。
+
+## 2026-06-27 · Settings-managed LLM Gateway runtime enforcement（de77a28c）
+
+- **取前沿**：active board / pool 为空，但 GOAL §4/§7/§8/§16 和 state/TRACE 仍有 Settings/Secrets/LLM Gateway runtime enforcement 缺口；新 mint `de77a28c` 落档 done，承接 LLM configure/test/runtime seam，不覆盖完整 Settings UI/OAuth/provider adapter。
+- **runtime/API**：`app.agent.llm_providers` 新增 `make_settings_managed_llm_client`，真实 provider 解析只认 `SecureKeystore` + `PersistentOnboardingRegistry`；`/api/llm/configure` 继续把明文 key 写 keystore，同时写 SecretRef/LLMProvider/CredentialPool/RoutingPolicy metadata；`/api/llm/status` 展示 settings-managed 状态；`/api/llm/test` 和 `_current_agent_llm` 改走 Gateway resolver。
+- **坏门**：env key 不能让 role-agent 绕过 Settings；revoked/missing SecretRef 会 fail-closed；配置响应/status/metadata 不回显明文 key。
+- **测试**：LLM/Settings scoped **29 passed / 2 warnings**；runtime adjacent scoped **132 passed / 2 warnings**；`cd app/backend && python -m compileall -q app` -> PASS；后端全量 **1585 passed / 13 skipped / 283 warnings**。
+- **落档**：新增 done 卡 `de77a28c`；更新 `dev/research/TRACE.md`、`dev/state/dreaminate/state.md`；`python dev/scripts/validate_dev.py` -> **49 ✅ / 0 ❌ / 0 ⚠️ PASS**。边界：未验证外部 LLM 实网连通，不等于完整 Settings UI、OAuth/device-code/account auth、所有 provider/connector adapter、生产 keystore backend 选择或完整 connection wizard。
+
+## 2026-06-27 · Settings-managed LLM connection wizard UI（21d99c19）
+
+- **取前沿**：`de77a28c` 后端 Gateway resolver 已接，但 `/settings/llm` 仍看不到 Settings refs，也不能在配置页内完成保存后测试连接；新 mint `21d99c19` 落档 done。
+- **runtime/UI**：`LLMSettingsPage` provider 卡显示 Gateway managed / auth status / SecretRef / Pool / Policy，并新增同页 `/api/llm/test` 按钮；configure 成功回执只显示 `SecretRef` 和 Settings metadata，不回显 key、不宣称已连通。`SettingsSecurityPage` 的 LLM Providers 面板改用 `authFetch` 和同一 refs/status 字段。
+- **坏门**：前端 refs 状态不泄露 API key；configure 成功不写“已连通”；connection test 成功/失败按后端返回显示，失败不报成功。
+- **测试**：LLM Settings UI scoped **1 file / 9 tests passed**；前端全量 **26 files / 292 tests passed**；frontend build **tsc + vite PASS**（保留既有 chunk size warning）。
+- **落档**：新增 done 卡 `21d99c19`；更新 `dev/research/TRACE.md`、`dev/state/dreaminate/state.md`。边界：这不是完整 Settings UI、OAuth/device-code/account auth、所有 provider/connector adapter、生产 keystore backend 选择、CI/线上部署或外部 LLM 实网连通证明。
+
+## 2026-06-27 · StrategyConsole Research Graph edge relation write-back（ddec60c2）
+
+- **取前沿**：state/TRACE 仍把 GraphCanvas 连线、删除、参数/Ghost/Auto 写回列为画布真实性残余；新 mint `ddec60c2` 先闭合真实 projection edge relation ref/hash 写回，不做自由建边或删除。
+- **runtime/UI**：选中真实 Research Graph projection edge 后，Inspector 显示 edge relation 面板；点击“记录连线”调用 `/api/research-os/graph/canvas_asset_mutations` 写 `output_contract.canvas_edge_ref/hash`，带 canonical/audit/evidence refs，成功后重拉 projection。
+- **坏门**：前端请求 body 不含 edge `from`/`to` raw payload，也不含 `raw_value`；后端 projection audit 不泄露 `canvas_edge_ref/hash` 值。
+- **测试**：StrategyConsole scoped **1 file / 30 tests passed**；Research Graph scoped **14 passed / 2 warnings**；Graph/Compiler/StrategyConsole/standards adjacent scoped **65 passed / 2 warnings**；前端全量 **26 files / 293 tests passed**；frontend build **tsc + vite PASS**。
+- **落档**：新增 done 卡 `ddec60c2`；更新 `dev/research/TRACE.md`、`dev/state/dreaminate/state.md`。边界：这不是自由建边、删除、参数/Ghost/Auto 写回、完整 graph database、CI 或线上部署证明。
+
+## 2026-06-27 · Research Graph first-class QRO-to-QRO edge creation（87ec505c）
+
+- **取前沿**：`3a17e940` 只做 connect-intent ref/hash，`aa74a817` 闭合 Ghost/Auto intent；state/TRACE 仍把真实 Graph edge creation 列为画布真实性缺口。新 mint `87ec505c` 做第一版 first-class QRO-to-QRO edge，不做 tombstone、patch application 或完整 graph DB。
+- **runtime/API**：新增 `ResearchGraphEdgeRecord` + `record_graph_edge` command schema，`PersistentResearchGraphStore` 可 JSONL replay；新增 `POST /api/research-os/graph/edges`，要求 canonical/audit/evidence refs，拒绝 raw value、未知 QRO、same-QRO edge 和 live QRO topology edit。
+- **projection/UI**：`/api/research-os/graph/canvas_projection` 会把当前可见 QRO 两端的 edge 渲染为 `canvas_edge:graph:*`；StrategyConsole 真实 projection 两步连接改为 QRO-to-QRO edge creation，不再把 command-node→QRO 内部投影边伪装成用户 Graph edge。
+- **坏门**：前端 edge create 请求 body 不含 `canvas_node:*`、`port` 或 raw endpoint object；projection 不泄露 QRO input/output contract 原值。
+- **测试**：Research Graph scoped **20 passed / 2 warnings**；Graph/ResearchOS/Agent/Compiler/StrategyConsole adjacent scoped **142 passed / 2 warnings**；StrategyConsole scoped **1 file / 36 tests passed**；前端全量 **26 files / 299 tests passed**；frontend build **tsc + vite PASS**。
+- **落档**：新增 done 卡 `87ec505c`。边界：这是 first-class QRO-to-QRO edge creation，不是真实 Graph deletion、Ghost/Auto patch application、完整 graph database、完整 compiler pass、CI 或线上部署证明。
+
+## 2026-06-27 · Research Graph edge tombstone deletion（f509953e）
+
+- **取前沿**：`87ec505c` 已有 first-class QRO-to-QRO edge creation；删除仍停在 `canvas_delete_ref/hash` intent。新 mint `f509953e` 做 append-only edge tombstone，不做 QRO node tombstone 或完整 graph deletion。
+- **runtime/API**：新增 `ResearchGraphEdgeDeletionRecord` + `delete_graph_edge` command schema；`ResearchGraphStore.graph_edges()` 默认过滤 tombstoned edge，`include_deleted=True` 保留历史；新增 `POST /api/research-os/graph/edge_deletions`，要求 canonical/audit/evidence refs，拒绝 raw value、未知 edge 和 live QRO topology edit。
+- **projection/UI**：`canvas_projection` 不再显示 tombstoned `canvas_edge:graph:*`；StrategyConsole 选中真实 graph edge 后 Delete/Inspector 删除走 tombstone endpoint。旧 command→QRO projection edge 仍走 delete-intent ref/hash write-back，不混淆。
+- **坏门**：前端 deletion body 只提交 `edge_ref` 和 canonical/audit/evidence refs，不提交 `canvas_node:*`、`port`、`from`/`to` raw endpoint object。
+- **测试**：Research Graph scoped **22 passed / 2 warnings**；Graph/ResearchOS/Agent/Compiler/StrategyConsole adjacent scoped **144 passed / 2 warnings**；StrategyConsole scoped **1 file / 37 tests passed**；前端全量 **26 files / 300 tests passed**；frontend build **tsc + vite PASS**。
+- **落档**：新增 done 卡 `f509953e`。边界：这是 first-class edge tombstone deletion，不是 QRO node tombstone、Graph node deletion、Ghost/Auto patch application、完整 graph database、完整 compiler pass、CI 或线上部署证明。
+
+## 2026-06-27 · Research Graph QRO node tombstone deletion（7070feed）
+
+- **取前沿**：`f509953e` 已有 first-class edge tombstone；QRO node 删除仍停在 `canvas_delete_ref/hash` intent。新 mint `7070feed` 做 append-only QRO tombstone，不做 restore、Ghost/Auto patch application 或完整 graph DB。
+- **runtime/API**：新增 `QROTombstoneRecord` + `tombstone_qro` command schema；`ResearchGraphStore.qro()` / `projection_index()` 默认过滤 tombstoned QRO，`include_tombstoned=True` 保留历史；`graph_edges()` 默认过滤 tombstoned QRO 相关 active edge，`include_deleted=True` 保留历史 edge。新增 `POST /api/research-os/graph/qro_tombstones`，要求 canonical/audit/evidence refs，拒绝 raw value、未知 QRO 和 live QRO tombstone。
+- **projection/UI**：`canvas_projection` 不再显示 tombstoned `canvas_node:qro:*` 或其相关 active `canvas_edge:graph:*`；StrategyConsole 选中真实 QRO node 后 Delete/Inspector 删除走 tombstone endpoint。旧 command→QRO projection edge 仍走 delete-intent ref/hash write-back，不混淆。
+- **坏门**：前端 QRO tombstone 请求 body 不含 `canvas_node:*`、params 或 raw node object；projection 不泄露 QRO input/output contract 原值。
+- **测试**：Research Graph scoped **24 passed / 2 warnings**；Graph/ResearchOS/Agent/Compiler/StrategyConsole adjacent scoped **146 passed / 2 warnings**；StrategyConsole scoped **1 file / 37 tests passed**；前端全量 **26 files / 300 tests passed**；frontend build **tsc + vite PASS**（仍有既有 chunk size warning）。
+- **落档**：新增 done 卡 `7070feed`。边界：这是 QRO node tombstone，不是 restore command、完整 graph database、Ghost/Auto patch application、完整 compiler pass、CI 或线上部署证明。
+
+## 2026-06-27 · Research Graph Ghost/Auto patch application（1af10281）
+
+- **取前沿**：`aa74a817` 只做 Ghost/Auto intent ref/hash，`7070feed` 已补 QRO node tombstone；Ghost/Auto 仍缺真实 Graph application。新 mint `1af10281` 做 `apply_graph_patch` + patch QRO + graph edge，不做 operation-level raw patch replay、revert 或完整 agent patch lifecycle。
+- **runtime/API**：新增 `GraphPatchApplicationRecord` + `apply_graph_patch` command schema；新增 `POST /api/research-os/graph/patch_applications`，要求 target QRO、patch kind/ref/hash、canonical/audit/evidence refs，拒绝 raw `ops`/`diff`/`node`/`edge`/`params`/`payload`/`raw_value`、未知 target 和 live target。成功后写 `apply_graph_patch`、patch QRO `upsert_qro`、`record_graph_edge` 三条 command。
+- **projection/UI**：StrategyConsole Ghost accept / Auto send 改为调用 patch application endpoint，成功后重拉 projection；`canvas_projection` 显示 `GraphPatchApplication` QRO 和 `canvas_edge:graph:*`，但不显示 raw proposal ops、DrawdownGuard raw node 或 patch hash。
+- **坏门**：前端 patch request body 只提交 target QRO、patch kind/ref/hash 和 refs，不提交 `ops`、`varcvar`、`DrawdownGuard` 或 raw node object。
+- **测试**：Research Graph scoped **26 passed / 2 warnings**；Graph/ResearchOS/Agent/Compiler/StrategyConsole adjacent scoped **148 passed / 2 warnings**；StrategyConsole scoped **1 file / 37 tests passed**；前端全量 **26 files / 300 tests passed**；frontend build **tsc + vite PASS**（仍有既有 chunk size warning）。
+- **落档**：新增 done 卡 `1af10281`。边界：这是 GraphPatchApplication QRO + edge，不是 operation-level raw patch replay、patch revert、完整 agent patch lifecycle、完整 graph database、完整 compiler pass、CI 或线上部署证明。
+
+## 2026-06-27 · Research Graph canvas parameter value save（9a6db34e）
+
+- **取前沿**：`a63af9d7` 只做 QRO-node parameter ref/hash intent，`1af10281` 已补 Ghost/Auto patch application；自由参数值仍未保存。新 mint `9a6db34e` 做 `set_canvas_parameter` value-level record + QRO ref/hash，不做完整参数 schema 或 secret 参数存储。
+- **runtime/API**：新增 `CanvasParameterValueRecord` + `set_canvas_parameter` command schema；新增 `POST /api/research-os/graph/canvas_parameter_values`，要求 target QRO、target asset type、param key/value、canonical/audit/evidence refs，拒绝 raw wrapper fields、secret-like value、未知 target 和 live target。成功后写 `set_canvas_parameter` 与 QRO `upsert_qro` 两条 command。
+- **projection/UI**：StrategyConsole Inspector 新增参数名/参数值输入；“记录参数”走 value-level endpoint，成功后重拉 projection。QRO output contract 只保存 `canvas_param_value_ref/hash` 和 `canvas_param_key`，projection 不泄露具体参数值。
+- **坏门**：前端 parameter request body 不提交 `node.params` 整包、`raw_value` 或 context payload；后端 projection 不含 `45%/w`、parameter_ref 或 value_hash。
+- **测试**：Research Graph scoped **28 passed / 2 warnings**；Graph/ResearchOS/Agent/Compiler/StrategyConsole adjacent scoped **150 passed / 2 warnings**；StrategyConsole scoped **1 file / 37 tests passed**；前端全量 **26 files / 300 tests passed**；frontend build **tsc + vite PASS**（仍有既有 chunk size warning）。
+- **落档**：新增 done 卡 `9a6db34e`。边界：这是参数值 record + QRO ref/hash，不是完整参数 schema/类型系统、secret 参数存储、所有节点/边布局、完整 graph database、完整 compiler pass、CI 或线上部署证明。
+
+## 2026-06-27 · Monitor weekly scheduler tick writes Observable QRO（10b23996）
+
+- **取前沿**：GOAL §0 明写 Chat / Canvas / API / IDE / Scheduler 都要能产生 QRO；Agent/API/IDE/Canvas 已有多片，weekly monitor scheduler 仍只返回业务结果。新 mint `10b23996` 先闭合 production weekly monitor tick 的 scheduler-origin Graph 写入，不做所有 scheduler/API/execution 入口。
+- **runtime/API**：`MonitorRuntime` 增加 `result_recorder` hook；DAG op 成功后把 `WeeklyMonitorResult` 交给 recorder。`main.py` 新增 weekly monitor QRO helper，写 `QROType.OBSERVABLE`、`EntrySource.SCHEDULER`，只保存 result hash、计数和 scheduler refs，不复制 cost drift report、factor observation 或 actions payload。
+- **endpoint/DAG**：`/api/monitor/weekly_tick` 成功响应新增 `qro_id` / `research_graph_command_id` / `research_graph_result_hash`；startup monitor runtime 绑定同一 recorder，DAG scheduler op 成功也会返回 Graph refs。
+- **坏门**：gate verdict/DSR/PBO 作为 observation 输入仍 422，且不写 Graph；audit summary 不泄露 factor id、cost report 或 actions 详情。
+- **测试**：monitor scoped **6 passed / 2 warnings**；monitor/Graph/Agent/entrypoint adjacent scoped **49 passed / 2 warnings**；monitor/Graph/Agent/entrypoint/Research OS/coverage/standards expanded scoped **74 passed / 2 warnings**；`compileall app/backend/app` **PASS**；`validate_dev` **49 ✅ / 0 ❌ / 0 ⚠️**（DAG 146）。
+- **落档**：新增 done 卡 `10b23996`。边界：这是 weekly monitor scheduler tick 的 QRO 写入，不是所有 scheduler/API/execution 入口贯通、完整 runtime promotion、CI/线上 scheduler 证明或 live broker 连通证明。
+
+## 2026-06-27 · Training success writes Model QRO（a2f46b22）
+
+- **取前沿**：训练台成功路径已有 ModelRegistry version、ModelPassport 和 ValidationDossier refs，但不会写 QRO/Research Graph。新 mint `a2f46b22` 闭合“训练成功产模型版本 → Model QRO”，不把 queued/failed/free-code no-artifact job 伪装成模型资产。
+- **runtime/API**：`TrainingJob` 增加 `qro_id` / `research_graph_command_id`；`TrainingService` 增加 `result_recorder`，只在 job `succeeded` 且 `model_version` 已登记后调用。`main.py` 新增 `_record_training_job_qro`，写 `QROType.MODEL` / `EntrySource.API`。
+- **审计边界**：QRO 只保存 job/model/version/passport/dossier/run refs、request hash、metrics hash 和计数；不复制 metrics 明细、artifact_dir、artifact_path 或模型二进制路径。轮询 `GET /api/training/jobs/{job_id}` 可看到 QRO refs。
+- **坏门**：训练仍必须先完成现有 ModelPassport/ValidationDossier/ModelRegistry version 路径；无模型版本成功 job 不写 Model QRO。
+- **测试**：新增单测 **1 passed / 2 warnings**；training/model governance/Graph adjacent scoped **99 passed / 2 warnings**；training+monitor+Research OS/coverage/standards expanded scoped **135 passed / 2 warnings**；`compileall app/backend/app` **PASS**；`validate_dev` **49 ✅ / 0 ❌ / 0 ⚠️**（DAG 147）。
+- **落档**：新增 done 卡 `a2f46b22`。边界：这是训练成功 Model QRO 写入，不是 Model Registry promotion QRO、runtime serving、完整 compiler/codegen、sandbox artifact inspection process、live model promotion 或所有模型相关 API 入口贯通。
+
+## 2026-06-27 · Training success compiler coverage（54b60744）
+
+- **取前沿**：`a2f46b22` 已让训练成功产模型版本路径写 Model QRO，但训练入口仍未自动生成 compiler IR/pass 和 entrypoint coverage。新卡把训练成功 QRO 接到同一条 Governed Compiler coverage 路径。
+- **runtime/API**：`_record_training_job_qro` 写 Research Graph 后调用 `_compile_training_job_qro`，返回 `compiler_ir_ref`、`compiler_pass_ref`、`entrypoint_coverage_ref`；`TrainingJob` snapshot 与 job detail API 透传这些 refs。
+- **refs contract**：compiler 记录绑定 ModelVersion、ModelPassport、ValidationDossier、training job、request hash、metrics hash、permission、environment lock 和 deterministic run plan refs；不复制 metrics 明细、artifact_dir、artifact_path 或模型二进制路径。
+- **对抗门**：测试断言 IR/pass/coverage 绑定同一 QRO + Graph command，`entry_source=api`、`actor_source=agent`、permission=`training.job:service`，且 compiled text 不含 `r2` 或 artifact path。
+- **测试**：`tests/test_training_api.py` **10 passed / 2 warnings**。
+- **落档**：新增 done 卡 `54b60744`。边界：这是训练成功入口的 compiler/coverage producer，不是 Model Registry promotion coverage、完整 compiler codegen、runtime auto-promotion、live model serving、CI、线上训练集群或用户验收。
+
+## 2026-06-27 · Model Registry promotion writes Model QRO（6c3d8f21）
+
+- **取前沿**：`a2f46b22` 已把训练成功产模型版本路径写入 Model QRO，但 Model Registry promotion 仍只写 approval gate / ModelVersion store。新 mint `6c3d8f21` 闭合 promotion request + approval 两个成功路径的 Model QRO。
+- **runtime/API**：`/api/models/{model_id}/promote` 成功返回 pending gate 时写 `Model` QRO，并返回 `qro_id` / `research_graph_command_id`；`/api/models/{model_id}/gates/{gate_id}/approve` 成功真翻 stage 后写第二条审批 `Model` QRO。
+- **审计边界**：promotion request QRO 只保存 ModelVersion/ApprovalGate/ModelPassport/ValidationDossier refs 与 `evidence_hash`；approval QRO 只保存 `reason_hash` / `risk_restated_hash` / `side_effect_ref`。不复制 DSR/PBO/champion raw evidence、审批理由正文、metrics 明细或 artifact path。
+- **坏门**：pending gate 不标成 approval；approval 不标成 live serving readiness、safe loading approval 或执行许可；现有 ModelPassport / ValidationDossier / approval gate 门不改弱。
+- **测试**：`test_model_governance.py` **19 passed / 2 warnings**；training/model governance/Graph/entrypoint/Research OS/coverage/standards adjacent scoped **126 passed / 2 warnings**；`compileall app/backend/app` **PASS**；`validate_dev` **49 ✅ / 0 ❌ / 0 ⚠️**（DAG 148）。
+- **落档**：新增 done 卡 `6c3d8f21`。边界：这是 Model Registry promotion 成功开门和成功审批 QRO，不是 rejected gate QRO、runtime serving、独立 sandbox artifact inspection process、remote artifact store、runtime auto-promotion、live model serving 或所有模型相关 API 入口贯通。
+
+## 2026-06-27 · Rejected Model Registry promotion writes Model QRO（e4f2a1c9）
+
+- **取前沿**：`6c3d8f21` 已覆盖 pending gate 和 approve success；rejected promotion gate 仍只由 endpoint 422 + approval store 体现。新 mint `e4f2a1c9` 闭合 rejected gate QRO。
+- **runtime/API**：`POST /api/models/{model_id}/promote` 遇 `GateRejection` 仍返回 422，但 detail 带 `qro_id` / `research_graph_command_id`；后端查回 stored gate 写 rejected `Model` QRO。
+- **审计边界**：QRO 输出 `gap_count` / `gaps_hash` / `verdict_hash` / `evidence_hash`，不复制缺口正文、verdict 文案、DSR/PBO/champion raw evidence、metrics 明细或 artifact path。
+- **坏门**：三角证据不同向仍 422；rejected QRO 不标成 pending/approved；现有 ModelPassport / ValidationDossier / approval gate 门不改弱。
+- **测试**：`test_model_governance.py` **20 passed / 2 warnings**；training/model governance/Graph/entrypoint/Research OS/coverage/standards adjacent scoped **127 passed / 2 warnings**；`compileall app/backend/app` **PASS**；`validate_dev` **49 ✅ / 0 ❌ / 0 ⚠️**（DAG 149）。
+- **落档**：新增 done 卡 `e4f2a1c9`。边界：这是 rejected promotion gate QRO，不是 runtime serving、独立 sandbox artifact inspection process、remote artifact store、runtime auto-promotion、live model serving 或所有模型相关 API 入口贯通。
+
+## 2026-06-27 · Model Registry promotion compiler coverage（ee8040b9）
+
+- **取前沿**：`6c3d8f21` / `e4f2a1c9` 已让 promotion pending、approval success 和 rejected gate 写 Model QRO，但 promotion API 仍未自动生成 compiler IR/pass 和 entrypoint coverage。新卡把三条 Model Registry QRO 接到 compiler coverage。
+- **runtime/API**：新增 `_compile_model_registry_qro`，`_record_model_promotion_request_qro` 与 `_record_model_promotion_approval_qro` 写 Graph 后返回 `compiler_ir_ref`、`compiler_pass_ref`、`entrypoint_coverage_ref`。
+- **refs contract**：compiler 记录绑定 ModelVersion、ModelPassport、ValidationDossier、approval gate、request hash、permission、environment lock 和 deterministic run plan refs；pending/rejected coverage entrypoint 是 `api:models.promote`，approval coverage entrypoint 是 `api:models.gates.approve`。
+- **对抗门**：测试覆盖 pending、rejected、approved 三条路径；compiled text 不含 DSR/PBO/champion raw evidence、中文 gap/verdict、approval reason 或 risk restatement 正文。
+- **测试**：`test_model_governance.py` **31 passed / 2 warnings**。
+- **落档**：新增 done 卡 `ee8040b9`。边界：这是 Model Registry promotion 的 compiler/coverage producer，不是完整 compiler codegen、runtime auto-promotion、live model serving、CI、线上或用户验收。
+
+## 2026-06-27 · Model governance monitoring and recertification records（f6d7a3b8）
+
+- **取前沿**：§15 仍把 `MonitoringProfile` / `RecertificationRecord` 写成 GOAL 对象，但 runtime 只有 passport、dossier、promotion gate 和 promotion QRO。新 mint `f6d7a3b8` 承接模型监控配置与再认证事件的 first-class record 层。
+- **runtime/API**：新增 `ModelMonitoringProfile` 与 `ModelRecertificationRecord`；`PersistentModelGovernanceRegistry` 支持 append-only event 写入、replay 和查询。新增 `/api/research-os/model_governance/monitoring_profiles` 与 `/api/research-os/model_governance/recertification_records`，summary 返回 profile/record totals 和 refs。
+- **坏门**：monitoring profile 必须引用匹配的 ModelPassport/ModelVersion，必须有 metrics/schedule/alert policy；recertification record 的 trigger 必须由 passport 声明，decision 只能是 `accepted` / `rejected` / `waived`。
+- **测试**：`test_model_governance.py` **23 passed / 2 warnings**；training/model governance/Graph/entrypoint/Research OS/coverage/standards adjacent scoped **130 passed / 2 warnings**；`compileall app/backend/app` **PASS**；`validate_dev` **49 ✅ / 0 ❌ / 0 ⚠️**（DAG 150）。
+- **落档**：新增 done 卡 `f6d7a3b8`。边界：这是 monitoring/recertification registry/API/summary，不是 runtime serving、独立 sandbox artifact inspection process、remote artifact store、runtime auto-promotion、live model serving 或外部监控系统接线。
+
+## 2026-06-27 · Model artifact sandbox inspection process（0e5c2a9d）
+
+- **取前沿**：§15 Artifact 安全仍有 `sandboxed load / inspect` 缺口；旧 loader 只验证 validation dossier/hash，`.pkl/.joblib` 仍会在主进程最终反序列化。新 mint `0e5c2a9d` 承接本地子进程 inspection + loader 双绑定 + governance artifact inspection record。
+- **runtime**：新增 `training.artifact_inspection_worker` 子进程 worker 和 wrapper；训练成功登记 model version 前写 `artifact_inspection.json`，validation dossier 写 `artifact_inspection_ref`，ModelPassport artifact 的 `sandbox_inspection_ref` 绑定同一 ref。pickle/joblib inspection 只做 metadata-only scan，不反序列化。
+- **治理/API**：新增 `ModelArtifactInspectionRecord`；registry 可 append-only replay，要求 passport/version/artifact/hash/inspection_ref 匹配；新增 `/api/research-os/model_governance/artifact_inspections` 和 summary 字段。
+- **坏门**：`.pkl/.joblib` loader 缺 `artifact_inspection.json`、path/hash/ref 不一致、非 subprocess isolation、inspection 反序列化过 pickle/joblib，都会拒绝加载。
+- **测试**：`test_model_governance.py` **28 passed / 2 warnings**；`test_training_service.py` **15 passed**；training/model governance/Graph/entrypoint/Research OS/coverage/standards adjacent scoped **136 passed / 2 warnings**；`compileall app/backend/app` **PASS**；`validate_dev` **49 ✅ / 0 ❌ / 0 ⚠️**（DAG 151）。
+- **落档**：新增 done 卡 `0e5c2a9d`。边界：这是本地子进程 inspection 和 governance record，不是容器级/内核级 sandbox、remote artifact store、runtime auto-promotion、live model serving 或外部监控系统接线。
+
+## 2026-06-27 · Governed model prediction serving seam（0f6a1d2e）
+
+- **取前沿**：`0e5c2a9d` 后 artifact inspection 已可执行/记录；§15 runtime serving 仍缺受控调用边界。新 mint `0f6a1d2e` 先做 staging/production 本地 prediction seam，不做 live broker serving。
+- **runtime/API**：新增 `/api/models/{model_id}/versions/{version}/predict`。入口要求 ModelVersion stage 是 `staging` 或 `production`，且有 recorded ModelPassport、accepted artifact inspection、matching MonitoringProfile；rows 限 200，feature cols 必须存在。
+- **治理**：新增 `ModelServingInvocationRecord`，调用后写 request_hash、prediction_hash、row_count、feature refs、artifact_inspection_ref、monitoring_profile_ref；summary 不写 raw rows 或 raw predictions。
+- **坏门**：dev stage 422；缺 passport / artifact inspection / monitoring profile 422；模型加载失败按 422 fail-closed。
+- **测试**：`test_model_governance.py` **30 passed / 2 warnings**；training/model governance/Graph/entrypoint/Research OS/coverage/standards adjacent scoped **138 passed / 2 warnings**；`compileall app/backend/app` **PASS**；`validate_dev` **49 ✅ / 0 ❌ / 0 ⚠️**（DAG 152）。
+- **落档**：新增 done 卡 `0f6a1d2e`。边界：这是受控本地 prediction serving seam 和治理记录，不是 live broker serving、runtime auto-promotion、remote artifact store、外部监控系统回路或生产部署。
+
+## 2026-06-27 · Model prediction emits typed signal contract（4c0d9e1f）
+
+- **取前沿**：`0f6a1d2e` 已能受控本地预测，但模型输出仍只是 prediction 数组；§9 要求 forecast/signal contract 带时间、单位、方向、置信度、过期等语义。新 mint `4c0d9e1f` 承接 model prediction → typed SignalContract 接线。
+- **runtime/API**：`/api/models/{model_id}/versions/{version}/predict` 新增可选 `signal_contract`。payload 必须给 OOF/purge/embargo、train/test lock、honest-N、forecast time、horizon、unit、direction semantics、confidence、expiry refs；通过 `validate_signal_protocol` 后才登记 `SIGNAL_CONTRACTS` 并返回 `signal_ref`。
+- **boundary**：`SignalProtocolRecord` 新增 typed forecast/signal semantics 字段，并在模型信号 validator 中强制检查。
+- **坏门**：缺 typed refs 时 422，且不写 serving invocation；模型本体仍不能直接进因子库。
+- **测试**：`test_factor_strategy_boundary.py` **8 passed**；`test_model_governance.py` **31 passed / 2 warnings**；training/model governance/factor boundary/Graph/entrypoint/Research OS/coverage/standards adjacent scoped **147 passed / 2 warnings**；`compileall app/backend/app` **PASS**；`validate_dev` **49 ✅ / 0 ❌ / 0 ⚠️**（DAG 153）。
+- **落档**：新增 done 卡 `4c0d9e1f`。边界：这是模型预测到 SignalContract 的可选 typed 接线，不是 signal alpha 证明、自动组合、order emission、live trading 或持久化 SignalContractRegistry。
+
+## 2026-06-27 · Persistent signal contract registry（c8e2f4a0）
+
+- **取前沿**：`4c0d9e1f` 已把 model prediction 可选接到 SignalContract，但 registry 仍是进程内存。新 mint `c8e2f4a0` 承接 SignalContract JSONL 持久化。
+- **runtime**：`SignalContractRegistry` 新增可选 `path`；有 path 时 startup replay，register 成功后 append JSONL。坏 schema/缺 payload fail-fast。
+- **app 接线**：主 app `SIGNAL_CONTRACTS` 改为 `DATA_ROOT/audit/signal_contracts.jsonl` backed，覆盖 `/api/factors/signal_contracts` 和 `/api/models/{model_id}/versions/{version}/predict` 的登记路径。
+- **坏门**：范畴门、model_ref 本体回指门、OOF/purge/embargo 泄露声明门不放松。
+- **测试**：`test_factor_lab_endpoints.py` **16 passed / 2 warnings**；factor boundary + model governance scoped **39 passed / 2 warnings**；expanded adjacent scoped **163 passed / 2 warnings**；`compileall app/backend/app` **PASS**；`validate_dev` **49 ✅ / 0 ❌ / 0 ⚠️**（DAG 154）。
+- **落档**：新增 done 卡 `c8e2f4a0`。边界：这是 SignalContract 持久化，不是 signal alpha proof、自动组合、order emission、live trading 或外部 registry。
+
+## 2026-06-27 · Signal performance validation registry（b7c6d8a9）
+
+- **取前沿**：`c8e2f4a0` 后 SignalContract 已可重放，但策略/组合消费 signal 仍缺 performance validation 记录门。新 mint `b7c6d8a9` 承接 signal validation registry/API 和 StrategyBook accepted-validation gate。
+- **runtime**：新增 `SignalPerformanceValidationRecord`、`PersistentSignalValidationRegistry` 和 `validate_signal_performance_validation`；validation 要求 signal_ref、dataset/window/methodology/metric/performance/leakage/evidence refs，verdict 限定 accepted/rejected/challenged。
+- **app 接线**：主 app 新增 `SIGNAL_VALIDATIONS = DATA_ROOT/audit/signal_validations.jsonl`，新增 `/api/research-os/signal_validations` record/summary API；record 先确认 SignalContract 存在，summary 不返回 raw predictions/raw returns。
+- **StrategyBook gate**：`validate_strategy_book(..., require_signal_validation=True)` 要求每个 `signal_ref` 绑定 accepted validation ref；缺失或 rejected validation 会拒。
+- **测试**：`test_factor_strategy_boundary.py` **12 passed**；`test_factor_lab_endpoints.py` **18 passed / 2 warnings**；factor/model/portfolio adjacent scoped **66 passed / 2 warnings**；expanded Research OS/coverage/standards scoped **93 passed / 2 warnings**；`compileall app/backend/app` **PASS**；`validate_dev` **49 ✅ / 0 ❌ / 0 ⚠️**（DAG 155）。
+- **落档**：新增 done 卡 `b7c6d8a9`。边界：这是 signal performance validation record/gate，不是 signal alpha proof、自动组合、order emission、live trading 或外部 signal registry。
+
+## 2026-06-27 · Portfolio promote signal validation gate（2c9f4e11）
+
+- **取前沿**：`b7c6d8a9` 已有 SignalPerformanceValidationRecord，但 portfolio production promote 入口尚未消费该门。新 mint `2c9f4e11` 把组合 promote 的 signal_refs 接到 accepted validation refs。
+- **runtime/API**：`/api/portfolios/{portfolio_id}/promote` 新增可选 `signal_refs` / `signal_validation_refs`；只要声明 signal，就必须有 matching accepted validation，且 signal_ref 必须存在于 SignalContract registry。
+- **坏门**：缺 validation、unknown validation、validation 指向非本组合 signal set、rejected validation 都在 `gate_portfolio` 前 422，不消耗 honest-N。
+- **测试**：`test_portfolio_promote_api.py` **8 passed / 2 warnings**；factor/model/portfolio adjacent scoped **69 passed / 2 warnings**；expanded Research OS/coverage/standards scoped **96 passed / 2 warnings**；`compileall app/backend/app` **PASS**；`validate_dev` **49 ✅ / 0 ❌ / 0 ⚠️**（DAG 156）。
+- **落档**：新增 done 卡 `2c9f4e11`。边界：这是 portfolio promote signal validation gate，不是 signal alpha proof、自动组合、order emission、live trading 或外部 signal registry。
+
+## 2026-06-27 · Execution order intent registry API（5e1d0a77）
+
+- **取前沿**：`2c9f4e11` 已把 portfolio promote 接到 signal validation gate；§9/§12 仍缺 portfolio/signal→order 的 typed intent contract。新 mint `5e1d0a77` 补 order intent audit object，不接真钱下单。
+- **runtime**：新增 `ExecutionOrderIntentRecord`、`PersistentExecutionOrderIntentRegistry` 和 `validate_execution_order_intent`；testnet/live intent 要求 venue、permission、OrderGuard、idempotency、audit、kill-switch、SecretRef、responsibility refs，A股 live intent 拒。
+- **app 接线**：主 app 新增 `EXECUTION_ORDER_INTENTS = DATA_ROOT/audit/execution_order_intents.jsonl`，新增 `/api/research-os/execution/order_intents` record/summary API。API 拒 raw `quantity`/`price`/`notional`/`secret`/`raw_order`，成功返回 `place_order_called=false`。
+- **测试**：`test_execution_boundary_contract.py` **12 passed / 2 warnings**；execution/portfolio/factor/realtime safety adjacent scoped **59 passed / 2 warnings**；expanded Research OS/coverage/standards/security scoped **126 passed / 2 warnings**；`compileall app/backend/app` **PASS**；`validate_dev` **49 ✅ / 0 ❌ / 0 ⚠️**（DAG 157）。
+- **落档**：新增 done 卡 `5e1d0a77`。边界：这是 typed order intent record/API，不是 order emission、live trading、broker connector 或资金执行。
+
+## 2026-06-27 · Guarded execution order submission seam（23f80fa8）
+
+- **取前沿**：`5e1d0a77` / `8f2d4b0c` 已有 typed order intent + QRO，`0d9a6e42` 已有 runtime promotion，后续 venue event/reconciliation/monitor action 已可记录 refs；但 order intent 到受控提交边界仍缺一个明确 seam。新 mint `23f80fa8` 做 guarded order submission record/API/QRO，不接真实交易所。
+- **runtime/API**：新增 `ExecutionOrderSubmissionRecord`、`PersistentExecutionOrderSubmissionRegistry`、`validate_execution_order_submission`；主 app 新增 `EXECUTION_ORDER_SUBMISSIONS`、disabled default submitter、`POST /api/research-os/execution/order_submissions` 与 summary。API 先拒 raw order/secret 字段，再确认 recorded order intent/runtime promotion，校验 permission、OrderGuard、idempotency、SecretRef、responsibility refs 与上游一致。
+- **submitter seam**：默认 `EXECUTION_ORDER_SUBMITTER` disabled，`submit_enabled=true` 且未注入 submitter 会 fail-closed。测试注入 fake `submit_guarded_order` 只证明 seam 可被调用；API 自身仍返回 `api_place_order_called=false`，不新增裸 `place_order`。
+- **审计边界**：成功路径写 `QROType.EXECUTION_POLICY` / `upsert_qro` command，output contract 只保存 refs、submitter_called、ack_ref、venue_order_ref 和 status，不保存 raw order、quantity、price、raw venue payload 或明文 secret。
+- **测试**：execution boundary scoped **31 passed / 2 warnings**；realmoney audit scoped **18 passed / 2 warnings**；entrypoint gate scoped **2 passed**；monitor+execution+realmoney scoped **58 passed / 2 warnings**；expanded Research OS/monitor/model/signal/execution/security scoped **163 passed / 2 warnings**；`compileall app/backend/app` **PASS**；`validate_dev` **49 ✅ / 0 ❌ / 0 ⚠️**（DAG 166）。
+- **落档**：新增 done 卡 `23f80fa8`。边界：这是 guarded submitter seam 和 fake submitter 注入证明，不是真实 Binance testnet key 连通、真实 venue API 连通、live trading、broker connector 或资金执行。
+
+## 2026-06-27 · Execution order materialization registry API（709450a4）
+
+- **取前沿**：`23f80fa8` 已有 guarded submission seam，但 `submit_enabled=true` 仍缺前置 order materialization hash/ref 门。新 mint `709450a4` 把 order intent + runtime promotion 先落成 refs-only materialization，再允许 submitter seam。
+- **runtime/API**：新增 `ExecutionOrderMaterializationRecord`、`PersistentExecutionOrderMaterializationRegistry`、`validate_execution_order_materialization`；主 app 新增 `EXECUTION_ORDER_MATERIALIZATIONS`、disabled default materializer、`POST /api/research-os/execution/order_materializations` 与 summary。API 拒 raw order/secret 字段，确认 recorded order intent/runtime promotion，校验 permission、OrderGuard、idempotency、SecretRef、responsibility refs 与上游一致。
+- **materializer seam**：默认 `EXECUTION_ORDER_MATERIALIZER` disabled；只有显式注入 `materialize_order` 才会产出 `order_schema_ref`、`order_payload_hash`、sizing/price/risk/market refs。materializer result 若报告 `api_place_order_called` 或 `api_venue_call_called` 会被拒。
+- **submission gate**：`ExecutionOrderSubmissionRecord` 增加 `order_materialization_ref`；`submit_enabled=true` 必须引用 recorded 且 `materialized` 的 materialization，否则 422，submitter 不调用；submitter result 若带 raw order/quantity/price 或自报 direct `place_order` 也会 422。
+- **审计边界**：成功路径写 `QROType.EXECUTION_POLICY` / `upsert_qro` command，output contract 只保存 refs/hash/materializer_called/status，不保存 raw order、quantity、price、raw venue payload 或明文 secret。
+- **测试**：execution boundary scoped **38 passed / 2 warnings**；realmoney audit scoped **18 passed / 2 warnings**；entrypoint gate scoped **2 passed**；expanded Research OS/monitor/model/signal/execution/security scoped **170 passed / 2 warnings**；`compileall app/backend/app` **PASS**；`validate_dev` **49 ✅ / 0 ❌ / 0 ⚠️**（DAG 167）。
+- **落档**：新增 done 卡 `709450a4`。边界：这是 refs-only materialization 和 fake materializer/submitter seam 证明，不是真实 Binance testnet key 连通、真实 venue API 连通、live trading、broker connector、venue-native payload 生成或资金执行。
+
+## 2026-06-27 · Execution venue capability readiness gate（98d6bf4a）
+
+- **取前沿**：`709450a4` 已要求 `submit_enabled=true` 先引用 materialized order payload hash/ref；但 submitter seam 仍缺“当前 guarded venue/submitter/runtime 安全能力 ready”的 refs-only 证明。新 mint `98d6bf4a` 补 venue capability readiness gate。
+- **runtime/API**：新增 `ExecutionVenueCapabilityRecord`、`PersistentExecutionVenueCapabilityRegistry`、`validate_execution_venue_capability`；主 app 新增 `EXECUTION_VENUE_CAPABILITIES`、`POST /api/research-os/execution/venue_capabilities` 与 summary。成功路径写 `QROType.EXECUTION_POLICY` / `upsert_qro` command。
+- **submission gate**：`ExecutionOrderSubmissionRecord` 增加 `venue_capability_ref`；`submit_enabled=true` 必须同时引用 `materialized` 的 `order_materialization_ref` 和 `ready/can_submit_orders=true` 的 `venue_capability_ref`。capability 非 ready、缺 credential/IP allowlist/withdrawal disabled/HMAC/health/rate-limit/kill-switch/SecretRef/responsibility refs，或 venue/submitter/runtime/guard refs 与 order intent/runtime promotion/submission 不一致，都会 422 且不调用 submitter。
+- **审计边界**：capability/API/QRO/summary 只存 refs/status，不存 raw order、quantity、price、raw venue payload 或明文 secret；新增路径不产生裸 `place_order` 或 venue API 调用。
+- **测试**：execution boundary scoped **44 passed / 2 warnings**；realmoney audit scoped **18 passed / 2 warnings**；entrypoint gate scoped **2 passed**；expanded Research OS/monitor/model/signal/execution/security scoped **176 passed / 2 warnings**；`compileall app/backend/app` **PASS**；`validate_dev` **49 ✅ / 0 ❌ / 0 ⚠️**（DAG 168）。
+- **落档**：新增 done 卡 `98d6bf4a`。边界：这是 refs-only venue capability readiness 和 fake submitter seam 证明，不是真实 Binance testnet key 连通、真实 venue API 连通、live trading、broker connector、venue-native payload 生成或资金执行。
+
+## 2026-06-27 · Execution venue safety attestation backing registry（4393d50a）
+
+- **取前沿**：`98d6bf4a` 已要求 ready capability 提供安全 refs，但这些 refs 仍可被裸字符串假填。新 mint `4393d50a` 把 credential/IP allowlist/withdrawal disabled/HMAC/health/rate-limit/sandbox refs 落成独立 append-only safety attestation。
+- **runtime/API**：新增 `ExecutionVenueSafetyAttestationRecord`、`PersistentExecutionVenueSafetyAttestationRegistry`、`validate_execution_venue_safety_attestation`；主 app 新增 `EXECUTION_VENUE_SAFETY_ATTESTATIONS`、`POST /api/research-os/execution/venue_safety_attestations` 与 summary。成功路径写 `QROType.EXECUTION_POLICY` / `upsert_qro` command。
+- **capability gate**：`ExecutionVenueCapabilityRecord` 增加 `venue_safety_attestation_ref`；`capability_status=ready` 必须引用 safety attestation ref。capability API 会解析 recorded attestation，并要求 `attestation_status=accepted` 且 venue/runtime/permission/OrderGuard/idempotency/credential/IP allowlist/withdrawal disabled/HMAC/health/rate-limit/kill-switch/SecretRef/responsibility refs 与 capability 匹配。
+- **审计边界**：attestation/API/QRO/summary 只存 refs/status，不存 raw order、quantity、price、raw venue payload 或明文 secret；新增路径不产生裸 `place_order` 或 venue API 调用。
+- **测试**：execution boundary scoped **49 passed / 2 warnings**；realmoney audit scoped **18 passed / 2 warnings**；entrypoint gate scoped **2 passed**；expanded Research OS/monitor/model/signal/execution/security scoped **181 passed / 2 warnings**；`compileall app/backend/app` **PASS**；`validate_dev` **49 ✅ / 0 ❌ / 0 ⚠️**（DAG 169）。
+- **落档**：新增 done 卡 `4393d50a`。边界：这是 refs-only safety attestation backing，不是真实 Binance testnet key 连通、真实 venue API 连通、live trading、broker connector、venue-native payload 生成或资金执行。
+
+## 2026-06-27 · Execution submit request envelope registry（9ca19020）
+
+- **取前沿**：`4393d50a` 已让 ready venue capability 必须引用 accepted safety attestation；但 `ExecutionOrderSubmissionRecord.submit_request_ref` 仍只是裸字段。新 mint `9ca19020` 把 submit request 本身落成 refs-only append-only envelope。
+- **runtime/API**：新增 `ExecutionSubmitRequestRecord`、`PersistentExecutionSubmitRequestRegistry`、`validate_execution_submit_request`；主 app 新增 `EXECUTION_SUBMIT_REQUESTS`、`POST /api/research-os/execution/submit_requests` 与 summary。成功路径写 `QROType.EXECUTION_POLICY` / `upsert_qro` command。
+- **submission gate**：`submit_enabled=true` 的 order submission 现在必须引用 recorded 且 `ready` 的 submit request。submit request 绑定 order intent、runtime promotion、materialized order payload hash、ready venue capability、guarded venue、submitter、runtime、permission、OrderGuard、idempotency、audit、kill-switch、SecretRef、responsibility refs；submission API 会解析并校验这些 refs 与上游和 submission 一致，未通过则 422 且不调用 submitter。
+- **审计边界**：submit request/API/QRO/summary 只存 refs/hash/status，不存 raw order、quantity、price、notional、raw venue payload 或明文 secret；新增路径不产生裸 `place_order` 或 venue API 调用。默认 submitter 仍 disabled。
+- **测试**：execution boundary scoped **54 passed / 2 warnings**；realm-money + entrypoint scoped **20 passed / 2 warnings**；expanded Research OS/monitor/model/signal/execution/security scoped **186 passed / 2 warnings**；`compileall app/backend/app` **PASS**；`validate_dev` **49 ✅ / 0 ❌ / 0 ⚠️**（DAG 170）。
+- **落档**：新增 done 卡 `9ca19020`。边界：这是 refs-only submit request envelope，不是真实 Binance testnet key 连通、真实 venue API 连通、live trading、broker connector、venue-native payload 生成或资金执行。
+
+## 2026-06-27 · Execution venue connectivity check registry（ac0ad93d）
+
+- **取前沿**：`4393d50a` 已让 ready venue capability 必须引用 accepted safety attestation，但 safety attestation 仍可直接人工填 credential/IP/HMAC/health/rate-limit refs。新 mint `ac0ad93d` 把这些 refs 先落成可重放的 connectivity check。
+- **runtime/API**：新增 `ExecutionVenueConnectivityCheckRecord`、`PersistentExecutionVenueConnectivityCheckRegistry`、`validate_execution_venue_connectivity_check`；主 app 新增 `EXECUTION_VENUE_CONNECTIVITY_CHECKS`、`POST /api/research-os/execution/venue_connectivity_checks` 与 summary。成功路径写 `QROType.EXECUTION_POLICY` / `upsert_qro` command。
+- **attestation gate**：`attestation_status=accepted` 的 venue safety attestation 现在必须引用 recorded 且 `accepted` 的 `venue_connectivity_check_ref`；API 会解析 connectivity check，并要求 venue/runtime/permission/OrderGuard/idempotency/credential/IP allowlist/withdrawal disabled/HMAC/health/rate-limit/sandbox/kill-switch/SecretRef/responsibility refs 与 attestation、order intent、runtime promotion 一致。
+- **审计边界**：connectivity check/API/QRO/summary 只存 refs/hash/status，不存 raw order、quantity、price、notional、raw venue payload 或明文 secret；新增路径不产生裸 `place_order` 或 venue API 调用。
+- **测试**：execution boundary scoped **59 passed / 2 warnings**；realm-money + entrypoint scoped **20 passed / 2 warnings**；expanded Research OS/monitor/model/signal/execution/security scoped **191 passed / 2 warnings**；`compileall app/backend/app` **PASS**；`validate_dev` **49 ✅ / 0 ❌ / 0 ⚠️**（DAG 171）。
+- **落档**：新增 done 卡 `ac0ad93d`。边界：这是 refs-only connectivity check registry，不是真实 Binance testnet key 连通、真实 venue API 连通、live trading、broker connector、venue-native payload 生成或资金执行。
+
+## 2026-06-27 · Execution venue connectivity checker seam（8d15d10c）
+
+- **取前沿**：`ac0ad93d` 已把 connectivity check 落成 append-only record/API/QRO，但成功路径仍靠手动提交 record。新 mint `8d15d10c` 补注入式 checker seam。
+- **runtime/API**：新增 disabled `EXECUTION_VENUE_CONNECTIVITY_CHECKER` adapter；`POST /api/research-os/execution/venue_connectivity_checks/run` 读取 recorded order intent + runtime promotion 后调用 checker。默认 disabled 会 422 且不写 connectivity JSONL/QRO。
+- **checker gate**：fake checker 成功路径把 checker result 归一成 `ExecutionVenueConnectivityCheckRecord`，写 connectivity registry 和 ExecutionPolicy QRO；checker result 继续拒 raw order、raw venue payload、quantity、price、notional、secret，也拒自报 direct `place_order` 或 venue API call。
+- **审计边界**：run endpoint 响应 `checker_called=true` 只证明注入 seam 被调用，不证明真实 Binance testnet key 连通；新增路径不产生裸 `place_order` 或 venue API 调用。
+- **测试**：execution boundary scoped **63 passed / 2 warnings**；realm-money + entrypoint scoped **20 passed / 2 warnings**；expanded Research OS/monitor/model/signal/execution/security scoped **195 passed / 2 warnings**；`compileall app/backend/app` **PASS**；`validate_dev` **49 ✅ / 0 ❌ / 0 ⚠️**（DAG 172）。
+- **落档**：新增 done 卡 `8d15d10c`。边界：这是 refs-only checker seam，不是真实 Binance testnet key 连通、真实 venue API 连通、live trading、broker connector、venue-native payload 生成或资金执行。
+
+## 2026-06-27 · Execution submit request builder seam（7ace6793）
+
+- **取前沿**：`9ca19020` 已把 submit request envelope 落成 append-only registry/API/QRO，但成功路径仍靠手工提交 refs。新 mint `7ace6793` 补 submit request builder seam。
+- **runtime/API**：新增 disabled `EXECUTION_SUBMIT_REQUEST_BUILDER` adapter；`POST /api/research-os/execution/submit_requests/run` 读取 recorded order materialization + ready venue capability，并解析对应 order intent/runtime promotion 后调用 builder。默认 disabled 会 422 且不写 submit request JSONL/QRO。
+- **builder gate**：fake builder 成功路径把 builder result 归一成 `ExecutionSubmitRequestRecord`，写 submit request registry 和 ExecutionPolicy QRO；builder result 继续拒 raw order、raw venue payload、quantity、price、notional、secret，也拒自报 direct `place_order` 或 venue API call。
+- **审计边界**：run endpoint 响应 `builder_called=true` 只证明注入 seam 被调用，不证明真实 venue-native payload builder 或真实 Binance testnet key 连通；新增路径不产生裸 `place_order` 或 venue API 调用。
+- **测试**：execution boundary scoped **67 passed / 2 warnings**；realm-money + entrypoint scoped **20 passed / 2 warnings**；expanded Research OS/monitor/model/signal/execution/security scoped **199 passed / 2 warnings**；`compileall app/backend/app` **PASS**；`validate_dev` **49 ✅ / 0 ❌ / 0 ⚠️**（DAG 173）。
+- **落档**：新增 done 卡 `7ace6793`。边界：这是 refs-only submit request builder seam，不是真实 Binance testnet key 连通、真实 venue API 连通、live trading、broker connector、venue-native raw payload 生成或资金执行。
+
+## 2026-06-27 · Execution guarded submission runner seam（951b443b）
+
+- **取前沿**：`7ace6793` 已让 submit request 可由 builder seam 生成，但 submission 仍需手工 POST 完整 refs。新 mint `951b443b` 补 submit_request-only runner。
+- **runtime/API**：新增 `POST /api/research-os/execution/order_submissions/run`；只接 `submit_request_ref`，解析 recorded submit request、order intent、runtime promotion、materialization、venue capability 后构造 `ExecutionOrderSubmissionRecord`。默认 `EXECUTION_ORDER_SUBMITTER` disabled 会 422 且不写 submission JSONL/QRO。
+- **submitter gate**：fake submitter 成功路径写 submission registry 和 ExecutionPolicy QRO；runner 继续拒 raw order、raw venue payload、quantity、price、notional、secret，也拒自报 direct `place_order` 或 direct venue API call。
+- **审计边界**：runner endpoint 响应 `submitter_called=true` 只证明注入 seam 被调用，不证明真实 Binance testnet key 连通、真实 venue API 连通或资金执行。
+- **测试**：execution boundary scoped **71 passed / 2 warnings**；realm-money + entrypoint scoped **20 passed / 2 warnings**；expanded Research OS/monitor/model/signal/execution/security scoped **203 passed / 2 warnings**；`compileall app/backend/app` **PASS**；`validate_dev` **49 ✅ / 0 ❌ / 0 ⚠️**（DAG 174）。
+- **落档**：新增 done 卡 `951b443b`。边界：这是 refs-only guarded submission runner seam，不是真实 Binance testnet key 连通、真实 venue API 连通、live trading、broker connector 或资金执行。
+
+## 2026-06-27 · Execution venue event ingester seam（6613a3fa）
+
+- **取前沿**：`951b443b` 已能从 ready submit request 进入 guarded submission runner，但 venue ack/fill event 仍需手工 POST。新 mint `6613a3fa` 补 submission→venue event ingester seam。
+- **runtime/API**：新增 disabled `EXECUTION_VENUE_EVENT_INGESTER` adapter；`POST /api/research-os/execution/venue_events/run` 只接 `submission_ref`，解析 recorded submission、order intent、runtime promotion 后调用 ingester。默认 disabled 会 422 且不写 venue event JSONL/QRO。
+- **ingester gate**：fake ingester 成功路径把 ingester result 归一成 `ExecutionVenueEventRecord`，写 venue event registry 和 ExecutionPolicy QRO；ingester result 继续拒 raw order、raw venue payload、quantity、price、notional、secret，也拒自报 direct `place_order` 或 direct venue API call；fill event 缺 fill/quantity/price refs 会被 validator 拒绝。
+- **审计边界**：run endpoint 响应 `ingester_called=true` 只证明注入 seam 被调用，不证明真实 Binance testnet ack/fill ingest、真实 venue API 连通或资金执行。
+- **测试**：execution boundary scoped **76 passed / 2 warnings**；realm-money + entrypoint scoped **20 passed / 2 warnings**；expanded Research OS/monitor/model/signal/execution/security scoped **208 passed / 2 warnings**；`compileall app/backend/app` **PASS**；`validate_dev` **49 ✅ / 0 ❌ / 0 ⚠️**（DAG 175）。
+- **落档**：新增 done 卡 `6613a3fa`。边界：这是 refs-only venue event ingester seam，不是真实 Binance testnet ack/fill ingest、真实 venue API 连通、live trading、broker connector 或资金执行。
+
+## 2026-06-27 · Market data asset registry and QRO write-through（24baede1）
+
+- **取前沿**：§11 已有 `market_data_contract.py` validator，能挡无 PIT confirmatory、跨币种资本账缺失、期权 terms 缺失、live capability 缺 permission、A股 live 和数据变换数学绑定缺失；但 DatasetSemantics、InstrumentSpec、MarketCapabilityMatrix 还没有作为 Research OS 资产写入 append-only registry/API/QRO。
+- **runtime/API**：新增 `PersistentMarketDataRegistry`、record parsers 和 `to_dict`；主 app 新增 `MARKET_DATA_REGISTRY`、`POST /api/research-os/market_data/datasets`、`POST /api/research-os/market_data/instruments`、`POST /api/research-os/market_data/capability_matrices`、`GET /api/research-os/market_data/summary`。
+- **QRO 接线**：DatasetSemantics 成功写 `QROType.DATASET`；InstrumentSpec 映射到当前已有 `QROType.DATA_SOURCE_ASSET`，QRO known_limits 明确当前没有专门 InstrumentSpec QRO type；MarketCapabilityMatrix 成功写 `QROType.MARKET_CAPABILITY_MATRIX`。output contract 均标明 `raw_data_stored=false`、`connector_called=false`，capability 额外标明 `venue_called=false`。
+- **对抗门**：confirmatory dataset 缺 known_at/effective_at/PIT、option InstrumentSpec 缺 expiry/strike/multiplier/settlement、live MarketCapabilityMatrix 缺 live permission、malformed history、raw rows/payload、plaintext secret 均 fail-closed；坏输入不写 registry，不写 Graph。
+- **测试**：`tests/test_market_data_contract.py` **12 passed / 2 warnings**；market data/onboarding/Graph/entrypoint adjacent scoped **63 passed / 2 warnings**；expanded Research OS/entrypoint/execution/model/RDP/compiler scoped **234 passed / 2 warnings**；`compileall app/backend/app` **PASS**；`validate_dev` **49 ✅ / 0 ❌ / 0 ⚠️**（DAG 176）。
+- **落档**：新增 done 卡 `24baede1`。边界：这是 §11 refs-only metadata registry/API/QRO，不是真实 data connector、行情下载、全资产自动同步、strategy builder 接线、execution path 接线、live provider permission proof 或真实 venue permission check。
+
+## 2026-06-27 · Market data use gate registry and QRO write-through（e2907891）
+
+- **取前沿**：`24baede1` 已把 DatasetSemantics、InstrumentSpec、MarketCapabilityMatrix 落成 registry/API/QRO，但下游仍可把裸 refs 拼成 MarketDataUseRequest。新卡补 refs-only use gate，要求使用方引用已登记 §11 资产后再进入 MarketDataUse validator。
+- **runtime/API**：新增 `MarketDataUseValidationRecord`、parser、validator 和 `PersistentMarketDataRegistry.record_use_validation` event；主 app 新增 `POST /api/research-os/market_data/use_requests`，成功通过后写 use validation registry 和 Research Graph QRO；summary 增加 `use_validations` / `use_validation_total`。
+- **QRO 接线**：use validation QRO 使用当前已有 `QROType.MARKET_CAPABILITY_MATRIX` 承载 capability-bound use gate；output contract 只存 refs 和 gate 状态，标明 `raw_data_stored=false`、`connector_called=false`、`strategy_builder_called=false`、`venue_called=false`。
+- **对抗门**：use request 引用未登记 dataset/instrument/capability、cross-currency 缺 base_currency/fx_conversion_ref、live use 引用 live=false matrix、raw rows/payload/secret 均 422；坏输入不写 use validation，不写 Graph command。
+- **测试**：`tests/test_market_data_contract.py` **17 passed / 2 warnings**；expanded Research OS/entrypoint/execution/model/RDP/compiler scoped **239 passed / 2 warnings**；`compileall app/backend/app` **PASS**。
+- **落档**：新增 done 卡 `e2907891`。边界：这是 refs-only MarketDataUse gate，不是 strategy builder 接线、execution order intent 强制引用、真实 connector、行情下载、live provider permission proof、真实 venue permission check 或全资产自动同步。
+
+## 2026-06-27 · Execution order intent requires MarketDataUse validation（0f977f03）
+
+- **取前沿**：`e2907891` 已把 MarketDataUse gate 落成 registry/API/QRO，但 `ExecutionOrderIntent` 仍可绕过它进入 paper/testnet/live 意图记录。新卡补 §11→§12 的 refs-only downlink。
+- **runtime/API**：`ExecutionOrderIntentRecord` 新增 `market_data_use_validation_ref`；validator 对 paper/testnet/live 强制要求该 ref；`POST /api/research-os/execution/order_intents` 写入前调用 `MARKET_DATA_REGISTRY.use_validation(ref)` 并要求 `accepted=true`。
+- **QRO 接线**：ExecutionPolicy QRO 的 evidence refs、lineage、implementation hash、input contract、output contract 和 summary 均包含 `market_data_use_validation_ref`；仍不保存 raw data rows、raw order、quantity、price、notional 或 secret。
+- **对抗门**：缺 `market_data_use_validation_ref`、unknown ref 或未 accepted ref 均 422；坏输入不写 order intent JSONL，不写 Research Graph command。
+- **测试**：`tests/test_execution_boundary_contract.py` **78 passed / 2 warnings**；market-data/execution/Graph/entrypoint/model/compiler/RDP adjacent scoped **228 passed / 2 warnings**；`compileall app/backend/app` **PASS**。
+- **落档**：新增 done 卡 `0f977f03`。边界：这是 execution order intent 对 accepted MarketDataUse validation 的 refs-only 强制引用，不是 strategy builder 接线、StrategyBook/portfolio promote 全入口强制引用、真实 connector、行情下载、live provider permission proof、真实 venue permission check 或全资产自动同步。
+
+## 2026-06-27 · StrategyBook requires MarketDataUse validation（2cee6b45）
+
+- **取前沿**：`e2907891` 已把 MarketDataUse gate 落成 registry/API/QRO，`0f977f03` 已把它强制接到 ExecutionOrderIntent；但 StrategyBook 仍可只引用 factor/signal/leg，不引用数据使用验证。新卡补 §11→§9 的 runtime validator gate。
+- **runtime**：`StrategyBookContract` 新增 `market_data_use_validation_refs`；`validate_strategy_book` 新增 `market_data_use_validations` 与 `require_market_data_use_validation`。开启 hard gate 后，每个 leg instrument 必须被 accepted `MarketDataUseValidationRecord.instrument_refs` 覆盖。
+- **对抗门**：缺 ref、unknown ref、未 accepted ref、validation 自身 violation、instrument 不覆盖均 fail-closed；错误码覆盖 `missing_market_data_use_validation_record`、`market_data_use_not_accepted`、`market_data_use_has_violations`、`missing_market_data_use_validation`。
+- **测试**：`tests/test_factor_strategy_boundary.py` **16 passed**；market-data/factor-lab/portfolio/model adjacent scoped **90 passed / 2 warnings**。
+- **落档**：新增 done 卡 `2cee6b45`。边界：这是 StrategyBook runtime validator 的 MarketDataUse hard gate，不是 portfolio promote API 接线、IDE strategy save/run 接线、strategy builder 全入口接线、真实 connector、行情下载或 live provider permission proof。
+
+## 2026-06-27 · Portfolio promote requires MarketDataUse validation（0a0dc8c5）
+
+- **取前沿**：`ba59fb7b` 已把 portfolio production promote 接成 `record=True` 一本账，`2c9f4e11` 已接 signal validation gate，`e2907891` 已有 MarketDataUse gate；但 promote 仍只校验 `dataset_version` 字符串和收益序列结构。新卡把 accepted MarketDataUse validation 接到 promote 前置门。
+- **runtime/API**：`/api/portfolios/{portfolio_id}/promote` 新增 `market_data_use_validation_refs` hard gate；每个 portfolio symbol 必须被 accepted `MarketDataUseValidationRecord.instrument_refs` 覆盖。gate 在 `gate_portfolio` 与 honest-N 消耗前执行。
+- **对抗门**：缺 ref、unknown ref、未 accepted ref、validation 带 violation、symbol 不覆盖均 422；坏输入不增加 honest-N，不写 portfolio gate record。
+- **测试**：`tests/test_portfolio_promote_api.py` **12 passed / 2 warnings**；market-data/factor/portfolio/model/Graph/entrypoint adjacent scoped **124 passed / 2 warnings**。
+- **落档**：新增 done 卡 `0a0dc8c5`。边界：这是 portfolio production promote 的 refs-only MarketDataUse hard gate，不是 strategy builder 全入口接线、IDE strategy save/run 接线、真实 connector、行情下载、live provider permission proof、真实 venue permission check 或 order emission。
+
+## 2026-06-27 · IDE strategy save requires MarketDataUse validation（06b1f745）
+
+- **取前沿**：`e2907891` 已把 MarketDataUse gate 落成 registry/API/QRO，且 `0f977f03` / `2cee6b45` / `0a0dc8c5` 已把它分别接到 order intent、StrategyBook validator、portfolio promote；但 `POST /api/ide/strategies` 仍可保存策略草稿并写 StrategyBook QRO，却不引用 accepted MarketDataUse validation。新卡闭合 IDE save 入口。
+- **runtime/API**：`ide_save_strategy` 在 `IDEService.save_strategy` 前解析 `market_data_use_validation_refs`，要求 list、非空、每个 ref resolve 到 accepted/no-violation `MarketDataUseValidationRecord`。缺 ref、unknown ref、未 accepted ref、带 violation ref 均 422，且不保存 strategy、不写 Research Graph command。
+- **QRO/审计**：`_record_ide_strategy_qro` 的 input/output contract、lineage 和 implementation hash 绑定 `market_data_use_validation_refs`；Graph audit allowlist 暴露 refs 字段，但仍不复制 raw strategy code 或 description。
+- **前端**：IDE 页面新增 MarketDataUse refs 输入，保存 payload 带 refs；`run()` 自动保存失败时停止，不再继续调用 run endpoint；新策略首次 run 使用 save 返回的策略名，避免 React state 尚未同步导致 run 打旧 name。
+- **测试**：`tests/test_strategy_console_s2.py` **32 passed / 2 warnings**；market-data/IDE/portfolio/Graph/Agent adjacent scoped **97 passed / 2 warnings**；`compileall app/backend/app` **PASS**；frontend build **tsc + vite PASS**（保留既有 chunk size warning）。
+- **落档**：新增 done 卡 `06b1f745`。边界：这是 IDE strategy save 的 refs-only MarketDataUse hard gate；IDE run gate 后续由 `84b1d0c6` 补齐；本卡不是 strategy builder 全入口接线、真实 connector、行情下载、live provider permission proof、真实 venue permission check 或 order emission。
+
+## 2026-06-27 · IDE strategy run requires MarketDataUse validation（84b1d0c6）
+
+- **取前沿**：`06b1f745` 已让 IDE save 在保存策略和写 StrategyBook QRO 前强制 accepted MarketDataUse refs，但 run 入口仍可能绕过数据使用证明。新卡闭合 `POST /api/ide/strategies/{name}/run` 的 sandbox 前门。
+- **runtime/API**：`IDEService` 持久化策略级 `market_data_use_validation_refs`，旧 SQLite 库自动补列，fork 继承 parent refs；run payload 可显式传 refs，未传时继承 saved strategy refs。
+- **run gate**：`ide_run_strategy` 在 `IDEService.run_strategy` 前校验 refs，要求 list、非空、每个 ref resolve 到 accepted/no-violation `MarketDataUseValidationRecord`。缺 ref、unknown ref、未 accepted ref 或 violation ref 均 422，且不生成 `i_runs`、不写 Research Graph command。
+- **QRO/审计**：BacktestRun QRO input/output contract、lineage、implementation hash 和 audit summary 绑定 `market_data_use_validation_refs`；Graph audit summary 仍不暴露 stdout、stderr、result payload 或 raw source。
+- **前端**：IDE `run()` payload 带 MarketDataUse refs。
+- **测试**：`tests/test_strategy_console_s2.py` **36 passed / 2 warnings**；`tests/test_ide.py` **23 passed**；market-data/IDE/portfolio/Graph/Agent adjacent scoped **124 passed / 2 warnings**；`compileall app/backend/app` **PASS**；frontend build **tsc + vite PASS**（保留既有 chunk size warning）。
+- **落档**：新增 done 卡 `84b1d0c6`。边界：这是 IDE strategy run 的 refs-only MarketDataUse hard gate，不是 strategy builder 全入口接线、真实 connector、行情下载、live provider permission proof、真实 venue permission check、order emission 或 sandbox code 对真实数据行消费的强证明。
+
+## 2026-06-27 · Agent strategy synthesis requires MarketDataUse validation（4b6f55dc）
+
+- **取前沿**：IDE save/run 已接 MarketDataUse gate，但 Agent `backtest.run` 的 `_synth_and_promote` 仍可从 StrategyGoal/组装意图合成策略、读样本、跑 sandbox 并 promote 成 run。新卡把 §11 数据使用门接到这个 strategy synthesis 前门。
+- **runtime/tool**：`_synth_and_promote` 开头解析 `market_data_use_validation_refs`，要求 list/string、非空、每个 ref resolve 到 accepted/no-violation `MarketDataUseValidationRecord`；`_agent_runtime` 注册 business tools 时注入 `MARKET_DATA_REGISTRY`；`backtest.run` tool schema 声明 refs 必填。
+- **no-write gate**：缺 ref、unknown ref、未 accepted ref 或 violation ref 均返回 error/no_write，且早于 LLM/code synthesis、sample read、sandbox run 和 promote；缺 refs 测试证明 LLM `complete()` 未被调用，坏 refs 不创建 `artifacts/experiments`。
+- **兼容边界**：正向 DS-1/DS-2/delivery 路径补 accepted refs；成功响应返回 `market_data_use_validation_refs`；旧 `run.json["assembly_inputs"]` shape 不变，不把 MarketDataUse refs 塞进 assembly metadata。
+- **测试**：DS-1/DS-2/delivery focused **26 passed / 2 warnings**；Agent/tool focused **38 passed / 2 warnings**；Agent/DS/Chat adjacent **97 passed / 2 warnings**；market-data/IDE/portfolio/execution adjacent **143 passed / 2 warnings**；`compileall app/backend/app` **PASS**。
+- **落档**：新增 done 卡 `4b6f55dc`。边界：这是 Agent `backtest.run` strategy synthesis 的 refs-only MarketDataUse hard gate，不是真实 connector、行情下载、live provider permission proof、真实 venue permission check、order emission、完整 strategy code generator、自动组合注入或 sandbox code 对真实数据行消费的强证明。
+
+## 2026-06-27 · IDE AI complete requires MarketDataUse validation（b7c35c82）
+
+- **取前沿**：IDE save/run 和 Agent `backtest.run` strategy synthesis 已接 MarketDataUse gate，但 IDE AI complete 仍可在保存/运行前调用 LLM 生成、解释或修复策略代码。新卡闭合 IDE strategy codegen 的 LLM 前门。
+- **runtime/API**：`ide_ai_complete` 在 prompt 非空后、LLM 调用前复用 IDE MarketDataUse refs validator；缺 ref、unknown ref、未 accepted ref 或 violation ref 均 422，不调用 LLM。
+- **QRO/审计**：LLMCallRecord QRO input/output contract、lineage、implementation hash、assumptions/known_limits 记录 `market_data_use_validation_refs`；仍不复制 prompt、context code 或 generated output。
+- **前端**：IDE AI complete payload 带同一组 MarketDataUse refs。
+- **对抗门**：缺 refs 与 violation refs 测试证明 fake LLM 不被调用，Research Graph command 数不增加；成功路径返回 refs，QRO 记录 refs且不泄露 prompt/context/output。
+- **测试**：`tests/test_strategy_console_s2.py` **38 passed / 2 warnings**；IDE/market-data/portfolio/execution adjacent **168 passed / 2 warnings**；Agent/DS/Chat adjacent **97 passed / 2 warnings**；`compileall app/backend/app` **PASS**；frontend build **tsc + vite PASS**（保留既有 chunk size warning）。
+- **落档**：新增 done 卡 `b7c35c82`。边界：这是 IDE AI complete strategy codegen 的 refs-only MarketDataUse hard gate，不是真实 connector、行情下载、live provider permission proof、真实 venue permission check、order emission、完整 strategy code generator 验证、自动组合注入或 sandbox code 对真实数据行消费的强证明。
+
+## 2026-06-27 · IDE promote requires MarketDataUse validation（d6c4a2b8）
+
+- **取前沿**：IDE save/run/AI complete 和 Agent strategy synthesis 已接 MarketDataUse gate，但 IDE promote 仍可只凭 ok sandbox run 和 result shape 写正式 Run。新 mint `d6c4a2b8` 补 sandbox run -> formal Run 的 MarketDataUse 前门。
+- **runtime/API**：`i_runs` 新增 `market_data_use_validation_refs`，旧 SQLite 库自动补列；`IDEService.run_strategy()` 默认继承 saved strategy refs，也可显式传 refs。`POST /api/ide/runs/{run_id}/promote` 在读取 result、调用 `promote_ide_run()`、写 QRO/Graph 前校验 refs。
+- **promote gate**：缺 refs、unknown ref、未 accepted ref 或 violation ref 均 422；对抗测试证明不会创建 promoted run 目录，也不会写 Research Graph command。
+- **QRO/前端**：promoted BacktestRun QRO input/output contract、lineage、implementation hash 和 assumptions 记录 refs；IDE 页面 promote payload 优先发送 active run refs，兼容旧 run 时使用当前输入框 refs。
+- **测试**：IDE scoped **66 passed / 2 warnings**；market-data/portfolio/execution/delivery/DS adjacent **133 passed / 2 warnings**；`compileall app/backend/app` **PASS**；frontend build **tsc + vite PASS**（保留既有 chunk size warning）。
+- **落档**：新增 done 卡 `d6c4a2b8`。边界：这是 IDE promote 的 refs-only MarketDataUse hard gate，不是真实 connector、行情下载、live provider permission proof、真实 venue permission check、order emission、完整 strategy code generator 验证、自动组合注入或 sandbox code 对真实数据行消费的强证明。
+
+## 2026-06-27 · Settings-managed Data Connector checks（aa10b25c）
+
+- **取前沿**：`73e78014` 已有 Settings/LLM Provider metadata registry/API，但 DataSourceAsset、IngestionSkill 和 data connector connection test 还没有持久化 Settings 入口。新卡补 §4 Data Onboarding 的第一条 refs-only connector check seam。
+- **runtime/API**：`PersistentOnboardingRegistry` 新增 DataSourceAsset、IngestionSkill、DataConnectorConnectionCheck 三类 append-only event 和 replay；主 app 新增 `/api/research-os/settings/data_sources`、`/ingestion_skills`、`/data_connector_checks`，summary 返回对应 totals 和 sanitized records。
+- **connector seam**：新增 `DATA_CONNECTOR_CONNECTION_CHECKER`，默认 disabled；API 会记录 `ok=false/status=disabled/health_status=disabled` 的诚实失败，不声称真实 provider 连通。调用 checker 前先验证 skill/source/SecretRef 已登记且 SecretRef 未 revoked。
+- **对抗门**：plaintext Settings payload、checker result 含明文 secret、revoked SecretRef、source/secret refs 不匹配均 422；坏输入不写 ConnectorCheck，revoked SecretRef 路径证明 checker 不被调用。
+- **前端**：Settings 安全页新增 Data Connectors panel，读取 `/api/research-os/settings/summary`，展示 source/skill/check refs，并按 `skill_id` 调用 `/api/research-os/settings/data_connector_checks`；页面不显示 raw key。
+- **测试**：`tests/test_onboarding_gateway.py` **20 passed / 2 warnings**；LLM/Settings scoped **36 passed / 2 warnings**；onboarding/LLM/market-data/spine adjacent **61 passed / 2 warnings**；targeted compileall **PASS**；frontend scoped **2 files / 10 tests passed**；frontend full **27 files / 301 tests passed**；frontend build **PASS**（保留既有 chunk-size warning）。
+- **落档**：新增 done 卡 `aa10b25c`。边界：这是 Settings-managed connector metadata + refs-only connection-check seam，不是真实 connector adapter、真实 secret value storage、OAuth/device-code/account auth、行情下载、schema scanner、DatasetVersion 写入、全资产自动同步、live provider permission proof 或 sandbox code 对真实数据行消费的强证明。
+
+## 2026-06-27 · IngestionSkill updates require DatasetVersion binding（addd2e4e）
+
+- **取前沿**：`aa10b25c` 已让 Settings 登记 DataSourceAsset/IngestionSkill/ConnectorCheck，但数据更新仍没有 append-only update registry/API，也未把更新记录绑定到真实 DatasetVersion/checksum/time axes。新卡补 §3/§4/§11 的 DataUpdate audit seam。
+- **runtime/API**：`IngestionSkillUpdateRecord` 新增 source_ref、secret_ref、known_at_ref、effective_at_ref、freshness/schema/row_count/evidence refs；新增 `PersistentAssetLifecycleRegistry` 和 `POST /api/research-os/settings/ingestion_skill_updates`。
+- **update gate**：endpoint 写入前确认 Settings IngestionSkill 存在、skill version/source 匹配、SecretRef 属于 skill 且未 revoked、`dataset_version_ref` 对应 `DatasetRegistry` 真实 version、checksum 匹配、row_count 匹配。
+- **对抗门**：缺 source/SecretRef/DatasetVersion/checksum/lineage/quality/known_at/effective_at、unknown DatasetVersion、checksum mismatch 均 fail-closed；坏输入不写 lifecycle update。
+- **前端**：Settings 安全页 Data Connectors panel 增加 update count、latest DatasetVersion、quality verdict、known_at/effective_at refs 展示。
+- **测试**：`tests/test_asset_lifecycle.py` **8 passed**；asset/onboarding scoped **31 passed / 2 warnings**；asset/onboarding/LLM/market-data/spine adjacent **72 passed / 2 warnings**；targeted compileall **PASS**；Settings frontend scoped **1 file / 1 test passed**；frontend build **PASS**（保留既有 chunk-size warning）。
+- **落档**：新增 done 卡 `addd2e4e`。边界：这是已有 DatasetVersion 的 refs/checksum 绑定和 ingestion update audit，不是真实 connector adapter、schema scanner、字段映射、PIT/bitemporal 自动生成、DatasetVersion 文件生成、全资产自动同步、live provider permission proof 或 raw data consumption proof。
+
+## 2026-06-27 · Settings IngestionSkill runner produces DatasetVersion files（e6f2b8a4）
+
+- **取前沿**：`aa10b25c` 已有 Settings connector check，`addd2e4e` 已能把 update 绑定已有 DatasetVersion，但还没有受控 producer 把 connector 结果写成 DatasetVersion 文件。新卡补 §4→§11→§3 的第一条 runner seam。
+- **runtime/API**：新增 `DATA_CONNECTOR_INGESTION_RUNNER`，默认 disabled；新增 `POST /api/research-os/settings/ingestion_skill_runs`。endpoint 要求 active IngestionSkill、active SecretRef 和 ok DataConnectorConnectionCheck，runner 返回 `FetchResult` 后重新校验 row_count/checksum/secret，原子写本地 parquet，登记 `DatasetRegistry`，并自动写 `IngestionSkillUpdateRecord`。
+- **dataset file**：成功路径写 `DATA_ROOT/datasets/ingestion/<dataset_id>/<sha12>.parquet`，DatasetVersion metadata 带 source、skill、connector_check、schema_probe、permission、PIT refs；响应只返回 refs/hash/path/row_count/update_ref，不返回 raw rows。
+- **对抗门**：缺 ok connector check 不调用 runner；默认 disabled runner 不写；checksum mismatch 不写；frame 含明文 secret 不写。
+- **前端**：Settings 安全页 Data Connectors panel 新增 `Run update`，使用最新 ok `connector_check_ref` 调 `/api/research-os/settings/ingestion_skill_runs`，展示 DatasetVersion ref、row_count 和 update_ref。
+- **测试**：`tests/test_onboarding_gateway.py` **28 passed / 2 warnings**；asset/onboarding scoped **36 passed / 2 warnings**；asset/onboarding/LLM/market-data/spine/data_quality adjacent **87 passed / 2 warnings**；targeted compileall **PASS**；Settings frontend scoped **1 file / 1 test passed**；frontend full **27 files / 301 tests passed**；frontend build **PASS**（保留既有 chunk-size warning）。
+- **落档**：新增 done 卡 `e6f2b8a4`。边界：这是注入式 runner seam + 本地 DatasetVersion 文件生成 + update audit，不是内置真实 connector adapter、真实行情下载、字段映射 wizard、PIT/bitemporal 自动推导、全资产自动同步、live provider permission proof、生产 scheduler 或外部 provider 实网连通证明。
+
+## 2026-06-27 · Settings ingestion schema probe registry and drift gate（2d7a91c3）
+
+- **取前沿**：`e6f2b8a4` 已让 runner 生成 DatasetVersion 文件，但 schema_probe 仍是裸 ref，没有可 replay schema scanner 记录和 drift gate。新卡补 §4/§11 schema scanner。
+- **runtime/registry**：新增 `DataConnectorSchemaProbeRecord`、`validate_data_connector_schema_probe()` 和 `data_connector_schema_probe_recorded` event；`PersistentOnboardingRegistry` 可 record/replay/access/list schema probes。
+- **run gate**：ingestion run 计算 columns/dtypes 的 `schema_signature_hash`，绑定 skill/source/ok connector check/DatasetVersion。首次 schema 为 `none`，相同 schema 为 `unchanged`；schema 变化时若缺 `schema_drift_event_ref` 或 `downstream_impact_refs`，在写 parquet 前 422，不写 DatasetVersion/schema probe/update。
+- **前端**：Settings 安全页 Data Connectors panel 显示 schema probe count、latest probe ref、drift status、columns count。
+- **测试**：`tests/test_onboarding_gateway.py` **30 passed / 2 warnings**；asset/onboarding scoped **38 passed / 2 warnings**；asset/onboarding/LLM/market-data/spine/data_quality adjacent **89 passed / 2 warnings**；targeted compileall **PASS**；Settings frontend scoped **1 file / 1 test passed**；frontend full **27 files / 301 tests passed**；frontend build **PASS**（保留既有 chunk-size warning）。
+- **落档**：新增 done 卡 `2d7a91c3`。边界：这是可 replay schema scanner record + drift gate，不是自动字段映射、语义类型推断、PIT/bitemporal 自动生成、真实 connector adapter、全资产自动同步、生产 scheduler 或外部 provider 实网连通证明。
+
+## 2026-06-27 · Settings data connector field mapping registry and UI（b7d0708b）
+
+- **取前沿**：`2d7a91c3` 已让 schema probe/drift gate 可 replay，但 schema 后的字段映射仍是裸 ref/旧 field catalog 辅助能力。新卡补 GOAL §2/§4/§11 的 Settings-managed field mapping record。
+- **runtime/registry**：新增 `DataConnectorFieldMappingRecord`、`data_connector_field_mapping_hash()`、`validate_data_connector_field_mapping()` 和 `data_connector_field_mapping_recorded` event；`PersistentOnboardingRegistry` 可 JSONL replay/access/list field mappings。
+- **API/UI**：新增 `POST /api/research-os/settings/data_connector_field_mappings`，绑定 recorded IngestionSkill/DataSourceAsset/SchemaProbe，缺 schema_probe_ref 时取该 skill 最新 probe；summary 返回 field mapping total/list。Settings 安全页 Data Connectors panel 显示 latest mapping，并可基于 schema probe 常见列名记录一版 mapping。
+- **对抗门**：未知 source column、未覆盖 observed columns、缺/未知/未映射 event_time、secret-like 字段、schema probe/scope mismatch、mapping_hash mismatch 均 fail-closed；API 坏输入不写 partial field mapping。
+- **测试**：`tests/test_onboarding_gateway.py` **32 passed / 2 warnings**；asset/onboarding scoped **40 passed / 2 warnings**；asset/onboarding/LLM/market-data/spine/data_quality adjacent **91 passed / 2 warnings**；targeted compileall **PASS**；Settings frontend scoped **1 file / 1 test passed**；frontend full **27 files / 301 tests passed**；frontend build **PASS**（保留既有 chunk-size warning）。
+- **落档**：新增 done 卡 `b7d0708b`。边界：这是可 replay Settings field mapping record/API/UI，不是完整字段映射 wizard、语义类型推断、PIT/bitemporal 自动生成、真实 connector adapter、全资产自动同步、生产 scheduler、live provider permission proof 或 confirmatory validation data-semantics proof。
+
+## 2026-06-27 · Settings PIT bitemporal rule registry and UI（22682f6a）
+
+- **取前沿**：`b7d0708b` 已让 schema probe 后的字段映射可 replay，但 `pit_bitemporal_rules_ref` 仍只是 IngestionSkill 上的裸字符串。新卡补 GOAL §4/§11 的 Settings-managed PIT/bitemporal rule record。
+- **runtime/registry**：新增 `DataConnectorPITBitemporalRuleRecord`、`data_connector_pit_bitemporal_rule_hash()`、`validate_data_connector_pit_bitemporal_rule()` 和 `data_connector_pit_bitemporal_rule_recorded` event；`PersistentOnboardingRegistry` 可 JSONL replay/access/list PIT/bitemporal rules。
+- **API/UI**：新增 `POST /api/research-os/settings/pit_bitemporal_rules`，绑定 recorded IngestionSkill/DataSourceAsset/FieldMapping/SchemaProbe；缺 field_mapping_ref 时取该 skill 最新 mapping。summary 返回 PIT rule total/list。Settings 安全页 Data Connectors panel 显示 latest rule，并可从 field mapping 生成一版 PIT-safe rule payload。
+- **对抗门**：rule_ref 不匹配 skill、event_time 不在 schema 或不等于 field mapping axis、`current_snapshot/full_history/latest` 等非 PIT-safe as-of policy、缺 field mapping/schema probe evidence、rule_hash mismatch 均 fail-closed；API 坏输入不写 partial PIT rule。
+- **测试**：`tests/test_onboarding_gateway.py` **33 passed / 2 warnings**；asset/onboarding/LLM/market-data/spine/data_quality adjacent **92 passed / 2 warnings**；targeted compileall **PASS**；Settings frontend scoped **1 file / 1 test passed**；frontend full **27 files / 301 tests passed**；frontend build **PASS**（保留既有 chunk-size warning）。
+- **落档**：新增 done 卡 `22682f6a`。边界：这是可 replay Settings PIT/bitemporal rule record/API/UI，不是完整 PIT 推导 wizard、语义类型推断、真实 connector adapter、全资产自动同步、生产 scheduler、live provider permission proof 或 confirmatory validation proof；当时不含 DatasetSemantics 生成，已由 `6886f4e4` 补齐第一条 Settings 自动登记路径。
+
+## 2026-06-27 · Settings DatasetSemantics generation from ingestion update and PIT rule（6886f4e4）
+
+- **取前沿**：`22682f6a` 已把 PIT/bitemporal rule 做成可 replay record，但 Settings ingestion run 产出的 DatasetVersion / update 还没有自动闭合到 §11 `DatasetSemanticsRecord` 和 Dataset QRO。新卡补 Settings 链路从 update + PIT rule 到 MarketData registry 的第一条生成路径。
+- **runtime/API**：新增 `POST /api/research-os/settings/dataset_semantics`，读取 recorded IngestionSkill、DataSourceAsset、IngestionSkillUpdate、DatasetVersion、PIT/bitemporal rule，校验 skill/source/update/DatasetVersion/checksum/PIT rule 匹配后组装 `DatasetSemanticsRecord`，默认以 `confirmatory_validation` 写 `MARKET_DATA_REGISTRY.record_dataset(...)`。
+- **QRO/summary**：endpoint 复用 `_record_market_data_dataset_qro()` 写 Dataset QRO/Research Graph command；响应明确 `raw_data_stored=false`、`connector_called=false`。Settings summary 增加 `market_data_dataset_total` 和 `market_data_datasets`，Settings 安全页 Data Connectors panel 显示 latest DatasetSemantics，并在 latest update + PIT rule 存在时可触发登记。
+- **对抗门**：缺 recorded PIT rule、坏 update_ref、DatasetVersion 不存在或 checksum mismatch 均 422；坏输入不写 MarketData registry，不写 Research Graph command。
+- **测试**：`tests/test_onboarding_gateway.py` **33 passed / 2 warnings**；asset/onboarding/LLM/market-data/spine/data_quality adjacent **92 passed / 2 warnings**；targeted compileall **PASS**；Settings frontend scoped **1 file / 1 test passed**；frontend full **27 files / 301 tests passed**；frontend build **PASS**（保留既有 chunk-size warning）。
+- **落档**：新增 done 卡 `6886f4e4`。边界：这是 Settings 链路到 refs-only DatasetSemantics + Dataset QRO 的闭合，不是 InstrumentSpec/Capability/MarketDataUseValidation 自动生成，不是实际策略消费数据行证明，不是真实 connector adapter、全资产自动同步、生产 scheduler、CI、线上或用户验收。
+
+## 2026-06-27 · Settings InstrumentSpec and CapabilityMatrix generation from DatasetSemantics（ebaaefd1）
+
+- **取前沿**：`6886f4e4` 已让 Settings ingestion update + PIT rule 生成 DatasetSemantics/QRO，但 §11 下游 MarketDataUse gate 仍需要 InstrumentSpec 和 MarketCapabilityMatrix。新卡补 Settings 链路从 DatasetSemantics 到标的/能力 metadata 的生成路径。
+- **runtime/API**：新增 `POST /api/research-os/settings/instrument_specs`，读取 recorded IngestionSkill、DataSourceAsset、DatasetSemantics 和 PIT rule，生成 `InstrumentSpec` 并写 `MARKET_DATA_REGISTRY.record_instrument()`；新增 `POST /api/research-os/settings/capability_matrices`，从 recorded DatasetSemantics + InstrumentSpec 生成默认 research/backtest/paper capability，live/testnet 默认 false。
+- **QRO/summary/UI**：两个 endpoint 均复用现有 market-data QRO 写入函数；响应明确 `raw_data_stored=false`、`connector_called=false`、`venue_called=false`。Settings summary 增加 `market_data_instrument_total` / `market_data_instruments` 和 `market_data_capability_matrix_total` / `market_data_capability_matrices`；Settings 安全页显示 latest instrument/capability 并提供 Instrument / Capability 按钮。
+- **对抗门**：缺 recorded DatasetSemantics 时 InstrumentSpec 422，不写 instrument/QRO；A股/`cn_equity` live capability 仍由现有 validator 422，不写 capability/QRO。
+- **测试**：`tests/test_onboarding_gateway.py` **33 passed / 2 warnings**；asset/onboarding/LLM/market-data/spine/data_quality adjacent **92 passed / 2 warnings**；targeted compileall **PASS**；Settings frontend scoped **1 file / 1 test passed**；frontend full **27 files / 301 tests passed**；frontend build **PASS**（保留既有 chunk-size warning）。
+- **落档**：新增 done 卡 `ebaaefd1`。边界：这是 Settings 链路到 refs-only InstrumentSpec + CapabilityMatrix + QRO 的闭合，不是 MarketDataUseValidation 自动生成，不是实际策略消费数据行证明，不是真实 connector adapter、全资产自动同步、生产 scheduler、CI、线上或用户验收。
+
+## 2026-06-27 · Settings MarketDataUseValidation generation from onboarding refs（e65a6e96）
+
+- **取前沿**：`ebaaefd1` 已让 Settings 链路生成 DatasetSemantics、InstrumentSpec 和 CapabilityMatrix，但 IDE/Agent/portfolio/execution 下游强制引用的是 accepted MarketDataUseValidation ref。新卡补 Settings 链路到下游数据使用 gate 的 refs-only validation。
+- **runtime/API**：新增 `POST /api/research-os/settings/market_data_use_validations`，从 recorded DatasetSemantics、InstrumentSpec、CapabilityMatrix 构造 `MarketDataUseRequest`，复用 `validate_market_data_use()`，成功后写 `MARKET_DATA_REGISTRY.record_use_validation()`。
+- **QRO/summary/UI**：endpoint 复用 `_record_market_data_use_validation_qro()`；响应明确 `raw_data_stored=false`、`connector_called=false`、`strategy_builder_called=false`、`venue_called=false`。Settings summary 增加 `market_data_use_validation_total` / `market_data_use_validations`；Settings 安全页显示 latest validation 并提供 MarketDataUse 按钮。
+- **对抗门**：缺 recorded CapabilityMatrix 时 422，不写 validation/QRO；验证仍经过 DatasetSemantics、InstrumentSpec 和 CapabilityMatrix validators。
+- **测试**：`tests/test_onboarding_gateway.py` **33 passed / 2 warnings**；asset/onboarding/LLM/market-data/spine/data_quality adjacent **92 passed / 2 warnings**；targeted compileall **PASS**；Settings frontend scoped **1 file / 1 test passed**；frontend full **27 files / 301 tests passed**；frontend build **PASS**（保留既有 chunk-size warning）。
+- **落档**：新增 done 卡 `e65a6e96`。边界：这是 Settings 链路到 refs-only accepted MarketDataUseValidation + QRO 的闭合，不是下游自动注入，不是实际策略消费数据行证明，不是真实 connector adapter、全资产自动同步、生产 scheduler、CI、线上或用户验收。
+
+## 2026-06-27 · Settings SecretValue storage for SecretRef-backed connectors（4b7e2c19）
+
+- **取前沿**：`e65a6e96` 已把 Settings Data Connector 链路闭合到 accepted MarketDataUseValidation，但 §4/§16 仍把 “SecretRef metadata 不等于真实 secret value backend” 留为缺口。新卡补 Settings-managed Data Connector secret value storage。
+- **runtime/API**：新增 `POST /api/research-os/settings/secret_values`，这是 Settings 下唯一允许接收 plaintext credential 的 SecretValue 入口；endpoint 先构造并验证 SecretRef metadata，再写 `SecureKeystore`，并把 metadata `access_audit` 绑定到 `keystore:<name>`。
+- **summary/gate**：SecretRef summary 返回 `keystore_refs`、`secret_value_stored`、`keystore_backend`，不返回 value 或 note。Data Connector check/run 在 SecretRef metadata 声明 keystore ref 时先确认 value 存在；缺 value 时 422 且不调用 checker/runner。
+- **前端**：Settings 安全页 Data Connectors panel 显示 per-SecretRef stored/missing 状态、backend/ref，并提供 password 输入与 Store value 按钮；成功回执只显示 keystore ref/backend。
+- **对抗门**：revoked SecretRef 不能写 value；metadata-only endpoint 仍拒绝 plaintext payload；declared keystore missing 会在 checker 前 fail-closed；fake checker 可通过 keystore ref 自行 fetch value，但 response/summary/UI 不回显 value。
+- **测试**：`tests/test_onboarding_gateway.py` **37 passed / 2 warnings**；asset/onboarding/LLM/market-data/spine/data_quality adjacent **96 passed / 2 warnings**；targeted compileall **PASS**；Settings frontend scoped **1 file / 1 test passed**；frontend full **27 files / 301 tests passed**；frontend build **PASS**（保留既有 chunk-size warning）。
+- **落档**：新增 done 卡 `4b7e2c19`。边界：这是 Settings-managed secret value storage + declared keystore presence gate，不是 OAuth/device-code/account auth、生产 keyring/HSM 选择、真实 connector adapter、外部 provider 实网连通、CI、线上或用户验收。
+
+## 2026-06-27 · Settings registry-backed data connector adapter（adf0c2a4）
+
+- **取前沿**：`4b7e2c19` 已让 Settings SecretRef value 进入 `SecureKeystore`，但 Settings Data Connector check/run 默认仍需要外部注入 fake/disabled runner。新卡补 GOAL §4/§11 的第一条内置 connector registry adapter。
+- **runtime/API**：新增 Settings connector-name 推断、keystore-backed Tushare connector 实例化、`FetchRequest` 构造、`SettingsRegistryDataConnectorConnectionChecker` 和 `SettingsRegistryDataConnectorIngestionRunner`，并设为默认 `DATA_CONNECTOR_CONNECTION_CHECKER` / `DATA_CONNECTOR_INGESTION_RUNNER`。
+- **connector path**：Tushare adapter 从 SecretRef declared keystore value 读取 token 后实例化 `TushareConnector(token=...)`；connection check 调 connector `health_check()`，ingestion run 调 connector `fetch()`，再复用现有 `FetchResult` row_count/checksum/plaintext-frame gate、DatasetVersion parquet writer、schema probe 和 IngestionSkillUpdate 管线。
+- **对抗门**：fake Tushare SDK 测试确认 adapter 使用 Settings keystore token，不读 env 绕过 Settings；check/run response 不回显 token；declared keystore 缺 value、revoked SecretRef、bad runner result 仍由既有 gate fail-closed。
+- **测试**：`tests/test_onboarding_gateway.py` **39 passed / 2 warnings**；connectors + asset/onboarding/LLM/market-data/spine/data_quality adjacent **110 passed / 2 warnings**；targeted compileall **PASS**。
+- **落档**：新增 done 卡 `adf0c2a4`。边界：这是内置 connector registry adapter seam 和 fake SDK 证明，不是外部 Tushare/Binance 实网连通、完整 connector/provider adapter 覆盖、OAuth/device-code/account auth、生产 keyring/HSM 选择、CI、线上或用户验收。
+
+## 2026-06-27 · Settings Binance public connector adapter coverage（a6dcb50f）
+
+- **取前沿**：`adf0c2a4` 已证明 Tushare SecretRef-backed adapter；§4/§11 仍缺 no-auth public connector path。新卡覆盖 Binance public REST connector，不让空 SecretRef 被误判成普通缺 credential，也不把 fake method 测试说成实网连通。
+- **runtime/API**：新增 `ingestion_skill_allows_no_secret_connector()`，只有 `auth_mode=none/no_auth/public`、无 `auth_ref`、无 `secret_refs` 时允许 no-auth connector check。Settings connector resolver 对 `binance_rest_spot` / `binance_rest_usdm` 显式构造 `BinanceRESTConnector`。
+- **run/update**：no-auth ingestion run 继续要求 ok DataConnectorConnectionCheck；runner 调 connector `fetch()` 产 `FetchResult`，复用 DatasetVersion/schema probe/IngestionSkillUpdate gate；update 写 `secret:none:<connector_name>` 作为审计占位。
+- **对抗门**：fake Binance connector method 测试确认 check 调 `health_check()`、run 调 `fetch()`、secret_refs 为空时仅显式 no-auth skill 可通过、DatasetVersion/update 被写入、响应不回显 secret 字段。
+- **测试**：`tests/test_onboarding_gateway.py` **41 passed / 2 warnings**；connectors + asset/onboarding/LLM/market-data/spine/data_quality adjacent **112 passed / 2 warnings**；targeted compileall **PASS**。
+- **落档**：新增 done 卡 `a6dcb50f`。边界：这是 Binance public connector no-auth seam 和 fake method proof，不是真实 Binance REST 实网连通、真实 Binance testnet key、venue permission proof、完整 provider adapter catalog、CI、线上或用户验收。
+
+## 2026-06-27 · Settings data connector one-shot onboarding run（ce49ca21）
+
+- **取前沿**：`e65a6e96` 已让 Settings 链路逐步闭合到 accepted MarketDataUseValidation；`4b7e2c19` / `adf0c2a4` / `a6dcb50f` 已补 SecretValue、Tushare adapter 和 Binance public no-auth adapter。新卡把散端点收成后端 one-shot onboarding run。
+- **runtime/API**：新增 `POST /api/research-os/settings/data_connector_onboarding_runs`，按 step 串联 connection check、ingestion run、field mapping、PIT/bitemporal rule、DatasetSemantics、InstrumentSpec、CapabilityMatrix 和 MarketDataUseValidation。每步复用现有 endpoint/validator，不新增第二套验证路径。
+- **field mapping**：未显式传 mapping 时，只对常见 event_time/symbol/OHLCV/amount/market/interval 字段做 conservative inference，其余 observed columns 进入 `unmapped_columns`，并标记 `mapping_method=agent_suggested`。
+- **对抗门**：成功路径产 accepted MarketDataUseValidation；坏 mapping 在 `field_mapping` step 返回 `failed_step` + `completed_steps`，已发生 check/run 保留为审计事实，但不写 field mapping、PIT rule、DatasetSemantics、InstrumentSpec、CapabilityMatrix、MarketDataUseValidation 或 Graph command。
+- **测试**：`tests/test_onboarding_gateway.py` **43 passed / 2 warnings**；connectors + asset/onboarding/LLM/market-data/spine/data_quality adjacent **114 passed / 2 warnings**；targeted compileall **PASS**；`validate_dev` **49 ✅ / 0 ❌ / 0 ⚠️ PASS**。
+- **落档**：新增 done 卡 `ce49ca21`。边界：这是后端 one-shot onboarding seam 和 fake checker/runner proof，不是真实 provider 实网连通、完整 Settings wizard、下游 strategy auto-injection、venue execution、CI、线上或用户验收。
+
+## 2026-06-27 · Settings Data Connector one-shot onboarding UI（8ba1997f）
+
+- **取前沿**：`ce49ca21` 已有后端 one-shot onboarding seam，但 Settings 安全页仍需要 user 逐步点击 check/run/mapping/PIT/semantics/instrument/capability/use；同时 `secret_refs=[]` 的 public no-auth connector 会被前端误禁用测试和 run update。
+- **前端 UI**：Settings Security 的 Data Connectors panel 新增 `Run onboarding` 动作，调用 `/api/research-os/settings/data_connector_onboarding_runs`；成功显示 `run_ref`、`market_data_use_validation_ref` 和 completed step count；失败显示 `failed_step`、`completed_steps` 和 sanitized error。
+- **no-auth 修正**：`测试连接` / `Run update` 不再因为 `secret_refs=[]` 被前端禁用，no-auth/public 与 SecretRef gate 交给后端 validator 和 connector resolver 裁决。
+- **对抗门**：测试覆盖 one-shot 成功调用、422 failed_step 展示、public no-auth connector 按钮启用、SecretValue 不回显。
+- **测试**：`SettingsSecurityPage.test.tsx` **1 file / 2 tests passed**；frontend full **27 files / 302 tests passed**；frontend build **PASS**（保留既有 chunk-size warning）。
+- **落档**：新增 done 卡 `8ba1997f`。边界：这是 Settings Data Connector one-shot UI seam，不是真实 provider 实网连通、完整字段映射/PIT wizard、下游 strategy auto-injection、venue execution、CI、线上或用户验收。
+
+## 2026-06-27 · Settings editable Data Connector field mapping and PIT wizard（f11f8c4c）
+
+- **取前沿**：`8ba1997f` 暴露了 one-shot onboarding，但 `Record mapping` / `PIT rules` 仍由前端硬推断默认 payload。新卡补 GOAL §4/§11 的可编辑字段映射/PIT wizard seam。
+- **前端 UI**：Data Connectors panel 基于 schema probe columns 渲染 canonical role select，用户可指定 `event_time`、`instrument_id`、OHLCV/amount/market/interval 等 canonical roles；ignored columns 进入 `unmapped_columns`。
+- **time/PIT controls**：新增 `event_time_column`、`known_at_column`、`effective_at_column`、`symbol_column` selectors；PIT rule 可编辑 event/known/effective columns、known/effective policies、as-of policy、restatement policy 和 timezone。
+- **对抗门**：提交仍调用既有 `/data_connector_field_mappings` 与 `/pit_bitemporal_rules` endpoint，不复制后端 validator；unsafe `current_snapshot` 等 policy 由后端 422，UI 显示失败原因。
+- **测试**：`SettingsSecurityPage.test.tsx` **1 file / 3 tests passed**；frontend full **27 files / 303 tests passed**；frontend build **PASS**（保留既有 chunk-size warning）。
+- **落档**：新增 done 卡 `f11f8c4c`。边界：这是 Settings editable field mapping/PIT UI seam，不是真实 provider 实网连通、完整 provider catalog、生产 scheduler、下游 strategy auto-injection、CI、线上或用户验收。
+
+## 2026-06-27 · Settings Generic REST connector YAML adapter（0fca8ad6）
+
+- **取前沿**：`adf0c2a4` / `a6dcb50f` 已覆盖 Tushare 和 Binance hardcoded adapters，`f11f8c4c` 已补 editable mapping/PIT UI，但 GOAL §4/§11 仍缺可扩展 provider adapter。新卡把已有 `GenericRESTConnector` 接入 Settings resolver。
+- **runtime/API**：`_settings_connector_for_skill()` 支持 `connector_name=generic_rest` / `generic_rest_yaml` / `generic_rest_config`；从 `IngestionSkill.connector_config` 或 request override 读取 `generic_rest_yaml` / `connector_yaml` / `generic_rest_config` / `connector_config`，构造 `GenericRESTConnector`，并拒绝 `auth.static_value`。
+- **check/run**：Generic REST adapter 使用 YAML 内的 `connector_name` 作为 capability/source/audit 名称；Settings checker 调 `health_check()`，runner 调 `fetch()`，随后复用 DatasetVersion parquet writer、schema probe 和 IngestionSkillUpdate 管线。无 SecretRef 时仍要求 `auth_mode=none` 等既有 no-auth gate。
+- **对抗门**：缺 YAML/config 不假绿，按现有 checker 契约记录 `status=failed` / `ok=false` 的 audited check；mocked Generic REST check/run 证明实例来自 per-skill YAML，不走全局 singleton；response 不回显 `api_key`、`sk-live` 或 `static_value`。
+- **测试**：`tests/test_onboarding_gateway.py` **45 passed / 2 warnings**；connectors + asset/onboarding/LLM/market-data/spine/data_quality adjacent **116 passed / 2 warnings**；targeted compileall **PASS**。
+- **落档**：新增 done 卡 `0fca8ad6`。边界：这是 Generic REST YAML adapter seam 和 fake method proof，不是真实外网 provider 连通、完整 provider catalog、OAuth/device-code/account auth、生产 scheduler、下游 strategy auto-injection、CI、线上或用户验收。
+
+## 2026-06-27 · Settings Generic REST connector draft UI（8c774e19）
+
+- **取前沿**：`0fca8ad6` 已有后端 Generic REST YAML adapter，但 Settings UI 仍只能操作已有 summary 里的 skill/source。新卡补 Generic REST source/skill draft 表单，不新增后端 bypass。
+- **前端 UI**：Data Connectors panel 新增 Generic REST YAML draft，用户可填写 source ref/url、skill id、dataset/schema/PIT refs、symbol/market/interval/start/end 和 YAML；提交先写 `/api/research-os/settings/data_sources`，再写 `/api/research-os/settings/ingestion_skills`。
+- **payload contract**：IngestionSkill 固定 `source_type=generic_rest_api`、`connector_config.connector_name=generic_rest`、`auth_mode=none`、`generic_rest_yaml=<textarea>`、`secret_refs=[]`，后续 test/run/onboarding 仍由既有 Settings 后端 gates 执行。
+- **对抗门**：测试确认登记动作只调用 DataSource/IngestionSkill endpoints，不触发 connection check/run 假绿；第二步失败时 UI 显示失败并保留 source recorded 事实；UI 不接收 SecretValue。
+- **测试**：`SettingsSecurityPage.test.tsx` **1 file / 4 tests passed**；frontend full **27 files / 304 tests passed**；frontend build **PASS**（保留既有 chunk-size warning）。
+- **落档**：新增 done 卡 `8c774e19`。边界：这是 Settings Generic REST metadata draft UI，不是真实 provider 实网连通、完整 provider marketplace、OAuth/device-code/account auth、生产 scheduler、下游 strategy auto-injection、CI、线上或用户验收。
+
+## 2026-06-27 · Methodology validation depth registry and API（b6bf792c）
+
+- **取前沿**：§10 已有 `ValidationMethodologyRecord`，但状态仍把 CPCV + walk-forward 双轨、conformal/abstain、TCA、feature-level leakage probes、fault injection 与 recovery drill 列为验证纵深缺口。新卡补 first-class validation-depth runtime record，不伪造外部计算已执行。
+- **runtime/API**：新增 `ValidationDepthRecord`、`validate_validation_depth()`、`PersistentValidationDepthRegistry`；`POST /api/research-os/methodology/validation_depth_records` 写 JSONL append-only event，`GET /api/research-os/methodology/summary` 返回 refs/verdict 摘要。
+- **对抗门**：strong label 缺 CPCV+walk-forward、conformal、abstain、feature leakage probe 会拒绝；paper/testnet/live/production 缺 TCA/cost、fault injection、recovery drill 会拒绝；non-passing verdict、silent mock fallback、user-waived strong overclaim 会拒绝；API 失败不写 partial JSONL。
+- **测试**：`tests/test_methodology_validation.py` **13 passed / 2 warnings**；methodology/spine/trust/goal/compiler adjacent **52 passed / 2 warnings**；`python -m compileall -q app/backend/app` PASS。
+- **落档**：新增 done 卡 `b6bf792c`。边界：这是 validation-depth 证据 refs registry/API，不是 CPCV/conformal/TCA 计算器、真实 broker/venue fault drill、production scheduler、完整 validation dossier UI、CI、线上或用户验收。
+
+## 2026-06-27 · Trust release gate registry for RDP publish（e9c58149）
+
+- **取前沿**：§13 `TrustReleaseGateRecord` 已有 contract，但 RDP local publish 可不带 release gate。新卡把 trust release gate 接到 RDP publish 流水线。
+- **runtime/API**：新增 `PersistentTrustReleaseGateRegistry`、`trust_release_gate_record_from_dict()`、`POST /api/research-os/trust/release_gates` 和 `GET /api/research-os/trust/summary`。
+- **RDP publish gate**：`RDPPackagePublishRecord` 新增 `trust_release_ref`；`/api/research-os/rdp/manifests/{package_id}/publish` 在 export/publish 前要求 payload `trust_release_ref` 已登记，缺 ref 或 unknown ref 422 且不写 publish record。旧 publish JSONL 无该字段仍可 replay。
+- **前端 UI**：`RDPExportPanel` local publish 增加 `trust_release_ref` 输入，空 ref 前端阻断，不打后端；成功 publication 显示 gate ref。
+- **对抗门**：release gate 缺任一 §13 检查 ref 不写 JSONL；RDP publish 缺/未知 trust gate 不写 publication；成功 publish 和 publications summary 回显 `trust_release_ref`。
+- **测试**：`tests/test_trust_layer.py` + `tests/test_research_os_rdp_publish.py` **20 passed / 2 warnings**；trust/RDP adjacent **47 passed / 2 warnings**；`python -m compileall -q app/backend/app` PASS；`RDPExportPanel.test.tsx` **1 file / 6 tests passed**；RDP/agent-workbench frontend scoped **2 files / 46 tests passed**；frontend build PASS（保留既有 chunk-size warning）。
+- **落档**：新增 done 卡 `e9c58149`。边界：这是 RDP local publish 的 trust gate ref 接线和既有 publish UI 的入参同步，不是完整 release gate 管理 UI、专家工作流、自动压力测试生成器、外部 object-store publish、CI、线上或用户验收。
+
+## 2026-06-27 · Mathematical Spine full-chain registry and API（ecc6b957）
+
+- **取前沿**：`TheoryImplementationBinding` / `ConsistencyCheck` 已建，但状态仍写明 Mathematical Spine 未贯穿 data→factor→model→signal→portfolio→execution→backtest→attribution→monitor。新卡补 full-chain refs registry/API。
+- **runtime/API**：新增 `MathematicalSpineChainRecord`、`validate_mathematical_spine_chain()`、`PersistentMathematicalSpineChainRegistry`；`POST /api/research-os/spine/mathematical_chains` 写 JSONL append-only event，summary 返回全链 refs。
+- **对抗门**：缺 data/factor/model/forecast/signal/strategy/portfolio/risk/execution/backtest/attribution/monitor 任一关键 ref、缺 theory/consistency/evidence/validation refs、consistency 非 checked/accepted 或 silent mock fallback 均拒绝；API 用 current user 覆盖 payload `recorded_by`。
+- **测试**：`tests/test_research_os_spine.py` **13 passed / 2 warnings**；spine/methodology/trust/goal/compiler/factor/execution adjacent **154 passed / 2 warnings**；`python -m compileall -q app/backend/app` PASS。
+- **落档**：新增 done 卡 `ecc6b957`。边界：这是 full-chain Mathematical Spine refs record/API，不是所有生产者自动写入、完整 compiler pass、strategy code generator、完整 graph database、前端 inspector UI、CI、线上或用户验收。
+
+## 2026-06-27 · GOAL entrypoint spine coverage registry and API（173405ef）
+
+- **取前沿**：§0/§1/§7/§8 已有 QRO/Graph/Compiler 多个入口接线，但状态仍写明全入口单一路径未闭合。新卡补 entrypoint coverage refs registry/API，用来证明某个入口是否已走 QRO -> Graph -> Compiler -> Evidence/Validation。
+- **runtime/API**：新增 `GoalEntrypointCoverageRecord`、`validate_goal_entrypoint_coverage()`、`validate_goal_entrypoint_coverage_manifest()`、`PersistentGoalEntrypointCoverageRegistry`；`POST /api/research-os/goal/entrypoint_coverage_records` 写 JSONL append-only event，summary 返回 present/missing entry sources；`POST /api/research-os/compiler/compile_qro` 和 `POST /api/research-os/compiler/passes` 成功记录 IR/pass 后自动写 entrypoint coverage 并返回 `entrypoint_coverage_ref`。
+- **对抗门**：缺 QRO、Research Graph command、Compiler IR/pass、evidence、validation、permission、replay refs 均拒绝；unknown EntrySource/GOAL section、silent mock fallback、raw payload persisted 均拒绝；all-entrypoints-wired claim 缺 Chat/Canvas/API/IDE/Scheduler/Agent Shell 任一入口会 fail；unknown QRO、缺 evidence 或 silent mock coverage 的 `compile_qro` 失败路径不写 compiler/coverage partial record；silent mock IR 的 direct pass coverage 失败路径不写 pass/coverage partial record。
+- **测试**：`tests/test_goal_coverage.py` **13 passed / 2 warnings**；goal/compiler scoped **31 passed / 2 warnings**；goal/compiler/spine/methodology/trust adjacent **70 passed / 2 warnings**；`python -m compileall -q app/backend/app` PASS。
+- **落档**：新增 done 卡 `173405ef`。边界：这是 entrypoint coverage 证据 refs registry/API，不是所有入口 producer 自动接线、完整 compiler implementation、strategy code generator、CI、线上或用户验收。
+
+## 2026-06-27 · RDP manifest upstream compiler coverage and math spine gate（31870f62）
+
+- **取前沿**：`173405ef` / `41b7c9e2` / `0b3f6a91` 已把 compiler artifact 绑定到 entrypoint coverage 和 Mathematical Spine chain；`e9c58149` 已把 RDP publish 绑定 trust release gate。新卡补 RDP manifest 本体的 upstream refs 硬门。
+- **runtime/API**：`RDPManifest` 新增 `compiler_artifact_refs`、`mathematical_spine_chain_refs`、`goal_entrypoint_coverage_refs`；RDP record/materialize/bundle/deployment attestation/archive/source-run integrity/publish 入口在继续前校验三类 refs 已登记，并要求 coverage lifecycle refs 覆盖 compiler artifact 和 chain refs。
+- **open package**：materialized `refs.json` 打包三类 upstream refs，交付包可审计其 compiler artifact、Mathematical Spine chain 和 entrypoint coverage 来源。
+- **对抗门**：缺三类 refs 的 manifest 被 validator 拒绝；未登记 compiler artifact 422 且不写 RDP manifest；replay/detail/materialized refs 保留三类 refs。
+- **测试**：RDP scoped **56 passed / 2 warnings**；goal/compiler/trust/RDP adjacent **102 passed / 2 warnings**。
+- **落档**：新增 done 卡 `31870f62`。边界：这是 RDP manifest 的上游 refs gate，不是所有 GOAL 入口闭合、完整 compiler pass/strategy codegen、外部 publish、CI、线上或用户验收。
+
+## 2026-06-27 · RDP publish source-run and live deployment attestation gate（d14e2309）
+
+- **取前沿**：RDP 已有 source-run integrity、deployment attestation、trust release gate 和 upstream refs gate，但 local publish 仍只要求 trust gate + archive。新卡把已有 attestation 记录接到 publish 终端动作。
+- **runtime/API**：`/api/research-os/rdp/manifests/{package_id}/publish` 在 archive export 后、copy publish 前检查 source-run integrity；manifest 有 `source_file_refs` 时，matching manifest hash + artifact hash 的 integrity records 必须覆盖 `run_refs`。`target_runtime=live` 时还要求 deployment attestation 覆盖 `deployment_refs`。
+- **前端 UI**：`RDPExportPanel` 在有 source refs 且未完成 source-run integrity 时阻断 local publish 请求，先让用户完成 attest。
+- **对抗门**：source bundle + trust gate 都存在但 source-run integrity 缺失时 422 且不写 publication；成功 publish 先登记 integrity；external channel 仍被 local-only gate 拒绝。
+- **测试**：`tests/test_research_os_rdp_publish.py` **8 passed / 2 warnings**；`RDPExportPanel.test.tsx` **1 file / 7 tests passed**；frontend build **PASS**（保留既有 chunk-size warning）。
+- **落档**：新增 done 卡 `d14e2309`。边界：这是 publish 终端 attestation gate，不是外部 object-store publish、live deployment runner、真实 broker/provider attestation、CI、线上或用户验收。
+
+## 2026-06-27 · Weekly monitor scheduler compiler coverage（d6bbdb2e）
+
+- **取前沿**：`10b23996` 已让 weekly monitor scheduler tick 写 Observable QRO，但 state 仍把 scheduler 的 QRO→Compiler wiring 列为缺口。新卡让同一路径自动生成 compiler IR/pass 和 scheduler entrypoint coverage。
+- **runtime/API**：`_record_weekly_monitor_qro` 写 Research Graph 后调用 `_compile_weekly_monitor_qro`，复用 `_compile_qro_payload`、compiler store 和 coverage registry，返回 `compiler_ir_ref`、`compiler_pass_ref`、`entrypoint_coverage_ref`。
+- **refs contract**：compiler 记录绑定 scheduler DAG/op、QRO ref、Research Graph command ref、result hash validation ref、permission ref、environment lock ref 和 deterministic run plan ref，不复制 factor id、cost drift report、actions 或 raw monitor payload。
+- **对抗门**：非法 `factor_observations` 带 DSR/PBO/gate verdict 时仍在 monitor 输入校验阶段 422，不写 Graph、compiler IR 或 coverage partial；DAG path 断言 actor_source 为 `scheduled_agent`。
+- **测试**：`tests/test_monitor_production.py` **7 passed / 2 warnings**。
+- **落档**：新增 done 卡 `d6bbdb2e`。边界：这是 weekly monitor scheduler 的 compiler/coverage producer，不是所有 scheduler 入口、完整 compiler implementation、CI、线上 cron 证明、真实 deployment monitor 或 live broker 连通证明。
+
+## 2026-06-27 · Settings market data use/onboarding compiler coverage（5d93d82e）
+
+- **取前沿**：`e65a6e96` 已让 Settings 生成 accepted `MarketDataUseValidationRecord` 与 MarketDataUse QRO；`ce49ca21` / `8ba1997f` 已让 Data Connector one-shot onboarding 串起 Settings 数据接入链路。新卡把 direct MarketDataUse 和 one-shot onboarding 的最终 QRO 接到 Governed Compiler 与 GOAL entrypoint coverage。
+- **runtime/API**：`_record_market_data_use_validation_qro` 写 Research Graph 后自动调用 `_compile_market_data_use_validation_qro`，返回 `compiler_ir_ref`、`compiler_pass_ref`、`entrypoint_coverage_ref`。`/api/research-os/settings/data_connector_onboarding_runs` 成功后再为 one-shot 入口生成单独 coverage，并把 `compiler_coverage` 写入 `completed_steps`。
+- **refs contract**：direct coverage entrypoint 是 `api:research_os.settings.market_data_use_validations`；one-shot coverage entrypoint 是 `api:research_os.settings.data_connector_onboarding_runs`。两者都绑定最终 MarketDataUse QRO、Research Graph command、Dataset/Instrument/Capability/MarketDataUse validation refs、permission/env/run-plan refs，不复制 raw rows、instrument symbol、plaintext secret、strategy builder payload 或 venue payload。
+- **测试**：`tests/test_onboarding_gateway.py` **45 passed / 2 warnings**；asset/onboarding/market-data/goal/compiler adjacent **103 passed / 2 warnings**；`SettingsSecurityPage.test.tsx` **1 file / 4 tests passed**；`python -m compileall -q app/backend/app` PASS。
+- **落档**：新增 done 卡 `5d93d82e`。边界：这是 Settings data onboarding 的 compiler/coverage producer，不是真实 provider 实网连通、完整 provider catalog、下游 strategy auto-injection、venue execution、CI、线上或用户验收。
+
+## 2026-06-27 · Execution QRO producers compiler coverage（093ee78e）
+
+- **取前沿**：execution ladder 已有 order intent、runtime promotion、materialization、connectivity、safety、capability、submit request、submission、venue event、reconciliation、action 的 ExecutionPolicy QRO/ResearchGraph write-through，但这些 API 成功路径还没有进入 governed compiler/entrypoint coverage spine。
+- **runtime/API**：新增 `_compile_execution_boundary_qro`，11 类 execution QRO producer 写 Graph 后自动生成 compiler IR/pass 和 entrypoint coverage refs，并随 HTTP response 返回。
+- **refs contract**：coverage entrypoint 保持真实 API 名称，例如 `api:research_os.execution.order_submissions`；compiler IR/pass 绑定 QRO、Research Graph command、validation/evidence/permission/env/run-plan refs，不复制 raw order、raw event 或 secret material。
+- **对抗门**：17 条 execution 成功路径断言 response refs、store 回查、entrypoint_ref、`direct_graph_mutation=false`、`bypassed_permission=false`、`raw_payload_persisted=false`；拒绝路径继续由原 no-write tests 覆盖。
+- **测试**：`tests/test_execution_boundary_contract.py` **78 passed / 2 warnings**；`tests/test_governed_compiler.py` + `tests/test_goal_coverage.py` + `tests/test_monitor_production.py` **40 passed / 2 warnings**；`python -m compileall -q app/backend/app` PASS。
+- **落档**：新增 done 卡 `093ee78e`。边界：这是 execution refs-only compiler/coverage producer，不是真实 venue connector、真实下单、资金执行、线上长期 scheduler、CI 或用户验收。
+
+## 2026-06-27 · Market data contract QRO producers compiler coverage（ed548b5c）
+
+- **取前沿**：DatasetSemantics、InstrumentSpec、MarketCapabilityMatrix 已写 market-data registry、QRO 和 Research Graph；MarketDataUseValidation / one-shot onboarding 已有 compiler coverage。剩余缺口是前置 market-data objects 没有 entrypoint-level compiler coverage。
+- **runtime/API**：新增 `_compile_market_data_contract_qro`；direct `/api/research-os/market_data/datasets|instruments|capability_matrices` 成功后返回 compiler IR/pass/coverage refs；Settings `dataset_semantics|instrument_specs|capability_matrices` 传入 settings-specific entrypoint。
+- **refs contract**：direct entrypoint 和 Settings entrypoint 分开记录，compiler IR/pass 绑定 QRO、Research Graph command、validation/evidence/permission/env/run-plan refs，不复制 raw rows/raw payload/secret。
+- **对抗门**：测试确认 direct entrypoint 不误写成 Settings，Settings entrypoint 不误写成 direct；coverage store 可回查同一 QRO/Graph command。
+- **测试**：`tests/test_market_data_contract.py` + `tests/test_onboarding_gateway.py` **62 passed / 2 warnings**；market-data/onboarding/goal/compiler/execution adjacent **173 passed / 2 warnings**；`python -m compileall -q app/backend/app` PASS。
+- **落档**：新增 done 卡 `ed548b5c`。边界：这是 market-data contract refs-only compiler coverage，不是真实 provider 实网连通、全资产自动同步、下游 strategy auto-injection、venue permission proof、CI 或用户验收。
+
+## 2026-06-27 · Signal/portfolio QRO producers compiler coverage（a00ed3d6）
+
+- **取前沿**：SignalContract、SignalPerformanceValidation 和 portfolio production promote gate 已有 registry/gate/honest-N 约束，但成功路径还没有统一写 QRO→Graph→Compiler→Coverage。
+- **runtime/API**：新增 `_record_signal_contract_qro`、`_record_signal_validation_qro`、`_record_portfolio_promote_qro`；`POST /api/factors/signal_contracts`、`POST /api/research-os/signal_validations`、`POST /api/portfolios/{portfolio_id}/promote` 成功后返回 QRO/Graph/compiler/coverage refs。
+- **refs contract**：coverage entrypoint 分别是 `api:factors.signal_contracts`、`api:research_os.signal_validations`、`api:portfolios.promote`；compiler IR/pass 绑定 QRO、Research Graph command、validation/evidence/permission/env/run-plan refs。
+- **对抗门**：测试确认 SignalContract 不把模型本体路径写入 Graph/Compiler；SignalValidation 不保存 raw predictions/raw returns；PortfolioPolicy QRO 不保存 `asset_returns` 或收益数列明细，honest-N/gate 语义保持不变。
+- **测试**：`tests/test_factor_lab_endpoints.py` + `tests/test_portfolio_promote_api.py` **30 passed / 2 warnings**；factor/portfolio/goal/compiler/market-data/execution adjacent **174 passed / 2 warnings**；`python -m compileall -q app/backend/app` PASS。
+- **落档**：新增 done 卡 `a00ed3d6`。边界：这是 signal/portfolio refs-only compiler coverage，不是 signal alpha proof、自动组合构建、stage flip、真实下单、CI、线上或用户验收。
+
+## 2026-06-27 · Factor registration compiler coverage（67a5e97c）
+
+- **取前沿**：`POST /api/factors` 已有编译、前视、重名三检查和 FactorRegistry 初始 `NEW` 写入，但成功路径还没有 Factor QRO、Research Graph command 或 entrypoint compiler coverage。
+- **runtime/API**：新增 `_record_factor_qro`；因子注册成功后写 Factor QRO，并随响应返回 `qro_id`、`research_graph_command_id`、`compiler_ir_ref`、`compiler_pass_ref`、`entrypoint_coverage_ref`。
+- **refs contract**：coverage entrypoint 是 `api:factors`；QRO/Compiler 记录 formula hash、params hash、gate summary、Factor refs、permission/env/run-plan refs，不保存公式原文。
+- **对抗门**：测试确认 Factor QRO 类型、coverage store 回查、compiler safety flags 和 `raw_payload_persisted=false`；公式原文不进入 Graph/Compiler；原失败路径仍由注册三门阻断。
+- **测试**：`tests/test_factor_desk_f2.py` **28 passed / 2 warnings**；factor/portfolio/goal/compiler/market-data/execution adjacent **202 passed / 2 warnings**；`python -m compileall -q app/backend/app` PASS。
+- **落档**：新增 done 卡 `67a5e97c`。边界：这是 Factor registration refs-only compiler coverage，不是 alpha validation、strategy codegen、portfolio construction、runtime promotion、CI、线上或用户验收。
+
+## 2026-06-27 · Factor audit ValidationDossier compiler coverage（b9c3dc4b）
+
+- **取前沿**：`67a5e97c` 已把 factor registration 接到 Factor QRO/Graph/Compiler/Coverage，但 `POST /api/factors/{factor_id}/audit` 仍只返回多证据三角报告，没有把报告作为 ValidationDossier producer 写入统一链路。
+- **runtime/API**：新增 `_record_factor_audit_qro`；因子 audit 成功后写 `QROType.VALIDATION_DOSSIER`，并随响应返回 `validation_dossier_ref`、`qro_id`、`research_graph_command_id`、`compiler_ir_ref`、`compiler_pass_ref`、`entrypoint_coverage_ref`。audit endpoint 现在通过 `require_user_dependency` 记录 actor。
+- **refs contract**：coverage entrypoint 是 `api:factors.audit`；QRO/Compiler 只保存 formula hash、report hash、threshold hash、check summary hash、verdict 和 refs，不保存公式原文、raw return panel、raw audit payload 或 secret marker。
+- **对抗门**：成功路径断言 ValidationDossier QRO、coverage store 回查、compiler safety flags 和 `raw_payload_persisted=false`；invalid tier 422 后 Graph/Compiler/Coverage 记录数不变。
+- **测试**：`tests/test_factor_desk_f2.py` **29 passed / 2 warnings**；factor/portfolio/goal/compiler/market-data/execution adjacent **203 passed / 2 warnings**；后端全量 **1802 passed / 13 skipped / 283 warnings**；`python -m compileall -q app/backend/app` PASS。
+- **落档**：新增 done 卡 `b9c3dc4b`。边界：这是 Factor audit refs-only ValidationDossier compiler coverage，不是 alpha approval、strategy promotion、portfolio construction、runtime permission、CI、线上或用户验收。
+
+## 2026-06-27 · Factor layered BacktestRun compiler coverage（84c728cb）
+
+- **取前沿**：factor registration 和 factor audit 已进入 QRO/Graph/Compiler/Coverage，但 `POST /api/factors/{factor_id}/layered_backtest` 仍只返回分层诊断报告，没有作为 BacktestRun producer 写入统一链路。
+- **runtime/API**：新增 `_record_factor_layered_backtest_qro`；分层回测成功后写 `QROType.BACKTEST_RUN`，并随响应返回 `backtest_run_ref`、`qro_id`、`research_graph_command_id`、`compiler_ir_ref`、`compiler_pass_ref`、`entrypoint_coverage_ref`。layered endpoint 现在通过 `require_user_dependency` 记录 actor。
+- **refs contract**：coverage entrypoint 是 `api:factors.layered_backtest`；QRO/Compiler 只保存 formula hash、report hash、quantile/sample summary 和 refs，不保存公式原文、bucket mean returns、long-short spread、raw returns 或 secret marker。
+- **对抗门**：成功路径断言 BacktestRun QRO、coverage store 回查、compiler safety flags 和 `raw_payload_persisted=false`；`n_quantiles < 2` 422 后 Graph/Compiler/Coverage 记录数不变。
+- **测试**：`tests/test_factor_desk_f2.py` **30 passed / 2 warnings**；factor/portfolio/goal/compiler/market-data/execution adjacent **204 passed / 2 warnings**；后端全量 **1803 passed / 13 skipped / 283 warnings**；`python -m compileall -q app/backend/app` PASS。
+- **落档**：新增 done 卡 `84c728cb`。边界：这是 Factor layered refs-only BacktestRun compiler coverage，不是 alpha approval、cost-aware strategy performance、portfolio promotion、runtime permission、CI、线上或用户验收。
+
+## 2026-06-27 · Factor preview ValidationDossier compiler coverage（ae5237ad）
+
+- **取前沿**：factor registration、audit 和 layered backtest 已进入 QRO/Graph/Compiler/Coverage，但 `POST /api/factors/validate` 的 build desk 即时预览仍只返回 HTTP 结果，没有作为 preview ValidationDossier producer 写入统一链路。
+- **runtime/API**：新增 `_record_factor_preview_validation_qro`；`factors_validate` 的 ok、compile reject、lookahead reject 200 返回路径写 `QROType.VALIDATION_DOSSIER`，并随响应返回 `validation_dossier_ref`、`qro_id`、`research_graph_command_id`、`compiler_ir_ref`、`compiler_pass_ref`、`entrypoint_coverage_ref`。validate endpoint 现在通过 `require_user_dependency` 记录 actor。
+- **refs contract**：coverage entrypoint 是 `api:factors.validate`；QRO/Compiler 只保存 formula hash、result hash、reason hash、IC summary hash、stage/valid summary 和 refs，不保存公式原文、IC 数值、return panel 或 secret marker。
+- **对抗门**：成功预览、编译拒绝、前视拒绝三条路径均断言 ValidationDossier QRO、coverage store 回查、compiler safety flags 和 `raw_payload_persisted=false`；拒绝预览只写 rejected dossier，不注册因子也不升级为 alpha proof。
+- **测试**：`tests/test_factor_desk_f2.py` **31 passed / 2 warnings**；factor/portfolio/goal/compiler/market-data/execution adjacent **205 passed / 2 warnings**；后端全量 **1804 passed / 13 skipped / 283 warnings**；`python -m compileall -q app/backend/app` PASS。
+- **落档**：新增 done 卡 `ae5237ad`。边界：这是 Factor preview refs-only ValidationDossier compiler coverage，不是 factor registration、alpha approval、strategy promotion、runtime permission、CI、线上或用户验收。
+
+## 2026-06-27 · Model Governance runtime record compiler coverage（aeb7832a）
+
+- **取前沿**：Model Registry promotion 已进入 QRO/Graph/Compiler/Coverage，但 monitoring profile、recertification record、artifact inspection 和 serving invocation 仍只停在 registry 或 prediction response。
+- **runtime/API**：新增 `_record_model_monitoring_profile_qro`、`_record_model_recertification_qro`、`_record_model_artifact_inspection_qro`、`_record_model_serving_invocation_qro`；三个 `/api/research-os/model_governance/*` POST 和 `/api/models/{model_id}/versions/{version}/predict` 成功后返回 QRO/Graph/compiler/coverage refs。
+- **refs contract**：coverage entrypoints 分别是 `api:research_os.model_governance.monitoring_profiles`、`api:research_os.model_governance.recertification_records`、`api:research_os.model_governance.artifact_inspections`、`api:models.predict`；compiler/coverage 绑定 ModelVersion、ModelPassport、inspection/profile/recertification/serving refs、permission/env/run-plan refs，不复制 raw evidence、loader limitation text、feature rows、prediction values 或 artifact path。
+- **对抗门**：测试确认四条成功路径的 QRO type、permission ref、entrypoint_ref、compiler safety flags 和 `raw_payload_persisted=false`；未声明 recertification trigger 的 422 仍不写 Graph/Compiler/Coverage partial record。
+- **测试**：`tests/test_model_governance.py` **31 passed / 2 warnings**；model/training/goal/compiler/spine adjacent **102 passed / 2 warnings**；后端全量 **1804 passed / 13 skipped / 283 warnings**；`python -m compileall -q app/backend/app` PASS。
+- **落档**：新增 done 卡 `aeb7832a`。边界：这是 refs-only Model Governance runtime record compiler coverage，不是真实外部 serving、runtime auto-promotion、artifact sandbox execution、portfolio/order/execution permission、CI、线上或用户验收。
+
+## 2026-06-27 · Training MarketDataUse/PIT hard gate（03dcb87d）
+
+- **取前沿**：Settings/MarketDataUse 已能生成 accepted refs，训练成功路径已有 Model QRO、Governed Compiler 和 entrypoint coverage，但 `/api/training/jobs` 仍允许只凭 `dataset_id` 提交，未把 estimator 与 data timing/PIT refs 绑定成硬门。
+- **runtime/API**：`training_submit` 现在要求 `market_data_use_validation_refs` 是非空 list；每个 ref 必须 resolve 到 accepted/no-violation `MarketDataUseValidationRecord`，且至少一个 ref 的 `dataset_refs` 覆盖训练 `dataset_id`。缺 ref、unknown、未 accepted、violation、dataset mismatch 均 422 且不创建 job。
+- **refs contract**：`TrainingRequest`、ValidationDossier、training Model QRO input/output contract、QRO lineage、Compiler IR validation refs 和 GOAL entrypoint coverage 绑定同一组 refs；QRO/Compiler 仍只保存 refs/hash/count，不复制 metrics 明细、artifact path、artifact dir 或模型二进制路径。
+- **前端**：训练台新增 MarketDataUse refs 输入，按空白/逗号拆分去重后随 `/api/training/jobs` payload 下发；无 refs 时禁用提交。
+- **测试**：training focused **70 passed / 2 warnings**；model/market-data/goal/compiler adjacent **145 passed / 2 warnings**；后端全量 **1805 passed / 13 skipped / 283 warnings**；frontend scoped **25 passed**；frontend full **28 files / 307 tests passed**；frontend build **PASS**；`compileall app/backend/app` PASS。
+- **落档**：新增 done 卡 `03dcb87d`。边界：这是训练入口的 refs-only MarketDataUse/PIT hard gate，不是真实 provider 实网连通、所有 backtest/report/data consumer 全域 PIT 闭合、线上训练集群、runtime auto-promotion、CI 或用户验收。
+
+## 2026-06-27 · Training job backtest MarketDataUse + BacktestRun coverage（2b9b76fb）
+
+- **取前沿**：`03dcb87d` 已让训练提交绑定 MarketDataUse/PIT refs，但训练后的 `/api/training/jobs/{job_id}/backtest` 仍可换 dataset 做跨集 OOS，未校验回测 dataset refs，也没有 BacktestRun QRO/Compiler/Coverage。
+- **runtime/API**：`training_job_backtest` 现在用训练 job request refs 作为同集 fallback；如果 payload 换 `dataset_id`，refs 必须覆盖 backtest dataset。只拿训练 dataset refs 去回测另一个 dataset 会 422，不创建 BacktestRun QRO。
+- **QRO/Compiler**：新增 `_record_training_job_backtest_qro`，成功回测写 `QROType.BACKTEST_RUN`、Research Graph command、compiler IR/pass 和 `api:training.jobs.backtest` coverage。QRO/Compiler 只保存 refs/hash/count，不保存 raw `metrics`、`equity_curve`、`artifact_dir`、`artifact_path` 或模型二进制路径。
+- **前端**：训练台评价面板新增 backtest MarketDataUse refs 输入，跨集回测时可显式传 refs；payload 按空白/逗号拆分去重。
+- **测试**：backtest/training focused **29 passed / 2 warnings**；training/model/market-data/goal/compiler adjacent **138 passed / 2 warnings**；后端全量 **1805 passed / 13 skipped / 283 warnings**；frontend scoped **26 passed**；frontend full **28 files / 308 tests passed**；frontend build **PASS**；`compileall app/backend/app` PASS。
+- **落档**：新增 done 卡 `2b9b76fb`。边界：这是训练 job 回测入口的 refs-only MarketDataUse/PIT hard gate + BacktestRun compiler coverage，不是所有回测/report consumer 全域 PIT 闭合、alpha proof、promotion approval、真实 provider 实网连通、线上训练/回测集群、CI 或用户验收。
+
+## 2026-06-27 · Factor layered backtest MarketDataUse/PIT hard gate（48f70fa3）
+
+- **取前沿**：`84c728cb` 已把 `POST /api/factors/{factor_id}/layered_backtest` 接成 BacktestRun QRO/Graph/Compiler/Coverage，但该入口仍可在没有 MarketDataUse/PIT refs 的情况下产分层回测证据，属于“其他回测入口”缺口。
+- **runtime/API**：新增 `_factor_layered_market_data_use_validation_refs`；endpoint 在调用 `layered_backtest(...)` 前要求 `market_data_use_validation_refs` 非空 list，每个 ref 必须 resolve 到 accepted/no-violation 记录，use_context 必须是 backtest 或 confirmatory_validation；引用的 DatasetSemantics 必须有 `known_at_ref`、`effective_at_ref`、`pit_bitemporal_rules_ref`，CapabilityMatrix 必须允许 backtest，Instrument/Capability asset_class 必须覆盖请求 market。
+- **refs contract**：`_record_factor_layered_backtest_qro` 把 deduped refs 写入 BacktestRun QRO input/output、evidence refs、lineage 和 Compiler IR validation refs；QRO/Compiler 仍只保存 formula hash、report hash、quantile/sample summary、refs 和 hashes，不保存公式原文、bucket mean returns、long-short spread 或 raw returns。
+- **对抗门**：测试覆盖缺 refs、unknown refs、未 accepted/带 violation 历史脏账、market mismatch、PIT timing 缺失、invalid quantiles 失败路径均不写 Graph/Compiler/Coverage partial record；成功路径可从 QRO/IR 回查 refs。
+- **测试**：`tests/test_factor_desk_f2.py` **35 passed / 2 warnings**；factor/portfolio/goal/compiler/market-data/execution adjacent **155 passed / 2 warnings**；后端全量 **1809 passed / 13 skipped / 283 warnings**；`compileall app/backend/app` PASS。
+- **落档**：新增 done 卡 `48f70fa3`。边界：这是 factor layered backtest 入口的 refs-only MarketDataUse/PIT hard gate，不是正式报告全域 gate、所有 backtest/report consumer 全域 PIT 闭合、alpha approval、strategy promotion、CI、线上或用户验收。
+
+## 2026-06-27 · RDP formal package MarketDataUse/PIT gate（5ba64e4f）
+
+- **取前沿**：RDP manifest gate 已要求 data_refs、DatasetVersion、reproducibility command、run、honest-N、known limits、compiler/spine/coverage refs 等字段，但没有一等 `market_data_use_validation_refs`，正式交付包可引用 dataset/run 而不强制绑定 event/known/effective time 证据。
+- **runtime/API**：`RDPManifest` 新增 `market_data_use_validation_refs`，`validate_rdp_manifest` 要求非空；`_rdp_manifest_from_payload` 接收该字段，summary/detail 回显；`_validate_rdp_manifest_registered_refs` 回查 MarketData registry，要求 refs 已记录、accepted、无 violation、use_context 为 backtest/confirmatory_validation，DatasetSemantics 有 `known_at_ref` / `effective_at_ref` / `pit_bitemporal_rules_ref`，且覆盖 manifest 的 `dataset:*` data_refs。
+- **package contract**：open `manifest.json` 和 `refs.json` 都输出 `market_data_use_validation_refs`；package id hash 纳入该字段，refs 变化会得到不同 package identity。
+- **前端**：RDP export panel detail 显示 MarketDataUse refs，不把正式包的数据使用证据藏在后端 JSON。
+- **对抗门**：测试覆盖缺 refs 的 pure manifest rejection、unknown ref API 422 no-write、data_ref mismatch API 422 no-write，以及 RDP materialize/bundle/archive/publish 仍复用同一 runtime validator。
+- **测试**：RDP focused **60 passed / 2 warnings**；RDP/market-data/goal/compiler adjacent **168 passed / 2 warnings**；后端全量 **1812 passed / 13 skipped / 283 warnings**；RDP frontend scoped **1 file / 7 tests passed**；frontend full **28 files / 308 tests passed**；frontend build **PASS**；`compileall app/backend/app` PASS。
+- **落档**：新增 done 卡 `5ba64e4f`。边界：这是 RDP 正式交付包的 refs-only MarketDataUse/PIT gate，不是外部 publish、对象存储/CI release、完整 release gate UI、所有非 RDP 报告入口、真实 provider 实网连通、CI 或线上验收。
+
+## 2026-06-27 · Agent report.generate MarketDataUse/PIT gate（8f9d53ac）
+
+- **取前沿**：RDP formal package 已接 MarketDataUse/PIT gate，但 Agent Shell 的 `report.generate` 仍可只凭 `run_id` 生成 markdown 报告，属于非 RDP 报告入口缺口。
+- **runtime/schema**：`report.generate` tool schema 现在要求 `run_id` + `market_data_use_validation_refs`；handler 在调用 `project_verdict` / `project_overfit` / `project_cost_sensitivity` 前回查 MarketData registry，要求 refs 已记录、accepted、无 violation、use_context 为 backtest/confirmatory_validation，且 DatasetSemantics 有 `known_at_ref` / `effective_at_ref` / `pit_bitemporal_rules_ref`。
+- **report contract**：坏 refs 返回 `no_write=true`，不投影报告；成功报告返回体与 markdown 都显示 MarketDataUse refs。报告仍只是 Agent markdown，不升级成 RDP package 或 persisted artifact。
+- **对抗门**：测试覆盖缺 refs、unknown、rejected、violation、wrong use_context、DatasetSemantics timing 缺失均不调用报告投影；成功路径断言 refs 出现在 markdown 和返回体。
+- **测试**：Agent report focused **37 passed / 2 warnings**；Agent/DS1/delivery/legacy chat adjacent **51 passed / 2 warnings**；Agent/MarketData/Goal adjacent **118 passed / 2 warnings**；后端全量 **1820 passed / 13 skipped / 283 warnings**；`compileall app/backend/app` PASS；`validate_dev` PASS（49 ✅ / 0 ❌ / 0 ⚠️）；`git diff --check` PASS。
+- **落档**：新增 done 卡 `8f9d53ac`。边界：这是 Agent markdown report 的 refs-only MarketDataUse/PIT gate，不是 RDP formal package、report artifact persistence、所有非 RDP 报告入口、CI、线上或用户验收。
+
+## 2026-06-27 · Factor audit MarketDataUse/PIT gate（713803ca）
+
+- **取前沿**：`b9c3dc4b` 已把 `POST /api/factors/{factor_id}/audit` 接成 ValidationDossier QRO/Graph/Compiler/Coverage，但该报告/验证材料仍可在没有 MarketDataUse/PIT refs 的情况下生成。
+- **runtime/API**：抽出 `_factor_market_data_use_validation_refs` 供 factor audit 与 layered backtest 共享；audit endpoint 在运行 `run_factor_audit(...)` 前要求 `market_data_use_validation_refs` 非空 list，每个 ref 必须 resolve 到 accepted/no-violation 记录，use_context 必须是 backtest 或 confirmatory_validation；引用的 DatasetSemantics 必须有 `known_at_ref`、`effective_at_ref`、`pit_bitemporal_rules_ref`，CapabilityMatrix 必须允许 backtest，Instrument/Capability asset_class 必须覆盖请求 market。
+- **refs contract**：`_record_factor_audit_qro` 把 deduped refs 写入 ValidationDossier QRO input/output、evidence refs、lineage 和 Compiler IR validation refs；QRO/Compiler 仍只保存 formula hash、report hash、threshold/check summary hash、verdict 和 refs，不保存公式原文、raw return panel 或 raw audit payload。
+- **对抗门**：测试覆盖缺 refs、unknown、未 accepted、带 violation、market mismatch、PIT timing 缺失、invalid tier 均不写 Graph/Compiler/Coverage partial record；成功路径可从 QRO/IR 回查 refs。
+- **测试**：`tests/test_factor_desk_f2.py` **39 passed / 2 warnings**；factor/portfolio/goal/compiler/market-data/execution adjacent **197 passed / 2 warnings**；后端全量 **1824 passed / 13 skipped / 283 warnings**；`compileall app/backend/app` PASS；`validate_dev` PASS（49 ✅ / 0 ❌ / 0 ⚠️）；`git diff --check` PASS。
+- **落档**：新增 done 卡 `713803ca`。边界：这是 factor audit ValidationDossier 的 refs-only MarketDataUse/PIT gate，不是 alpha approval、strategy promotion、portfolio construction、CI、线上或用户验收。
+
+## 2026-06-27 · Factor preview and IC MarketDataUse/PIT gate（659eb22d）
+
+- **取前沿**：factor audit/layered 已接 MarketDataUse/PIT gate，但 factor preview valid path、IC report 和 IC decay report 仍可直接读 panel，属于因子数据 consumer/report 旁路。
+- **runtime/API**：新增 `_factor_preview_market_data_use_validation_refs`；`POST /api/factors/validate` 只在 compile/lookahead 通过、即将计算 IC 前要求 refs，compile/lookahead rejected preview 不读行情所以保持可无 refs；`GET /api/factors/{factor_id}/ic` 和 `/ic_decay` 通过 query `market_data_use_validation_refs` 接同一 gate。
+- **refs contract**：Preview ValidationDossier QRO input/output、evidence refs、lineage 和 Compiler IR validation refs 写入 deduped refs；IC/decay report 返回体回显 refs。QRO/Compiler 仍只保存 refs/hash/count，不复制公式原文、raw IC、return panel 或 raw data。
+- **对抗门**：测试覆盖 valid preview 缺 refs 422 且不写 Graph/Compiler/Coverage partial record，IC/decay 缺 refs 422 且不写新增 partial record，compile/lookahead rejected preview 仍不要求 refs。
+- **测试**：`tests/test_factor_desk_f2.py` **41 passed / 2 warnings**；factor/portfolio/goal/compiler/market-data/execution adjacent **199 passed / 2 warnings**；后端全量 **1826 passed / 13 skipped / 283 warnings**；`compileall app/backend/app` PASS；`validate_dev` PASS（49 ✅ / 0 ❌ / 0 ⚠️）；`git diff --check` PASS。
+- **落档**：新增 done 卡 `659eb22d`。边界：这是 factor preview/IC report 的 refs-only MarketDataUse/PIT gate，不是 alpha approval、factor registration、strategy promotion、CI、线上或用户验收。
+
+## 2026-06-27 · Factor correlation MarketDataUse/PIT gate（f2722491）
+
+- **取前沿**：preview valid IC、IC/IC decay、audit 和 layered backtest 已接 MarketDataUse/PIT gate，但 `GET /api/factors/correlation` 仍可直接读 panel 并生成 matrix，属于因子报告/数据 consumer 旁路。
+- **runtime/API**：`factors_correlation` query 增加 `market_data_use_validation_refs`，在 pair selection 和 `correlation_matrix(...)` 前调用 `_factor_market_data_use_validation_refs`；refs 必须已记录、accepted、无 violation，use_context 必须是 backtest/confirmatory_validation，且 DatasetSemantics timing refs、Instrument/Capability market coverage 和 Capability backtest permission 通过。
+- **report contract**：成功响应回显 deduped refs；失败路径 422，不写 Graph/Compiler/Coverage partial record。该 endpoint 仍只是 correlation report，不升级为 alpha approval 或 strategy promotion。
+- **对抗门**：测试覆盖缺 refs fail-closed 和成功路径 refs 回显。
+- **测试**：`tests/test_factor_desk_f2.py` **42 passed / 2 warnings**；factor/portfolio/goal/compiler/market-data/execution adjacent **200 passed / 2 warnings**；后端全量 **1827 passed / 13 skipped / 283 warnings**；`compileall app/backend/app` PASS；`validate_dev` PASS（49 ✅ / 0 ❌ / 0 ⚠️）；`git diff --check` PASS。
+- **落档**：新增 done 卡 `f2722491`。边界：这是 factor correlation report 的 refs-only MarketDataUse/PIT gate，不是 alpha approval、strategy promotion、portfolio construction、CI、线上或用户验收。
+
+## 2026-06-27 · Direct run report MarketDataUse/PIT gate（b7651d50）
+
+- **取前沿**：Agent `report.generate` 已接 MarketDataUse/PIT gate，但 direct RunVerdictCard HTTP endpoints 仍可绕过 Agent tool schema，直接按 `run_id` 投影 verdict / overfit / cost / monthly heatmap。
+- **runtime/API**：新增 `_run_report_market_data_use_validation_refs`；`GET /api/runs/{run_id}/verdict`、`/overfit`、`/cost-sensitivity`、`/monthly-heatmap` 都要求 query `market_data_use_validation_refs`。endpoint 先从 run manifest 取 market，再在调用 projector 前要求 refs 已记录、accepted、无 violation，use_context 为 backtest/confirmatory_validation，且 DatasetSemantics timing refs、Instrument/Capability market coverage 和 Capability backtest permission 通过。
+- **report contract**：成功响应回显 deduped refs；缺 refs 422 且不调用任何 report projector。missing run 仍保持 404。
+- **对抗门**：测试 monkeypatch 四个 projector，确认缺 refs 时无调用；成功路径断言 refs 回显。
+- **测试**：`tests/test_run_verdict_card.py` **16 passed / 2 warnings**；run-report/Agent/DS/Goal/MarketData/Execution adjacent **179 passed / 2 warnings**；后端全量 **1828 passed / 13 skipped / 283 warnings**；`compileall app/backend/app` PASS；`validate_dev` PASS（49 ✅ / 0 ❌ / 0 ⚠️）；`git diff --check` PASS。
+- **落档**：新增 done 卡 `b7651d50`。边界：这是 direct run report 的 refs-only MarketDataUse/PIT gate，不是 RDP formal package、alpha approval、strategy promotion、CI、线上或用户验收。
+
+## 2026-06-27 · Agent backtest.run existing-run MarketDataUse/PIT gate（73209378）
+
+- **取前沿**：`backtest.run` 无 run_id 的 strategy synthesis 分支已强制 MarketDataUse refs，direct run report endpoints 也已加门；但 `backtest.run` 传已有 `run_id` 时仍直接投影 verdict/overfit 摘要，绕过 handler 实际 refs 校验。
+- **runtime/tool**：existing-run branch 在 `project_verdict` / `project_overfit` 前调用 `_market_data_use_validation_refs(..., operation="backtest.run existing run projection", require_dataset_timing=True, allowed_use_contexts=(backtest, confirmatory_validation))`。
+- **summary contract**：成功响应回显 refs；缺 refs 返回 `no_write=true`，不调用 projector。新合成回测主路径仍由 `_synth_and_promote` 原有 gate 负责。
+- **对抗门**：测试 monkeypatch projector，确认缺 refs 不投影；成功 path 只调用 verdict/overfit 并回显 refs。
+- **测试**：`tests/test_agent_business_tools_a4.py` **33 passed / 2 warnings**；Agent/DS/run-report/Goal/MarketData/Execution adjacent **181 passed / 2 warnings**；`tests/test_model_governance.py` **31 passed / 2 warnings**（修正 raw-payload 泄漏断言用裸 `"1.5"` 误撞时间戳的测试误报；runtime 未变）；后端全量 **1830 passed / 13 skipped / 283 warnings**；`compileall app/backend/app` PASS；`validate_dev` PASS（49 ✅ / 0 ❌ / 0 ⚠️）；`git diff --check` PASS。
+- **落档**：新增 done 卡 `73209378`。边界：这是 Agent existing-run summary 的 refs-only MarketDataUse/PIT gate，不是新回测、RDP formal package、strategy promotion、CI、线上或用户验收。
+
+## 2026-06-27 · Agent backtest.run synthesis PIT timing gate（499980c8）
+
+- **取前沿**：`4b6f55dc` 已让 Agent `backtest.run` synthesis 分支要求 accepted/no-violation MarketDataUse refs，但没有要求 DatasetSemantics timing refs；这是实际回测入口，不能停在 refs-only accepted 状态。
+- **runtime/tool**：`_synth_and_promote` 调 `_market_data_use_validation_refs` 时开启 `require_dataset_timing=True`，并限制 use_context 为 `strategy_builder_backtest` / `backtest` / `confirmatory_validation`。
+- **gate contract**：缺 refs、unknown/rejected/violation refs、缺 DatasetSemantics timing refs 都在 LLM/codegen/sample/sandbox/promote 前 no-write；成功路径仍返回 refs。
+- **测试替身**：DS-1、DS-2 和 delivery slice fake registry 补 `dataset()` timing refs；delivery slice 与 DS2 fake use_context 同步为正式 `backtest`。
+- **测试**：`tests/test_ds1_run_id_spine.py` **16 passed**；`tests/test_ds2_strategy_goal_persist.py` **8 passed / 2 warnings**；Agent/DS/Chat/run-report/Goal/MarketData adjacent **145 passed / 2 warnings**；后端全量 **1831 passed / 13 skipped / 283 warnings**；`compileall app/backend/app` PASS；`validate_dev` PASS（49 ✅ / 0 ❌ / 0 ⚠️）；`git diff --check` PASS。
+- **落档**：新增 done 卡 `499980c8`。边界：这是 Agent strategy synthesis 的 refs-only PIT gate，不是完整 strategy assembly injection、真实 provider 实网连通、CI、线上或用户验收。
+
+## 2026-06-27 · Research Asset RAG local dense vector index（5f8d8f7c）
+
+- **取前沿**：TRACE §5 仍把 `dense embedding/vector DB` 列为待实现；已有 `/api/research-os/rag/vector_search` 是 token-count sparse cosine，不能冒充 dense embedding 或 vector DB。
+- **runtime/API**：`ResearchAssetRAGIndex` 新增 `AssetRAGDenseVector`、`local_hash_dense_v1` deterministic dense embedding、`dense_vector_search` 和 `dense_vectors()`；`PersistentResearchAssetRAGIndex` 在 document add 后追加 `dense_embedding_indexed` JSONL 事件，replay 时恢复 dense vectors，旧 document-only 历史仍可补建内存 vector。
+- **Agent/API contract**：新增 `POST /api/research-os/rag/dense_vector_search`，返回 `embedding_model_ref`、hits 和 agent usage ids；Agent Shell `rag_search=dense` 走同一 dense index。权限过滤、candidate-context 角色、plaintext secret guard 和 Agent source/version usage 账本不变。
+- **测试**：RAG focused **12 passed / 2 warnings**；RAG/Document/Agent adjacent **99 passed / 7 warnings**；后端全量 **1832 passed / 13 skipped / 283 warnings**；`compileall app/backend/app` PASS；`validate_dev` PASS（49 ✅ / 0 ❌ / 0 ⚠️）；`git diff --check` PASS。
+- **落档**：新增 done 卡 `5f8d8f7c`。边界：这是本地 deterministic dense vector index，不是语义 embedding 模型、外部 embedding provider、生产级 vector DB、跨 registry/provider/scheduler 自动同步、CI、线上或用户验收。
+
+## 2026-06-27 · Methodology CPCV/conformal/TCA calculators（d3983386）
+
+- **取前沿**：`b6bf792c` 已有 ValidationDepthRecord refs gate，但 CPCV/conformal/TCA 仍只能手填 refs，没有 producer。
+- **runtime/API**：新增 `CPCVCalculatorRecord`、`ConformalCalculatorRecord`、`TCACalculatorRecord` 与 `PersistentMethodologyCalculatorRegistry`；新增 `/api/research-os/methodology/cpcv`、`/conformal`、`/tca`。成功路径计算 refs/hash/摘要并写 `methodology_calculators.jsonl`；summary 返回 calculator totals 与摘要。
+- **honesty contract**：计算使用 raw fold/calibration/gross-return arrays，但 JSONL 不保存这些 raw arrays，只保存 sample/count/mean/threshold/cost summary 和 `source_hash`；silent mock、短 fold、短 calibration、非法 alpha、缺 cost refs、负成本均 no-write。
+- **测试**：methodology focused **16 passed / 2 warnings**；methodology/goal/compiler/spine/trust/RDP adjacent **82 passed / 2 warnings**；后端全量 **1835 passed / 13 skipped / 283 warnings**；`compileall app/backend/app` PASS；`validate_dev` PASS（49 ✅ / 0 ❌ / 0 ⚠️）；`git diff --check` PASS。
+- **落档**：新增 done 卡 `d3983386`。边界：这是本地 calculator producer，不是完整 CPCV path enumeration、walk-forward scheduler、真实 broker/venue fault drill、完整 validation dossier UI、CI、线上或用户验收。
+
+## 2026-06-27 · RDP trust release gate management UI（1058c62d）
+
+- **取前沿**：`e9c58149` 已让 RDP local publish 必须引用已登记 trust gate，但 RDP export desk 仍只能手填 `trust_release_ref`，用户不能在同一发布面查看、创建或选择 gate。
+- **前端 UI/API**：`RDPExportPanel` 启动读取 `/api/research-os/trust/summary`，展示 release gate 总数和 gate refs；新增七字段 Record gate 表单，提交 `{ release_gate }` 到 `/api/research-os/trust/release_gates`；已有 gate 可点击 Use 填入 publish `trust_release_ref`。
+- **对抗门**：缺任一 required ref 时前端显示错误且不调用 release gate 后端；创建成功后刷新 summary 并填入返回的 `release_ref`；既有 materialize/bundle/attest/archive/publish 流程保持，publish 仍要求非空 `trust_release_ref` 和 source-run integrity。
+- **测试**：`RDPExportPanel.test.tsx` **10 passed**；frontend full **28 files / 311 tests passed**；frontend build **PASS**（保留既有 Vite chunk-size warning）；`validate_dev` PASS（49 ✅ / 0 ❌ / 0 ⚠️）；`git diff --check` PASS。
+- **落档**：新增 done 卡 `1058c62d`。边界：这是本地 release gate 记录/选择 UI，不是自动压力测试生成器、专家工作流、外部 release、CI release、线上发布或用户验收。
+
+## 2026-06-27 · Methodology validation dossier UI（33a8a56e）
+
+- **取前沿**：`b6bf792c` 已有 ValidationDepthRecord registry/API，`d3983386` 已有 CPCV/conformal/TCA calculator producers，但研究执行台仍没有 §10 方法学验证操作面。
+- **前端 UI/API**：新增 `MethodologyValidationPanel`；Agent Workbench 增加 `Methodology` tab 并标记 Backend。面板读取 `/api/research-os/methodology/summary`，展示 validation-depth 与 CPCV/conformal/TCA calculator 摘要；可提交 `/cpcv`、`/conformal`、`/tca` calculator inputs，也可提交 `{ validation_depth: ... }` 写 ValidationDepthRecord refs/verdict/责任边界。
+- **对抗门**：CPCV 缺 fold values 时前端阻断且不打后端；calculator summary 不展示 raw fold/calibration/gross-return series；ValidationDepthRecord payload 强制 `silent_mock_fallback_used=false` 并按后端 schema 包装。
+- **测试**：`MethodologyValidationPanel.test.tsx` **4 passed**；agent-workbench/RAG/RDP/methodology scoped **4 files / 61 tests passed**；frontend full **29 files / 315 tests passed**；frontend build **PASS**（保留既有 Vite chunk-size warning）；`validate_dev` PASS（49 ✅ / 0 ❌ / 0 ⚠️）；`git diff --check` PASS。
+- **落档**：新增 done 卡 `33a8a56e`。边界：这是现有方法学 backend records 的 UI，不是真实 broker/venue fault drill、fault/recovery runner、monitor/promotion 自动 producer、CI 或线上验收。
+
+## 2026-06-27 · Methodology runtime drill producer API and UI（d3efc139）
+
+- **取前沿**：ValidationDepthRecord 已要求 fault injection / recovery drill refs，Methodology UI 也可手填 refs，但没有 producer 生成这些 refs。
+- **runtime/API**：新增 `RuntimeDrillRecord`、`validate_runtime_drill()`、`record_runtime_drill()` 和 `PersistentMethodologyRuntimeDrillRegistry`；新增 `/api/research-os/methodology/runtime_drills`，summary 返回 `runtime_drill_total` 和 `runtime_drills` 摘要。
+- **前端 UI**：Methodology tab 新增 Runtime drills 表单；提交成功后刷新 summary，并把返回的 `fault_injection_ref` / `recovery_drill_ref` 回填到 ValidationDepthRecord draft。
+- **对抗门**：`drill_mode` 只允许 simulation/paper/testnet；live/production/unknown mode、guard mismatch、silent mock fallback 都拒绝且 no-write；summary 不暴露 raw log / traceback。
+- **测试**：methodology focused **19 passed / 2 warnings**；methodology/goal/compiler/spine/trust/RDP adjacent **85 passed / 2 warnings**；后端全量 **1838 passed / 13 skipped / 283 warnings**；`compileall app/backend/app` PASS；`MethodologyValidationPanel.test.tsx` **5 passed**；agent-workbench/RAG/RDP/methodology scoped **4 files / 62 tests passed**；frontend full **29 files / 316 tests passed**；frontend build **PASS**（保留既有 Vite chunk-size warning）；`validate_dev` PASS（49 ✅ / 0 ❌ / 0 ⚠️）；`git diff --check` PASS。
+- **落档**：新增 done 卡 `d3efc139`。边界：这是 safe-mode producer，不是真实 broker/venue API、venue-native fault injection、真钱/实盘故障演练、CI 或线上验收。
+
+## 2026-06-27 · Trust release check producer API and RDP UI（a8e03245）
+
+- **取前沿**：RDP export desk 已能查看/创建 Trust Release Gate，但 gate 所需六类检查 refs 仍只能手填，缺受控 producer 生成 `check_ref`。
+- **runtime/API**：新增 `TrustReleaseCheckRecord`、`validate_trust_release_check()`、`record_trust_release_check()` 与 `PersistentTrustReleaseCheckRegistry`；新增 `/api/research-os/trust/release_checks`，summary 返回 `release_check_total` 与 `release_checks`。
+- **前端 UI**：RDP export desk 新增 release checks 列表和 Record check 表单；提交成功后刷新 trust summary，并把返回的 `check_ref` 回填到对应 release gate draft 字段。
+- **对抗门**：unknown `check_kind`、expected/observed behavior mismatch、缺 evidence/validation refs、silent mock fallback 均拒绝且 no-write；前端缺 required refs 时不调用 release check 后端。
+- **测试**：trust focused **16 passed / 2 warnings**；RDP publish focused **8 passed / 2 warnings**；trust/RDP adjacent **24 passed / 2 warnings**；后端全量 **1841 passed / 13 skipped / 283 warnings**；`compileall app/backend/app` PASS；`RDPExportPanel.test.tsx` **12 passed**；agent-workbench/RAG/RDP/methodology scoped **4 files / 64 tests passed**；frontend full **29 files / 318 tests passed**；frontend build **PASS**（保留既有 Vite chunk-size warning）；`validate_dev` PASS（49 ✅ / 0 ❌ / 0 ⚠️）；`git diff --check` PASS。
+- **落档**：新增 done 卡 `a8e03245`。边界：这是 refs producer 和本地 UI，不是真实外部专家工作流、自动压力测试 runner、CI release、线上或用户验收。
+
+## 2026-06-27 · Trust disclosure registry API and workbench UI（4c8e476b）
+
+- **取前沿**：TrustLayer 已有 trust claim、functional independence、user autonomy validators，但这些 disclosure 只能在测试里存在，没有 runtime registry/API/UI。
+- **runtime/API**：新增 `PersistentTrustDisclosureRegistry`，同一 JSONL 记录 `trust_claim_recorded`、`functional_independence_disclosure_recorded`、`user_autonomy_recorded`；新增 `/api/research-os/trust/claims`、`/independence_disclosures`、`/user_autonomy`，并把三类 totals/records 接入 trust summary。
+- **前端 UI**：Agent Workbench 新增 `Trust` tab；`TrustDisclosurePanel` 展示三类 disclosure summary，并能记录 trust claim、independence disclosure 和 user autonomy。
+- **对抗门**：strong claim 缺 evidence refs、虚假 organizational independence、agent made final choice 均 fail-closed；前端 strong claim 缺 evidence refs 不打后端。
+- **测试**：trust focused **19 passed / 2 warnings**；trust/RDP/coverage adjacent **40 passed / 2 warnings**；后端全量 **1844 passed / 13 skipped / 283 warnings**；`compileall app/backend/app` PASS；`TrustDisclosurePanel.test.tsx` **2 passed**；agent-workbench/RAG/RDP/methodology/trust scoped **5 files / 66 tests passed**；frontend full **30 files / 320 tests passed**；frontend build **PASS**（保留既有 Vite chunk-size warning）；`validate_dev` PASS（49 ✅ / 0 ❌ / 0 ⚠️）。
+- **落档**：新增 done 卡 `4c8e476b`。边界：这是 disclosure runtime surface 和本地 UI，不是真实外部专家工作流、组织流程系统、CI release、线上或用户验收。
+
+## 2026-06-27 · Trust release check suite producer API and RDP UI（bab2b148）
+
+- **取前沿**：单条 release check producer 已存在，但 release gate 仍靠逐条手填六类 check refs；这不等于自动压力测试 runner，也不能伪装外部专家或 CI release。
+- **runtime/API**：新增 `record_trust_release_check_suite()`，要求 anti-flattery、multi-turn、expert veto、weakness collapse、mock honesty、cold-start honesty 六类 check 全覆盖且无重复；每条 check 复用单条 validator，最后生成 matching `TrustReleaseGateRecord`。新增 `/api/research-os/trust/release_check_suites`，成功时写 6 checks + 1 gate。
+- **前端 UI**：RDP export desk 新增 release check suite JSON array 表单；提交成功后刷新 trust summary、填 `trust_release_ref`，并把 returned release gate 写回 gate draft。
+- **对抗门**：suite 缺 kind、重复 kind、坏 JSON、silent mock、behavior mismatch 或缺 refs 均 fail-closed；后端缺项/重复项测试断言 check/gate registry 不写 partial record。
+- **测试**：trust focused **22 passed / 2 warnings**；trust/RDP/coverage adjacent **43 passed / 2 warnings**；后端全量 **1847 passed / 13 skipped / 283 warnings**；`compileall app/backend/app` PASS；`RDPExportPanel.test.tsx` **14 passed**；agent-workbench/RAG/RDP/methodology/trust scoped **5 files / 68 tests passed**；frontend full **30 files / 322 tests passed**；frontend build **PASS**（保留既有 Vite chunk-size warning）；`validate_dev` PASS（49 ✅ / 0 ❌ / 0 ⚠️）；`git diff --check` PASS。
+- **落档**：新增 done 卡 `bab2b148`。边界：这是本地 refs-only suite producer，不是真实外部专家工作流、自动 agent 压力测试 runner、CI release、线上或用户验收。
+
+## 2026-06-27 · External expert review registry API and Trust UI（a952f63e）
+
+- **取前沿**：Trust release gate/check/suite 已能记录本地 release refs，但还没有独立的 external expert review evidence surface。不能把 agent critic 或本地用户判断伪装成外部专家。
+- **runtime/API**：新增 `ExternalExpertReviewRecord`、`validate_external_expert_review()`、`record_external_expert_review()` 和 `external_expert_review_from_dict()`；`PersistentTrustDisclosureRegistry` 新增 `external_expert_review_recorded` event replay。新增 `/api/research-os/trust/expert_reviews`，summary 返回 `expert_review_total` 与 `expert_reviews`。
+- **前端 UI**：Trust tab 新增 expert review summary 和 Record expert review 表单，提交 release/reviewer/independence/artifact/protocol/verdict/evidence/veto/signature refs。
+- **对抗门**：agent/system/self/generic user reviewer、approved 缺 signed attestation、vetoed/needs_revision 缺 reason、缺 evidence refs、silent mock fallback 均拒绝；前端 approved 缺 signed attestation 不打后端。
+- **测试**：trust focused **24 passed / 2 warnings**；trust/RDP/coverage adjacent **45 passed / 2 warnings**；后端全量 **1849 passed / 13 skipped / 283 warnings**；`compileall app/backend/app` PASS；`TrustDisclosurePanel.test.tsx` **3 passed**；agent-workbench/RAG/RDP/methodology/trust scoped **5 files / 69 tests passed**；frontend full **30 files / 323 tests passed**；frontend build **PASS**（保留既有 Vite chunk-size warning）；`validate_dev` PASS（49 ✅ / 0 ❌ / 0 ⚠️）；`git diff --check` PASS。
+- **落档**：新增 done 卡 `a952f63e`。边界：这是 external expert review evidence record，不是真实外部专家账号体系、电子签平台、组织审批流、CI release、线上或用户验收。
+
+## 2026-06-27 · Trust pressure runner producer API and RDP UI（f94d20a0）
+
+- **取前沿**：release check suite 已能一次生成 six checks + one gate，但仍要求人工提交 suite；TRACE §13/§17 的自动 agent 压力测试 runner 缺口还没被 runtime record 覆盖。不能把本地 refs-only suite 伪装成 CI、真实 autonomous agent 或外部专家流程。
+- **runtime/API**：新增 `TrustPressureRunRecord`、`validate_trust_pressure_run()`、`record_trust_pressure_run()`、`trust_pressure_run_record_from_dict()` 和 `PersistentTrustPressureRunRegistry`；新增 `/api/research-os/trust/pressure_runs`，成功时复用 suite producer 写 6 checks + 1 gate，再写 1 条 pressure run record；trust summary 返回 `pressure_run_total` 与 `pressure_runs`。
+- **前端 UI**：RDP export desk 新增 pressure runs summary/list 和 scenarios JSON 表单；提交成功后刷新 trust summary，填 `trust_release_ref`，并把 returned release gate 写回 gate draft。
+- **对抗门**：runner mode 只允许 `local_deterministic` / `test_harness`；六类 scenario 必须全覆盖且无重复；expected/observed behavior mismatch、outcome flags、缺 runner/scenario evidence refs、缺 validation refs、silent mock 或失败 scenario 均 fail-closed；失败路径不写 check/gate/run partial record。
+- **测试**：trust focused **30 passed / 2 warnings**；trust/RDP/coverage adjacent **51 passed / 2 warnings**；后端全量 **1855 passed / 13 skipped / 283 warnings**；`compileall app/backend/app` PASS；`RDPExportPanel.test.tsx` **16 passed**；agent-workbench/RAG/RDP/methodology/trust scoped **5 files / 71 tests passed**；frontend full **30 files / 325 tests passed**；frontend build **PASS**（保留既有 Vite chunk-size warning）；`validate_dev` PASS（49 ✅ / 0 ❌ / 0 ⚠️；244 cards）；`git diff --check` PASS。
+- **落档**：新增 done 卡 `f94d20a0`。边界：这是本地 deterministic/test harness pressure runner record，不是真实 autonomous agent 长程执行、CI release、外部专家审批、线上发布或用户验收。
+
+## 2026-06-27 · Trust release approval workflow registry API and RDP UI（acd267d1）
+
+- **取前沿**：Trust pressure run 和 external expert review 已能分别登记，但还没有把 release gate + pressure run + expert review 合成为一条 release approval evidence record。当前不能把本地 record 说成 CI、外部组织流程或线上发布。
+- **runtime/API**：新增 `TrustReleaseApprovalRecord`、`validate_trust_release_approval()`、`record_trust_release_approval()`、`trust_release_approval_record_from_dict()` 和 `PersistentTrustReleaseApprovalRegistry`；新增 `/api/research-os/trust/release_approvals`，summary 返回 `release_approval_total` 与 `release_approvals`。
+- **前端 UI**：RDP export desk 新增 release approval summary/list、expert review ref list 和 Record approval 表单；可提交 release gate、pressure run、expert review、artifact、protocol、evidence、signature、blocker refs。
+- **对抗门**：API 从现有 registries 查 gate/pressure/expert；unknown ref、release mismatch、pressure run gate mismatch、approved 缺签名、approved 带 residual blocker、needs_revision/blocked 缺 blocker、approved 引用非 approved expert review、silent mock 均 fail-closed；失败不写 approval record。
+- **测试**：trust focused **36 passed / 2 warnings**；trust/RDP/coverage adjacent **57 passed / 2 warnings**；后端全量 **1861 passed / 13 skipped / 283 warnings**；`compileall app/backend/app` PASS；`RDPExportPanel.test.tsx` **18 passed**；agent-workbench/RAG/RDP/methodology/trust scoped **5 files / 73 tests passed**；frontend full **30 files / 327 tests passed**；frontend build **PASS**（保留既有 Vite chunk-size warning）；`validate_dev` PASS（49 ✅ / 0 ❌ / 0 ⚠️；245 cards）；`git diff --check` PASS。
+- **落档**：新增 done 卡 `acd267d1`。边界：这是本地 release approval evidence record，不是 RDP publish hard gate 已升级、CI release、外部组织审批流、线上发布或用户验收。
+
+## 2026-06-27 · RDP local publish requires trust release approval ref（44ca5ea7）
+
+- **取前沿**：release approval record 已存在，但 RDP local publish 仍只要求 `trust_release_ref`，approval 证据没有约束发布动作。
+- **runtime/API**：`RDPPackagePublishRecord` 新增 `trust_release_approval_ref`，新 publish hash 纳入该 ref；`RDPLocalPackagePublisher.publish()` 缺 approval ref 拒绝；旧 publication JSONL 缺字段仍可 replay。RDP publish API 要求 `trust_release_approval_ref` 已登记、release 匹配且 verdict=approved。
+- **前端 UI**：RDP export desk publish 表单新增 `trust_release_approval_ref`；approval create/use 成功回填 publish approval ref；publish response/results 回显 approval ref。
+- **对抗门**：缺 approval ref、unknown approval ref、approval release mismatch、non-approved approval 均 422 且不写 publication；source bundle、source-run integrity、external channel 等既有 publish 坏门仍按原错误触发。
+- **测试**：RDP publish focused **8 passed / 2 warnings**；trust/RDP/coverage adjacent **57 passed / 2 warnings**；后端全量 **1861 passed / 13 skipped / 283 warnings**；`compileall app/backend/app` PASS；`RDPExportPanel.test.tsx` **19 passed**；agent-workbench/RAG/RDP/methodology/trust scoped **5 files / 74 tests passed**；frontend full **30 files / 328 tests passed**；frontend build **PASS**（保留既有 Vite chunk-size warning）；`validate_dev` PASS（49 ✅ / 0 ❌ / 0 ⚠️；246 cards）；`git diff --check` PASS。
+- **落档**：新增 done 卡 `44ca5ea7`。边界：这是 local publish hard gate，不是外部 object store publish、CI release、live deployment runner、线上发布或用户验收。
+
+## 2026-06-27 · RDP external publish attestation proof（770982f3）
+
+- **取前沿**：RDP local publish 已被 trust release approval hard gate 约束，但 §13/§17 仍没有 external publish/release proof 记录面；不能把 `channel` 改成外部 URL 直接绕过 local publish hard gate。
+- **runtime/API**：新增 `RDPExternalPublicationProofRecord` 与 `PersistentRDPExternalPublicationProofStore`；新增 `/api/research-os/rdp/manifests/{package_id}/external_publications`，必须引用已存在 local publication hash，并重新校验 trust release gate、approved release approval、archive hash 和 secret-free external pointer。record 只保存 external URI digest、immutable pointer ref、destination allowlist ref、local publish hash、archive hash、release/approval refs 与 evidence refs，不保存 raw external URI。
+- **前端 UI**：RDP export desk 新增 external publication proof 表单；必须先有 local publication 结果，否则前端阻断且不打后端；结果区回显 `external_proof_hash`、`external_uri_digest` 和 immutable pointer ref。
+- **对抗门**：缺 local publication hash、unknown local publish hash、archive hash mismatch、unknown approval、secret-bearing external URI 均 422 且不写 proof；`/publish` 仍只支持 `local_registry`。
+- **测试**：RDP publish/external proof focused **11 passed / 2 warnings**；trust/RDP/coverage adjacent **60 passed / 2 warnings**；后端全量 **1864 passed / 13 skipped / 283 warnings**；`compileall app/backend/app` PASS；`RDPExportPanel.test.tsx` **20 passed**；agent-workbench/RAG/RDP/methodology/trust scoped **5 files / 75 tests passed**；frontend full **30 files / 329 tests passed**；frontend build **PASS**（保留既有 Vite chunk-size warning）；`validate_dev` PASS（49 ✅ / 0 ❌ / 0 ⚠️；247 cards）；assigned-vs-done duplicate check 无输出；`git diff --check` PASS。
+- **落档**：新增 done 卡 `770982f3`。边界：这是 refs-only external publication proof，不是真实 object-store 上传、CI release、live deployment runner、线上发布、线上可用性证明或用户验收。
+
+## 2026-06-28 · External expert identity and signed attestation verification（4143d1cc）
+
+- **取前沿**：`a952f63e` 已能记录 external expert review refs，`acd267d1` release approval 也能引用 expert review，但 `signed_attestation_ref` 仍只是字符串；不能把“有 ref”说成“detached signature 已验证”。
+- **runtime/API**：新增 `ExternalReviewerIdentityRecord`、`ExternalExpertSignatureRecord` 与 `PersistentExternalExpertSignatureRegistry`。identity 记录 Ed25519 public key、public key fingerprint、identity provider ref、independence/evidence refs；signature record 绑定已登记 `ExternalExpertReviewRecord`，对 canonical payload 验证 detached Ed25519 signature 后写 `verified_signature_ref` / `verification_hash`。
+- **后端接口**：新增 `/api/research-os/trust/expert_identities` 与 `/api/research-os/trust/expert_signatures`；trust summary 增加 `expert_identity_total`、`expert_identities`、`expert_signature_total`、`expert_signatures`，只回显 refs/fingerprint/hash，不回显 private key、raw payload 或 `signature_b64`。
+- **前端 UI**：Trust tab 新增 expert identity 和 expert signature verification 表单；缺 required field 时前端阻断，不打后端。
+- **对抗门**：agent/system/self/user reviewer、invalid public key、signature reviewer mismatch、bad signature、secret/private-key marker 均 fail-closed；坏 signature 不写 partial record。
+- **测试**：trust/RDP/goal adjacent **63 passed / 2 warnings**；后端全量 **1867 passed / 13 skipped / 283 warnings**；`compileall app/backend/app` PASS；`TrustDisclosurePanel.test.tsx` **4 passed**；agent-workbench/RAG/RDP/methodology/trust scoped **5 files / 76 tests passed**；frontend full **30 files / 330 tests passed**；frontend build **PASS**（保留既有 Vite chunk-size warning）；`validate_dev` PASS（49 ✅ / 0 ❌ / 0 ⚠️；248 cards）；assigned-vs-done duplicate check 无输出；`git diff --check` PASS。
+- **落档**：新增 done 卡 `4143d1cc`。边界：这是本地 external reviewer identity registry 与 detached Ed25519 signature verification，不是外部身份平台、KYC、SSO、电子签 SaaS、组织审批流、CI、线上发布或用户验收。
+
+## 2026-06-28 · RDP CI release attestation proof（b793f3a7）
+
+- **取前沿**：`770982f3` 已能登记 refs-only external publication proof，但 §17 仍没有 CI release attestation 记录面；不能把外部 proof 或本地 publish 说成 CI workflow/test release 已证明。
+- **runtime/API**：新增 `RDPCIReleaseAttestationRecord` 与 `PersistentRDPCIReleaseAttestationStore`；新增 `/api/research-os/rdp/manifests/{package_id}/ci_release_attestations`。endpoint 先查已登记 local publication、external proof、trust release gate 和 approved release approval，再写 CI attestation record。
+- **honesty contract**：record 只保存 CI system/workflow/run/commit refs、artifact digest、test report refs/hash、build log digest、required check refs、evidence refs 和 `attestation_hash`；不保存 raw CI log、raw artifact payload、secret 或 token。`ci_status != passed`、failed/skipped/missing checks、archive mismatch、approval mismatch、secret-bearing refs 均 422 且不写 partial record。
+- **前端 UI**：RDP export desk 新增 CI release attestation 表单；必须先有 local publication 和 external publication proof，否则前端阻断，不打后端。
+- **测试**：RDP publish/CI focused **14 passed / 2 warnings**；trust/RDP/goal adjacent **66 passed / 2 warnings**；后端全量 **1870 passed / 13 skipped / 283 warnings**；`compileall app/backend/app` PASS；`RDPExportPanel.test.tsx` **21 passed**；agent-workbench/RAG/RDP/methodology/trust scoped **5 files / 77 tests passed**；frontend full **30 files / 331 tests passed**；frontend build **PASS**（保留既有 Vite chunk-size warning）。
+- **落档**：新增 done 卡 `b793f3a7`。边界：这是 refs/hash-only CI release attestation，不是真实 CI provider adapter、GitHub Actions/GitLab/CircleCI 凭据接入、外部 workflow 触发、deployment runner、线上健康检查、线上发布或用户验收。
+
+## 2026-06-28 · RDP CI release runner seam（6ec698e4）
+
+- **取前沿**：`b793f3a7` 已有 refs/hash-only CI release attestation record，但 §17 仍缺 CI provider adapter / external workflow trigger 的 fail-closed 接缝；不能把手工 attestation 当成 runner 已跑。
+- **runtime/API**：新增 configurable `RDP_CI_RELEASE_RUNNER`，默认 `None`；新增 `/api/research-os/rdp/manifests/{package_id}/ci_release_attestations/run`。endpoint 先查真实 manifest、local publication、external proof、trust release gate 和 approved release approval，再把 refs/hash-only request 交给 runner；runner 成功结果复用 `PersistentRDPCIReleaseAttestationStore.record_attestation()` 写同一类 CI attestation。
+- **honesty contract**：未配置 runner 422 且不写记录；runner result 只允许 refs/hash/status/check/evidence 字段，`raw_ci_log`、raw artifact payload、stdout/stderr、token/secret key、plaintext secret、非标量 ref payload、failed/skipped/missing checks 均 fail-closed。
+- **前端 UI**：RDP export desk 新增 `Run CI` 按钮；手工 `Record CI attestation` 仍要求完整 CI refs/hash，`Run CI` 只要求 runner request 所需 refs，允许 `ci_run_ref`、artifact digest、test report、build log digest 先为空，由 runner result 产出。
+- **测试**：RDP publish/CI focused **20 passed / 2 warnings**；trust/RDP/goal adjacent **72 passed / 2 warnings**；后端全量 **1876 passed / 13 skipped / 283 warnings**；`compileall app/backend/app` PASS；`RDPExportPanel.test.tsx` **22 passed**；agent-workbench/RAG/RDP/methodology/trust scoped **5 files / 77 tests passed**；frontend full **30 files / 332 tests passed**；frontend build **PASS**（保留既有 Vite chunk-size warning）；`validate_dev` PASS（49 ✅ / 0 ❌ / 0 ⚠️；250 cards）；assigned-vs-done duplicate check 无输出；`git diff --check` PASS。
+- **落档**：新增 done 卡 `6ec698e4`。边界：这是本地 configurable runner seam 和 fake-runner 验证，不是真实 GitHub Actions/GitLab/CircleCI credential adapter、真实外部 workflow execution、object-store uploader、deployment runner、线上发布、线上健康检查或用户验收。
+
+## 2026-06-28 · Settings Stooq public market-data connector（76898af4）
+
+- **取前沿**：§4/§11 已有 Tushare token、Binance public 和 Generic REST YAML adapter，但 TRACE 仍保留“更多真实 connector/provider adapter 覆盖”；Stooq public daily CSV 是一个 no-auth、read-only、非执行路径的安全切入点。
+- **runtime/API**：新增 `StooqConnector`，实现 describe、health check 和 daily OHLCV CSV fetch；注册到 connector registry；Settings connector inference 可识别 `stooq`，继续使用现有 `SettingsRegistryDataConnectorConnectionChecker` / `SettingsRegistryDataConnectorIngestionRunner`，不新增并行 Settings API。
+- **对抗门**：只支持 daily interval，非 daily interval 拒绝；Settings check/run 不需要 secret，`secret_refs=[]`，IngestionSkillUpdate 使用 `secret:none:stooq` 占位；测试钉住不回显 plaintext token/API key。
+- **测试**：onboarding focused **48 passed / 2 warnings**；onboarding/asset-lifecycle/market-data/goal adjacent **86 passed / 2 warnings**；后端全量 **1879 passed / 13 skipped / 283 warnings**；`compileall app/backend/app` PASS；`validate_dev` PASS（49 ✅ / 0 ❌ / 0 ⚠️；251 cards）；assigned-vs-done duplicate check 无输出；`git diff --check` PASS。
+- **落档**：新增 done 卡 `76898af4`。边界：这是 Stooq public daily CSV no-auth connector 和 Settings registry-backed check/run 接线，不是全资产自动同步、scheduler crawling、商业授权自动判断、live venue permission check、下游自动注入、生产 health monitor、线上验收或用户验收。
+
+## 2026-06-28 · Settings Stooq public connector preset UI（29a670fe）
+
+- **取前沿**：`76898af4` 已接 Stooq no-auth connector 后端，但 Settings 用户仍要手工构造 DataSourceAsset/IngestionSkill metadata；§4 完整 Settings/connection wizard 仍缺具体 no-auth preset。
+- **前端 UI**：`/settings/security` Data Connectors panel 新增 Stooq public daily bars 表单，可登记 source_ref、skill_id、symbol、output dataset、schema mapping、PIT ref、source URL、rate limit、start/end；提交只走既有 `data_sources` 和 `ingestion_skills` endpoints。
+- **对抗门**：payload 固定 `connector_name=stooq`、`auth_mode=none`、`source_type=public_csv`、`secret_refs=[]`；登记动作不触发 `data_connector_checks` 或 `ingestion_skill_runs`，不提供 secret 表单，也不回显 api_key/token/sk-live。
+- **测试**：`SettingsSecurityPage.test.tsx` **1 file / 5 tests passed**；frontend full **30 files / 333 tests passed**；frontend build **PASS**（保留既有 chunk-size warning）。
+- **落档**：新增 done 卡 `29a670fe`。边界：这是 no-auth public provider metadata preset UI，不是真实连接测试、ingestion run、scheduler crawling、商业授权自动判断、全资产同步、生产 health monitor、线上验收或用户验收。
+
+## 2026-06-28 · Settings Binance public connector preset UI（224e9865）
+
+- **取前沿**：`a6dcb50f` 已接 Binance public no-auth backend adapter，Settings summary 也能渲染 existing Binance skill，但用户仍要手工登记 DataSourceAsset/IngestionSkill metadata；本卡补 Spot/USDM public REST preset。
+- **前端 UI**：`/settings/security` Data Connectors panel 新增 Binance public REST 表单，可登记 source_ref、skill_id、symbol、market、interval、output dataset、schema mapping、PIT ref、source URL、rate limit、start/end；提交只走既有 `data_sources` 和 `ingestion_skills` endpoints。
+- **对抗门**：Spot/USDM market 映射到 `binance_rest_spot` / `binance_rest_usdm`；payload 固定 `auth_mode=none`、`source_type=public_api`、`secret_refs=[]`；登记动作不触发 `data_connector_checks` 或 `ingestion_skill_runs`，不提供 secret 表单，也不回显 api_key/token/sk-live。
+- **测试**：`SettingsSecurityPage.test.tsx` **1 file / 6 tests passed**；frontend full **30 files / 334 tests passed**；frontend build **PASS**（保留既有 chunk-size warning）。
+- **落档**：新增 done 卡 `224e9865`。边界：这是 Binance public provider metadata preset UI，不是真实 Binance REST 实网连通、ingestion run、testnet/live trading、scheduler crawling、生产 health monitor、线上验收或用户验收。
+
+## 2026-06-28 · RDP external publication uploader seam（9ea22292）
+
+- **取前沿**：`770982f3` 已有手工 refs-only external publication proof，`6ec698e4` 已有 CI release runner seam；§17 仍缺 object-store publication uploader 的受控接缝。不能把手工 proof 当成 uploader 已运行，也不能接真实 cloud SDK/credential 越过 Secrets/CI/账号治理。
+- **runtime/API**：新增 configurable `RDP_EXTERNAL_PUBLICATION_UPLOADER`，默认 `None`；新增 `/api/research-os/rdp/manifests/{package_id}/external_publications/run`。endpoint 先查真实 manifest、local publication、trust release gate、approved release approval 和 archive hash，再把 refs/hash-only request 交给 uploader；成功结果复用 `PersistentRDPExternalPublicationProofStore.record_proof_from_digest()` 写同一类 external proof。
+- **honesty contract**：未配置 uploader 422 且不写记录；uploader request 不含 raw external URI、published archive path、raw artifact 或 secret；uploader result 只允许 external channel、external URI digest、immutable pointer ref、destination allowlist ref、publication status 和 evidence refs，raw URI、stdout/stderr、token/secret、plaintext secret、非标量 ref payload 和非 `published` status 均 fail-closed。
+- **前端 UI**：RDP export desk 新增 `Run external publish` 按钮；手工 `Record external proof` 仍要求 raw external URI 并由后端只保存 digest，runner path 不提交 `external_uri`。
+- **测试**：RDP publish/uploader focused **26 passed / 2 warnings**；trust/RDP/goal adjacent **78 passed / 2 warnings**；后端全量 **1885 passed / 13 skipped / 283 warnings**；`compileall app/backend/app` PASS；`RDPExportPanel.test.tsx` **24 passed**；frontend full **30 files / 336 tests passed**；frontend build **PASS**（保留既有 Vite chunk-size warning）；`validate_dev` PASS（49 ✅ / 0 ❌ / 0 ⚠️；254 cards）；assigned-vs-done duplicate check 无输出；`git diff --check` PASS。
+- **落档**：新增 done 卡 `9ea22292`。边界：这是本地 configurable uploader seam 和 fake-uploader 验证，不是真实 S3/GCS/R2 credential adapter、云端实际上传、CI release、deployment runner、线上发布、线上健康检查或用户验收。
+
+## 2026-06-28 · RDP deployment runner seam（bf94fd9d）
+
+- **取前沿**：`d5f0ff41` 已有手工 deployment attestation record，`d14e2309` 已让 live publish 要求 deployment attestation 覆盖 `deployment_refs`，但 §17 仍缺 deployment runner 接缝。不能把手工 attestation 当成部署动作已执行，也不能直接接真实 Vercel/Fly/Kubernetes/SSH 凭据越过 Secrets、CI 和线上变更治理。
+- **runtime/API**：新增 configurable `RDP_DEPLOYMENT_RUNNER`，默认 `None`；新增 `/api/research-os/rdp/manifests/{package_id}/deployment_attestations/run`。endpoint 先查真实 manifest 和声明的 deployment ref，再把 refs/hash-only request 交给 runner；成功结果复用 `PersistentRDPDeploymentAttestationStore.record_attestation()` 写同一类 deployment attestation。
+- **record 兼容**：`RDPDeploymentAttestationRecord` 增加 `deployment_event_ref`、`deployment_artifact_digest` 和 `evidence_refs`；无新增字段的 v1 记录保持原 hash/replay payload，新 runner 记录写 v2 attestation。
+- **honesty contract**：未配置 runner 422 且不写记录；runner request 不含 raw deployment payload、本地 package path、kubeconfig、SSH key、token、stdout/stderr 或 secret；runner result 只允许 deployment ref/status、deployment event/artifact digest、monitor/rollback/retire/evidence refs，raw manifest/package payload、stdout/stderr、token/secret、plaintext secret、非标量 ref payload 和非 `deployed` status 均 fail-closed。
+- **测试**：`compileall app/backend/app` PASS；RDP deployment focused **14 passed / 2 warnings**；RDP/goal adjacent **98 passed / 2 warnings**；后端全量 **1892 passed / 13 skipped / 283 warnings**。
+- **落档**：新增 done 卡 `bf94fd9d`。边界：这是本地 configurable deployment runner seam 和 fake-runner 验证，不是真实 Vercel/Fly/Render/Kubernetes/SSH credential adapter、production rollout、线上健康检查、rollback 执行、线上发布或用户验收。
+
+## 2026-06-28 · RDP deployment health and rollback proof registry（378bb0b9）
+
+- **取前沿**：`bf94fd9d` 已能把 configurable deployment runner result 写成 deployment attestation，但 GOAL §17 的 `Deployment / monitor / rollback / retire 清单` 仍没有 post-deploy health/rollback proof 记录面。不能把 deployment attestation 说成线上健康检查或 rollback 已证明。
+- **runtime/API**：新增 `RDPDeploymentHealthCheckRecord` 与 `PersistentRDPDeploymentHealthCheckStore`，JSONL append-only/replay；新增 `/api/research-os/rdp/manifests/{package_id}/deployment_health_checks`。endpoint 先查 manifest 和已登记 deployment attestation，再写 refs/hash-only health/rollback proof。
+- **honesty contract**：record 只保存 `deployment_attestation_hash`、health refs、monitor refs、rollback plan/readiness/drill refs、retire plan ref、evidence refs 和 proof hash；不保存 raw health response、raw log、provider payload、token 或 secret。
+- **对抗门**：缺/unknown deployment attestation hash、hash 不属于 package、deployment ref mismatch、`health_status != healthy`、缺 health/monitor/rollback/retire/evidence refs、raw response/log/provider payload、token/secret 或 plaintext secret 均 422，且不写 partial record。
+- **测试**：`compileall app/backend/app` PASS；RDP deployment focused **22 passed / 2 warnings**；RDP/goal adjacent **106 passed / 2 warnings**；后端全量 **1900 passed / 13 skipped / 283 warnings**。
+- **落档**：新增 done 卡 `378bb0b9`。边界：这是本地 refs/hash-only deployment health/rollback proof registry，不是真实 provider health API、prod traffic probe、real canary、rollback execution、production rollout、线上发布或用户验收。
+
+## 2026-06-28 · RDP deployment proof UI wiring（60c601d2）
+
+- **取前沿**：`bf94fd9d` 和 `378bb0b9` 已有 backend API，但 RDP export desk 还不能操作 deployment attestation、runner 和 post-deploy health/rollback proof。
+- **前端 UI**：`RDPExportPanel` 新增 deployment proof 区，包含 `Record deployment`、`Run deployment` 和 `Record health proof`；结果面显示 deployment attestation hash、deployment event/artifact digest、deployment health proof hash、health status、rollback drill ref 和 retire plan ref。
+- **对抗门**：runner payload 只提交 `deployment_ref` 和 `source_bundle_required`；不提交 raw deployment payload、本地 package path、kubeconfig、SSH key、token 或 secret。health proof 缺 deployment attestation、health refs、monitor refs、rollback/retire/evidence refs 时前端阻断，不打后端。
+- **测试**：`RDPExportPanel.test.tsx` **1 file / 26 tests passed**；frontend full **30 files / 338 tests passed**；frontend build **PASS**（保留既有 Vite chunk-size warning）。
+- **落档**：新增 done 卡 `60c601d2`。边界：这是 RDP export desk 的本地 UI 接线，不是真实 deployment provider、真实线上健康检查、real canary、rollback execution、production rollout、线上发布或用户验收。
+
+## 2026-06-28 · Settings LLM provider health snapshot registry（2cd2ed24）
+
+- **取前沿**：GOAL §4 要求 Settings 监控 provider health 与 quota status。现有 `LLMProviderRecord` 只有当前字段，`/api/llm/test` 是临时测试，没有可 replay 的 provider health/quota snapshot 账本。
+- **runtime/API**：新增 `LLMProviderHealthSnapshotRecord`、`validate_llm_provider_health_snapshot()` 和 `PersistentOnboardingRegistry.record_llm_provider_health_snapshot()`；新增 `/api/research-os/settings/llm_provider_health_snapshots`，settings summary 回显 `llm_provider_health_snapshot_total` 与 snapshot 列表。
+- **对抗门**：snapshot 必须绑定已登记 LLMProvider 和 provider.auth_refs 里的 Settings SecretRef；revoked auth ref、unknown provider、bad health/quota status、负 latency、raw response/prompt/output/provider payload、token/secret 或 plaintext secret 均 fail-closed。
+- **honesty contract**：record 只保存 snapshot/provider/auth refs、health/quota status、latency、response hash、capability/evidence refs 和 snapshot hash；服务端重算 hash，不保存 raw provider response、prompt、output、token 或 secret。
+- **测试**：`compileall app/backend/app` PASS；onboarding focused **51 passed / 2 warnings**；LLM/onboarding/market-data/goal/compiler adjacent **154 passed / 2 warnings**；后端全量 **1903 passed / 13 skipped / 283 warnings**。
+- **落档**：新增 done 卡 `2cd2ed24`。边界：这是本地 provider health/quota snapshot 账本，不是真实 provider polling scheduler、OAuth/device-code/account auth、生产 keyring/HSM、外部 billing/quota API、CI 或线上监控。
+
+## 2026-06-28 · Settings LLM provider health snapshot UI（a5dc9306）
+
+- **取前沿**：`2cd2ed24` 已有 provider health/quota snapshot registry/API，但 `/settings/llm` 只能配置和测试 provider，不能把 health/quota 证据写回 Settings 账本。
+- **前端 UI**：`LLMSettingsPage` 读取 `/api/research-os/settings/summary` 的 `llm_providers` / `llm_provider_health_snapshots`；新增 Provider health snapshot 面板，基于已登记 provider/auth_ref 提交 snapshot。
+- **对抗门**：缺 Settings provider/auth_ref 时前端禁用并阻断提交；成功 payload 只含 status/quota/latency/checker/response_hash/capability_refs/evidence_refs/error_code，不提交 raw response、prompt/output、token、secret 或 API key；后端 422 时显示失败，不假装记录成功。
+- **测试**：`LLMSettingsPage.test.tsx` **1 file / 12 tests passed**；frontend full **30 files / 341 tests passed**；frontend build **PASS**（保留既有 Vite chunk-size warning）。
+- **落档**：新增 done 卡 `a5dc9306`。边界：这是本地 Settings wizard UI 接线，不是真实 provider polling scheduler、OAuth/device-code/account auth、外部 billing/quota API、生产 keystore backend、CI 或线上监控。
+
+## 2026-06-28 · GOAL §0-§17 runtime gap matrix
+
+- **启动复核**：当前分支 `fix-u2-synth`，HEAD `5d55de3`，`origin/main` `70bacab`，`HEAD...origin/main = 0 167`；工作区有大量既有脏改，未切分支/未 reset/未 commit。
+- **证据读取**：已读 `/Users/wzy/.codex/AGENTS.md`、项目 `CLAUDE.md`、`dev/exec/HANDOFF.md`、`dev/.identity`、`dev/TEAM.md`、`dev/GOAL.md`、`dev/RULES.md`、`dev/RULES.project.md`、`dev/decisions/_NAV.md`、`dev/decisions/dreaminate/DECISIONS.md`、`dev/experience/dreaminate/experience.md`；`dev/research/findings/dreaminate/construction-map.md` 不存在。
+- **矩阵结论**：新增 finding `dev/research/findings/dreaminate/goal-0-17-gap-matrix-2026-06-28.md`。本地 `goal_entrypoint_coverage.jsonl` 有 **577 rows**，但全是 `entry_source=api` 且只覆盖 `§0/§1/§7/§8`，`claims_full_product_entrypoint=0`；full §0-§17 和 all-entrypoints 仍是缺口。
+- **落任务**：新增 active 卡 `2b1706f1`、`6bbfa5ac`、`9112dbc6`、`124d7c3a`、`564ccd82`、`7f4823d4`，分别覆盖 full section manifest、chat/agent_shell、canvas、IDE、scheduler、M1-M21 real platform manifest。
+- **验证**：`python -m pytest app/backend/tests/test_funnel_hooks.py::test_register_emits_user_registered -q` **1 passed / 2 warnings**；`validate_dev` 在新增矩阵前为 **49 ✅ / 0 ❌ / 0 ⚠️**。新增卡后需重新 build board/dev-map/validate。
+- **边界**：这是矩阵和任务路由，不是 §0-§17 完成证明；未做 CI、线上、真实 provider、用户验收。
+
+## 2026-06-28 · GOAL §0-§17 full section coverage manifest hard gate（2b1706f1）
+
+- **取前沿**：`validate_goal_coverage_manifest` 已能拒绝 contract-only full claim，但没有持久化 section coverage 账本，也无法回查 `entrypoint_wiring_refs` 是否真实存在。
+- **runtime/API**：新增 `PersistentGoalSectionCoverageRegistry` 与 `goal_section_coverage_record_from_dict()`；新增 `/api/research-os/goal/section_coverage_records` 与 `/api/research-os/goal/section_coverage/summary`。
+- **对抗门**：section record 必须有 contract/test/task/evidence refs；`full_entrypoint_wired=true` 必须有 `entrypoint_wiring_refs`；每个 wiring ref 必须能从 `PersistentGoalEntrypointCoverageRegistry` 回查，且 entrypoint record 必须覆盖同一 GOAL section。unknown ref、section mismatch、contract-only full claim 均 fail-closed。
+- **测试**：`compileall app/backend/app` PASS；goal focused **17 passed / 2 warnings**；goal/platform/compiler/spine adjacent **55 passed / 2 warnings**；后端全量 **1907 passed / 13 skipped / 283 warnings**。
+- **落档**：新增 done 卡 `2b1706f1`。边界：这是 full section coverage manifest 硬门，不是 chat/canvas/IDE/scheduler/agent_shell producer 本身，也不是 §0-§17 完成证明。
+
+## 2026-06-28 · Chat / Agent Shell GOAL entrypoint coverage producer（6bbfa5ac）
+
+- **取前沿**：GOAL gap matrix 显示 `goal_entrypoint_coverage.jsonl` 当前只证明 `entry_source=api`；chat / agent_shell 成功入口虽有 QRO/Graph command，但没有 Compiler IR/pass 与 GOAL entrypoint coverage。
+- **runtime/API**：`AgentTurn` 增加 `compiler_ir_refs`、`compiler_pass_refs`、`entrypoint_coverage_refs`；新增 AgentRuntime turn coverage helper，把成功 turn 的 QRO/Research Graph command 编译成 Governed Compiler IR/pass 并写 GOAL entrypoint coverage。`/api/agent/chat`、workbench SSE、legacy non-stream chat 写 `entry_source=agent_shell|chat`；legacy stream 未经过 AgentRuntime，只创建 hash-only chat QRO 并写 `entry_source=chat` coverage。
+- **对抗门**：缺 QRO/Graph refs 会 fail-closed 且不写 partial；silent mock fallback 被 coverage validator 拒绝且不写 compiler/coverage；coverage/IR/pass/QRO 只保存 refs/hash/count/status，不保存 raw user prompt、assistant text、tool payload、token 或 secret。
+- **测试**：`compileall app/backend/app app/backend/tests/test_agent_runtime_research_graph.py app/backend/tests/test_chat_conversations.py` PASS；agent/chat focused **36 passed / 2 warnings**；goal/agent/chat/spine adjacent **66 passed / 2 warnings**；后端全量 **1910 passed / 13 skipped / 283 warnings**。
+- **落档**：新增 done 卡 `6bbfa5ac`。边界：这是 chat / agent_shell entrypoint coverage producer，不是 canvas、IDE、scheduler producer；仍只覆盖 GOAL `§0/§1/§7/§8` entrypoint wiring，不是 §0-§17 full product implementation proof、CI、线上或用户验收。
+
+## 2026-06-28 · Scheduler GOAL entrypoint coverage producer（564ccd82）
+
+- **取前沿**：矩阵拆卡时 `entry_source=scheduler` 没有进入本地 audit 实证。复核代码后确认 weekly tick producer 已存在，不应重复造第二套 scheduler coverage。
+- **runtime/API**：`_record_weekly_monitor_qro()` 记录 `QROType.OBSERVABLE` 和 `ResearchGraphCommand(source=EntrySource.SCHEDULER)`；`_compile_weekly_monitor_qro()` 记录 Governed Compiler IR/pass，并写 `entry_source=scheduler`、`entrypoint_ref=scheduler:monitor.weekly_tick` 的 GOAL entrypoint coverage。manual `/api/monitor/weekly_tick` 和 scheduled DAG result recorder 复用同一路径。
+- **对抗门**：坏 observation / gate verdict observation 在写 QRO/Compiler/Coverage 前 422；QRO/IR/pass/coverage 只保存 refs/hash/count/status，不保存 raw factor id、cost drift report、action payload 或 secret。
+- **测试**：`compileall app/backend/app/monitor app/backend/app/main.py` PASS；scheduler/goal focused **24 passed / 2 warnings**；后端全量 **1910 passed / 13 skipped / 283 warnings**。
+- **落档**：新增 done 卡 `564ccd82`。边界：这是 weekly tick / scheduled producer 的核验落档，不是部署级长期 scheduler 运行证明、canvas、IDE、chat/agent_shell producer，也不是 §0-§17 full product implementation proof。
+
+## 2026-06-28 · IDE GOAL entrypoint coverage producer（124d7c3a）
+
+- **取前沿**：代码里已存在 IDE save/run/promote/AI complete 的 QRO→Compiler→Coverage producer，但 `test_ide.py` 只测 service/sandbox，没有 API-level coverage registry 断言。
+- **runtime/API**：IDE save/run/promote/AI complete 成功路径分别写 `ide:strategy.save`、`ide:strategy.run`、`ide:run.promote`、`ide:ai_complete` 的 QRO、Research Graph command、Compiler IR/pass 和 GOAL entrypoint coverage，`entry_source=ide`。
+- **对抗门**：unknown MarketDataUse ref 在写 QRO/Compiler/Coverage 前 422；QRO/IR/pass/coverage 只保存 refs/hash/count/status，不保存 raw strategy code、description、LLM prompt、editor context、LLM output、token 或 secret。
+- **测试**：`compileall app/backend/tests/test_ide.py app/backend/app/main.py` PASS；IDE/goal focused **43 passed / 2 warnings**。
+- **落档**：新增 done 卡 `124d7c3a`。边界：这是 IDE producer 和测试补强，不是 canvas、scheduler、chat/agent_shell producer，也不是 §0-§17 full product implementation proof。
+
+## 2026-06-28 · Canvas GOAL entrypoint coverage producer（9112dbc6）
+
+- **取前沿**：Canvas 已有 canonical Graph command 与 QRO update 路径，但 canonical canvas 操作没有统一写 Governed Compiler IR/pass 与 GOAL entrypoint coverage。
+- **runtime/API**：新增 `_record_canvas_goal_entrypoint_coverage()`；`canvas_asset_mutations`、`canvas_layouts`、`canvas_parameter_values`、`patch_applications` 成功路径返回 `compiler_ir_ref`、`compiler_pass_ref`、`entrypoint_coverage_ref`。entrypoints 分别是 `canvas:asset_mutation`、`canvas:layout`、`canvas:parameter_value`、`canvas:graph_patch_application`。
+- **旧入口边界**：旧 audit-only `/api/research-os/graph/canvas_mutations` 继续只写 canonical mutation command，不伪造 QRO 或 coverage。
+- **对抗门**：raw canvas payload 在写账前 422；QRO/IR/pass/coverage 只保存 refs/hash/count/status，不保存 raw value、layout projection、patch body、token 或 secret。
+- **测试**：`compileall app/backend/app/main.py app/backend/tests/test_research_graph_persistence.py` PASS；canvas/goal focused **45 passed / 2 warnings**；canvas/spine/strategy-console adjacent **83 passed / 2 warnings**。
+- **落档**：新增 done 卡 `9112dbc6`。边界：这是 canonical canvas QRO update/layout/parameter/patch producer，不是 §0-§17 full product implementation proof、CI、线上或用户验收。
+
+## 2026-06-28 · M1-M21 real platform coverage manifest registry（7f4823d4）
+
+- **取前沿**：`validate_platform_coverage()` 只能证明 M1-M21 结构齐，不区分 synthetic/test fixture refs，也没有可 replay 的 manifest registry/API。
+- **runtime/API**：新增 `PersistentPlatformCoverageRegistry`、dict materializer、real-manifest validator 和 JSONL append-only replay；新增 `/api/research-os/platform/coverage_manifest` 与 `/api/research-os/platform/coverage_summary`，summary 按 M1-M21 顺序输出 rows。
+- **对抗门**：common refs 必须是 registry/audit-shaped QRO、Research Graph、lifecycle、governance、RAG、Mathematical Spine refs；evidence/specific refs 拒绝 synthetic、fixture、test-only、`:001` 占位；M14 必须有 LLM gateway、routing policy、credential pool、theory binding；M21 必须有 mock label 和 asset category。非对象 records 422，不静默跳过。
+- **测试**：`compileall app/backend/app/research_os/platform_coverage.py app/backend/app/research_os/__init__.py app/backend/app/main.py app/backend/tests/test_platform_coverage.py` PASS；platform focused **11 passed / 2 warnings**；platform+goal coverage **28 passed / 2 warnings**；后端全量 **1918 passed / 13 skipped / 283 warnings**。
+- **落档**：新增 done 卡 `7f4823d4`。边界：这是本地 platform coverage manifest registry/API，不是 CI、线上、真实 provider、生产 audit 数据已全量登记或用户验收。
+
+## 2026-06-28 · GOAL §0-§17 local integration proof
+
+- **任务状态**：本轮拆出的 GOAL §0-§17 follow-up 卡 `2b1706f1`、`6bbfa5ac`、`564ccd82`、`124d7c3a`、`9112dbc6`、`7f4823d4` 均在 `dev/tasks/dreaminate/done/`；dreaminate active 任务检查无输出。
+- **dev 校验**：`build_board.py`、`build_dev_map.py` 已刷新；`validate_dev.py` **49 ✅ / 0 ❌ / 0 ⚠️**（265 卡）。
+- **全量验证**：后端全量 **1918 passed / 13 skipped / 283 warnings**；前端 `npm run test:run` **30 files / 341 tests passed**；前端 `npm run build` PASS（保留 Vite chunk-size warning）；`git diff --check` 无输出。
+- **边界**：这是本地 runtime/dev/test proof；未 commit、未 push、未跑 CI、未部署线上，生产 audit 数据是否全量登记和用户验收均未声明。

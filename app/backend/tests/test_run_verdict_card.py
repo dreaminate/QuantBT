@@ -1,4 +1,4 @@
-"""R2 裁决卡后端接线 · 对抗测试（RunVerdictCard 接真）。
+"""R2 裁决卡后端接线 · 对抗测试（RunVerdictCard 真实后端）。
 
 种已知坏门必抓：
   G1 verdict 措辞门：note 出现「可信/安全/排除过拟合/保证/可复现/组织独立」必抓（R7）。
@@ -20,9 +20,28 @@ import pytest
 from fastapi.testclient import TestClient
 
 from app.auth import require_user_dependency
+from app.research_os import (
+    DatasetSemanticsRecord,
+    InstrumentSpec,
+    MarketCapabilityMatrixRecord,
+    MarketDataUseValidationRecord,
+    PersistentMarketDataRegistry,
+    ValidationUseContext,
+)
 
 # 措辞红线词（与 verification/schema.py DISCLOSURE + R7 一致）。
 _BANNED_WORDS = ["可信", "安全", "保证", "可复现", "组织独立", "排除过拟合"]
+_RUN_REPORT_VALIDATION_REF = "market_data_use:run_report:crypto_perp"
+
+
+def _report_params(**extra):
+    params = {"market_data_use_validation_refs": [_RUN_REPORT_VALIDATION_REF]}
+    params.update(extra)
+    return params
+
+
+def _get_report(client: TestClient, path: str, **extra):
+    return client.get(path, params=_report_params(**extra))
 
 
 def _write_run(root: Path, run_id: str, *, n: int = 600, verdict_id: str | None = None) -> Path:
@@ -64,6 +83,84 @@ def _write_run(root: Path, run_id: str, *, n: int = 600, verdict_id: str | None 
     return rd
 
 
+def _run_report_market_data_registry(tmp_path: Path) -> PersistentMarketDataRegistry:
+    registry = PersistentMarketDataRegistry(tmp_path / "market_data.jsonl")
+    dataset_ref = "dataset:run_report:crypto_perp:v1"
+    instrument_ref = "instrument:run_report:crypto_perp:demo"
+    capability_ref = "capability:run_report:crypto_perp:backtest"
+    registry.record_dataset(
+        DatasetSemanticsRecord(
+            dataset_ref=dataset_ref,
+            source_ref="source:run_report:crypto_perp:fixture",
+            version="v1",
+            known_at_ref="known_at:run_report:crypto_perp",
+            effective_at_ref="effective_at:run_report:crypto_perp",
+            pit_bitemporal_rules_ref="pit:run_report:crypto_perp",
+            quality_status="accepted",
+            lineage_refs=("lineage:run_report:crypto_perp",),
+            freshness_status="fresh",
+            checksum="sha256:run_report:crypto_perp",
+            asof_join_rule_ref="pit:run_report:crypto_perp",
+        ),
+        use_context=ValidationUseContext.BACKTEST,
+    )
+    registry.record_instrument(
+        InstrumentSpec(
+            instrument_ref=instrument_ref,
+            asset_class="crypto",
+            instrument_type="spot",
+            currency="USDT",
+            exchange_calendar_ref="calendar:crypto:24x7",
+            symbol_mapping_ref="symbols:run_report:crypto_perp",
+        )
+    )
+    registry.record_capability_matrix(
+        MarketCapabilityMatrixRecord(
+            matrix_ref=capability_ref,
+            asset_class="crypto",
+            instrument_type="spot",
+            research=True,
+            backtest=True,
+            paper=False,
+            testnet=False,
+            live=False,
+            long=True,
+            short=True,
+            leverage=True,
+            options=False,
+            margin=True,
+            borrow=False,
+            data_availability="pit_bitemporal_fixture",
+            cost_model_availability="fixture_cost_model",
+            execution_availability="none",
+            permission_requirement=None,
+        ),
+        use_context=ValidationUseContext.BACKTEST,
+    )
+    registry.record_use_validation(
+        MarketDataUseValidationRecord(
+            validation_ref=_RUN_REPORT_VALIDATION_REF,
+            request_ref="market_data_use_request:run_report:crypto_perp",
+            use_context=ValidationUseContext.BACKTEST.value,
+            dataset_refs=(dataset_ref,),
+            instrument_refs=(instrument_ref,),
+            capability_matrix_ref=capability_ref,
+            capital_record_ref=None,
+            transformation_refs=("transform:run_report:projection",),
+            accepted=True,
+            violation_codes=(),
+            evidence_refs=(
+                "pit:run_report:crypto_perp",
+                "known_at:run_report:crypto_perp",
+                "effective_at:run_report:crypto_perp",
+            ),
+            recorded_by="pytest",
+            created_at_utc="2026-06-27T00:00:00+00:00",
+        )
+    )
+    return registry
+
+
 @pytest.fixture
 def env(tmp_path, monkeypatch):
     """隔离 RUN_ROOT + VERDICT_STORE + GATE_SERVICE，auth override。返回 (client, run_root, main)。"""
@@ -84,6 +181,7 @@ def env(tmp_path, monkeypatch):
     gstore = ApprovalGateStore(tmp_path / "approval")
     gservice = ApprovalGateService(gstore, verdict_lookup=vstore.record_for)
     monkeypatch.setattr(main, "GATE_SERVICE", gservice)
+    monkeypatch.setattr(main, "MARKET_DATA_REGISTRY", _run_report_market_data_registry(tmp_path))
 
     main.app.dependency_overrides[require_user_dependency] = lambda: SimpleNamespace(
         user_id="alice", username="alice",
@@ -98,14 +196,56 @@ def env(tmp_path, monkeypatch):
 def test_verdict_no_authoritative_record_is_concern(env):
     client, run_root, _m, _v = env
     _write_run(run_root, "run_noverdict")
-    r = client.get("/api/runs/run_noverdict/verdict")
+    r = _get_report(client, "/api/runs/run_noverdict/verdict")
     assert r.status_code == 200
     body = r.json()
     assert body["verdict"] == "concern", "无权威裁决须 concern（不假绿灯）"
     assert body["has_authoritative_verdict"] is False
+    assert body["market_data_use_validation_refs"] == [_RUN_REPORT_VALIDATION_REF]
     # note 合规：禁词不得出现。
     for w in _BANNED_WORDS:
         assert w not in body["verdictNote"], f"note 越界禁词: {w}"
+
+
+def test_run_report_endpoints_require_market_data_use_refs_before_projection(env, monkeypatch):
+    client, run_root, _m, _v = env
+    _write_run(run_root, "run_requires_refs")
+    from app import run_verdict
+
+    calls: list[str] = []
+
+    def _project_verdict(*_args, **_kwargs):
+        calls.append("verdict")
+        raise AssertionError("project_verdict must not run without market_data_use_validation_refs")
+
+    def _project_overfit(*_args, **_kwargs):
+        calls.append("overfit")
+        raise AssertionError("project_overfit must not run without market_data_use_validation_refs")
+
+    def _project_cost(*_args, **_kwargs):
+        calls.append("cost")
+        raise AssertionError("project_cost_sensitivity must not run without market_data_use_validation_refs")
+
+    def _project_heatmap(*_args, **_kwargs):
+        calls.append("heatmap")
+        raise AssertionError("project_monthly_heatmap must not run without market_data_use_validation_refs")
+
+    monkeypatch.setattr(run_verdict, "project_verdict", _project_verdict)
+    monkeypatch.setattr(run_verdict, "project_overfit", _project_overfit)
+    monkeypatch.setattr(run_verdict, "project_cost_sensitivity", _project_cost)
+    monkeypatch.setattr(run_verdict, "project_monthly_heatmap", _project_heatmap)
+
+    cases = (
+        ("verdict", "run verdict reports"),
+        ("overfit", "run overfit reports"),
+        ("cost-sensitivity", "run cost-sensitivity reports"),
+        ("monthly-heatmap", "run monthly heatmap reports"),
+    )
+    for path, operation in cases:
+        r = client.get(f"/api/runs/run_requires_refs/{path}")
+        assert r.status_code == 422, path
+        assert f"market_data_use_validation_refs is required for {operation}" in r.text
+    assert calls == []
 
 
 # ── G1 · 措辞门：任何投影出的 note 都无禁词 ───────────────────────────────
@@ -119,7 +259,7 @@ def test_verdict_note_never_contains_banned_words(env):
     )
     vstore.record(rec)
     _write_run(run_root, "run_blocked", verdict_id=rec.verdict_id)
-    r = client.get("/api/runs/run_blocked/verdict")
+    r = _get_report(client, "/api/runs/run_blocked/verdict")
     body = r.json()
     assert body["verdict"] == "blocked"
     for w in _BANNED_WORDS:
@@ -146,7 +286,7 @@ def test_verdict_consistent_projected(env):
     assert rec.verdict == "consistent"
     vstore.record(rec)
     _write_run(run_root, "run_ok", verdict_id=rec.verdict_id)
-    body = client.get("/api/runs/run_ok/verdict").json()
+    body = _get_report(client, "/api/runs/run_ok/verdict").json()
     assert body["verdict"] == "consistent"
     assert body["has_authoritative_verdict"] is True
     assert body["verdict_id"] == rec.verdict_id
@@ -172,7 +312,7 @@ def test_tampered_verdict_fails_closed_to_concern(env):
     row["verdict"] = "consistent"
     path.write_text(json.dumps(row, ensure_ascii=False) + "\n", encoding="utf-8")
     _write_run(run_root, "run_tamper", verdict_id=rec.verdict_id)
-    body = client.get("/api/runs/run_tamper/verdict").json()
+    body = _get_report(client, "/api/runs/run_tamper/verdict").json()
     assert body["verdict"] == "concern", "篡改须 fail-closed 投影 concern，绝不返脏数据/绿灯"
     assert body["has_authoritative_verdict"] is False
 
@@ -181,7 +321,7 @@ def test_tampered_verdict_fails_closed_to_concern(env):
 def test_overfit_gate_label_is_separate_pipeline(env):
     client, run_root, _m, _v = env
     _write_run(run_root, "run_of")
-    body = client.get("/api/runs/run_of/overfit").json()
+    body = _get_report(client, "/api/runs/run_of/overfit").json()
     # overfit 投影有 color/gate_label，但绝无三态 verdict 枚举字段冒充。
     assert "color" in body
     assert body["color"] in ("green", "yellow", "red", "insufficient_evidence")
@@ -199,8 +339,8 @@ def test_overfit_gate_label_caught_if_used_as_verdict(env):
     """
     client, run_root, _m, _v = env
     _write_run(run_root, "run_x")
-    verdict_body = client.get("/api/runs/run_x/verdict").json()
-    overfit_body = client.get("/api/runs/run_x/overfit").json()
+    verdict_body = _get_report(client, "/api/runs/run_x/verdict").json()
+    overfit_body = _get_report(client, "/api/runs/run_x/overfit").json()
     three_state = {"consistent", "concern", "blocked"}
     gate_labels = {"晋级候选", "证据分歧", "证据强负", "证据不足"}
     assert verdict_body["verdict"] in three_state
@@ -252,7 +392,7 @@ def test_promote_unknown_run_404(env):
 def test_cost_sensitivity_three_presets_derived(env):
     client, run_root, _m, _v = env
     _write_run(run_root, "run_cost")
-    body = client.get("/api/runs/run_cost/cost-sensitivity").json()
+    body = _get_report(client, "/api/runs/run_cost/cost-sensitivity").json()
     assert body["derived"] is True, "P0 派生须诚实标 derived"
     presets = {c["preset"] for c in body["cost"]}
     assert presets == {"optimistic", "neutral", "pessimistic"}
@@ -264,14 +404,14 @@ def test_cost_sensitivity_three_presets_derived(env):
 def test_cost_sensitivity_single_preset(env):
     client, run_root, _m, _v = env
     _write_run(run_root, "run_cost2")
-    body = client.get("/api/runs/run_cost2/cost-sensitivity?preset=pessimistic").json()
+    body = _get_report(client, "/api/runs/run_cost2/cost-sensitivity", preset="pessimistic").json()
     assert [c["preset"] for c in body["cost"]] == ["pessimistic"]
 
 
 def test_monthly_heatmap_real_aggregation(env):
     client, run_root, _m, _v = env
     _write_run(run_root, "run_heat", n=600)  # 跨 ~20 个月
-    body = client.get("/api/runs/run_heat/monthly-heatmap").json()
+    body = _get_report(client, "/api/runs/run_heat/monthly-heatmap").json()
     assert body["available"] is True
     assert body["metric"] in ("excess", "net")
     assert body["rows"], "须有真聚合行（非空）"
@@ -283,5 +423,5 @@ def test_monthly_heatmap_real_aggregation(env):
 def test_endpoints_404_on_missing_run(env):
     client, _run_root, _m, _v = env
     for path in ("verdict", "overfit", "cost-sensitivity", "monthly-heatmap"):
-        r = client.get(f"/api/runs/ghost/{path}")
+        r = _get_report(client, f"/api/runs/ghost/{path}")
         assert r.status_code == 404, path

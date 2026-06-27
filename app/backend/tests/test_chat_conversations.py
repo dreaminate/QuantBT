@@ -3,14 +3,24 @@
 from __future__ import annotations
 
 from pathlib import Path
+from types import SimpleNamespace
 
 import pytest
 from fastapi.testclient import TestClient
 
 from app.agent.conversations import ChatError, ChatService, VALID_MARKET_MODES
+from app.agent.llm_client import LLMResponse
 from app.agent.rag import format_rag_context, format_run_context, retrieve
 from app.glossary import GlossaryRegistry, load_glossary_dir
 from app.main import app
+from app.research_os import (
+    AssetRAGDocument,
+    PersistentCompilerIRStore,
+    PersistentGoalEntrypointCoverageRegistry,
+    PersistentResearchAssetRAGIndex,
+    RAGPermission,
+    ResearchGraphStore,
+)
 
 
 @pytest.fixture
@@ -164,8 +174,62 @@ def test_format_rag_context_with_hits():
 
 
 @pytest.fixture
-def client() -> TestClient:
+def client(tmp_path: Path, monkeypatch) -> TestClient:  # noqa: ANN001
+    import app.main as main
+
+    monkeypatch.setattr(main, "CHAT_SERVICE", ChatService(tmp_path / "api_chat.db"))
+    monkeypatch.setattr(main, "RESEARCH_GRAPH_STORE", ResearchGraphStore())
+    monkeypatch.setattr(main, "COMPILER_IR_STORE", PersistentCompilerIRStore(tmp_path / "compiler_ir.jsonl"))
+    monkeypatch.setattr(
+        main,
+        "GOAL_ENTRYPOINT_COVERAGE_REGISTRY",
+        PersistentGoalEntrypointCoverageRegistry(tmp_path / "goal_entrypoint_coverage.jsonl"),
+    )
     return TestClient(app)
+
+
+class _Mode2CapturingLLM:
+    provider = "test"
+
+    def __init__(self) -> None:
+        self.messages = []
+
+    def chat(self, messages, *, tools=None, model=None, temperature=0.2):  # noqa: ANN001, ARG002
+        self.messages = list(messages)
+        return LLMResponse(content="legacy mode2 answer")
+
+
+class _Mode2StreamingLLM:
+    provider = "test"
+
+    def __init__(self) -> None:
+        self.messages = []
+
+    def stream_chat(self, messages, *, model=None, temperature=0.2):  # noqa: ANN001, ARG002
+        self.messages = list(messages)
+        yield "streamed legacy answer"
+
+
+def _legacy_rag_doc(**overrides) -> AssetRAGDocument:
+    payload = {
+        "source_id": "doc:legacy-mode2",
+        "version": "v1",
+        "title": "Legacy Mode2 covariance shrinkage note",
+        "body": "covariance covariance shrinkage portfolio risk PBO legacy mode2",
+        "projection": "ResearchRAG",
+        "asset_ref": "qro:legacy-risk",
+        "permission": RAGPermission(
+            allowed_users=("u1",),
+            allowed_desks=("research",),
+            allowed_assets=("qro:legacy-risk",),
+            permission_tags=("research.read",),
+        ),
+        "applicability": "candidate research context for legacy mode2 chat",
+        "source_kind": "EvidenceSpan",
+        "evidence_label": "candidate_context",
+    }
+    payload.update(overrides)
+    return AssetRAGDocument(**payload)
 
 
 def test_api_chat_start(client: TestClient):
@@ -197,6 +261,195 @@ def test_api_send_message_devLocal_round_trip(client: TestClient):
     assert len(assistant["content"]) > 0
     # 应该 RAG 命中 sharpe_ratio
     assert any(h["slug"] == "sharpe_ratio" for h in (assistant["metadata"].get("rag_hits") or []))
+
+
+def test_api_send_message_records_chat_and_agent_shell_goal_coverage(client: TestClient, monkeypatch):
+    import app.main as main
+
+    monkeypatch.setattr(main, "_current_agent_llm", lambda run_id=None: _Mode2CapturingLLM())
+    secret = "SECRET_SHOULD_NOT_ENTER_LEGACY_GOAL_COVERAGE"
+    r1 = client.post("/api/agent/chat/start", json={"market_mode": "ashare_research"})
+    tid = r1.json()["thread_id"]
+    r2 = client.post(f"/api/agent/chat/{tid}/message", json={"content": f"夏普比率是什么 {secret}"})
+
+    assert r2.status_code == 200, r2.text
+    metadata = r2.json()["metadata"]
+    assert len(metadata["compiler_ir_refs"]) == 2
+    assert len(metadata["compiler_pass_refs"]) == 2
+    assert len(metadata["entrypoint_coverage_refs"]) == 2
+    coverages = main.GOAL_ENTRYPOINT_COVERAGE_REGISTRY.records()
+    assert {(record.entry_source, record.entrypoint_ref) for record in coverages} == {
+        ("agent_shell", "agent_shell:legacy_mode2.chat.message"),
+        ("chat", "chat:legacy_mode2.chat.message"),
+    }
+    persisted = str(coverages)
+    for ir_ref in metadata["compiler_ir_refs"]:
+        persisted += str(main.COMPILER_IR_STORE.ir(ir_ref))
+    for pass_ref in metadata["compiler_pass_refs"]:
+        persisted += str(main.COMPILER_IR_STORE.compiler_pass(pass_ref))
+    assert secret not in persisted
+    assert "夏普比率是什么" not in persisted
+
+
+def test_api_send_message_retrieves_research_asset_rag_when_visible_assets_supplied(tmp_path, monkeypatch):
+    import app.main as main
+
+    index = PersistentResearchAssetRAGIndex(tmp_path / "legacy_rag.jsonl")
+    index.add(_legacy_rag_doc())
+    store = ResearchGraphStore()
+    llm = _Mode2CapturingLLM()
+    monkeypatch.setattr(main, "RESEARCH_ASSET_RAG_INDEX", index)
+    monkeypatch.setattr(main, "RESEARCH_GRAPH_STORE", store)
+    monkeypatch.setattr(main, "COMPILER_IR_STORE", PersistentCompilerIRStore(tmp_path / "compiler_ir.jsonl"))
+    monkeypatch.setattr(
+        main,
+        "GOAL_ENTRYPOINT_COVERAGE_REGISTRY",
+        PersistentGoalEntrypointCoverageRegistry(tmp_path / "goal_entrypoint_coverage.jsonl"),
+    )
+    monkeypatch.setattr(main, "_current_agent_llm", lambda run_id=None: llm)
+    main.app.dependency_overrides[main.current_user_dependency] = lambda: SimpleNamespace(username="u1", user_id="u1")
+    client = TestClient(main.app)
+    try:
+        start = client.post("/api/agent/chat/start", json={"market_mode": "ashare_research"})
+        tid = start.json()["thread_id"]
+        response = client.post(
+            f"/api/agent/chat/{tid}/message",
+            json={
+                "content": "Explain covariance shrinkage PBO risk",
+                "desk": "research",
+                "visible_asset_refs": ["qro:legacy-risk"],
+                "permission_tags": ["research.read"],
+                "projections": ["ResearchRAG"],
+                "rag_search": "vector",
+            },
+        )
+    finally:
+        main.app.dependency_overrides.pop(main.current_user_dependency, None)
+
+    assert response.status_code == 200, response.text
+    assistant = response.json()
+    metadata = assistant["metadata"]
+    assert any(h["slug"] == "pbo" for h in metadata["rag_hits"])
+    assert metadata["research_asset_rag_hits"][0]["source_id"] == "doc:legacy-mode2"
+    assert metadata["research_asset_rag_hits"][0]["evidence_ref"] == "rag:doc:legacy-mode2@v1:qro:legacy-risk"
+    assert metadata["research_asset_rag_usage_ids"]
+    assert index.agent_usage(source_id="doc:legacy-mode2", user_id="u1")
+
+    prompt_text = "\n".join(message.content for message in llm.messages)
+    assert "Research Asset RAG candidate context" in prompt_text
+    assert "covariance covariance shrinkage" in prompt_text
+    graph_refs = {
+        ref
+        for command in store.commands()
+        if command.command_id in set(metadata["research_graph_command_ids"])
+        for ref in command.evidence_refs
+    }
+    assert "rag:doc:legacy-mode2@v1:qro:legacy-risk" in graph_refs
+    assert any(ref.startswith("rag_usage:") for ref in graph_refs)
+
+
+def test_api_send_message_does_not_auto_retrieve_research_asset_rag_without_visible_assets(tmp_path, monkeypatch):
+    import app.main as main
+
+    index = PersistentResearchAssetRAGIndex(tmp_path / "legacy_rag.jsonl")
+    index.add(_legacy_rag_doc())
+    llm = _Mode2CapturingLLM()
+    monkeypatch.setattr(main, "RESEARCH_ASSET_RAG_INDEX", index)
+    monkeypatch.setattr(main, "RESEARCH_GRAPH_STORE", ResearchGraphStore())
+    monkeypatch.setattr(main, "COMPILER_IR_STORE", PersistentCompilerIRStore(tmp_path / "compiler_ir.jsonl"))
+    monkeypatch.setattr(
+        main,
+        "GOAL_ENTRYPOINT_COVERAGE_REGISTRY",
+        PersistentGoalEntrypointCoverageRegistry(tmp_path / "goal_entrypoint_coverage.jsonl"),
+    )
+    monkeypatch.setattr(main, "_current_agent_llm", lambda run_id=None: llm)
+    main.app.dependency_overrides[main.current_user_dependency] = lambda: SimpleNamespace(username="u1", user_id="u1")
+    client = TestClient(main.app)
+    try:
+        start = client.post("/api/agent/chat/start", json={"market_mode": "ashare_research"})
+        tid = start.json()["thread_id"]
+        response = client.post(
+            f"/api/agent/chat/{tid}/message",
+            json={
+                "content": "Explain covariance shrinkage PBO risk",
+                "desk": "research",
+                "permission_tags": ["research.read"],
+                "projections": ["ResearchRAG"],
+            },
+        )
+    finally:
+        main.app.dependency_overrides.pop(main.current_user_dependency, None)
+
+    assert response.status_code == 200, response.text
+    metadata = response.json()["metadata"]
+    assert metadata["research_asset_rag_hits"] == []
+    assert metadata["research_asset_rag_usage_ids"] == []
+    assert index.agent_usage(source_id="doc:legacy-mode2", user_id="u1") == []
+    prompt_text = "\n".join(message.content for message in llm.messages)
+    assert "Research Asset RAG candidate context" not in prompt_text
+
+
+def test_api_chat_stream_retrieves_research_asset_rag_when_visible_assets_supplied(tmp_path, monkeypatch):
+    import app.main as main
+
+    index = PersistentResearchAssetRAGIndex(tmp_path / "legacy_stream_rag.jsonl")
+    index.add(_legacy_rag_doc(source_id="doc:legacy-mode2-stream"))
+    llm = _Mode2StreamingLLM()
+    monkeypatch.setattr(main, "RESEARCH_ASSET_RAG_INDEX", index)
+    monkeypatch.setattr(main, "RESEARCH_GRAPH_STORE", ResearchGraphStore())
+    monkeypatch.setattr(main, "COMPILER_IR_STORE", PersistentCompilerIRStore(tmp_path / "compiler_ir.jsonl"))
+    monkeypatch.setattr(
+        main,
+        "GOAL_ENTRYPOINT_COVERAGE_REGISTRY",
+        PersistentGoalEntrypointCoverageRegistry(tmp_path / "goal_entrypoint_coverage.jsonl"),
+    )
+    monkeypatch.setattr(main, "_current_agent_llm", lambda run_id=None: llm)
+    main.app.dependency_overrides[main.current_user_dependency] = lambda: SimpleNamespace(username="u1", user_id="u1")
+    client = TestClient(main.app)
+    try:
+        start = client.post("/api/agent/chat/start", json={"market_mode": "ashare_research"})
+        tid = start.json()["thread_id"]
+        with client.stream(
+            "GET",
+            f"/api/agent/chat/{tid}/stream",
+            params=[
+                ("q", "covariance shrinkage PBO risk"),
+                ("desk", "research"),
+                ("visible_asset_refs", "qro:legacy-risk"),
+                ("permission_tags", "research.read"),
+                ("projections", "ResearchRAG"),
+                ("rag_search", "vector"),
+            ],
+        ) as stream:
+            assert stream.status_code == 200
+            raw = "".join(chunk for chunk in stream.iter_text())
+        thread = client.get(f"/api/agent/chat/{tid}")
+    finally:
+        main.app.dependency_overrides.pop(main.current_user_dependency, None)
+
+    assert "event: rag" in raw
+    assert "event: research_rag" in raw
+    assert "rag:doc:legacy-mode2-stream@v1:qro:legacy-risk" in raw
+    assert "research_asset_rag_usage_ids" in raw
+    assert "entrypoint_coverage_refs" in raw
+    assert index.agent_usage(source_id="doc:legacy-mode2-stream", user_id="u1")
+    prompt_text = "\n".join(message.content for message in llm.messages)
+    assert "Research Asset RAG candidate context" in prompt_text
+    assert "covariance covariance shrinkage" in prompt_text
+
+    assistant_messages = [m for m in thread.json()["messages"] if m["role"] == "assistant"]
+    metadata = assistant_messages[-1]["metadata"]
+    assert len(metadata["qro_ids"]) == 1
+    assert len(metadata["research_graph_command_ids"]) == 1
+    assert len(metadata["compiler_ir_refs"]) == 1
+    assert len(metadata["compiler_pass_refs"]) == 1
+    assert len(metadata["entrypoint_coverage_refs"]) == 1
+    coverages = main.GOAL_ENTRYPOINT_COVERAGE_REGISTRY.records()
+    assert {(record.entry_source, record.entrypoint_ref) for record in coverages} == {
+        ("chat", "chat:legacy_mode2.chat.stream")
+    }
+    assert metadata["research_asset_rag_hits"][0]["source_id"] == "doc:legacy-mode2-stream"
+    assert metadata["research_asset_rag_usage_ids"]
 
 
 def test_api_send_message_empty_content_400(client: TestClient):

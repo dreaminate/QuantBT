@@ -23,7 +23,16 @@ import pytest
 from fastapi.testclient import TestClient
 
 from app.auth import require_user_dependency
-from app.main import MODEL_REGISTRY, VERDICT_STORE, VERIFIER, app
+from app.main import MODEL_GOVERNANCE_REGISTRY, MODEL_REGISTRY, VERDICT_STORE, VERIFIER, app
+from app.research_os import (
+    ModelArtifactFormat,
+    ModelArtifactManifestEntry,
+    ModelArtifactSource,
+    ModelGovernancePassport,
+    ModelRiskTier,
+    RecertificationTrigger,
+    SafeLoadingPolicy,
+)
 from app.training.codegen import GraphCodegenError, graph_to_code
 
 client = TestClient(app)
@@ -61,7 +70,7 @@ def test_training_job_detail_field_round_trips() -> None:
     assert d["detail"]["io_spec"]["in_groups"][0]["group"] == "动量"
 
 
-def test_training_submit_persists_detail() -> None:
+def test_training_submit_persists_detail(training_market_data_use_validation_ref) -> None:
     """端到端：POST /api/training/jobs 带 detail → GET jobs/{id} 透传（库读回不丢）。"""
     detail = {"why": "对抗测试动机", "data": "demo", "window": "w", "label": "l",
               "design": "d", "arch": "a", "hparams": "h", "sections": []}
@@ -69,6 +78,7 @@ def test_training_submit_persists_detail() -> None:
         "name": "m2-detail", "model": "xgboost", "task": "regression",
         "feature_cols": ["f_mom5"], "label_col": "label",
         "dataset_id": "demo_ashare_xsec", "detail": detail,
+        "market_data_use_validation_refs": [training_market_data_use_validation_ref],
     })
     assert r.status_code == 200, r.text
     job_id = r.json()["job_id"]
@@ -76,11 +86,12 @@ def test_training_submit_persists_detail() -> None:
     assert got["detail"]["why"] == "对抗测试动机", "detail 未持久化进 job 快照"
 
 
-def test_training_job_without_detail_is_empty_not_fabricated() -> None:
+def test_training_job_without_detail_is_empty_not_fabricated(training_market_data_use_validation_ref) -> None:
     """旧 job 无 detail → 空 dict（向后兼容），绝不编造（不假绿）。"""
     r = client.post("/api/training/jobs", json={
         "name": "m2-nodetail", "model": "xgboost", "task": "regression",
         "feature_cols": ["f_mom5"], "dataset_id": "demo_ashare_xsec",
+        "market_data_use_validation_refs": [training_market_data_use_validation_ref],
     })
     assert r.status_code == 200
     assert r.json()["detail"] == {}
@@ -157,11 +168,12 @@ def test_walk_forward_extract_ran_for_walk_forward_scheme() -> None:
     assert out["windows"][0]["metric_key"] == "ir"
 
 
-def test_walk_forward_endpoint_unrun_job_not_fabricated() -> None:
+def test_walk_forward_endpoint_unrun_job_not_fabricated(training_market_data_use_validation_ref) -> None:
     """未训完 / 无 artifact 的 job walk-forward → windows=[]，ran=False（不编造逐窗）。"""
     r = client.post("/api/training/jobs", json={
         "name": "m2-wf", "model": "xgboost", "task": "regression",
         "feature_cols": ["f_mom5"], "dataset_id": "demo_ashare_xsec",
+        "market_data_use_validation_refs": [training_market_data_use_validation_ref],
     })
     job_id = r.json()["job_id"]
     wf = client.get(f"/api/training/jobs/{job_id}/walkforward").json()
@@ -203,18 +215,59 @@ def _consistent_verdict(config_hash: str) -> str:
     return rec.verdict_id
 
 
+def _record_model_passport(model_id: str, version: int) -> str:
+    passport = ModelGovernancePassport(
+        model_version_ref=f"model_version:{model_id}:v{version}",
+        model_type_card_ref="model_type_card:lgbm",
+        training_plan_ref=f"training_plan:{model_id}:v{version}",
+        training_run_ref=f"training_run:{model_id}:v{version}",
+        model_risk_tier=ModelRiskTier.MEDIUM,
+        materiality="model desk staging candidate",
+        intended_use=("staging review",),
+        prohibited_use=("direct live order placement",),
+        dataset_refs=("dataset_version:fixture",),
+        feature_refs=("feature:fixture",),
+        label_refs=("label:fixture",),
+        training_code_hash=f"codehash:{model_id}:v{version}",
+        artifact_manifest=(
+            ModelArtifactManifestEntry(
+                artifact_ref=f"artifact:{model_id}:v{version}",
+                uri=f"registry://models/{model_id}/v{version}/model.safetensors",
+                artifact_format=ModelArtifactFormat.SAFE_TENSORS,
+                source=ModelArtifactSource.PROJECT_PRODUCED,
+                content_hash=f"sha256:{model_id}{version}",
+                producer_run_ref=f"training_run:{model_id}:v{version}",
+                sandbox_inspection_ref=f"inspect:{model_id}:v{version}",
+            ),
+        ),
+        safe_loading_policy=SafeLoadingPolicy(
+            sandboxed_load_inspect=True,
+            prefer_safe_tensors=True,
+            torch_weights_only=True,
+        ),
+        vendor_dependency_refs=("none",),
+        foundation_model_dependency_refs=("none",),
+        monitoring_requirements=("performance degradation monitor",),
+        recertification_triggers=tuple(RecertificationTrigger),
+        validation_dossier_ref=f"validation_dossier:{model_id}:v{version}",
+        challenger_result="fixture challenger review complete",
+    )
+    return MODEL_GOVERNANCE_REGISTRY.record_passport(passport).passport_id
+
+
 def _open_staging_gate(creator: str):
     """经 MODEL_REGISTRY 正路开一个 pending staging 门，返回 (model_id, gate_id)。"""
     import uuid
 
     mid = f"m2adv-{uuid.uuid4().hex[:8]}"
     MODEL_REGISTRY.register_version(mid, artifact_path="a.pkl")
-    MODEL_REGISTRY.register_version(mid, artifact_path="b.pkl")
+    passport_ref = _record_model_passport(mid, 2)
+    MODEL_REGISTRY.register_version(mid, artifact_path="b.pkl", model_passport_ref=passport_ref)
     evidence = _good_evidence()
     vid = _consistent_verdict(evidence["config_hash"])
     gate = MODEL_REGISTRY.promote(
         mid, 2, "staging", created_by=creator, verification_record_id=vid,
-        evidence=evidence, strategy_goal_ref="theme",
+        evidence=evidence, strategy_goal_ref="theme", model_passport_ref=passport_ref,
     )
     assert gate.decision == "pending", f"门未 pending（前置坏，无法测自批）: {gate}"
     return mid, gate.gate_id

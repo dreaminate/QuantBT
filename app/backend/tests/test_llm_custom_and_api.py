@@ -10,9 +10,13 @@ from app.agent import (
     DevLocalLLM,
     LLMMessage,
     OpenAICompatibleLLM,
+    OpenAILLM,
+    ensure_settings_managed_llm_provider,
     list_llm_status,
     make_llm_client,
+    make_settings_managed_llm_client,
 )
+from app.research_os import PersistentOnboardingRegistry, SecretRefRecord, SecretRefStatus
 from app.security import InMemoryKeystore, KeystoreRecord, SecureKeystore
 
 
@@ -86,6 +90,19 @@ def client(monkeypatch):
     return TestClient(app)
 
 
+@pytest.fixture()
+def isolated_client(monkeypatch, tmp_path):
+    for var in ("ANTHROPIC_API_KEY", "OPENAI_API_KEY", "DASHSCOPE_API_KEY", "LLM_PROVIDER"):
+        monkeypatch.delenv(var, raising=False)
+    from app import main
+
+    keystore = SecureKeystore(InMemoryKeystore())
+    registry = PersistentOnboardingRegistry(tmp_path / "onboarding_settings.jsonl")
+    monkeypatch.setattr(main, "KEYSTORE", keystore)
+    monkeypatch.setattr(main, "ONBOARDING_REGISTRY", registry)
+    return TestClient(main.app), keystore, registry
+
+
 def test_get_llm_status(client) -> None:
     r = client.get("/api/llm/status")
     assert r.status_code == 200
@@ -116,6 +133,93 @@ def test_post_llm_configure_custom(client) -> None:
     by_p = {s["provider"]: s for s in status_body["providers"]}
     assert by_p["custom"]["configured"] is True
     assert by_p["custom"]["model"] == "qwen2.5:32b"
+
+
+def test_post_llm_configure_records_settings_metadata_without_plaintext_secret(isolated_client) -> None:
+    client, _keystore, registry = isolated_client
+    secret = "sk-live-plaintext-should-not-echo"
+    r = client.post(
+        "/api/llm/configure",
+        json={
+            "provider": "openai",
+            "api_key": secret,
+            "base_url": "https://proxy.example/v1",
+            "model": "gpt-5.5",
+        },
+    )
+    assert r.status_code == 200, r.text
+    body = r.json()
+    assert body["settings_refs"]["secret_ref"] == "secretref:llm:openai"
+    assert secret not in r.text
+    assert registry.secret_ref("secretref:llm:openai").status == SecretRefStatus.ACTIVE
+    assert registry.llm_provider("openai").auth_refs == ("secretref:llm:openai",)
+    assert registry.credential_pool("pool:llm:openai:default").auth_refs == ("secretref:llm:openai",)
+    assert registry.routing_policy("routing:llm:openai:default").allowed_models == ("gpt-5.5",)
+
+    status = client.get("/api/llm/status").json()
+    openai = next(row for row in status["providers"] if row["provider"] == "openai")
+    assert openai["settings_managed"] is True
+    assert openai["auth_status"] == "active"
+    assert secret not in str(status)
+
+
+def test_settings_gateway_rejects_revoked_secret_ref_for_connection_test(isolated_client) -> None:
+    client, _keystore, registry = isolated_client
+    configured = client.post(
+        "/api/llm/configure",
+        json={
+            "provider": "custom",
+            "api_key": "local-key",
+            "base_url": "http://localhost:11434/v1",
+            "model": "qwen2.5:32b",
+        },
+    )
+    assert configured.status_code == 200, configured.text
+    registry.record_secret_ref(
+        SecretRefRecord(
+            secret_ref="secretref:llm:custom",
+            scope="llm:custom:call",
+            status=SecretRefStatus.REVOKED,
+            created_at="2026-06-27T00:00:00Z",
+            revoked_at="2026-06-27T01:00:00Z",
+        )
+    )
+    result = client.post("/api/llm/test", json={"provider": "custom", "ping": "ok"}).json()
+    assert result["ok"] is False
+    assert "llm_call_uses_revoked_secret_ref" in result["error"]
+
+
+def test_settings_managed_llm_does_not_use_env_key_without_settings_metadata(monkeypatch, tmp_path) -> None:
+    monkeypatch.setenv("OPENAI_API_KEY", "sk-env-should-not-be-used")
+    keystore = SecureKeystore(InMemoryKeystore())
+    registry = PersistentOnboardingRegistry(tmp_path / "onboarding_settings.jsonl")
+
+    with pytest.raises(Exception, match="provider not configured|route rejected"):
+        make_settings_managed_llm_client(provider="openai", keystore=keystore, registry=registry)
+
+
+def test_settings_managed_llm_uses_keystore_secret_not_env(monkeypatch, tmp_path) -> None:
+    monkeypatch.setenv("OPENAI_API_KEY", "sk-env-should-not-be-used")
+    keystore = SecureKeystore(InMemoryKeystore())
+    keystore.store(
+        KeystoreRecord(
+            name="llm_openai",
+            api_key="sk-keystore",
+            api_secret="sk-keystore",
+            note=json.dumps({"base_url": "https://proxy.example/v1", "model": "gpt-5.5"}),
+        )
+    )
+    registry = PersistentOnboardingRegistry(tmp_path / "onboarding_settings.jsonl")
+    ensure_settings_managed_llm_provider(
+        registry=registry,
+        provider="openai",
+        base_url="https://proxy.example/v1",
+        model="gpt-5.5",
+    )
+
+    client = make_settings_managed_llm_client(provider="openai", keystore=keystore, registry=registry)
+    assert isinstance(client, OpenAILLM)
+    assert client._key == "sk-keystore"
 
 
 def test_post_llm_active_switch(client) -> None:

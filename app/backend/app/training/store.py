@@ -42,6 +42,14 @@ class TrainingJob:
     artifact_dir: str | None = None
     experiment_id: str | None = None
     run_id: str | None = None
+    model_version: int | None = None
+    model_passport_ref: str | None = None
+    validation_dossier_ref: str | None = None
+    qro_id: str | None = None
+    research_graph_command_id: str | None = None
+    compiler_ir_ref: str | None = None
+    compiler_pass_ref: str | None = None
+    entrypoint_coverage_ref: str | None = None
     tensorboard: bool = False  # 该模型是否产 TensorBoard
     error: str | None = None
     elapsed_seconds: float | None = None

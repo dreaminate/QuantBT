@@ -19,9 +19,48 @@ from app.agent.business_tools import _synth_and_promote
 from app.agent.sample_data import SAMPLE_REL, sample_path
 from app.lineage import Ledger
 from app.paper.desk import AShareLiveForbidden, PaperDeskService
+from app.research_os import MarketDataUseValidationRecord
 from app.run_verdict import project_overfit, project_verdict
 from app.strategy_goal_store import StrategyGoalStore
 from app.verification import Verifier, VerdictStore
+
+MARKET_DATA_USE_REFS = ["market_data_use:delivery_slice:accepted"]
+
+
+class _DatasetSemantics:
+    dataset_ref = "dataset:btc_daily"
+    known_at_ref = "known_at:btc_daily"
+    effective_at_ref = "effective_at:btc_daily"
+    pit_bitemporal_rules_ref = "pit:btc_daily"
+
+
+class _MarketDataUseRegistry:
+    def __init__(self) -> None:
+        self._record = MarketDataUseValidationRecord(
+            validation_ref=MARKET_DATA_USE_REFS[0],
+            request_ref="market_data_use:delivery_slice:request",
+            use_context="backtest",
+            dataset_refs=("dataset:btc_daily",),
+            instrument_refs=("BTC-USDT",),
+            capability_matrix_ref="capability:crypto_perp_daily",
+            capital_record_ref=None,
+            transformation_refs=(),
+            accepted=True,
+            violation_codes=(),
+            evidence_refs=("evidence:delivery_slice_market_data_use",),
+            recorded_by="test",
+            created_at_utc="2026-06-27T00:00:00Z",
+        )
+
+    def use_validation(self, validation_ref: str) -> MarketDataUseValidationRecord:
+        if validation_ref != self._record.validation_ref:
+            raise KeyError(validation_ref)
+        return self._record
+
+    def dataset(self, dataset_ref: str) -> _DatasetSemantics:
+        if dataset_ref != _DatasetSemantics.dataset_ref:
+            raise KeyError(dataset_ref)
+        return _DatasetSemantics()
 
 
 def _has_btc() -> bool:
@@ -56,9 +95,15 @@ def test_stranger_full_path_chat_to_paper_all_real(tmp_path, monkeypatch):
 
     # ② backtest → 真 run_id 落 RUN_ROOT（读真样本产真净值）
     bt = _synth_and_promote(
-        args={"market": "crypto_perp", "strategy_goal_ref": goal_id, "lookback": 20},
+        args={
+            "market": "crypto_perp",
+            "strategy_goal_ref": goal_id,
+            "lookback": 20,
+            "market_data_use_validation_refs": MARKET_DATA_USE_REFS,
+        },
         ledger=ledger, returns_store=None, data_root=tmp_path,
         verdict_store=vstore, verifier=verifier, llm_client=None,
+        market_data_registry=_MarketDataUseRegistry(),
     )
     assert bt.get("error") is None, bt
     run_id = bt["run_id"]

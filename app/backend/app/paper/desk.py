@@ -71,7 +71,7 @@ class PaperRunRecord:
     # bar/mark provider（注入即 tick_once 真喂数据产净值；None=空壳）。两类档（duck-typed 同形接口）：
     #   · ReplayBarProvider  = 兜底（真捆样本回放 / 合成游走，非实盘 key），无 key 也能跑。
     #   · TestnetBarProvider = testnet 真喂可选档（配 key 时 Binance testnet 公共实时 bar）。
-    provider: ReplayBarProvider | TestnetBarProvider | None = None
+    provider: Any | None = None
     simulated_source: str | None = None  # 数据来源标注：bundled_sample_replay(crypto 真捆样本) / deterministic_sim_walk(无样本市场合成兜底) / binance_testnet_live(testnet 真喂)——均为模拟非实盘真钱
     # provider 档位 + 降级留痕（DS-4 testnet 可选档 · fail-open 留痕，§3 诚实不假绿灯）：
     #   provider_kind ∈ {"testnet"(真喂), "replay_fallback"(请求 testnet 但无 key/连接失败→回退兜底),
@@ -79,6 +79,7 @@ class PaperRunRecord:
     #   degrade_reason：请求 testnet 却回退兜底时记降级原因（诚实留痕；回退态 source 绝不标 testnet）。
     provider_kind: str = "empty"
     degrade_reason: str | None = None
+    provider_status: dict[str, Any] = field(default_factory=dict)
     initial_cash: float = 1_000_000.0  # 注册时起始现金（prime_run 幂等重置基准）
 
 
@@ -295,6 +296,8 @@ class PaperDeskService:
         testnet_keystore: Any = None,
         testnet_keystore_name: str = DEFAULT_TESTNET_KEYSTORE_NAME,
         testnet_client_factory: Callable[[], TestnetMarketClient] | None = None,
+        provider_override: Any | None = None,
+        provider_status: dict[str, Any] | None = None,
     ) -> PaperRunRecord:
         """注册一条 paper run。simulate=True（默认）注入 provider + 建仓种子单：
 
@@ -315,7 +318,7 @@ class PaperDeskService:
         # ── testnet 解析在锁外（含网络 I/O：拉 klines）：避免占 self._lock 拖垮全 desk / 首屏 <2s（H2）。──
         testnet_provider: TestnetBarProvider | None = None
         degrade_reason: str | None = None
-        if simulate and symbols and testnet:
+        if simulate and symbols and testnet and provider_override is None:
             ks = testnet_keystore if testnet_keystore is not None else self._resolve_keystore()
             testnet_provider, degrade_reason = make_testnet_provider(
                 market, list(symbols), keystore=ks, keystore_name=testnet_keystore_name,
@@ -328,11 +331,14 @@ class PaperDeskService:
             venue = PaperVenue(cash=cash, equity_log_path=equity_log_path, audit=audit)
             cfg = PaperSchedulerConfig(strategy_id=run_id, symbols=list(symbols), market=market,
                                        equity_log_path=equity_log_path)
-            provider: ReplayBarProvider | TestnetBarProvider | None = None
+            provider: Any | None = None
             provider_kind = "empty"
             bar_p = mark_p = None
             if simulate and symbols:
-                if testnet_provider is not None:
+                if provider_override is not None:
+                    provider = provider_override
+                    provider_kind = "testnet" if getattr(provider, "source", None) else "replay"
+                elif testnet_provider is not None:
                     # testnet 真喂档：Binance testnet 公共实时 bar（无 key 公共端点；仅模拟撮合不下真单）。
                     provider = testnet_provider
                     provider_kind = "testnet"
@@ -358,6 +364,7 @@ class PaperDeskService:
                 provider_kind=provider_kind,
                 # 留痕仅当请求 testnet 却回退兜底时（否则 None）：诚实记降级原因，回退态 source 绝不标 testnet。
                 degrade_reason=(degrade_reason if provider_kind == "replay_fallback" else None),
+                provider_status=dict(provider_status or {}),
                 initial_cash=cash,
             )
             self._runs[run_id] = rec
@@ -386,7 +393,7 @@ class PaperDeskService:
                     "run_id": run_id, "bars_fed": rec.scheduler.state.bars_fed,
                     "mtm_count": rec.scheduler.state.mtm_count, "fills": 0,
                     "equity_points": rec.scheduler.state.mtm_count,
-                    "simulated": False, "source": None,
+                    "simulated": False, "source": None, "provider_status": dict(rec.provider_status),
                 }
             # M4：先停后台循环并 join，确保复位/喂 bar 期间无并发改同 venue/state/equity_log。
             was_running = rec.scheduler.state.running
@@ -422,6 +429,7 @@ class PaperDeskService:
                 "equity_points": rec.scheduler.state.mtm_count,
                 "simulated": rec.simulated_source is not None,
                 "source": rec.simulated_source,
+                "provider_status": dict(rec.provider_status),
             }
 
     def get(self, run_id: str) -> PaperRunRecord:
@@ -463,6 +471,7 @@ class PaperDeskService:
         snap["simulated_source"] = rec.simulated_source
         snap["provider_kind"] = rec.provider_kind
         snap["degrade_reason"] = rec.degrade_reason
+        snap["provider_status"] = dict(rec.provider_status)
         return snap
 
     def positions(self, run_id: str) -> list[dict[str, Any]]:
@@ -629,6 +638,7 @@ class PaperDeskService:
             "promoted": rec.promoted, "bars_fed": st.bars_fed,
             "simulated_source": rec.simulated_source,
             "provider_kind": rec.provider_kind, "degrade_reason": rec.degrade_reason,
+            "provider_status": dict(rec.provider_status),
         }
 
 

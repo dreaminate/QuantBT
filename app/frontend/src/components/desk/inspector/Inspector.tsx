@@ -30,7 +30,7 @@ export function Inspector({
     <div
       data-inspector
       style={{
-        width: 340,
+        width: "var(--desk-right-pane-width, 340px)",
         flex: "none",
         display: "flex",
         flexDirection: "column",

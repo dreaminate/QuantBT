@@ -55,7 +55,7 @@ export const MILESTONE_DEFS: MilestoneDef[] = [
 ];
 
 /** 工作区 tab。 */
-export type WorkspaceTab = "cowork" | "code" | "report";
+export type WorkspaceTab = "cowork" | "code" | "report" | "rag" | "rdp" | "methodology" | "trust";
 
 /** 剧本事件——驱动「重放」推进对话流 + 解锁产物卡/里程碑。 */
 export interface ScriptEvent {

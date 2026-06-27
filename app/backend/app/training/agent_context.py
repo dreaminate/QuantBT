@@ -1,7 +1,7 @@
-"""训练台 Agent 上下文 —— 约束 agent『只能在模型卡里做』。
+"""训练台 Agent 上下文，约束生成代码只能使用模型卡。
 
 注入给训练台对话 agent 的 system prompt：可用模型清单（来自 catalog/模型卡）+
-训练库用法 + 硬约束。除非用户让 agent 搜新模型 → 走 add_model_card 加卡后再用。
+训练库用法 + 硬约束。用户要求目录外模型时，先走 add_model_card 加卡，再生成训练代码。
 """
 
 from __future__ import annotations
@@ -35,7 +35,7 @@ def model_choices_block() -> str:
 
 def training_system_prompt(field_universe_block: str = "") -> str:
     parts = [
-        "你是 QuantBT 训练台的助手。用户用自然语言描述要训什么，你生成可运行的训练脚本。",
+        "你是 QuantBT 训练台的代码生成层。用户用自然语言描述训练任务，你生成可运行的训练脚本。",
         model_choices_block(),
         _LIB_DOC,
     ]

@@ -6,6 +6,8 @@ T5 honest-N 改小→拒 / T6 真信号→放行 / T12 幂等门后副作用 / T
 
 from __future__ import annotations
 
+from types import SimpleNamespace
+
 import numpy as np
 import pytest
 
@@ -46,6 +48,15 @@ def _open_conf(svc, *, created_by="alice", evidence=_DEFAULT, vrid="v-1", to_sta
                          created_by=created_by, verification_record_id=vrid,
                          evidence=(_good_evidence() if evidence is _DEFAULT else evidence),
                          strategy_goal_ref=goal)
+
+
+class _ModelGovernanceFixture:
+    def passport(self, passport_ref: str):
+        return SimpleNamespace(
+            passport_id=passport_ref,
+            model_version_ref="m:v2",
+            validation_dossier_ref="validation_dossier:m:v2",
+        )
 
 
 # ── T1 · 噪声 → PBO≈1/DSR≈0 → 三角不同向 → 门必拒 ─────────────────────────────────
@@ -239,11 +250,12 @@ def test_resume_after_crash_no_double_execute():
 # ── 复核 #17 · ModelRegistry 经门正路：approve_promotion 真翻 stage ──────────────
 def test_registry_approve_flips_stage(tmp_path):
     svc = _svc(tmp_path)
-    reg = ModelRegistry(tmp_path, gate_service=svc)
+    reg = ModelRegistry(tmp_path, gate_service=svc, model_governance_registry=_ModelGovernanceFixture())
     reg.register_version("m", artifact_path="a.pkl")
     reg.register_version("m", artifact_path="b.pkl")
     gate = reg.promote("m", 2, "production", created_by="alice", verification_record_id="v",
-                       evidence=_good_evidence(), strategy_goal_ref="theme")
+                       evidence=_good_evidence(), strategy_goal_ref="theme",
+                       model_passport_ref="model_passport:m:v2")
     assert gate.decision == "pending"
     reg.approve_promotion(gate.gate_id, approver="bob", reason="独立复核一致三角同向适用域已核可上")
     assert any(v.version == 2 and v.stage == "production" for v in reg.list_versions("m")), \
@@ -276,11 +288,18 @@ def test_boilerplate_reason_rejected():
 # ── ModelRegistry.promote 接审批门：production 经门、rejected 不翻 stage ──────────
 def test_registry_promote_through_gate(tmp_path):
     svc = _svc(tmp_path)
-    reg = ModelRegistry(tmp_path, gate_service=svc)
+    reg = ModelRegistry(tmp_path, gate_service=svc, model_governance_registry=_ModelGovernanceFixture())
     reg.register_version("m", artifact_path="a.pkl")
     reg.register_version("m", artifact_path="b.pkl")
     # 缺要件 → GateRejection，stage 不翻
-    res = reg.promote("m", 2, "production", created_by="alice", evidence=_good_evidence(pbo=0.9))
+    res = reg.promote(
+        "m",
+        2,
+        "production",
+        created_by="alice",
+        evidence=_good_evidence(pbo=0.9),
+        model_passport_ref="model_passport:m:v2",
+    )
     from app.approval.schema import GateRejection
     assert isinstance(res, GateRejection) and res.gap_list
     assert all(v.stage != "production" for v in reg.list_versions("m")), "被拒却翻了 stage（门坏）"

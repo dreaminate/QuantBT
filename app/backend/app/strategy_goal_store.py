@@ -14,6 +14,7 @@ goal_id 内容寻址（复用 lineage.ids.content_hash 单一身份源）→ 同
 
 from __future__ import annotations
 
+from datetime import UTC, datetime
 from pathlib import Path
 from typing import Any
 
@@ -21,6 +22,17 @@ from pydantic import ValidationError
 
 from .agent.slot_filling import StrategyGoalSlotFiller
 from .lineage.ids import content_hash
+from .research_os import (
+    ActorSource,
+    DefinitionStatus,
+    EntrySource,
+    EvidenceStatus,
+    GovernanceStatus,
+    QRORecord,
+    QROType,
+    ResearchGraphCommand,
+    ResearchGraphStore,
+)
 from .strategy_goal import StrategyGoal, _coerce_cost_model
 
 
@@ -75,7 +87,80 @@ class StrategyGoalStore:
             return []
         return sorted(p.stem for p in self._root.glob("*.yaml"))
 
-    def create_from_args(self, args: dict[str, Any]) -> dict[str, Any]:
+    def _record_goal_qro(
+        self,
+        *,
+        goal: StrategyGoal,
+        goal_id: str,
+        args: dict[str, Any],
+        research_graph: ResearchGraphStore,
+        entry_source: EntrySource | str,
+        actor_source: ActorSource | str,
+        actor: str,
+        owner: str,
+    ) -> tuple[str, str]:
+        now = datetime.now(UTC).isoformat()
+        goal_payload = goal.model_dump(mode="json")
+        goal_hash = content_hash(goal_payload)
+        qro = QRORecord(
+            qro_type=QROType.QUANT_INTENT,
+            owner=owner,
+            actor=actor_source,
+            input_contract={
+                "entry_source": str(entry_source.value if isinstance(entry_source, EntrySource) else entry_source),
+                "tool_name": "strategy_goal.create",
+                "arg_hash": content_hash(args),
+                "arg_keys": sorted(str(k) for k in args.keys()),
+            },
+            output_contract={
+                "strategy_goal_id": goal_id,
+                "goal_hash": goal_hash,
+                "asset_class": goal.asset_class,
+                "objective": goal.objective,
+                "horizon": goal.horizon,
+                "benchmark": goal.benchmark,
+            },
+            market=goal.asset_class,
+            universe=goal.universe_id or "unspecified",
+            horizon=goal.horizon,
+            frequency=goal.horizon,
+            lineage=("strategy_goal_store", "strategy_goal.create", goal_id),
+            implementation_hash="strategy_goal_store:" + goal_hash,
+            assumptions=("StrategyGoal is an intent object created from user or agent input.",),
+            known_limits=(
+                "StrategyGoal creation is not evidence of alpha, validation, or execution readiness.",
+                "Raw prompt text and full StrategyGoal YAML are not copied into QRO contracts.",
+            ),
+            failure_modes=("Slot filling can infer the wrong market, horizon, or objective and requires downstream review.",),
+            validation_plan=("Bind the goal to hypothesis cards, backtests, evidence refs, and promotion gates before claims.",),
+            definition_status=DefinitionStatus.IMPLEMENTED,
+            evidence_status=EvidenceStatus.UNTESTED,
+            governance_status=GovernanceStatus.UNREVIEWED,
+            event_time=now,
+            known_at=now,
+            effective_at=now,
+            permission="strategy_goal.create:no_side_effect",
+        )
+        command = ResearchGraphCommand(
+            source=entry_source,
+            command_type="upsert_qro",
+            actor_source=actor_source,
+            actor=actor,
+            payload={"qro": qro},
+        )
+        command_id = research_graph.apply(command)
+        return qro.qro_id, command_id
+
+    def create_from_args(
+        self,
+        args: dict[str, Any],
+        *,
+        research_graph: ResearchGraphStore | None = None,
+        entry_source: EntrySource | str = EntrySource.API,
+        actor_source: ActorSource | str = ActorSource.USER_MANUAL,
+        actor: str = "strategy_goal_store",
+        owner: str = "strategy_goal_store",
+    ) -> dict[str, Any]:
         """对话意图 → 真 goal_id（strategy_goal.create handler 的真体，替代旧回显 lambda）。"""
 
         if not isinstance(args, dict):
@@ -101,7 +186,7 @@ class StrategyGoalStore:
                 "needs_slots": sorted({str(e.get("loc", ["?"])[0]) for e in exc.errors()}),
             }
         goal_id = self.create(goal)
-        return {
+        out = {
             "strategy_goal_id": goal_id,
             "name": goal.name,
             "asset_class": goal.asset_class,
@@ -110,6 +195,20 @@ class StrategyGoalStore:
             "benchmark": goal.benchmark,
             "note": "StrategyGoal 已校验落库（cost_model 按 asset_class dispatch）；goal_id 可被 backtest.run 消费。",
         }
+        if research_graph is not None:
+            qro_id, command_id = self._record_goal_qro(
+                goal=goal,
+                goal_id=goal_id,
+                args=args,
+                research_graph=research_graph,
+                entry_source=entry_source,
+                actor_source=actor_source,
+                actor=actor,
+                owner=owner,
+            )
+            out["qro_id"] = qro_id
+            out["research_graph_command_id"] = command_id
+        return out
 
 
 __all__ = ["StrategyGoalStore"]

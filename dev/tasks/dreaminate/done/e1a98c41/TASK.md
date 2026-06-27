@@ -14,6 +14,11 @@ depends_on: []
 
 # binance_vision_pull reload-merge bug 修
 
+## 完成记录
+- `app/backend/app/binance_vision_pull.py` 已通过 `_reload_partition_csv(... try_parse_dates=False)` 保持 timestamp 字符串，避免同年多日增量 merge 时 String/Datetime schema 冲突。
+- `app/backend/tests/test_vision_pull_merge.py` 覆盖 reload dtype、多日同年 merge、旧行为会崩三条对抗测试。
+- 验证：`cd app/backend && python -m pytest tests/test_vision_pull_merge.py -v` → 3 passed。
+
 ## Scope [必填]
 修 `app/backend/app/binance_vision_pull.py` 的 `pull_vision_klines_date_range`（经 `_pull_vision_kline_like`）多日同年 range 拉取时的预存 schema bug：第 2 天起 reload 已写分区用 `pl.read_csv(path, try_parse_dates=True)` 把 `timestamp` 读成 `Datetime`，与新解析的 `String` timestamp `pl.concat(how="vertical")` 报 `SchemaError: type String is incompatible with Datetime`。**DS-1 已绕开此函数（自写无状态并发捆绑），本卡修源函数本身**。修法：reload 不解析日期（`try_parse_dates=False`）或落盘前/读回后统一 timestamp dtype；扩展不替换，不破其它 vision 拉取路径。
 

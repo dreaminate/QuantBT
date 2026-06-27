@@ -1,4 +1,4 @@
-"""F4 · 三纯库 / 信号契约 / 暴力遍历挖掘 后端接真 + 治理对抗测试。
+"""F4 · 三纯库 / 信号契约 / 暴力遍历挖掘 真实后端 + 治理对抗测试。
 
 对抗（种已知坏门必抓）：
 - 对抗① POST `.pt`「本体」入因子库必拒（R17 范畴门：把模型当因子塞库是范畴错误）。
@@ -16,6 +16,7 @@ from types import SimpleNamespace
 import pytest
 from fastapi.testclient import TestClient
 
+from app import main as app_main
 from app.auth import require_user_dependency
 from app.factor_factory import (
     SignalContractError,
@@ -36,15 +37,64 @@ from app.factor_factory.mining import (
     run_mining,
 )
 from app.main import app
+from app.research_os import (
+    PersistentCompilerIRStore,
+    PersistentGoalEntrypointCoverageRegistry,
+    PersistentResearchGraphStore,
+    PersistentSignalValidationRegistry,
+    QROType,
+)
 
 
 @pytest.fixture
-def client():
+def client(tmp_path, monkeypatch):
+    monkeypatch.setattr(app_main, "SIGNAL_CONTRACTS", SignalContractRegistry(tmp_path / "signal_contracts.jsonl"))
+    monkeypatch.setattr(app_main, "SIGNAL_VALIDATIONS", PersistentSignalValidationRegistry(tmp_path / "signal_validations.jsonl"))
+    monkeypatch.setattr(app_main, "RESEARCH_GRAPH_STORE", PersistentResearchGraphStore(tmp_path / "research_graph.jsonl"))
+    monkeypatch.setattr(app_main, "COMPILER_IR_STORE", PersistentCompilerIRStore(tmp_path / "compiler_ir.jsonl"))
+    monkeypatch.setattr(
+        app_main,
+        "GOAL_ENTRYPOINT_COVERAGE_REGISTRY",
+        PersistentGoalEntrypointCoverageRegistry(tmp_path / "goal_entrypoint_coverage.jsonl"),
+    )
     app.dependency_overrides[require_user_dependency] = lambda: SimpleNamespace(user_id="tester")
     try:
         yield TestClient(app)
     finally:
         app.dependency_overrides.pop(require_user_dependency, None)
+
+
+def _assert_compiler_coverage(body: dict, *, entrypoint_ref: str, qro_type: QROType) -> None:
+    assert body["qro_id"].startswith("qro_")
+    assert body["research_graph_command_id"].startswith("rgcmd_")
+    assert body["compiler_ir_ref"].startswith("compiler_ir:")
+    assert body["compiler_pass_ref"].startswith("compiler_pass:")
+    assert body["entrypoint_coverage_ref"].startswith("goal_entrypoint_coverage:")
+    qro = app_main.RESEARCH_GRAPH_STORE.qro(body["qro_id"])
+    ir = app_main.COMPILER_IR_STORE.ir(body["compiler_ir_ref"])
+    compiler_pass = app_main.COMPILER_IR_STORE.compiler_pass(body["compiler_pass_ref"])
+    coverage = app_main.GOAL_ENTRYPOINT_COVERAGE_REGISTRY.coverage(body["entrypoint_coverage_ref"])
+    assert qro.qro_type == qro_type
+    assert ir.source_qro_refs == (body["qro_id"],)
+    assert ir.graph_command_refs == (body["research_graph_command_id"],)
+    assert compiler_pass.input_qro_refs == (body["qro_id"],)
+    assert compiler_pass.entry_source == "api"
+    assert coverage.entry_source == "api"
+    assert coverage.entrypoint_ref == entrypoint_ref
+    assert coverage.qro_refs == (body["qro_id"],)
+    assert coverage.research_graph_command_refs == (body["research_graph_command_id"],)
+    assert coverage.compiler_ir_refs == (body["compiler_ir_ref"],)
+    assert coverage.compiler_pass_refs == (body["compiler_pass_ref"],)
+    assert compiler_pass.direct_graph_mutation is False
+    assert compiler_pass.bypassed_permission is False
+    assert compiler_pass.raw_llm_output_embedded_as_ir is False
+    assert coverage.silent_mock_fallback_used is False
+    assert coverage.raw_payload_persisted is False
+    compiled_text = f"{qro.__dict__} {ir.__dict__} {compiler_pass.__dict__} {coverage.__dict__}"
+    assert "raw_predictions" not in compiled_text
+    assert "raw_returns" not in compiled_text
+    assert "asset_returns" not in compiled_text
+    assert "sk-" not in compiled_text
 
 
 # ════════════════ 基线：正常路径 ════════════════
@@ -92,9 +142,108 @@ def test_signal_contract_register_and_list_success(client):
     assert j["registered"] is True
     assert j["signal_ref"].startswith("sig::")
     assert j["author"] == "tester"
+    _assert_compiler_coverage(j, entrypoint_ref="api:factors.signal_contracts", qro_type=QROType.SIGNAL)
+    qro = app_main.RESEARCH_GRAPH_STORE.qro(j["qro_id"])
+    assert qro.output_contract["signal_ref"] == j["signal_ref"]
+    assert "tcn_seq_alpha_v2.pt" not in f"{qro.__dict__}"
     lst = client.get("/api/factors/signal_contracts")
     assert lst.status_code == 200
     assert any(c["signal_id"] == j["signal_id"] for c in lst.json())
+
+
+def test_signal_contract_registry_persists_and_replays(tmp_path):
+    path = tmp_path / "signal_contracts.jsonl"
+    registry = SignalContractRegistry(path)
+    contract = registry.register(
+        name="Persistent signal",
+        source_lib="ml",
+        model_ref="registry://models/persistent.pkl",
+        output_kind="xs_score",
+        horizon=5,
+        leakage={"oof": True, "purge": True, "embargo": True},
+        author="tester",
+    )
+
+    reloaded = SignalContractRegistry(path)
+
+    assert reloaded.get(contract.signal_ref).signal_ref == contract.signal_ref
+    assert reloaded.list()[0].model_ref == "registry://models/persistent.pkl"
+
+
+def test_signal_validation_api_records_and_summarizes(tmp_path, monkeypatch, client):
+    contract_registry = SignalContractRegistry(tmp_path / "signal_contracts.jsonl")
+    contract = contract_registry.register(
+        name="Validated signal",
+        source_lib="ml",
+        model_ref="registry://models/validated.pkl",
+        output_kind="xs_score",
+        horizon=5,
+        leakage={"oof": True, "purge": True, "embargo": True},
+        author="tester",
+    )
+    validation_path = tmp_path / "signal_validations.jsonl"
+    validation_registry = PersistentSignalValidationRegistry(validation_path)
+    monkeypatch.setattr(app_main, "SIGNAL_CONTRACTS", contract_registry)
+    monkeypatch.setattr(app_main, "SIGNAL_VALIDATIONS", validation_registry)
+
+    body = {
+        "signal_ref": contract.signal_ref,
+        "validation_dataset_ref": "dataset_version:btc_daily:oos",
+        "evaluation_window_ref": "window:2025q4",
+        "methodology_ref": "methodology:cpcv_walkforward",
+        "metric_refs": ["metric:rank_ic", "metric:dsr"],
+        "performance_summary_ref": "signal_perf:validated:oos",
+        "leakage_check_ref": "leakage:oof_purge_embargo",
+        "evidence_refs": ["evidence:signal_validation_report"],
+        "verdict": "accepted",
+        "known_limits_refs": ["limit:not_alpha_proof"],
+    }
+    response = client.post("/api/research-os/signal_validations", json=body)
+    assert response.status_code == 200, response.text
+    response_body = response.json()
+    validation_id = response_body["validation_id"]
+    assert response_body["signal_ref"] == contract.signal_ref
+    _assert_compiler_coverage(
+        response_body,
+        entrypoint_ref="api:research_os.signal_validations",
+        qro_type=QROType.SIGNAL,
+    )
+
+    summary = client.get("/api/research-os/signal_validations/summary")
+    assert summary.status_code == 200
+    payload = summary.json()
+    assert payload["signal_validation_total"] == 1
+    assert payload["accepted_signal_refs"] == [contract.signal_ref]
+    assert payload["validations"][0]["validation_id"] == validation_id
+    assert "raw_predictions" not in payload["validations"][0]
+    assert "raw_returns" not in payload["validations"][0]
+
+    reloaded = PersistentSignalValidationRegistry(validation_path)
+    assert reloaded.validation(validation_id).performance_summary_ref == "signal_perf:validated:oos"
+
+
+def test_signal_validation_api_rejects_unknown_signal_without_write(tmp_path, monkeypatch, client):
+    monkeypatch.setattr(app_main, "SIGNAL_CONTRACTS", SignalContractRegistry(tmp_path / "signal_contracts.jsonl"))
+    validation_path = tmp_path / "signal_validations.jsonl"
+    monkeypatch.setattr(app_main, "SIGNAL_VALIDATIONS", PersistentSignalValidationRegistry(validation_path))
+
+    response = client.post(
+        "/api/research-os/signal_validations",
+        json={
+            "signal_ref": "sig::missing",
+            "validation_dataset_ref": "dataset_version:btc_daily:oos",
+            "evaluation_window_ref": "window:2025q4",
+            "methodology_ref": "methodology:cpcv_walkforward",
+            "metric_refs": ["metric:rank_ic"],
+            "performance_summary_ref": "signal_perf:missing:oos",
+            "leakage_check_ref": "leakage:oof_purge_embargo",
+            "evidence_refs": ["evidence:signal_validation_report"],
+            "verdict": "accepted",
+        },
+    )
+    assert response.status_code == 422
+    assert "unknown SignalContract" in response.json()["detail"]
+    assert not validation_path.exists()
 
 
 # ════════════════ 对抗① POST .pt 本体入因子库必拒（R17 范畴门）════════════════

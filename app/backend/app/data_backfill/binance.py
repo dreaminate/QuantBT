@@ -1,11 +1,11 @@
-"""Binance Vision 全量拉取 + zip 拼接管线（像 API 一样丝滑读）。
+"""Binance Vision 全量拉取 + zip 拼接管线，输出统一读取接口。
 
 Vision 同时提供 monthly 与 daily zip：
 - monthly：`.../{market}/monthly/{kind}/{SYM}/{interval}/{SYM}-{interval}-YYYY-MM.zip`（全历史首选，请求少）
 - daily：  `.../{market}/daily/{kind}/{SYM}/{interval}/{SYM}-{interval}-YYYY-MM-DD.zip`（补当月/近几天）
 
 stitch_klines：拉所有可用月 + 近月日 → 解压 → 按 open_time 去重排序 → 拼接成**连续 parquet** +
-缺口检测；read_klines：统一读取，列名与 REST klines 对齐 → 上层无感，和 API 一样。
+缺口检测；read_klines：统一读取，列名与 REST klines 对齐 → 上层不用关心 zip 拼接。
 
 下载用 `fetch(url)->bytes|None`（404→None）注入，单测无需联网。
 """

@@ -100,7 +100,7 @@ export function ModelDeskPage() {
       desk="model"
       topbar={
         <DeskTopBar>
-          <DeskSwitcher current="model" soon={["factor", "paper"]} />
+          <DeskSwitcher current="model" />
           <span style={{ marginLeft: "auto", fontSize: 11, color: "var(--desk-text-faint)" }}>
             算力 · 1×A100 80G · 本地
           </span>

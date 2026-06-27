@@ -1,4 +1,4 @@
-"""v0.8.4 Day 4 · run 结果可信度风险摘要（纯函数）。
+"""v0.8.4 Day 4 · run 证据状态风险摘要（纯函数）。
 
 输入: run metrics dict (含 sharpe / pbo / dsr / max_drawdown / ic_ir / turnover / 等)
 输出:
@@ -13,7 +13,7 @@
 
   HIGH (任一触发 → trust_level=high_risk)
     1. pbo > 0.6                       · CSCV 过拟合概率高
-    2. dsr < 0.2                       · 折减夏普不可信
+    2. dsr < 0.2                       · 折减夏普证据不足
     3. max_drawdown < -0.25            · 单次回测损失 > 25%
 
   MEDIUM (累积或单触发 caution)
@@ -23,7 +23,7 @@
     7. concentration > 0.25            · 单标的占比 > 25%
 
   INSUFFICIENT (必需字段缺失 → trust_level=insufficient_data)
-    - 既无 pbo 也无 dsr 时：无法判断过拟合可信度（即便 sharpe 漂亮）
+    - 既无 pbo 也无 dsr 时：无法判断过拟合证据状态（即便 sharpe 漂亮）
 
 完全 pure function：不依赖 db / file / http；可在 promote_ide_run / RunDetail API
 / 主动建议 hook 任何路径下调用。
@@ -108,7 +108,7 @@ def _rule_dsr(metrics: dict[str, Any]) -> RiskFlag | None:
         return RiskFlag(
             name="low_dsr_confidence",
             severity="high",
-            message=f"DSR={v:.2f} < 0.2，多次试验偏差大；这个 Sharpe 大概率是运气",
+            message=f"DSR={v:.2f} < 0.2，多次试验偏差大；当前 Sharpe 不足以支撑晋级",
             metric_name="dsr",
             metric_value=v,
             threshold=0.2,
@@ -216,7 +216,7 @@ def compute_risk_summary(metrics: dict[str, Any] | None) -> RiskSummary:
     if not metrics:
         return RiskSummary(
             trust_level="insufficient_data",
-            summary="无 metrics 数据，无法判断可信度",
+            summary="无 metrics 数据，无法给出证据状态",
         )
 
     flags: list[RiskFlag] = []
@@ -253,7 +253,7 @@ def compute_risk_summary(metrics: dict[str, Any] | None) -> RiskSummary:
         return RiskSummary(
             trust_level="insufficient_data",
             flags=flags,
-            summary="Sharpe 已有但缺 PBO/DSR 反过拟合证据，无法判断这个 Sharpe 是否真有效",
+            summary="Sharpe 已有但缺 PBO/DSR 反过拟合证据，无法给出 Sharpe 证据状态",
             checked_metrics=checked,
         )
 

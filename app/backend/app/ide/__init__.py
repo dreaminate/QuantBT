@@ -6,7 +6,7 @@
   + isolated python (-I) + chdir 到 tempdir + wallclock timeout
 - 用户代码必须在 stdout 最后一行 print JSON {"equity_curve": [...], "trades": [...]}
 - 后端解析 JSON → 落 runs/<run_id>/ → 复用现有 run.json + metrics pipeline
-- AI 辅助 = 现有 /api/agent/chat + system prompt "你是策略代码助手"
+- 代码生成 = 现有 /api/agent/chat + system prompt "你是策略代码生成层"
 """
 
 from __future__ import annotations

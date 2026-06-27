@@ -304,7 +304,7 @@ export function FactorDeskPage() {
 
   const topbar = (
     <DeskTopBar>
-      <DeskSwitcher current="factor" soon={["model", "paper"]} />
+      <DeskSwitcher current="factor" />
       <div style={{ flex: 1 }} />
       <SegmentedControl
         size="sm"

@@ -46,6 +46,44 @@ afterEach(() => {
 });
 
 describe("LLMSettingsPage · 配置流程", () => {
+  it("状态卡显示 Settings Gateway refs，但不显示 API key", async () => {
+    const fetchMock = vi.fn().mockImplementation((url: string) => {
+      if (String(url).includes("/api/llm/status")) {
+        return Promise.resolve(
+          new Response(
+            JSON.stringify({
+              providers: [
+                {
+                  provider: "anthropic",
+                  configured: true,
+                  model: "claude-sonnet-4.5",
+                  settings_managed: true,
+                  secret_ref: "secret:llm:anthropic",
+                  credential_pool_ref: "llm_pool:anthropic",
+                  routing_policy_ref: "llm_route:anthropic",
+                  auth_status: "active",
+                },
+              ],
+            }),
+            { status: 200 },
+          ),
+        );
+      }
+      return Promise.resolve(new Response("{}", { status: 200 }));
+    });
+    vi.stubGlobal("fetch", fetchMock);
+
+    const { container } = renderWithDesk(<LLMSettingsPage />);
+
+    await waitFor(() => {
+      expect(container.textContent).toContain("Gateway 管理");
+      expect(container.textContent).toContain("secret:llm:anthropic");
+      expect(container.textContent).toContain("llm_pool:anthropic");
+      expect(container.textContent).toContain("llm_route:anthropic");
+      expect(container.textContent).not.toContain("sk-ant");
+    });
+  });
+
   it("anthropic 填 api_key → 保存真打 POST /api/llm/configure（含 provider+api_key）", async () => {
     const fetchMock = vi.fn().mockImplementation((url: string) => {
       if (String(url).includes("/api/llm/status")) {
@@ -73,6 +111,43 @@ describe("LLMSettingsPage · 配置流程", () => {
       const body = JSON.parse(String((call![1] as RequestInit).body));
       expect(body.provider).toBe("anthropic");
       expect(body.api_key).toBe("sk-ant-xyz");
+    });
+  });
+
+  it("配置成功回执只显示 Settings refs，不声称已连通", async () => {
+    const fetchMock = vi.fn().mockImplementation((url: string) => {
+      if (String(url).includes("/api/llm/status")) {
+        return Promise.resolve(new Response(JSON.stringify({ providers: [] }), { status: 200 }));
+      }
+      return Promise.resolve(
+        new Response(
+          JSON.stringify({
+            configured: "anthropic",
+            model: "claude-sonnet-4.5",
+            settings_refs: {
+              secret_ref: "secret:llm:anthropic",
+              credential_pool_ref: "llm_pool:anthropic",
+              routing_policy_ref: "llm_route:anthropic",
+            },
+          }),
+          { status: 200 },
+        ),
+      );
+    });
+    vi.stubGlobal("fetch", fetchMock);
+
+    const { container } = renderWithDesk(<LLMSettingsPage />);
+    fireEvent.change(container.querySelector("[data-api-key]") as HTMLElement, {
+      target: { value: "sk-ant-xyz" },
+    });
+    fireEvent.click(container.querySelector("[data-configure-submit]") as HTMLElement);
+
+    await waitFor(() => {
+      const text = (container.querySelector("[data-configure-result]") as HTMLElement).textContent ?? "";
+      expect(text).toContain("SecretRef=secret:llm:anthropic");
+      expect(text).toContain("Settings metadata");
+      expect(text).not.toMatch(/已连通真模型|连接成功|模型可用/);
+      expect(text).not.toContain("sk-ant-xyz");
     });
   });
 
@@ -137,6 +212,106 @@ describe("LLMSettingsPage · 配置流程", () => {
     expect(configureCalls.length).toBe(0);
   });
 
+  it("测试连接真打 /api/llm/test，并显示 provider 回复预览", async () => {
+    const fetchMock = vi.fn().mockImplementation((url: string) => {
+      if (String(url).includes("/api/llm/status")) {
+        return Promise.resolve(
+          new Response(
+            JSON.stringify({
+              providers: [
+                {
+                  provider: "anthropic",
+                  configured: true,
+                  settings_managed: true,
+                  secret_ref: "secret:llm:anthropic",
+                  credential_pool_ref: "llm_pool:anthropic",
+                  routing_policy_ref: "llm_route:anthropic",
+                  auth_status: "active",
+                },
+              ],
+            }),
+            { status: 200 },
+          ),
+        );
+      }
+      if (String(url).includes("/api/llm/test")) {
+        return Promise.resolve(
+          new Response(JSON.stringify({ ok: true, provider: "anthropic", reply_preview: "ok" }), {
+            status: 200,
+          }),
+        );
+      }
+      return Promise.resolve(new Response("{}", { status: 200 }));
+    });
+    vi.stubGlobal("fetch", fetchMock);
+
+    const { container } = renderWithDesk(<LLMSettingsPage />);
+    await waitFor(() => {
+      expect(container.querySelector("[data-test-provider='anthropic']")).not.toBeNull();
+    });
+    fireEvent.click(container.querySelector("[data-test-provider='anthropic']") as HTMLElement);
+
+    await waitFor(() => {
+      const call = fetchMock.mock.calls.find((c) => String(c[0]).includes("/api/llm/test"));
+      expect(call).toBeDefined();
+      const body = JSON.parse(String((call![1] as RequestInit).body));
+      expect(body.provider).toBe("anthropic");
+      expect((container.querySelector("[data-connection-test-result]") as HTMLElement).textContent).toContain("✓ anthropic: ok");
+    });
+  });
+
+  it("测试连接失败时显示 Gateway 错误，不报成功", async () => {
+    const fetchMock = vi.fn().mockImplementation((url: string) => {
+      if (String(url).includes("/api/llm/status")) {
+        return Promise.resolve(
+          new Response(
+            JSON.stringify({
+              providers: [
+                {
+                  provider: "anthropic",
+                  configured: true,
+                  settings_managed: true,
+                  secret_ref: "secret:llm:anthropic",
+                  credential_pool_ref: "llm_pool:anthropic",
+                  routing_policy_ref: "llm_route:anthropic",
+                  auth_status: "revoked",
+                },
+              ],
+            }),
+            { status: 200 },
+          ),
+        );
+      }
+      if (String(url).includes("/api/llm/test")) {
+        return Promise.resolve(
+          new Response(
+            JSON.stringify({
+              ok: false,
+              provider: "anthropic",
+              error: "NoLLMConfigured: LLM Gateway route rejected for anthropic",
+            }),
+            { status: 200 },
+          ),
+        );
+      }
+      return Promise.resolve(new Response("{}", { status: 200 }));
+    });
+    vi.stubGlobal("fetch", fetchMock);
+
+    const { container } = renderWithDesk(<LLMSettingsPage />);
+    await waitFor(() => {
+      expect(container.querySelector("[data-test-provider='anthropic']")).not.toBeNull();
+    });
+    fireEvent.click(container.querySelector("[data-test-provider='anthropic']") as HTMLElement);
+
+    await waitFor(() => {
+      const text = (container.querySelector("[data-connection-test-result]") as HTMLElement).textContent ?? "";
+      expect(text).toContain("✗ anthropic");
+      expect(text).toContain("LLM Gateway route rejected");
+      expect(text).not.toContain("✓");
+    });
+  });
+
   it("诚实状态（§3 不假绿灯）：configure 成功只声明『已写入配置』，不声称『已连通真模型』", async () => {
     const fetchMock = vi.fn().mockImplementation((url: string) => {
       if (String(url).includes("/api/llm/status")) {
@@ -182,6 +357,180 @@ describe("LLMSettingsPage · 配置流程", () => {
       const r = container.querySelector("[data-configure-result]");
       expect(r).not.toBeNull();
       expect((r as HTMLElement).textContent).toMatch(/必须填 api_key/);
+    });
+  });
+
+  it("health snapshot：基于 Settings provider/auth_ref 只提交 refs/hash-only payload", async () => {
+    const fetchMock = vi.fn().mockImplementation((url: string) => {
+      if (String(url).includes("/api/llm/status")) {
+        return Promise.resolve(new Response(JSON.stringify({ providers: [] }), { status: 200 }));
+      }
+      if (String(url).includes("/api/research-os/settings/summary")) {
+        return Promise.resolve(
+          new Response(
+            JSON.stringify({
+              llm_providers: [
+                {
+                  provider_id: "openai",
+                  auth_refs: ["secretref:openai:project"],
+                  health_status: "unknown",
+                  quota_status: "unknown",
+                },
+              ],
+              llm_provider_health_snapshots: [],
+            }),
+            { status: 200 },
+          ),
+        );
+      }
+      if (String(url).includes("/api/research-os/settings/llm_provider_health_snapshots")) {
+        return Promise.resolve(
+          new Response(
+            JSON.stringify({
+              snapshot_ref: "llm_health:openai:001",
+              snapshot_hash: "sha16:healthsnapshot",
+            }),
+            { status: 200 },
+          ),
+        );
+      }
+      return Promise.resolve(new Response("{}", { status: 200 }));
+    });
+    vi.stubGlobal("fetch", fetchMock);
+
+    const { container } = renderWithDesk(<LLMSettingsPage />);
+    await waitFor(() => {
+      expect((container.querySelector("[data-health-provider-select]") as HTMLSelectElement).value).toBe("openai");
+      expect((container.querySelector("[data-health-auth-ref]") as HTMLSelectElement).value).toBe(
+        "secretref:openai:project",
+      );
+    });
+
+    fireEvent.change(container.querySelector("[data-health-status]") as HTMLElement, {
+      target: { value: "degraded" },
+    });
+    fireEvent.change(container.querySelector("[data-quota-status]") as HTMLElement, {
+      target: { value: "limited" },
+    });
+    fireEvent.change(container.querySelector("[data-health-latency]") as HTMLElement, {
+      target: { value: "123" },
+    });
+    fireEvent.change(container.querySelector("[data-health-response-hash]") as HTMLElement, {
+      target: { value: "sha16:providerping" },
+    });
+    fireEvent.change(container.querySelector("[data-health-capability-refs]") as HTMLElement, {
+      target: { value: "capability:tool_calling, capability:structured_output" },
+    });
+    fireEvent.change(container.querySelector("[data-health-evidence-refs]") as HTMLElement, {
+      target: { value: "evidence:llm-health-check" },
+    });
+    fireEvent.click(container.querySelector("[data-health-snapshot-submit]") as HTMLElement);
+
+    await waitFor(() => {
+      const call = fetchMock.mock.calls.find((c) =>
+        String(c[0]).includes("/api/research-os/settings/llm_provider_health_snapshots"),
+      );
+      expect(call).toBeDefined();
+      const body = JSON.parse(String((call![1] as RequestInit).body));
+      expect(body.provider_id).toBe("openai");
+      expect(body.auth_ref).toBe("secretref:openai:project");
+      expect(body.health_status).toBe("degraded");
+      expect(body.quota_status).toBe("limited");
+      expect(body.latency_ms).toBe(123);
+      expect(body.response_hash).toBe("sha16:providerping");
+      expect(body.capability_refs).toEqual(["capability:tool_calling", "capability:structured_output"]);
+      expect(body.evidence_refs).toEqual(["evidence:llm-health-check"]);
+      expect(Object.keys(body).join(" ")).not.toMatch(/api_key|token|secret|raw_response|raw_payload/);
+    });
+
+    await waitFor(() => {
+      expect((container.querySelector("[data-health-snapshot-result]") as HTMLElement).textContent).toContain(
+        "snapshot 已记录",
+      );
+    });
+  });
+
+  it("health snapshot：缺 auth_ref 时前端阻断，不打 snapshot API", async () => {
+    const fetchMock = vi.fn().mockImplementation((url: string) => {
+      if (String(url).includes("/api/llm/status")) {
+        return Promise.resolve(new Response(JSON.stringify({ providers: [] }), { status: 200 }));
+      }
+      if (String(url).includes("/api/research-os/settings/summary")) {
+        return Promise.resolve(
+          new Response(
+            JSON.stringify({
+              llm_providers: [{ provider_id: "openai", auth_refs: [] }],
+              llm_provider_health_snapshots: [],
+            }),
+            { status: 200 },
+          ),
+        );
+      }
+      return Promise.resolve(new Response("{}", { status: 200 }));
+    });
+    vi.stubGlobal("fetch", fetchMock);
+
+    const { container } = renderWithDesk(<LLMSettingsPage />);
+    await waitFor(() => {
+      expect((container.querySelector("[data-health-provider-select]") as HTMLSelectElement).value).toBe("openai");
+    });
+    fireEvent.change(container.querySelector("[data-health-response-hash]") as HTMLElement, {
+      target: { value: "sha16:providerping" },
+    });
+
+    const submit = container.querySelector("[data-health-snapshot-submit]") as HTMLButtonElement;
+    expect(submit.disabled).toBe(true);
+    fireEvent.click(submit);
+    expect(
+      fetchMock.mock.calls.filter((c) =>
+        String(c[0]).includes("/api/research-os/settings/llm_provider_health_snapshots"),
+      ),
+    ).toHaveLength(0);
+  });
+
+  it("health snapshot：后端拒绝时显示失败，不假装记录成功", async () => {
+    const fetchMock = vi.fn().mockImplementation((url: string) => {
+      if (String(url).includes("/api/llm/status")) {
+        return Promise.resolve(new Response(JSON.stringify({ providers: [] }), { status: 200 }));
+      }
+      if (String(url).includes("/api/research-os/settings/summary")) {
+        return Promise.resolve(
+          new Response(
+            JSON.stringify({
+              llm_providers: [{ provider_id: "openai", auth_refs: ["secretref:openai:project"] }],
+              llm_provider_health_snapshots: [],
+            }),
+            { status: 200 },
+          ),
+        );
+      }
+      if (String(url).includes("/api/research-os/settings/llm_provider_health_snapshots")) {
+        return Promise.resolve(
+          new Response(JSON.stringify({ detail: "invalid_llm_provider_quota_status" }), {
+            status: 422,
+          }),
+        );
+      }
+      return Promise.resolve(new Response("{}", { status: 200 }));
+    });
+    vi.stubGlobal("fetch", fetchMock);
+
+    const { container } = renderWithDesk(<LLMSettingsPage />);
+    await waitFor(() => {
+      expect((container.querySelector("[data-health-auth-ref]") as HTMLSelectElement).value).toBe(
+        "secretref:openai:project",
+      );
+    });
+    fireEvent.change(container.querySelector("[data-health-response-hash]") as HTMLElement, {
+      target: { value: "sha16:providerping" },
+    });
+    fireEvent.click(container.querySelector("[data-health-snapshot-submit]") as HTMLElement);
+
+    await waitFor(() => {
+      const text = (container.querySelector("[data-health-snapshot-result]") as HTMLElement).textContent ?? "";
+      expect(text).toContain("记录失败 (422)");
+      expect(text).toContain("invalid_llm_provider_quota_status");
+      expect(text).not.toContain("✓");
     });
   });
 });

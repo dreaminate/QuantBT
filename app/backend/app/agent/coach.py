@@ -1,11 +1,11 @@
-"""v0.8.6.1 · Mode 2 教练主动建议 + Socratic 响应决策 (W6 教练闭环)。
+"""v0.8.6.1 · Mode 2 研究诊断建议 + 提问式复核响应决策 (W6 诊断流)。
 
 patch1 §D.d 5 步状态机的 SOCRATIC_DECISION 阶段在 backend 落实：
   response_mode: ask / explain / refuse / recommend_experiment
 
 主动建议触发规则（基于 v0.8.4 risk_summary + 用户行为）：
-  - PBO > 0.6  → "我帮你诊断这个高过拟合风险？"
-  - DSR < 0.2  → "这个 Sharpe 真有效吗？我帮你查"
+  - PBO > 0.6  → "先诊断高过拟合风险"
+  - DSR < 0.2  → "先查 Sharpe 的证据状态"
   - MaxDD > 25% → "回撤这么深，要不要看看仓位约束？"
   - Sharpe 1-2 + 无 walk-forward → "建议跑 walk-forward 验证"
   - 连续 3 次 rerun 同策略无指标改善 → "换个变量试试"
@@ -53,9 +53,9 @@ def suggest_from_risk_summary(risk_summary: dict[str, Any] | None) -> CoachSugge
         if trust == "insufficient_data":
             return CoachSuggestion(
                 severity="info",
-                headline="你这次缺反过拟合证据，我帮你查？",
-                detail="Sharpe 已有但缺 PBO/DSR。多次试验偏差没量化前，Sharpe 数值不可信。",
-                suggested_chat_query="我这个策略只有 Sharpe 没有 PBO 和 DSR，怎么判断是否真有效？",
+                headline="这次缺反过拟合证据",
+                detail="Sharpe 已有但缺 PBO/DSR。多次试验偏差没量化前，Sharpe 不能单独支撑晋级。",
+                suggested_chat_query="这个策略只有 Sharpe，没有 PBO 和 DSR，怎么判断证据是否足够？",
                 related_glossary=["pbo", "deflated_sharpe"],
                 one_variable_hint="先在 RunDetail 跑 PBO 和 DSR 计算，再决定下一步。",
             )
@@ -68,7 +68,7 @@ def suggest_from_risk_summary(risk_summary: dict[str, Any] | None) -> CoachSugge
     mapping: dict[str, dict[str, Any]] = {
         "high_overfit_risk": {
             "severity": "critical",
-            "headline": "PBO 偏高，我帮你诊断这个策略可信吗？",
+            "headline": "PBO 偏高，先查过拟合风险",
             "detail": "CSCV 过拟合概率超出可接受阈值，建议跑 walk-forward 复测。",
             "suggested_chat_query": "这个策略 PBO 高于 0.6，怎么判断是不是过拟合？我下一步该怎么验证？",
             "related_glossary": ["pbo", "walk_forward", "purged_kfold"],
@@ -92,7 +92,7 @@ def suggest_from_risk_summary(risk_summary: dict[str, Any] | None) -> CoachSugge
         },
         "low_sharpe": {
             "severity": "info",
-            "headline": "Sharpe 偏低，我帮你想想？",
+            "headline": "Sharpe 偏低，先定位环节",
             "detail": "收益风险比偏低；可能因子方向不对，或标签设计有问题。",
             "suggested_chat_query": "我的 Sharpe 只有 {value:.2f}，你觉得最可能是哪个环节出了问题？",
             "related_glossary": ["sharpe_ratio", "ic", "triple_barrier"],
@@ -126,7 +126,7 @@ def suggest_from_risk_summary(risk_summary: dict[str, Any] | None) -> CoachSugge
 
     cfg = mapping.get(name, {
         "severity": "info",
-        "headline": "这次结果有些信号，要不要让我看看？",
+        "headline": "这次结果有风险信号",
         "detail": message,
         "suggested_chat_query": f"我这次跑出来 {message}，你帮我看看下一步该怎么办",
         "related_glossary": [],
@@ -173,7 +173,7 @@ def classify_response_mode(
     if any(s in text for s in experiment_signals):
         return "recommend_experiment"
 
-    # 默认：ask Socratic
+    # 默认：提问式复核
     return "ask"
 
 

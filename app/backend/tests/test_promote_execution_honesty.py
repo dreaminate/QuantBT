@@ -40,6 +40,47 @@ from app.release_gate.mock_honesty import (
 )
 from app.release_gate.promote_assembler import evaluate_run_releasable
 from app.release_gate.release_gate import GATE_MOCK_HONESTY
+from app.research_os import MarketDataUseValidationRecord
+
+
+MARKET_DATA_USE_REFS = ["market_data_use:promote_honesty:accepted"]
+MARKET_DATASET_REF = "dataset:btc_daily"
+
+
+class _DatasetSemantics:
+    dataset_ref = MARKET_DATASET_REF
+    known_at_ref = "known_at:btc_daily"
+    effective_at_ref = "effective_at:btc_daily"
+    pit_bitemporal_rules_ref = "pit:btc_daily"
+
+
+class _MarketDataUseRegistry:
+    def __init__(self) -> None:
+        self._record = MarketDataUseValidationRecord(
+            validation_ref=MARKET_DATA_USE_REFS[0],
+            request_ref="market_data_use:promote_honesty:request",
+            use_context="backtest",
+            dataset_refs=(MARKET_DATASET_REF,),
+            instrument_refs=("BTC-USDT",),
+            capability_matrix_ref="capability:crypto_perp_daily",
+            capital_record_ref=None,
+            transformation_refs=(),
+            accepted=True,
+            violation_codes=(),
+            evidence_refs=("evidence:promote_honesty_market_data_use",),
+            recorded_by="test",
+            created_at_utc="2026-06-27T00:00:00Z",
+        )
+
+    def use_validation(self, validation_ref: str) -> MarketDataUseValidationRecord:
+        if validation_ref != self._record.validation_ref:
+            raise KeyError(validation_ref)
+        return self._record
+
+    def dataset(self, dataset_ref: str) -> _DatasetSemantics:
+        if dataset_ref != _DatasetSemantics.dataset_ref:
+            raise KeyError(dataset_ref)
+        return _DatasetSemantics()
 
 
 # ── 建料 ─────────────────────────────────────────────────────────────────────
@@ -137,9 +178,10 @@ def test_synth_with_assembly_writes_template_block_caught_by_R4(iso):
     """
     out = _synth_and_promote(
         args={"market": "crypto_perp", "strategy_goal_ref": "g-assembly", "lookback": 20,
-              "factor_set": "fs_abc123", "model_id": "lgbm_rank_6f"},
+              "factor_set": "fs_abc123", "model_id": "lgbm_rank_6f",
+              "market_data_use_validation_refs": MARKET_DATA_USE_REFS},
         ledger=iso["ledger"], returns_store=None, data_root=iso["root"],
-        verdict_store=None, verifier=None, llm_client=None,
+        verdict_store=None, verifier=None, llm_client=None, market_data_registry=_MarketDataUseRegistry(),
     )
     assert out.get("error") is None, out
     run_id = out["run_id"]
@@ -168,9 +210,10 @@ def test_synth_with_assembly_writes_template_block_caught_by_R4(iso):
 @needs_btc
 def test_synth_without_assembly_writes_no_block_backward_compat(iso):
     out = _synth_and_promote(
-        args={"market": "crypto_perp", "strategy_goal_ref": "g-plain", "lookback": 20},
+        args={"market": "crypto_perp", "strategy_goal_ref": "g-plain", "lookback": 20,
+              "market_data_use_validation_refs": MARKET_DATA_USE_REFS},
         ledger=iso["ledger"], returns_store=None, data_root=iso["root"],
-        verdict_store=None, verifier=None, llm_client=None,
+        verdict_store=None, verifier=None, llm_client=None, market_data_registry=_MarketDataUseRegistry(),
     )
     assert out.get("error") is None, out
     run_json = json.loads(

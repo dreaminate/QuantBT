@@ -36,6 +36,7 @@ class StrategyFile:
     asset_class: str  # crypto_perp / crypto_spot / equity_cn
     description: str
     updated_at_utc: str
+    market_data_use_validation_refs: list[str]
 
 
 @dataclass
@@ -64,6 +65,7 @@ class IDERun:
     owner_username: str
     status: str  # running / ok / failed / timeout
     started_at_utc: str
+    market_data_use_validation_refs: list[str]
     finished_at_utc: str | None
     exit_code: int | None
     error: str | None
@@ -87,6 +89,7 @@ def _schema() -> list[str]:
             code TEXT NOT NULL,
             asset_class TEXT NOT NULL,
             description TEXT NOT NULL DEFAULT '',
+            market_data_use_validation_refs TEXT NOT NULL DEFAULT '[]',
             updated_at_utc TEXT NOT NULL,
             UNIQUE (owner_username, name)
         )
@@ -99,6 +102,7 @@ def _schema() -> list[str]:
             owner_username TEXT NOT NULL,
             status TEXT NOT NULL,
             started_at_utc TEXT NOT NULL,
+            market_data_use_validation_refs TEXT NOT NULL DEFAULT '[]',
             finished_at_utc TEXT,
             exit_code INTEGER,
             error TEXT,
@@ -134,6 +138,16 @@ def init_ide_db(db_path: Path) -> None:
     with sqlite3.connect(db_path) as conn:
         for stmt in _schema():
             conn.execute(stmt)
+        cols = {row[1] for row in conn.execute("PRAGMA table_info(i_strategies)").fetchall()}
+        if "market_data_use_validation_refs" not in cols:
+            conn.execute(
+                "ALTER TABLE i_strategies ADD COLUMN market_data_use_validation_refs TEXT NOT NULL DEFAULT '[]'"
+            )
+        run_cols = {row[1] for row in conn.execute("PRAGMA table_info(i_runs)").fetchall()}
+        if "market_data_use_validation_refs" not in run_cols:
+            conn.execute(
+                "ALTER TABLE i_runs ADD COLUMN market_data_use_validation_refs TEXT NOT NULL DEFAULT '[]'"
+            )
         conn.commit()
 
 
@@ -158,6 +172,38 @@ class IDEService:
         c.row_factory = sqlite3.Row
         return c
 
+    @staticmethod
+    def _refs_json(refs: list[str] | tuple[str, ...] | None) -> str:
+        return json.dumps([str(ref) for ref in refs or []], ensure_ascii=False)
+
+    @staticmethod
+    def _refs_from_json(raw_refs: Any) -> list[str]:
+        try:
+            parsed_refs = json.loads(raw_refs)
+        except (json.JSONDecodeError, TypeError):
+            parsed_refs = []
+        if not isinstance(parsed_refs, list):
+            parsed_refs = []
+        return [str(ref) for ref in parsed_refs if str(ref or "").strip()]
+
+    @classmethod
+    def _strategy_from_row(cls, row: sqlite3.Row) -> StrategyFile:
+        data = dict(row)
+        data["market_data_use_validation_refs"] = cls._refs_from_json(
+            data.get("market_data_use_validation_refs") or "[]"
+        )
+        return StrategyFile(**data)
+
+    @classmethod
+    def _run_from_row(cls, row: sqlite3.Row) -> IDERun:
+        data = dict(row)
+        data["result_keys"] = json.loads(data.get("result_keys") or "[]")
+        data["market_data_use_validation_refs"] = cls._refs_from_json(
+            data.get("market_data_use_validation_refs") or "[]"
+        )
+        data.pop("result_path", None)
+        return IDERun(**data)
+
     # ---------- strategy CRUD ----------
 
     def list_strategies(self, owner_username: str) -> list[StrategyFile]:
@@ -166,7 +212,7 @@ class IDEService:
                 "SELECT * FROM i_strategies WHERE owner_username=? ORDER BY updated_at_utc DESC",
                 (owner_username,),
             ).fetchall()
-        return [StrategyFile(**dict(r)) for r in rows]
+        return [self._strategy_from_row(r) for r in rows]
 
     def get_strategy(self, owner_username: str, name: str) -> StrategyFile:
         with self._conn() as c:
@@ -176,7 +222,7 @@ class IDEService:
             ).fetchone()
         if not r:
             raise IDEError(f"strategy not found: {name}")
-        return StrategyFile(**dict(r))
+        return self._strategy_from_row(r)
 
     def save_strategy(
         self,
@@ -186,6 +232,7 @@ class IDEService:
         *,
         asset_class: str = "crypto_perp",
         description: str = "",
+        market_data_use_validation_refs: list[str] | tuple[str, ...] | None = None,
     ) -> StrategyFile:
         if not owner_username or not name:
             raise IDEError("owner_username / name 必填")
@@ -195,6 +242,7 @@ class IDEService:
             raise IDEError("策略源码不能超过 1MB")
         if not name.replace("_", "").replace("-", "").isalnum():
             raise IDEError("策略名只能用字母数字 - _")
+        refs_json = self._refs_json(market_data_use_validation_refs)
         now = _utc_now()
         with self._conn() as c:
             existing = c.execute(
@@ -204,14 +252,14 @@ class IDEService:
             if existing:
                 sid = existing["strategy_id"]
                 c.execute(
-                    "UPDATE i_strategies SET code=?, asset_class=?, description=?, updated_at_utc=? WHERE strategy_id=?",
-                    (code, asset_class, description, now, sid),
+                    "UPDATE i_strategies SET code=?, asset_class=?, description=?, market_data_use_validation_refs=?, updated_at_utc=? WHERE strategy_id=?",
+                    (code, asset_class, description, refs_json, now, sid),
                 )
             else:
                 sid = "stg_" + token_urlsafe(8)
                 c.execute(
-                    "INSERT INTO i_strategies (strategy_id, owner_username, name, code, asset_class, description, updated_at_utc) VALUES (?,?,?,?,?,?,?)",
-                    (sid, owner_username, name, code, asset_class, description, now),
+                    "INSERT INTO i_strategies (strategy_id, owner_username, name, code, asset_class, description, market_data_use_validation_refs, updated_at_utc) VALUES (?,?,?,?,?,?,?,?)",
+                    (sid, owner_username, name, code, asset_class, description, refs_json, now),
                 )
             # 版本史留痕（append-only，身份经 lineage.content_hash；同一作者草稿谱系）。
             self._record_version_locked(
@@ -298,9 +346,9 @@ class IDEService:
             now = _utc_now()
             sid = "stg_" + token_urlsafe(8)
             c.execute(
-                "INSERT INTO i_strategies (strategy_id, owner_username, name, code, asset_class, description, updated_at_utc) VALUES (?,?,?,?,?,?,?)",
+                "INSERT INTO i_strategies (strategy_id, owner_username, name, code, asset_class, description, market_data_use_validation_refs, updated_at_utc) VALUES (?,?,?,?,?,?,?,?)",
                 (sid, owner_username, candidate, parent.code, parent.asset_class,
-                 f"fork of {parent.name}", now),
+                 f"fork of {parent.name}", self._refs_json(parent.market_data_use_validation_refs), now),
             )
             self._record_version_locked(
                 c, strategy_id=sid, owner_username=owner_username, name=candidate,
@@ -323,8 +371,19 @@ class IDEService:
 
     # ---------- run ----------
 
-    def run_strategy(self, owner_username: str, name: str) -> IDERun:
+    def run_strategy(
+        self,
+        owner_username: str,
+        name: str,
+        *,
+        market_data_use_validation_refs: list[str] | tuple[str, ...] | None = None,
+    ) -> IDERun:
         s = self.get_strategy(owner_username, name)
+        run_refs = (
+            list(market_data_use_validation_refs)
+            if market_data_use_validation_refs is not None
+            else list(s.market_data_use_validation_refs)
+        )
         run_id = "ide_" + token_urlsafe(8)
         run_dir = self._run_root / run_id
         run_dir.mkdir(parents=True, exist_ok=True)
@@ -332,8 +391,8 @@ class IDEService:
         started_at = _utc_now()
         with self._conn() as c:
             c.execute(
-                "INSERT INTO i_runs (run_id, strategy_id, owner_username, status, started_at_utc) VALUES (?,?,?,?,?)",
-                (run_id, s.strategy_id, owner_username, "running", started_at),
+                "INSERT INTO i_runs (run_id, strategy_id, owner_username, status, started_at_utc, market_data_use_validation_refs) VALUES (?,?,?,?,?,?)",
+                (run_id, s.strategy_id, owner_username, "running", started_at, self._refs_json(run_refs)),
             )
             c.commit()
 
@@ -392,10 +451,7 @@ class IDEService:
             r = c.execute("SELECT * FROM i_runs WHERE run_id=?", (run_id,)).fetchone()
         if not r:
             raise IDEError(f"run not found: {run_id}")
-        d = dict(r)
-        d["result_keys"] = json.loads(d.get("result_keys") or "[]")
-        d.pop("result_path", None)
-        return IDERun(**d)
+        return self._run_from_row(r)
 
     def list_runs(self, owner_username: str, *, limit: int = 50) -> list[IDERun]:
         with self._conn() as c:
@@ -405,10 +461,7 @@ class IDEService:
             ).fetchall()
         out: list[IDERun] = []
         for r in rows:
-            d = dict(r)
-            d["result_keys"] = json.loads(d.get("result_keys") or "[]")
-            d.pop("result_path", None)
-            out.append(IDERun(**d))
+            out.append(self._run_from_row(r))
         return out
 
     def get_run_artifact(self, run_id: str, kind: str) -> dict[str, Any]:

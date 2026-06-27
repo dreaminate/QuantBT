@@ -47,7 +47,8 @@ export async function authFetch(input: RequestInfo, init: RequestInit = {}): Pro
   const token = getToken();
   const headers = new Headers(init.headers || {});
   if (token) headers.set("Authorization", `Bearer ${token}`);
-  if (init.body && !headers.has("content-type")) headers.set("content-type", "application/json");
+  const isFormData = typeof FormData !== "undefined" && init.body instanceof FormData;
+  if (init.body && !headers.has("content-type") && !isFormData) headers.set("content-type", "application/json");
   return fetch(input, { ...init, headers });
 }
 

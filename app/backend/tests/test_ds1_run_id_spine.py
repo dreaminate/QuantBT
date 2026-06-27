@@ -20,8 +20,67 @@ from app.agent.business_tools import _synth_and_promote
 from app.agent.sample_data import SAMPLE_REL, sample_path
 from app.agent.strategy_synth import synthesize_strategy_code
 from app.lineage import Ledger
+from app.research_os import MarketDataUseValidationRecord
 from app.run_verdict import project_overfit, project_verdict
 from app.verification import Verifier, VerdictStore
+
+MARKET_DATA_USE_REFS = ["market_data_use:agent_builder:accepted"]
+MARKET_DATASET_REF = "dataset:btc_daily"
+
+
+class _DatasetSemantics:
+    def __init__(
+        self,
+        *,
+        known_at_ref: str | None = "known_at:btc_daily",
+        effective_at_ref: str | None = "effective_at:btc_daily",
+        pit_bitemporal_rules_ref: str | None = "pit:btc_daily",
+    ) -> None:
+        self.dataset_ref = MARKET_DATASET_REF
+        self.known_at_ref = known_at_ref
+        self.effective_at_ref = effective_at_ref
+        self.pit_bitemporal_rules_ref = pit_bitemporal_rules_ref
+
+
+class _MarketDataUseRegistry:
+    def __init__(
+        self,
+        records: list[MarketDataUseValidationRecord] | None = None,
+        datasets: dict[str, _DatasetSemantics] | None = None,
+    ) -> None:
+        source = [_market_data_use_validation()] if records is None else records
+        self._records = {record.validation_ref: record for record in source}
+        self._datasets = {MARKET_DATASET_REF: _DatasetSemantics()} if datasets is None else datasets
+
+    def use_validation(self, validation_ref: str) -> MarketDataUseValidationRecord:
+        return self._records[validation_ref]
+
+    def dataset(self, dataset_ref: str) -> _DatasetSemantics:
+        return self._datasets[dataset_ref]
+
+
+def _market_data_use_validation(**overrides) -> MarketDataUseValidationRecord:
+    data = {
+        "validation_ref": MARKET_DATA_USE_REFS[0],
+        "request_ref": "market_data_use:agent_builder:request",
+        "use_context": "strategy_builder_backtest",
+        "dataset_refs": (MARKET_DATASET_REF,),
+        "instrument_refs": ("BTC-USDT",),
+        "capability_matrix_ref": "capability:crypto_perp_daily",
+        "capital_record_ref": None,
+        "transformation_refs": (),
+        "accepted": True,
+        "violation_codes": (),
+        "evidence_refs": ("evidence:agent_builder_market_data_use",),
+        "recorded_by": "test",
+        "created_at_utc": "2026-06-27T00:00:00Z",
+    }
+    data.update(overrides)
+    return MarketDataUseValidationRecord(**data)
+
+
+def _with_market_data_use(args: dict) -> dict:
+    return {**args, "market_data_use_validation_refs": list(MARKET_DATA_USE_REFS)}
 
 
 def _has_btc_sample() -> bool:
@@ -52,16 +111,99 @@ def iso(tmp_path, monkeypatch):
         "ledger": Ledger(tmp_path / "lineage"),
         "vstore": VerdictStore(tmp_path / "verification"),
         "verifier": Verifier(),
+        "market_data_registry": _MarketDataUseRegistry(),
     }
+
+
+def test_strategy_builder_requires_market_data_use_refs_before_synthesis(tmp_path):
+    class _CountingLLM:
+        called = False
+
+        def complete(self, prompt):  # noqa: ANN001, ARG002
+            self.called = True
+            return "print('should not be called')"
+
+    llm = _CountingLLM()
+    out = _synth_and_promote(
+        args={"market": "crypto_perp", "strategy_goal_ref": "g-no-refs", "lookback": 20},
+        ledger=Ledger(tmp_path / "lineage"),
+        returns_store=None,
+        data_root=tmp_path,
+        verdict_store=None,
+        verifier=None,
+        llm_client=llm,
+        market_data_registry=_MarketDataUseRegistry(),
+    )
+    assert "market_data_use_validation_refs" in (out.get("error") or "")
+    assert out.get("no_write") is True
+    assert llm.called is False, "MarketDataUse gate must run before LLM/code synthesis"
+    assert not (tmp_path / "artifacts" / "experiments").exists(), "bad refs must not create run artifacts"
+
+
+@pytest.mark.parametrize(
+    ("registry", "refs", "message"),
+    [
+        (_MarketDataUseRegistry([]), ["market_data_use:agent_builder:missing"], "unknown"),
+        (
+            _MarketDataUseRegistry([
+                _market_data_use_validation(
+                    validation_ref="market_data_use:agent_builder:rejected",
+                    accepted=False,
+                )
+            ]),
+            ["market_data_use:agent_builder:rejected"],
+            "not accepted",
+        ),
+        (
+            _MarketDataUseRegistry([
+                _market_data_use_validation(
+                    validation_ref="market_data_use:agent_builder:violation",
+                    violation_codes=("live_permission_missing",),
+                )
+            ]),
+            ["market_data_use:agent_builder:violation"],
+            "violations",
+        ),
+        (
+            _MarketDataUseRegistry(
+                [_market_data_use_validation(validation_ref="market_data_use:agent_builder:no_timing")],
+                datasets={MARKET_DATASET_REF: _DatasetSemantics(pit_bitemporal_rules_ref=None)},
+            ),
+            ["market_data_use:agent_builder:no_timing"],
+            "PIT/bitemporal timing",
+        ),
+    ],
+)
+def test_strategy_builder_rejects_bad_market_data_use_refs_before_run(tmp_path, registry, refs, message):
+    out = _synth_and_promote(
+        args={
+            "market": "crypto_perp",
+            "strategy_goal_ref": "g-bad-market-data-use",
+            "lookback": 20,
+            "market_data_use_validation_refs": refs,
+        },
+        ledger=Ledger(tmp_path / "lineage"),
+        returns_store=None,
+        data_root=tmp_path,
+        verdict_store=None,
+        verifier=None,
+        llm_client=None,
+        market_data_registry=registry,
+    )
+    assert message in (out.get("error") or "")
+    assert out.get("no_write") is True
+    assert out.get("run_id") is None
+    assert not (tmp_path / "artifacts" / "experiments").exists(), "bad refs must not create run artifacts"
 
 
 @needs_btc
 def test_agent_backtest_produces_real_run_consumable_by_verdict(iso):
     """脊梁主断言：无 run_id → 真 RUN_ROOT run + run_id 被 run_verdict 真消费。"""
     out = _synth_and_promote(
-        args={"market": "crypto_perp", "strategy_goal_ref": "goal-momentum-1", "lookback": 20},
+        args=_with_market_data_use({"market": "crypto_perp", "strategy_goal_ref": "goal-momentum-1", "lookback": 20}),
         ledger=iso["ledger"], returns_store=None, data_root=iso["root"],
         verdict_store=iso["vstore"], verifier=iso["verifier"], llm_client=None,
+        market_data_registry=iso["market_data_registry"],
     )
     assert out.get("error") is None, out
     run_id = out["run_id"]
@@ -79,6 +221,7 @@ def test_agent_backtest_produces_real_run_consumable_by_verdict(iso):
     assert isinstance(out["metrics"].get("sharpe"), float)
     assert out["source"] == "synthesized_backtest_run"
     assert out["synthesis_method"] == "template"
+    assert out["market_data_use_validation_refs"] == MARKET_DATA_USE_REFS
 
 
 @needs_btc
@@ -91,13 +234,14 @@ def test_assembly_inputs_recorded_in_metadata_and_disclosed_honestly(iso):
     import json
 
     out = _synth_and_promote(
-        args={
+        args=_with_market_data_use({
             "market": "crypto_perp", "strategy_goal_ref": "g-assembly", "lookback": 20,
             "factor_set": "fs_abc123", "model_id": "lgbm_rank_6f",
             "signal_id": "sig_xyz", "portfolio_id": "pf_789", "cost_preset": "binance_taker",
-        },
+        }),
         ledger=iso["ledger"], returns_store=None, data_root=iso["root"],
         verdict_store=iso["vstore"], verifier=iso["verifier"], llm_client=None,
+        market_data_registry=iso["market_data_registry"],
     )
     assert out.get("error") is None, out
     run_id = out["run_id"]
@@ -124,9 +268,10 @@ def test_no_assembly_no_assembly_inputs_key(iso):
     import json
 
     out = _synth_and_promote(
-        args={"market": "crypto_perp", "strategy_goal_ref": "g-plain", "lookback": 20},
+        args=_with_market_data_use({"market": "crypto_perp", "strategy_goal_ref": "g-plain", "lookback": 20}),
         ledger=iso["ledger"], returns_store=None, data_root=iso["root"],
         verdict_store=None, verifier=None, llm_client=None,
+        market_data_registry=iso["market_data_registry"],
     )
     assert out.get("error") is None, out
     run_json = json.loads(
@@ -140,12 +285,14 @@ def test_no_assembly_no_assembly_inputs_key(iso):
 def test_same_goal_rerun_config_hash_stable_and_honest_n_not_double_spent(iso):
     """同 goal 重跑：config_hash 稳定 + honest-N 不重刷（memoize 单一源）。"""
     ref = "goal-momentum-stable"
-    args = {"market": "crypto_perp", "strategy_goal_ref": ref, "lookback": 20}
+    args = _with_market_data_use({"market": "crypto_perp", "strategy_goal_ref": ref, "lookback": 20})
     out1 = _synth_and_promote(args=args, ledger=iso["ledger"], returns_store=None,
-                              data_root=iso["root"], verdict_store=None, verifier=None, llm_client=None)
+                              data_root=iso["root"], verdict_store=None, verifier=None, llm_client=None,
+                              market_data_registry=iso["market_data_registry"])
     n1 = iso["ledger"].honest_n(ref)
     out2 = _synth_and_promote(args=args, ledger=iso["ledger"], returns_store=None,
-                              data_root=iso["root"], verdict_store=None, verifier=None, llm_client=None)
+                              data_root=iso["root"], verdict_store=None, verifier=None, llm_client=None,
+                              market_data_registry=iso["market_data_registry"])
     n2 = iso["ledger"].honest_n(ref)
     assert out1.get("error") is None and out2.get("error") is None, (out1, out2)
     ch1 = out1["overfit"]["config_hash"]
@@ -168,9 +315,10 @@ def test_break_engine_wiring_fails_honestly_not_fake_green(iso, monkeypatch):
 
     monkeypatch.setattr(sandbox, "run_user_strategy", _broken)
     out = _synth_and_promote(
-        args={"market": "crypto_perp", "strategy_goal_ref": "g-broken", "lookback": 20},
+        args=_with_market_data_use({"market": "crypto_perp", "strategy_goal_ref": "g-broken", "lookback": 20}),
         ledger=iso["ledger"], returns_store=None, data_root=iso["root"],
         verdict_store=None, verifier=None, llm_client=None,
+        market_data_registry=iso["market_data_registry"],
     )
     assert out.get("run_id") is None, "引擎断了绝不返回 run_id（防假绿灯）"
     assert "equity_curve" in (out.get("error") or ""), out
@@ -180,9 +328,10 @@ def test_break_engine_wiring_fails_honestly_not_fake_green(iso, monkeypatch):
 def test_missing_sample_fails_honestly_no_fake_run(iso):
     """§3：stocks_cn 样本未捆（仅 BTC 拷进 tmp）→ 显式 needs_sample 失败，绝不伪造 A股回测。"""
     out = _synth_and_promote(
-        args={"market": "stocks_cn", "strategy_goal_ref": "g-cn", "lookback": 20},
+        args=_with_market_data_use({"market": "stocks_cn", "strategy_goal_ref": "g-cn", "lookback": 20}),
         ledger=iso["ledger"], returns_store=None, data_root=iso["root"],
         verdict_store=None, verifier=None, llm_client=None,
+        market_data_registry=iso["market_data_registry"],
     )
     assert out.get("needs_sample") is True
     assert out.get("run_id") is None, "样本缺绝不伪造 run"

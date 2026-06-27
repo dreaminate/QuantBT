@@ -1,4 +1,4 @@
-"""v0.8.6.1 · Mode 2 教练主动建议 + 响应决策测试。"""
+"""v0.8.6.1 · Mode 2 研究诊断建议 + 响应决策测试。"""
 
 from __future__ import annotations
 

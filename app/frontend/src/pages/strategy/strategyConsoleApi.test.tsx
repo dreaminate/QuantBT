@@ -21,6 +21,9 @@ import {
   fetchStrategyVersions,
   forkStrategy,
   fetchLiveSnapshot,
+  fetchResearchGraphCanvasProjection,
+  executeResearchGraphCanvasAssetMutation,
+  recordResearchGraphCanvasLayout,
 } from "./api";
 import { MOCK_NODES, MOCK_EDGES, type DomainNode } from "./mockGraph";
 import { StrategyConsolePage } from "../StrategyConsolePage";
@@ -93,6 +96,93 @@ describe("S2 api.ts · 序列化与端点", () => {
     authFetchSpy.mockResolvedValue(jsonRes({ live_allowed: true, readonly: true }));
     await fetchLiveSnapshot("s1");
     expect(authFetchSpy.mock.calls[0][0]).toBe("/api/ide/strategies/s1/live_snapshot");
+  });
+
+  it("fetchResearchGraphCanvasProjection → GET Research Graph 只读投影", async () => {
+    authFetchSpy.mockResolvedValue(
+      jsonRes({ total: 0, limit: 24, filters: {}, read_only: true, source_projection_refs: [], nodes: [], edges: [] }),
+    );
+    const r = await fetchResearchGraphCanvasProjection({ limit: 24, qro_type: "PortfolioPolicy" });
+    expect(r.read_only).toBe(true);
+    expect(authFetchSpy.mock.calls[0][0]).toBe(
+      "/api/research-os/graph/canvas_projection?limit=24&qro_type=PortfolioPolicy",
+    );
+  });
+
+  it("executeResearchGraphCanvasAssetMutation → POST canonical asset mutation", async () => {
+    authFetchSpy.mockResolvedValue(
+      jsonRes({
+        accepted: true,
+        command_type: "execute_canvas_asset_mutation",
+        mutation_command_id: "rgcmd_mut",
+        qro_command_id: "rgcmd_qro",
+        qro_id: "qro_policy_1",
+        qro_version: 2,
+        projection_ref: "rgproj_2",
+        updated_field_path: "output_contract.canvas_edit_ref",
+        recorded_by: "tester",
+      }),
+    );
+    const r = await executeResearchGraphCanvasAssetMutation({
+      command_ref: "canvas_command:strategy_console:qro_policy_1:1",
+      source_desk: "strategy",
+      actor_source: "user_manual",
+      target_asset_type: "PortfolioPolicy",
+      target_ref: "qro_policy_1",
+      field_path: "output_contract.canvas_edit_ref",
+      operation: "set_ref",
+      canonical_command_ref: "canonical:strategy_console:qro_policy_1:1",
+      audit_ref: "audit:strategy_console:qro_policy_1:1",
+      value_ref: "canvas_edit:strategy_console:qro_policy_1:1",
+      value_hash: "hash_strategy_console_1",
+      evidence_refs: ["frontend:StrategyConsolePage:canvas_asset_mutation"],
+    });
+    expect(r.qro_version).toBe(2);
+    const [url, init] = authFetchSpy.mock.calls[0];
+    expect(url).toBe("/api/research-os/graph/canvas_asset_mutations");
+    expect((init as RequestInit).method).toBe("POST");
+    expect((init as RequestInit).body).toContain("output_contract.canvas_edit_ref");
+    expect((init as RequestInit).body).not.toContain("raw_value");
+  });
+
+  it("recordResearchGraphCanvasLayout → POST exact layout record", async () => {
+    authFetchSpy.mockResolvedValue(
+      jsonRes({
+        accepted: true,
+        command_type: "record_canvas_layout",
+        layout_command_id: "rgcmd_layout",
+        layout_ref: "canvas_layout:qro_policy_1:hash_canvas_layout_1",
+        layout_hash: "hash_canvas_layout_1",
+        mutation_command_id: "rgcmd_layout_mut",
+        qro_command_id: "rgcmd_layout_qro",
+        qro_id: "qro_policy_1",
+        qro_version: 2,
+        projection_ref: "rgproj_layout",
+        updated_field_path: "output_contract.canvas_layout_ref",
+        recorded_by: "tester",
+      }),
+    );
+    const r = await recordResearchGraphCanvasLayout({
+      command_ref: "canvas_command:strategy_console_layout:qro_policy_1:1",
+      source_desk: "strategy",
+      actor_source: "user_manual",
+      target_asset_type: "PortfolioPolicy",
+      target_ref: "qro_policy_1",
+      node_id: "canvas_node:qro:qro_policy_1",
+      x: 520,
+      y: 160,
+      w: 184,
+      canonical_command_ref: "canonical:strategy_console_layout:qro_policy_1:1",
+      audit_ref: "audit:strategy_console_layout:qro_policy_1:1",
+      evidence_refs: ["frontend:StrategyConsolePage:qro_node_layout_drag"],
+    });
+    expect(r.layout_ref).toBe("canvas_layout:qro_policy_1:hash_canvas_layout_1");
+    const [url, init] = authFetchSpy.mock.calls[0];
+    expect(url).toBe("/api/research-os/graph/canvas_layouts");
+    expect((init as RequestInit).method).toBe("POST");
+    expect((init as RequestInit).body).toContain('"node_id":"canvas_node:qro:qro_policy_1"');
+    expect((init as RequestInit).body).toContain('"x":520');
+    expect((init as RequestInit).body).not.toContain("raw_value");
   });
 
   it("非 2xx → 抛 detail（不静默吞错）", async () => {

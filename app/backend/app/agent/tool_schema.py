@@ -208,7 +208,7 @@ TOOL_SCHEMA: list[dict[str, Any]] = [
     },
     {
         "name": "backtest.run",
-        "description": "用 BacktestVenue 跑一次回测，输出标准 run 目录",
+        "description": "用 accepted MarketDataUse validation refs 约束策略合成，再跑一次回测并输出标准 run 目录",
         "parameters": {
             "type": "object",
             "properties": {
@@ -216,7 +216,13 @@ TOOL_SCHEMA: list[dict[str, Any]] = [
                 "factor_set": {"type": "string"},
                 "model_id": {"type": "string"},
                 "cost_preset": {"type": "string", "enum": ["optimistic", "neutral", "pessimistic"]},
+                "market_data_use_validation_refs": {
+                    "type": "array",
+                    "items": {"type": "string"},
+                    "description": "accepted/no-violation MarketDataUseValidationRecord refs required before strategy synthesis",
+                },
             },
+            "required": ["market_data_use_validation_refs"],
         },
     },
     {
@@ -244,8 +250,19 @@ TOOL_SCHEMA: list[dict[str, Any]] = [
     },
     {
         "name": "report.generate",
-        "description": "把当前 run 输出渲染成 markdown 报告",
-        "parameters": {"type": "object", "properties": {"run_id": {"type": "string"}}},
+        "description": "用 accepted MarketDataUse validation refs 约束当前 run，再渲染 markdown 报告",
+        "parameters": {
+            "type": "object",
+            "properties": {
+                "run_id": {"type": "string"},
+                "market_data_use_validation_refs": {
+                    "type": "array",
+                    "items": {"type": "string"},
+                    "description": "accepted/no-violation MarketDataUseValidationRecord refs with PIT/bitemporal DatasetSemantics timing refs",
+                },
+            },
+            "required": ["run_id", "market_data_use_validation_refs"],
+        },
     },
     {
         "name": "code.replicate",

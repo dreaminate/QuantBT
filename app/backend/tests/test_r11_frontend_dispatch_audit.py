@@ -3,7 +3,7 @@
 裁决（三角调查 no_bypass / r11_gap=False）：治理门钉在端点/执行层，前端 display-only，
 agent 层物理上派发不了动钱/晋级/实盘动作。本测试把该裁决钉成回归不变量。
 
-A4 更新：backtest.run（side_effect=none，本地可重置）改由 agent 接真引擎，已从高危标记移除；
+A4 更新：backtest.run（side_effect=none，本地可重置）改由 agent 真实引擎执行，已从高危标记移除；
 真正动钱/晋级/实盘控制工具（place_order/promote/kill_switch/…）仍永不可注册（详见 _HIGH_RISK_MARKERS）。
 
 种已知坏门必抓（每组配探针自检证明非 no-op）：
@@ -35,7 +35,7 @@ FRONTEND_SRC = APP_ROOT.parents[1] / "frontend" / "src"
 
 # 永不该被 agent 注册的高危工具标记（动钱 / 晋级 / 跟单 / 实盘控制）：
 #
-# A4 更新（2026-06）：`backtest.run` 改由 agent 接真引擎（side_effect="none"，本地可重置、不动钱、
+# A4 更新（2026-06）：`backtest.run` 改由 agent 真实引擎执行（side_effect="none"，本地可重置、不动钱、
 # 不外发单——策略台脊柱终点，设计稿剧本核心动作）。故从高危标记里移除 "backtest"——它不再是
 # 「永不可注册」类，而是受治理门管控（permission_gate）的 none 副作用能力。**真正动钱/晋级/实盘控制
 # 标记一个不少**（place_order/promote/kill_switch/leverage/withdraw/transfer/copy_trade/subscribe/

@@ -22,6 +22,7 @@ from .base import (
 from .binance_rest_connector import BinanceRESTConnector
 from .binance_vision_connector import BinanceVisionConnector
 from .generic_rest import GenericRESTConfig, GenericRESTConnector
+from .stooq_connector import StooqConnector
 from .tushare_connector import TushareConnector
 from .user_upload import (
     UploadDatasetRegistration,
@@ -40,6 +41,7 @@ def _bootstrap_default_registry() -> ConnectorRegistry:
     registry.register_instance("binance_vision_spot", BinanceVisionConnector("binance_spot"))
     registry.register_instance("binance_rest_usdm", BinanceRESTConnector("binanceusdm"))
     registry.register_instance("binance_rest_spot", BinanceRESTConnector("binance_spot"))
+    registry.register_instance("stooq", StooqConnector())
     return registry
 
 
@@ -57,6 +59,7 @@ __all__ = [
     "FetchResult",
     "GenericRESTConfig",
     "GenericRESTConnector",
+    "StooqConnector",
     "TushareConnector",
     "UNIFIED_OHLCV_COLUMNS",
     "UNIFIED_OHLCV_SCHEMA",

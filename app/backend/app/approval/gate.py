@@ -77,7 +77,7 @@ class ApprovalGateService:
         if not gate.verification_record_id:
             gaps.append("缺独立验证记录(verification_record_id)：'生成≠验证'未满足")
         elif self._verdict_lookup is not None:
-            # T-020 集成：接真验证官后，verification_record_id 不止要存在——还要
+            # T-020 集成：接入验证官后，verification_record_id 不止要存在——还要
             #   (i) 记录未被篡改（读路径校验，复核 #3）、(ii) target_ref 绑定本次晋升的 config
             #   （防拿无关/trivial 裁决冒名顶替，复核 #1）、(iii) verdict==consistent（blocked/concern≠pass，T9）。
             try:

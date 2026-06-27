@@ -26,12 +26,12 @@ def test_prompt_has_minimum_length():
 
 def test_prompt_role_identity_not_assistant():
     """禁止 Mode 2 自称'量化助手'/'交易助手'/'AI 助手'。"""
-    for forbidden in ["量化助手", "交易助手", "智能助手", "AI 助手"]:
+    for forbidden in ["量化助手", "交易助手", "智能助手", "AI 助手", "教练", "副驾驶"]:
         assert forbidden not in MODE2_SYSTEM_PROMPT_ZH, f"prompt 含 {forbidden!r} 与 Mode 2 定位冲突"
 
 
 def test_prompt_socratic_questions_count():
-    """Socratic 句式库至少 8 句（patch1 §D.b 硬要求）。"""
+    """提问式复核句式库至少 8 句（patch1 §D.b 硬要求）。"""
     lines = [l for l in MODE2_SYSTEM_PROMPT_ZH.split("\n") if l.strip().startswith(tuple("12345678"))]
     # 数字开头的行可能不只是 socratic（拒答也是有序列表），所以宽松校验
     assert len(lines) >= 8
@@ -76,6 +76,7 @@ def test_prompt_answer_format_specifies_four_steps():
     assert "结论" in MODE2_SYSTEM_PROMPT_ZH
     assert "证据" in MODE2_SYSTEM_PROMPT_ZH
     assert "下一步实验" in MODE2_SYSTEM_PROMPT_ZH
+    assert "证据一致" in MODE2_SYSTEM_PROMPT_ZH
 
 
 def test_prompt_no_emojis():

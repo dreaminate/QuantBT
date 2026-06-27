@@ -30,16 +30,17 @@ from __future__ import annotations
 
 import logging
 from collections.abc import Callable, Iterable, Sequence
-from dataclasses import replace
+from dataclasses import asdict, dataclass, replace
 from datetime import UTC, date, datetime
 from typing import TYPE_CHECKING, Any
 
 import numpy as np
 
-from ..dag.engine import DAGDefinition, DAGTask, register_op
+from ..dag.engine import DAGDefinition, DAGTask, Scheduler, register_op
+from ..execution.base import ExecutionAuditLog
 from ..factor_factory.lifecycle import FactorObservation, LifecycleManager
-from ..factor_factory.registry import FactorRegistry
-from .closure import MonitorAction, monitor_tick
+from ..factor_factory.registry import Factor, FactorRegistry
+from .closure import DRIFT_DEGRADE_THRESHOLD, MonitorAction, monitor_tick
 from .cost_drift import compute_weekly_cost_drift
 from .drift import (
     PSR_FLOOR_DEFAULT,
@@ -60,9 +61,14 @@ logger = logging.getLogger(__name__)
 WEEKLY_MONITOR_DAG_NAME = "weekly_factor_monitor"
 WEEKLY_MONITOR_OP = "weekly_factor_monitor"
 WEEKLY_MONITOR_CRON = "0 9 * * 1"
+MONITOR_WEEKLY_OP = "monitor.weekly_tick"
+MONITOR_WEEKLY_DAG_NAME = "monitor.weekly_factor_lifecycle"
+MONITOR_WEEKLY_CRON = "0 6 * * 1"
 
 # 活跃 = 仍在运营轨道、可被退役的状态（RETIRED 已退役、再喂无意义）。
 _ACTIVE_STATES = ("NEW", "QUALIFIED", "PROBATION", "OBSERVATION", "WARNING")
+ACTIVE_MONITOR_STATES = frozenset({"QUALIFIED", "PROBATION", "OBSERVATION", "WARNING"})
+FORBIDDEN_OBSERVATION_KEYS = frozenset({"pbo", "dsr", "gate", "gate_verdict", "overfit_verdict"})
 
 # ic_provider 契约：给 (factor_id, version) 返回**真实**周期 IC 观测，或 None（无真源时）。
 ICProvider = Callable[[str, int], FactorObservation | None]
@@ -72,6 +78,141 @@ ICProvider = Callable[[str, int], FactorObservation | None]
 # 类型恒为 PerfDriftSignal（axis="performance"）——**绝不**返回 FeatureDriftDiagnosis（PSI 特征轴只根因，
 # monitor_tick 类型层即拒）。无真源 → None（绝不伪造，诚实优先，与 ic_provider 同范式）。
 PerfDriftProvider = Callable[[str, int], PerfDriftSignal | None]
+
+
+@dataclass
+class WeeklyMonitorResult:
+    week_iso: str
+    drift_pct: float | None
+    n_fills: int
+    factors_checked: int
+    actions: list[dict[str, Any]]
+    lifecycle_events: list[dict[str, Any]]
+    cost_drift_report: dict[str, Any]
+
+    def to_dict(self) -> dict[str, Any]:
+        return asdict(self)
+
+
+@dataclass
+class MonitorRuntime:
+    lifecycle_manager: LifecycleManager
+    factor_registry: FactorRegistry
+    execution_audit_log: ExecutionAuditLog
+    observation_provider: Callable[[], Iterable[FactorObservation]] | None = None
+    result_recorder: Callable[[WeeklyMonitorResult, dict[str, Any]], dict[str, Any]] | None = None
+
+
+_RUNTIME: MonitorRuntime | None = None
+
+
+def configure_monitor_runtime(
+    *,
+    lifecycle_manager: LifecycleManager,
+    factor_registry: FactorRegistry,
+    execution_audit_log: ExecutionAuditLog,
+    observation_provider: Callable[[], Iterable[FactorObservation]] | None = None,
+    result_recorder: Callable[[WeeklyMonitorResult, dict[str, Any]], dict[str, Any]] | None = None,
+) -> MonitorRuntime:
+    global _RUNTIME
+    _RUNTIME = MonitorRuntime(
+        lifecycle_manager=lifecycle_manager,
+        factor_registry=factor_registry,
+        execution_audit_log=execution_audit_log,
+        observation_provider=observation_provider,
+        result_recorder=result_recorder,
+    )
+    return _RUNTIME
+
+
+def _number(value: Any, field: str) -> float:
+    if isinstance(value, bool):
+        raise ValueError(f"{field} must be a finite number")
+    try:
+        number = float(value)
+    except (TypeError, ValueError) as exc:
+        raise ValueError(f"{field} must be a finite number") from exc
+    if number != number or number in {float("inf"), float("-inf")}:
+        raise ValueError(f"{field} must be a finite number")
+    return number
+
+
+def observation_from_payload(payload: dict[str, Any], *, default_observed_at: str | None = None) -> FactorObservation:
+    forbidden = FORBIDDEN_OBSERVATION_KEYS.intersection(payload)
+    if forbidden:
+        raise ValueError(f"factor observation must not contain gate/overfit fields: {sorted(forbidden)}")
+    factor_id = str(payload.get("factor_id") or "").strip()
+    if not factor_id:
+        raise ValueError("factor_id is required")
+    version = int(payload.get("version") or 1)
+    observed_at = str(payload.get("observed_at_utc") or default_observed_at or datetime.now(UTC).isoformat())
+    return FactorObservation(
+        factor_id=factor_id,
+        version=version,
+        observed_at_utc=observed_at,
+        horizon=int(payload.get("horizon") or 0),
+        ic_mean=_number(payload.get("ic_mean"), "ic_mean"),
+        ic_ir=_number(payload.get("ic_ir"), "ic_ir"),
+        rank_ic_mean=_number(payload.get("rank_ic_mean"), "rank_ic_mean"),
+        sample_t=_number(payload.get("sample_t"), "sample_t"),
+        paper_excess_return=(
+            _number(payload.get("paper_excess_return"), "paper_excess_return")
+            if payload.get("paper_excess_return") is not None
+            else None
+        ),
+        extra=payload.get("extra") if isinstance(payload.get("extra"), dict) else {},
+    )
+
+
+def _first_number(mapping: dict[str, Any], *keys: str) -> float | None:
+    for key in keys:
+        if key in mapping and mapping[key] is not None:
+            return _number(mapping[key], key)
+    return None
+
+
+def observation_from_factor_ic_summary(factor: Factor, *, observed_at_utc: str) -> FactorObservation | None:
+    summary = factor.ic_summary if isinstance(factor.ic_summary, dict) else None
+    if not summary:
+        return None
+    ic_mean = _first_number(summary, "ic_mean", "mean_ic", "ic")
+    ic_ir = _first_number(summary, "ic_ir", "icir", "information_coefficient_ir")
+    rank_ic_mean = _first_number(summary, "rank_ic_mean", "rank_ic", "rank_mean_ic")
+    sample_t = _first_number(summary, "sample_t", "t_stat", "t")
+    if ic_mean is None or ic_ir is None or rank_ic_mean is None or sample_t is None:
+        return None
+    return FactorObservation(
+        factor_id=factor.factor_id,
+        version=factor.version,
+        observed_at_utc=observed_at_utc,
+        horizon=int(summary.get("horizon") or 0),
+        ic_mean=ic_mean,
+        ic_ir=ic_ir,
+        rank_ic_mean=rank_ic_mean,
+        sample_t=sample_t,
+        paper_excess_return=(
+            _number(summary.get("paper_excess_return"), "paper_excess_return")
+            if summary.get("paper_excess_return") is not None
+            else None
+        ),
+        extra={"source": "factor_registry.ic_summary"},
+    )
+
+
+def active_monitor_factors(registry: FactorRegistry) -> list[Factor]:
+    return [factor for factor in registry.list() if str(factor.lifecycle_state).upper() in ACTIVE_MONITOR_STATES]
+
+
+def observations_from_registry_ic_summary(
+    registry: FactorRegistry, *, observed_at_utc: str | None = None
+) -> list[FactorObservation]:
+    observed_at = observed_at_utc or datetime.now(UTC).isoformat()
+    observations: list[FactorObservation] = []
+    for factor in active_monitor_factors(registry):
+        observation = observation_from_factor_ic_summary(factor, observed_at_utc=observed_at)
+        if observation is not None:
+            observations.append(observation)
+    return observations
 
 
 def run_weekly_monitor_pass(
@@ -280,6 +421,54 @@ def run_production_monitor_cycle(*, week: date | None = None) -> list[MonitorAct
     )
 
 
+def run_weekly_monitor_tick(
+    *,
+    lifecycle_manager: LifecycleManager,
+    factor_registry: FactorRegistry,
+    execution_audit_log: ExecutionAuditLog,
+    factor_observations: Iterable[FactorObservation] | None = None,
+    week: date | None = None,
+    asset_class: str = "crypto_perp",
+    drift_threshold: float = DRIFT_DEGRADE_THRESHOLD,
+) -> WeeklyMonitorResult:
+    audit_records = execution_audit_log.export()
+    report = compute_weekly_cost_drift(audit_records, week=week, asset_class=asset_class)
+    if factor_observations is None:
+        factor_observations = observations_from_registry_ic_summary(factor_registry)
+    observations_by_key = {(obs.factor_id, obs.version): obs for obs in factor_observations}
+
+    actions: list[MonitorAction] = []
+    for factor in active_monitor_factors(factor_registry):
+        observation = observations_by_key.get((factor.factor_id, factor.version))
+        actions.append(
+            monitor_tick(
+                lifecycle_manager,
+                factor.factor_id,
+                factor.version,
+                observation=observation,
+                drift_pct=report.drift_pct,
+                drift_threshold=drift_threshold,
+            )
+        )
+    events = [action.lifecycle_event.to_dict() for action in actions if action.lifecycle_event is not None]
+    return WeeklyMonitorResult(
+        week_iso=report.week_iso,
+        drift_pct=report.drift_pct,
+        n_fills=report.n_fills,
+        factors_checked=len(actions),
+        actions=[_action_to_dict(action) for action in actions],
+        lifecycle_events=events,
+        cost_drift_report=report.to_dict(),
+    )
+
+
+def _action_to_dict(action: MonitorAction) -> dict[str, Any]:
+    payload = asdict(action)
+    if action.lifecycle_event is not None:
+        payload["lifecycle_event"] = action.lifecycle_event.to_dict()
+    return payload
+
+
 @register_op(WEEKLY_MONITOR_OP, version="v1")
 def _weekly_factor_monitor_op(*, context: dict[str, Any] | None = None) -> dict[str, Any]:
     """DAG op：被 `Scheduler.tick()` 经 `run_dag` 触发（参数仅 context，见 engine.py）。
@@ -307,7 +496,40 @@ def _weekly_factor_monitor_op(*, context: dict[str, Any] | None = None) -> dict[
     }
 
 
-def build_weekly_monitor_dag() -> DAGDefinition:
+@register_op(MONITOR_WEEKLY_OP, version="1")
+def _weekly_monitor_op(context: dict[str, Any] | None = None) -> dict[str, Any]:
+    runtime = _RUNTIME
+    if runtime is None:
+        raise RuntimeError("monitor runtime is not configured")
+    observations = (
+        list(runtime.observation_provider())
+        if runtime.observation_provider is not None
+        else observations_from_registry_ic_summary(runtime.factor_registry)
+    )
+    result = run_weekly_monitor_tick(
+        lifecycle_manager=runtime.lifecycle_manager,
+        factor_registry=runtime.factor_registry,
+        execution_audit_log=runtime.execution_audit_log,
+        factor_observations=observations,
+    )
+    payload = result.to_dict()
+    if runtime.result_recorder is not None:
+        payload.update(
+            runtime.result_recorder(
+                result,
+                {
+                    "scheduled": True,
+                    "entry_source": "scheduler",
+                    "actor": MONITOR_WEEKLY_OP,
+                    "asset_class": "crypto_perp",
+                    "trigger": "dag",
+                },
+            )
+        )
+    return payload
+
+
+def build_weekly_monitor_dag(*, schedule: str | None = None) -> DAGDefinition:
     """生产 weekly 监控 DAG（周一早 9 点）：单 pure 节点跑监控扫描。
 
     kind="pure"：本节点不触达券商/资金（无 place_order 路径），只改 registry 状态 + 落 PROV——
@@ -315,6 +537,12 @@ def build_weekly_monitor_dag() -> DAGDefinition:
     启动响亮失败。
     """
 
+    if schedule is not None:
+        return DAGDefinition(
+            name=MONITOR_WEEKLY_DAG_NAME,
+            schedule=schedule,
+            tasks=[DAGTask(id="weekly_monitor_tick", op=MONITOR_WEEKLY_OP, kind="pure")],
+        )
     return DAGDefinition(
         name=WEEKLY_MONITOR_DAG_NAME,
         schedule=WEEKLY_MONITOR_CRON,
@@ -322,18 +550,33 @@ def build_weekly_monitor_dag() -> DAGDefinition:
     )
 
 
+def build_weekly_monitor_scheduler(*, strict: bool = True, schedule: str = MONITOR_WEEKLY_CRON) -> Scheduler:
+    scheduler = Scheduler(strict=strict)
+    scheduler.add(build_weekly_monitor_dag(schedule=schedule))
+    return scheduler
+
+
 __all__ = [
+    "ACTIVE_MONITOR_STATES",
     "FrozenBaselineSource",
     "ICProvider",
+    "MONITOR_WEEKLY_CRON",
+    "MONITOR_WEEKLY_DAG_NAME",
+    "MONITOR_WEEKLY_OP",
     "PerfDriftProvider",
     "ReturnsSource",
     "WEEKLY_MONITOR_CRON",
     "WEEKLY_MONITOR_DAG_NAME",
     "WEEKLY_MONITOR_OP",
+    "WeeklyMonitorResult",
     "build_ic_provider",
     "build_returns_perf_drift_provider",
     "build_weekly_monitor_dag",
+    "build_weekly_monitor_scheduler",
     "collect_paper_audit_records",
+    "configure_monitor_runtime",
+    "observation_from_payload",
     "run_production_monitor_cycle",
+    "run_weekly_monitor_tick",
     "run_weekly_monitor_pass",
 ]

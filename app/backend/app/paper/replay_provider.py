@@ -39,6 +39,8 @@ from .scheduler import MarketKind
 # ── source 标签（诚实区分 bar 来源；与 simulated_source 同义域）──
 SIMULATED_SOURCE = "deterministic_sim_walk"  # 确定性合成游走（无样本市场兜底，非实盘 key、非真样本）
 BUNDLED_SOURCE = "bundled_sample_replay"  # 真捆样本回放（DS-1 落盘真 close 序列）
+BUNDLED_SAMPLE_SOURCE = BUNDLED_SOURCE
+MIXED_REPLAY_SOURCE = f"mixed:{BUNDLED_SOURCE}+{SIMULATED_SOURCE}"
 
 # MarketKind → sample_data 的 market 键（仅 crypto 接捆样本；A股本卡不映射——见下注）。
 # ⚠️ 范围纪律 + 治理：本卡(64717fe6)只接 BTC 一个捆样本。sample_data 虽有 "stocks_cn" 槽，但 A股
@@ -116,7 +118,7 @@ class ReplayBarProvider:
 
     symbols: list[str]
     length: int = 64
-    market: MarketKind = "equity_cn"  # 默认 = 无样本兜底分支（向后兼容旧调用）
+    market: MarketKind = "crypto"
     _series: dict[str, list[float]] = field(default_factory=dict)
     _cursor: dict[str, int] = field(default_factory=dict)
     _first_price: dict[str, float] = field(default_factory=dict)
@@ -157,12 +159,15 @@ class ReplayBarProvider:
         if srcs == {SIMULATED_SOURCE}:
             return SIMULATED_SOURCE
         # 混源：honest 复合标签（含 bundled 与合成）。
-        return f"mixed:{BUNDLED_SOURCE}+{SIMULATED_SOURCE}"
+        return MIXED_REPLAY_SOURCE
 
     def source_for(self, symbol: str) -> str:
         """单 symbol 的来源标签（bundled_sample_replay / deterministic_sim_walk）。"""
 
         return self._source.get(symbol, SIMULATED_SOURCE)
+
+    def source_for_symbol(self, symbol: str) -> str:
+        return self.source_for(symbol)
 
     def first_price(self, symbol: str) -> float:
         """该 symbol 序列首价（真样本→样本首 close ~47704；合成→100）。seed_positions 反推 qty 用。"""
@@ -254,6 +259,8 @@ __all__ = [
     "ReplayBarProvider",
     "SIMULATED_SOURCE",
     "BUNDLED_SOURCE",
+    "BUNDLED_SAMPLE_SOURCE",
+    "MIXED_REPLAY_SOURCE",
     "make_bar_provider",
     "make_mark_provider",
     "seed_positions",

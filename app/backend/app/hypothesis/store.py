@@ -112,7 +112,7 @@ class HypothesisCardStore:
             # 复核 #10：只有 confirmatory 可冻结（secondary/exploratory 都不可，否则 secondary 能过闸摸 OOS）。
             if card.layer != "confirmatory":
                 raise FreezeRejected(f"只有 confirmatory 卡可冻结，本卡 layer={card.layer}；先 promote（P2）")
-            # 复核 #15：confirmatory 冻结必须接真账本——否则 honest-N 静默为 0 却号称「实读自一本账」。
+            # 复核 #15：confirmatory 冻结必须接入真实账本——否则 honest-N 静默为 0 却号称「实读自一本账」。
             if ledger is None:
                 raise FreezeRejected("confirmatory 冻结必须接 T-013 一本账（honest-N 实读，不可缺）")
             # 复核 #11：必须绑非空 frozen_oos（含 dataset_version），否则 consumed BLOCK 形同虚设。

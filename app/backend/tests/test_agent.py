@@ -96,7 +96,7 @@ def test_agent_help_template() -> None:
     runtime = AgentRuntime(DevLocalLLM())
     turn = runtime.run("你能做什么")
     assert turn.succeeded
-    assert "我可以" in turn.final_message
+    assert "可以处理四类请求" in turn.final_message
 
 
 def __user_msg(text: str):

@@ -1,4 +1,4 @@
-"""F2 · 因子台后端接真 + 方法学治理对抗测试（决策 D-F2-AUDIT 全采纳+数值可调）。
+"""F2 · 因子台真实后端 + 方法学治理对抗测试（决策 D-F2-AUDIT 全采纳+数值可调）。
 
 真代码（非 mock）端点：
   POST /api/factors                          注册（必经三检查门 + 初始 NEW）
@@ -26,6 +26,7 @@ import numpy as np
 import pytest
 from fastapi.testclient import TestClient
 
+from app import main as app_main
 from app.auth import require_user_dependency
 from app.factor_factory.factor_audit import (
     DEFAULT_THRESHOLDS,
@@ -42,12 +43,32 @@ from app.factor_factory.register_guard import (
 )
 from app.factor_factory.registry import FactorRegistry
 from app.main import FACTOR_REGISTRY, app
+from app.research_os import (
+    DatasetSemanticsRecord,
+    InstrumentSpec,
+    MarketCapabilityMatrixRecord,
+    MarketDataUseValidationRecord,
+    PersistentCompilerIRStore,
+    PersistentGoalEntrypointCoverageRegistry,
+    PersistentMarketDataRegistry,
+    PersistentResearchGraphStore,
+    QROType,
+    ValidationUseContext,
+)
 
 _BANNED = ("可信", "安全", "保证", "可复现", "排除过拟合")
 
 
 @pytest.fixture
-def client():
+def client(tmp_path, monkeypatch):
+    monkeypatch.setattr(app_main, "RESEARCH_GRAPH_STORE", PersistentResearchGraphStore(tmp_path / "research_graph.jsonl"))
+    monkeypatch.setattr(app_main, "COMPILER_IR_STORE", PersistentCompilerIRStore(tmp_path / "compiler_ir.jsonl"))
+    monkeypatch.setattr(
+        app_main,
+        "GOAL_ENTRYPOINT_COVERAGE_REGISTRY",
+        PersistentGoalEntrypointCoverageRegistry(tmp_path / "goal_entrypoint_coverage.jsonl"),
+    )
+    monkeypatch.setattr(app_main, "MARKET_DATA_REGISTRY", PersistentMarketDataRegistry(tmp_path / "market_data.jsonl"))
     app.dependency_overrides[require_user_dependency] = lambda: SimpleNamespace(user_id="tester")
     try:
         yield TestClient(app)
@@ -64,33 +85,368 @@ def _cleanup(*factor_ids: str) -> None:
     FACTOR_REGISTRY._persist()  # noqa: SLF001
 
 
+def _assert_factor_compiler_coverage(body: dict, *, formula: str) -> None:
+    assert body["qro_id"].startswith("qro_")
+    assert body["research_graph_command_id"].startswith("rgcmd_")
+    assert body["compiler_ir_ref"].startswith("compiler_ir:")
+    assert body["compiler_pass_ref"].startswith("compiler_pass:")
+    assert body["entrypoint_coverage_ref"].startswith("goal_entrypoint_coverage:")
+    qro = app_main.RESEARCH_GRAPH_STORE.qro(body["qro_id"])
+    ir = app_main.COMPILER_IR_STORE.ir(body["compiler_ir_ref"])
+    compiler_pass = app_main.COMPILER_IR_STORE.compiler_pass(body["compiler_pass_ref"])
+    coverage = app_main.GOAL_ENTRYPOINT_COVERAGE_REGISTRY.coverage(body["entrypoint_coverage_ref"])
+    assert qro.qro_type == QROType.FACTOR
+    assert qro.output_contract["factor_ref"] == f"factor:{body['factor_id']}:v{body['version']}"
+    assert ir.source_qro_refs == (body["qro_id"],)
+    assert ir.graph_command_refs == (body["research_graph_command_id"],)
+    assert compiler_pass.input_qro_refs == (body["qro_id"],)
+    assert compiler_pass.entry_source == "api"
+    assert coverage.entry_source == "api"
+    assert coverage.entrypoint_ref == "api:factors"
+    assert coverage.qro_refs == (body["qro_id"],)
+    assert coverage.research_graph_command_refs == (body["research_graph_command_id"],)
+    assert coverage.compiler_ir_refs == (body["compiler_ir_ref"],)
+    assert coverage.compiler_pass_refs == (body["compiler_pass_ref"],)
+    assert compiler_pass.direct_graph_mutation is False
+    assert compiler_pass.bypassed_permission is False
+    assert compiler_pass.raw_llm_output_embedded_as_ir is False
+    assert coverage.silent_mock_fallback_used is False
+    assert coverage.raw_payload_persisted is False
+    compiled_text = f"{qro.__dict__} {ir.__dict__} {compiler_pass.__dict__} {coverage.__dict__}"
+    assert formula not in compiled_text
+    assert "sk-" not in compiled_text
+
+
+def _assert_factor_audit_compiler_coverage(
+    body: dict,
+    *,
+    formula: str,
+    market_data_use_validation_refs: tuple[str, ...],
+) -> None:
+    assert body["qro_id"].startswith("qro_")
+    assert body["research_graph_command_id"].startswith("rgcmd_")
+    assert body["compiler_ir_ref"].startswith("compiler_ir:")
+    assert body["compiler_pass_ref"].startswith("compiler_pass:")
+    assert body["entrypoint_coverage_ref"].startswith("goal_entrypoint_coverage:")
+    assert body["validation_dossier_ref"].startswith(f"validation_dossier:factor:{body['factor_id']}:v{body['version']}:audit:")
+    qro = app_main.RESEARCH_GRAPH_STORE.qro(body["qro_id"])
+    ir = app_main.COMPILER_IR_STORE.ir(body["compiler_ir_ref"])
+    compiler_pass = app_main.COMPILER_IR_STORE.compiler_pass(body["compiler_pass_ref"])
+    coverage = app_main.GOAL_ENTRYPOINT_COVERAGE_REGISTRY.coverage(body["entrypoint_coverage_ref"])
+    assert qro.qro_type == QROType.VALIDATION_DOSSIER
+    assert qro.output_contract["validation_dossier_ref"] == body["validation_dossier_ref"]
+    assert qro.output_contract["factor_ref"] == f"factor:{body['factor_id']}:v{body['version']}"
+    assert qro.output_contract["verdict"] == body["verdict"]
+    assert qro.input_contract["market_data_use_validation_refs"] == list(market_data_use_validation_refs)
+    assert qro.output_contract["market_data_use_validation_refs"] == list(market_data_use_validation_refs)
+    assert qro.input_contract["formula_hash"]
+    assert "formula" not in qro.input_contract
+    assert "formula" not in qro.output_contract
+    assert ir.source_qro_refs == (body["qro_id"],)
+    assert ir.graph_command_refs == (body["research_graph_command_id"],)
+    assert body["validation_dossier_ref"] in ir.validation_refs
+    for ref in market_data_use_validation_refs:
+        assert ref in qro.evidence_refs
+        assert ref in ir.validation_refs
+    assert compiler_pass.input_qro_refs == (body["qro_id"],)
+    assert compiler_pass.entry_source == "api"
+    assert compiler_pass.actor_source == "user_manual"
+    assert compiler_pass.permission_ref == "factor_audit:no_runtime_side_effect"
+    assert coverage.entry_source == "api"
+    assert coverage.entrypoint_ref == "api:factors.audit"
+    assert coverage.qro_refs == (body["qro_id"],)
+    assert coverage.research_graph_command_refs == (body["research_graph_command_id"],)
+    assert coverage.compiler_ir_refs == (body["compiler_ir_ref"],)
+    assert coverage.compiler_pass_refs == (body["compiler_pass_ref"],)
+    assert compiler_pass.direct_graph_mutation is False
+    assert compiler_pass.bypassed_permission is False
+    assert compiler_pass.raw_llm_output_embedded_as_ir is False
+    assert coverage.silent_mock_fallback_used is False
+    assert coverage.raw_payload_persisted is False
+    compiled_text = f"{qro.__dict__} {ir.__dict__} {compiler_pass.__dict__} {coverage.__dict__}"
+    assert formula not in compiled_text
+    assert "by_period" not in compiled_text
+    assert "returns" not in compiled_text
+    assert "sk-" not in compiled_text
+
+
+def _assert_factor_layered_compiler_coverage(
+    body: dict,
+    *,
+    formula: str,
+    market_data_use_validation_refs: tuple[str, ...],
+) -> None:
+    assert body["qro_id"].startswith("qro_")
+    assert body["research_graph_command_id"].startswith("rgcmd_")
+    assert body["compiler_ir_ref"].startswith("compiler_ir:")
+    assert body["compiler_pass_ref"].startswith("compiler_pass:")
+    assert body["entrypoint_coverage_ref"].startswith("goal_entrypoint_coverage:")
+    assert body["backtest_run_ref"].startswith(f"backtest_run:factor:{body['factor_id']}:v{body['version']}:layered:")
+    qro = app_main.RESEARCH_GRAPH_STORE.qro(body["qro_id"])
+    ir = app_main.COMPILER_IR_STORE.ir(body["compiler_ir_ref"])
+    compiler_pass = app_main.COMPILER_IR_STORE.compiler_pass(body["compiler_pass_ref"])
+    coverage = app_main.GOAL_ENTRYPOINT_COVERAGE_REGISTRY.coverage(body["entrypoint_coverage_ref"])
+    assert qro.qro_type == QROType.BACKTEST_RUN
+    assert qro.output_contract["backtest_run_ref"] == body["backtest_run_ref"]
+    assert qro.output_contract["factor_ref"] == f"factor:{body['factor_id']}:v{body['version']}"
+    assert qro.output_contract["effective_quantiles"] == body["effective_quantiles"]
+    assert qro.output_contract["sample_count"] == body["sample_count"]
+    assert qro.input_contract["market_data_use_validation_refs"] == list(market_data_use_validation_refs)
+    assert qro.output_contract["market_data_use_validation_refs"] == list(market_data_use_validation_refs)
+    assert qro.input_contract["formula_hash"]
+    qro_contract_text = str(qro.input_contract) + str(qro.output_contract)
+    assert "formula" not in qro.input_contract
+    assert "formula" not in qro.output_contract
+    assert "long_short_spread" not in qro_contract_text
+    assert "mean_return" not in qro_contract_text
+    assert "note" not in qro_contract_text
+    assert ir.source_qro_refs == (body["qro_id"],)
+    assert ir.graph_command_refs == (body["research_graph_command_id"],)
+    assert body["backtest_run_ref"] in ir.validation_refs
+    for ref in market_data_use_validation_refs:
+        assert ref in qro.evidence_refs
+        assert ref in ir.validation_refs
+    assert compiler_pass.input_qro_refs == (body["qro_id"],)
+    assert compiler_pass.entry_source == "api"
+    assert compiler_pass.actor_source == "user_manual"
+    assert compiler_pass.permission_ref == "factor_layered_backtest:no_runtime_side_effect"
+    assert coverage.entry_source == "api"
+    assert coverage.entrypoint_ref == "api:factors.layered_backtest"
+    assert coverage.qro_refs == (body["qro_id"],)
+    assert coverage.research_graph_command_refs == (body["research_graph_command_id"],)
+    assert coverage.compiler_ir_refs == (body["compiler_ir_ref"],)
+    assert coverage.compiler_pass_refs == (body["compiler_pass_ref"],)
+    assert compiler_pass.direct_graph_mutation is False
+    assert compiler_pass.bypassed_permission is False
+    assert compiler_pass.raw_llm_output_embedded_as_ir is False
+    assert coverage.silent_mock_fallback_used is False
+    assert coverage.raw_payload_persisted is False
+    compiled_text = f"{qro.__dict__} {ir.__dict__} {compiler_pass.__dict__} {coverage.__dict__}"
+    assert formula not in compiled_text
+    assert "long_short_spread" not in compiled_text
+    assert "mean_return" not in compiled_text
+    assert "sk-" not in compiled_text
+
+
+def _assert_factor_preview_compiler_coverage(
+    body: dict,
+    *,
+    formula: str,
+    stage: str,
+    valid: bool,
+    market_data_use_validation_refs: tuple[str, ...] = (),
+) -> None:
+    assert body["qro_id"].startswith("qro_")
+    assert body["research_graph_command_id"].startswith("rgcmd_")
+    assert body["compiler_ir_ref"].startswith("compiler_ir:")
+    assert body["compiler_pass_ref"].startswith("compiler_pass:")
+    assert body["entrypoint_coverage_ref"].startswith("goal_entrypoint_coverage:")
+    assert body["validation_dossier_ref"].startswith("validation_dossier:factor_preview:")
+    qro = app_main.RESEARCH_GRAPH_STORE.qro(body["qro_id"])
+    ir = app_main.COMPILER_IR_STORE.ir(body["compiler_ir_ref"])
+    compiler_pass = app_main.COMPILER_IR_STORE.compiler_pass(body["compiler_pass_ref"])
+    coverage = app_main.GOAL_ENTRYPOINT_COVERAGE_REGISTRY.coverage(body["entrypoint_coverage_ref"])
+    assert qro.qro_type == QROType.VALIDATION_DOSSIER
+    assert qro.input_contract["formula_hash"]
+    assert qro.input_contract["market"] == "equity_cn"
+    assert qro.output_contract["validation_dossier_ref"] == body["validation_dossier_ref"]
+    assert qro.output_contract["valid"] is valid
+    assert qro.output_contract["stage"] == stage
+    assert qro.output_contract["result_hash"]
+    assert qro.input_contract["market_data_use_validation_refs"] == list(market_data_use_validation_refs)
+    assert qro.output_contract["market_data_use_validation_refs"] == list(market_data_use_validation_refs)
+    qro_contract_text = str(qro.input_contract) + str(qro.output_contract)
+    assert "formula" not in qro.input_contract
+    assert "formula" not in qro.output_contract
+    assert "ic_tstat_nw" not in qro_contract_text
+    assert "ic_mean" not in qro_contract_text
+    assert "reason" not in qro.input_contract
+    assert "reason" not in qro.output_contract
+    assert ir.source_qro_refs == (body["qro_id"],)
+    assert ir.graph_command_refs == (body["research_graph_command_id"],)
+    assert body["validation_dossier_ref"] in ir.validation_refs
+    assert f"factor_preview_stage:{stage}" in ir.validation_refs
+    for ref in market_data_use_validation_refs:
+        assert ref in qro.evidence_refs
+        assert ref in ir.validation_refs
+    assert compiler_pass.input_qro_refs == (body["qro_id"],)
+    assert compiler_pass.entry_source == "api"
+    assert compiler_pass.actor_source == "user_manual"
+    assert compiler_pass.permission_ref == "factor_preview_validate:no_runtime_side_effect"
+    assert coverage.entry_source == "api"
+    assert coverage.entrypoint_ref == "api:factors.validate"
+    assert coverage.qro_refs == (body["qro_id"],)
+    assert coverage.research_graph_command_refs == (body["research_graph_command_id"],)
+    assert coverage.compiler_ir_refs == (body["compiler_ir_ref"],)
+    assert coverage.compiler_pass_refs == (body["compiler_pass_ref"],)
+    assert compiler_pass.direct_graph_mutation is False
+    assert compiler_pass.bypassed_permission is False
+    assert compiler_pass.raw_llm_output_embedded_as_ir is False
+    assert coverage.silent_mock_fallback_used is False
+    assert coverage.raw_payload_persisted is False
+    compiled_text = f"{qro.__dict__} {ir.__dict__} {compiler_pass.__dict__} {coverage.__dict__}"
+    assert formula not in compiled_text
+    assert "ic_tstat_nw" not in compiled_text
+    assert "ic_mean" not in compiled_text
+    assert "sk-" not in compiled_text
+
+
+def _compiler_record_counts() -> tuple[int, int, int, int]:
+    return (
+        len(app_main.RESEARCH_GRAPH_STORE.commands()),
+        len(app_main.COMPILER_IR_STORE.irs()),
+        len(app_main.COMPILER_IR_STORE.passes()),
+        len(app_main.GOAL_ENTRYPOINT_COVERAGE_REGISTRY.records()),
+    )
+
+
+def _record_factor_market_data_use_validation(
+    validation_ref: str = "market_data_use:factor_layered:equity_cn",
+    *,
+    market: str = "equity_cn",
+    accepted: bool = True,
+    violation_codes: tuple[str, ...] = (),
+    backtest: bool = True,
+    timing_refs: bool = True,
+    use_context: str = ValidationUseContext.BACKTEST.value,
+) -> str:
+    if market in {"equity_cn", "a_share", "stocks_cn", "cn_equity"}:
+        asset_class = "a_share"
+        instrument_type = "equity"
+        currency = "CNY"
+    else:
+        asset_class = "crypto"
+        instrument_type = "spot"
+        currency = "USDT"
+    fragment = market.replace("_", "-")
+    dataset_ref = f"dataset:factor_layered:{fragment}:v1"
+    instrument_ref = f"instrument:factor_layered:{fragment}:demo"
+    capability_ref = f"capability:factor_layered:{fragment}:backtest"
+    registry = app_main.MARKET_DATA_REGISTRY
+    registry.record_dataset(
+        DatasetSemanticsRecord(
+            dataset_ref=dataset_ref,
+            source_ref=f"source:factor_layered:{fragment}:fixture",
+            version="v1",
+            known_at_ref=f"known_at:factor_layered:{fragment}" if timing_refs else None,
+            effective_at_ref=f"effective_at:factor_layered:{fragment}" if timing_refs else None,
+            pit_bitemporal_rules_ref=f"pit:factor_layered:{fragment}" if timing_refs else None,
+            quality_status="accepted",
+            lineage_refs=(f"lineage:factor_layered:{fragment}",),
+            freshness_status="fresh",
+            checksum=f"sha256:factor_layered:{fragment}",
+            asof_join_rule_ref=f"pit:factor_layered:{fragment}" if timing_refs else None,
+        ),
+        use_context=ValidationUseContext.BACKTEST,
+    )
+    registry.record_instrument(
+        InstrumentSpec(
+            instrument_ref=instrument_ref,
+            asset_class=asset_class,
+            instrument_type=instrument_type,
+            currency=currency,
+            exchange_calendar_ref=f"calendar:factor_layered:{fragment}",
+            symbol_mapping_ref=f"symbols:factor_layered:{fragment}",
+        )
+    )
+    registry.record_capability_matrix(
+        MarketCapabilityMatrixRecord(
+            matrix_ref=capability_ref,
+            asset_class=asset_class,
+            instrument_type=instrument_type,
+            research=True,
+            backtest=backtest,
+            paper=False,
+            testnet=False,
+            live=False,
+            long=True,
+            short=False,
+            leverage=False,
+            options=False,
+            margin=False,
+            borrow=False,
+            data_availability="pit_bitemporal_fixture",
+            cost_model_availability="fixture_cost_model",
+            execution_availability="none",
+            permission_requirement=None,
+        ),
+        use_context=ValidationUseContext.BACKTEST,
+    )
+    record = MarketDataUseValidationRecord(
+        validation_ref=validation_ref,
+        request_ref=f"market_data_use_request:factor_layered:{fragment}",
+        use_context=use_context,
+        dataset_refs=(dataset_ref,),
+        instrument_refs=(instrument_ref,),
+        capability_matrix_ref=capability_ref,
+        capital_record_ref=None,
+        transformation_refs=(f"transform:factor_layered:{fragment}:factor_panel",),
+        accepted=accepted,
+        violation_codes=violation_codes,
+        evidence_refs=(
+            f"pit:factor_layered:{fragment}",
+            f"known_at:factor_layered:{fragment}",
+            f"effective_at:factor_layered:{fragment}",
+        )
+        if timing_refs
+        else (f"evidence:factor_layered:{fragment}:missing_timing",),
+        recorded_by="pytest",
+        created_at_utc="2026-06-27T00:00:00+00:00",
+    )
+    if accepted and not violation_codes:
+        registry.record_use_validation(record)
+    else:
+        # 正常 registry 写路径会拒绝这类记录；这里模拟迁移残留/历史脏账，测 endpoint fail-closed。
+        registry._use_validations[validation_ref] = record  # noqa: SLF001
+    return validation_ref
+
+
 # ════════════════ 基线：正常路径 ════════════════
 def test_register_valid_factor_initial_new(client):
     fid = "f2t_reg_ok"
+    formula = "ts_zscore(close, 20)"
     try:
-        r = client.post("/api/factors", json={"factor_id": fid, "formula": "ts_zscore(close, 20)"})
+        r = client.post("/api/factors", json={"factor_id": fid, "formula": formula})
         assert r.status_code == 200, r.text
         body = r.json()
         assert body["registered"] is True
         assert body["lifecycle_state"] == "NEW"          # 红线：初始恒 NEW
         assert body["gates"]["compiled"] and body["gates"]["no_lookahead"]
+        _assert_factor_compiler_coverage(body, formula=formula)
         # 真落库：列表能查到
         r2 = client.get(f"/api/factors/{fid}")
-        assert r2.status_code == 200 and r2.json()["formula"] == "ts_zscore(close, 20)"
+        assert r2.status_code == 200 and r2.json()["formula"] == formula
     finally:
         _cleanup(fid)
 
 
 def test_validate_ok_returns_ic(client):
-    r = client.post("/api/factors/validate", json={"formula": "ts_mean(close, 5)", "market": "equity_cn"})
+    formula = "ts_mean(close, 5)"
+    validation_ref = _record_factor_market_data_use_validation("market_data_use:factor_preview:ok")
+    r = client.post(
+        "/api/factors/validate",
+        json={"formula": formula, "market": "equity_cn", "market_data_use_validation_refs": [validation_ref]},
+    )
     assert r.status_code == 200, r.text
     body = r.json()
     assert body["valid"] is True and body["stage"] == "ok"
     assert body["ic"] is not None and "ic_tstat_nw" in body["ic"]
+    assert body["market_data_use_validation_refs"] == [validation_ref]
+    _assert_factor_preview_compiler_coverage(
+        body,
+        formula=formula,
+        stage="ok",
+        valid=True,
+        market_data_use_validation_refs=(validation_ref,),
+    )
 
 
 def test_correlation_matrix_shape(client):
-    r = client.get("/api/factors/correlation", params={"market": "equity_cn", "threshold": 0.5})
+    validation_ref = _record_factor_market_data_use_validation("market_data_use:factor_correlation:ok")
+    r = client.get(
+        "/api/factors/correlation",
+        params={"market": "equity_cn", "threshold": 0.5, "market_data_use_validation_refs": [validation_ref]},
+    )
     assert r.status_code == 200, r.text
     body = r.json()
     n = len(body["factor_ids"])
@@ -99,30 +455,84 @@ def test_correlation_matrix_shape(client):
     # 对角线为 1
     assert all(abs(body["matrix"][i][i] - 1.0) < 1e-9 for i in range(n))
     assert body["threshold"] == 0.5
+    assert body["market_data_use_validation_refs"] == [validation_ref]
+
+
+def test_correlation_requires_market_data_use_validation_refs_before_report(client):
+    before = _compiler_record_counts()
+    r = client.get("/api/factors/correlation", params={"market": "equity_cn", "threshold": 0.5})
+    assert r.status_code == 422, r.text
+    assert "market_data_use_validation_refs is required for factor correlation reports" in r.text
+    assert _compiler_record_counts() == before
 
 
 def test_ic_and_decay_endpoints(client):
     fid = "f2t_ic"
+    validation_ref = _record_factor_market_data_use_validation("market_data_use:factor_ic:ok")
     try:
         client.post("/api/factors", json={"factor_id": fid, "formula": "ts_zscore(close, 20)"})
-        r = client.get(f"/api/factors/{fid}/ic", params={"market": "equity_cn", "horizon": 5})
+        r = client.get(
+            f"/api/factors/{fid}/ic",
+            params={
+                "market": "equity_cn",
+                "horizon": 5,
+                "market_data_use_validation_refs": [validation_ref],
+            },
+        )
         assert r.status_code == 200, r.text
         body = r.json()
         # Newey-West HAC t 必须在返回里（D-F2-AUDIT b）
         assert "ic_tstat_nw" in body and body["nw_lag"] == 4
-        r2 = client.get(f"/api/factors/{fid}/ic_decay", params={"market": "equity_cn"})
+        assert body["market_data_use_validation_refs"] == [validation_ref]
+        r2 = client.get(
+            f"/api/factors/{fid}/ic_decay",
+            params={"market": "equity_cn", "market_data_use_validation_refs": [validation_ref]},
+        )
         assert r2.status_code == 200
-        decay = r2.json()["decay"]
+        body2 = r2.json()
+        assert body2["market_data_use_validation_refs"] == [validation_ref]
+        decay = body2["decay"]
         assert [d["horizon"] for d in decay] == [1, 3, 5, 10, 20]
+    finally:
+        _cleanup(fid)
+
+
+def test_validate_ok_requires_market_data_use_validation_refs_before_ic(client):
+    before = _compiler_record_counts()
+    r = client.post("/api/factors/validate", json={"formula": "ts_mean(close, 5)", "market": "equity_cn"})
+    assert r.status_code == 422, r.text
+    assert "market_data_use_validation_refs is required for factor preview validations" in r.text
+    assert _compiler_record_counts() == before
+
+
+def test_ic_and_decay_require_market_data_use_validation_refs_before_report(client):
+    fid = "f2t_ic_missing_refs"
+    try:
+        created = client.post("/api/factors", json={"factor_id": fid, "formula": "ts_zscore(close, 20)"})
+        assert created.status_code == 200, created.text
+        before = _compiler_record_counts()
+        r = client.get(f"/api/factors/{fid}/ic", params={"market": "equity_cn", "horizon": 5})
+        assert r.status_code == 422, r.text
+        assert "market_data_use_validation_refs is required for factor IC reports" in r.text
+        assert _compiler_record_counts() == before
+        r2 = client.get(f"/api/factors/{fid}/ic_decay", params={"market": "equity_cn"})
+        assert r2.status_code == 422, r2.text
+        assert "market_data_use_validation_refs is required for factor IC decay reports" in r2.text
+        assert _compiler_record_counts() == before
     finally:
         _cleanup(fid)
 
 
 def test_layered_backtest_buckets(client):
     fid = "f2t_layer"
+    formula = "ts_zscore(close, 20)"
+    validation_ref = _record_factor_market_data_use_validation()
     try:
-        client.post("/api/factors", json={"factor_id": fid, "formula": "ts_zscore(close, 20)"})
-        r = client.post(f"/api/factors/{fid}/layered_backtest", json={"n_quantiles": 5})
+        client.post("/api/factors", json={"factor_id": fid, "formula": formula})
+        r = client.post(
+            f"/api/factors/{fid}/layered_backtest",
+            json={"n_quantiles": 5, "market_data_use_validation_refs": [validation_ref, validation_ref]},
+        )
         assert r.status_code == 200, r.text
         body = r.json()
         # equity_cn 仅 4 symbol → 5 分位下调到 4，所有桶非空（无空桶伪精确）
@@ -130,6 +540,124 @@ def test_layered_backtest_buckets(client):
         assert len(body["buckets"]) == 4
         assert all(b["n_obs"] > 0 for b in body["buckets"])
         assert "long_short_spread" in body
+        assert body["market_data_use_validation_refs"] == [validation_ref]
+        _assert_factor_layered_compiler_coverage(
+            body,
+            formula=formula,
+            market_data_use_validation_refs=(validation_ref,),
+        )
+    finally:
+        _cleanup(fid)
+
+
+def test_layered_backtest_invalid_quantiles_writes_no_partial_graph_or_compiler_records(client):
+    fid = "f2t_layer_bad_q"
+    validation_ref = _record_factor_market_data_use_validation("market_data_use:factor_layered:bad_q")
+    try:
+        created = client.post("/api/factors", json={"factor_id": fid, "formula": "ts_zscore(close, 20)"})
+        assert created.status_code == 200, created.text
+        before = _compiler_record_counts()
+        r = client.post(
+            f"/api/factors/{fid}/layered_backtest",
+            json={"n_quantiles": 1, "market_data_use_validation_refs": [validation_ref]},
+        )
+        assert r.status_code == 422, r.text
+        assert _compiler_record_counts() == before
+    finally:
+        _cleanup(fid)
+
+
+def test_layered_backtest_requires_market_data_use_validation_refs_before_run(client):
+    fid = "f2t_layer_missing_refs"
+    try:
+        created = client.post("/api/factors", json={"factor_id": fid, "formula": "ts_zscore(close, 20)"})
+        assert created.status_code == 200, created.text
+        before = _compiler_record_counts()
+        r = client.post(f"/api/factors/{fid}/layered_backtest", json={"n_quantiles": 5})
+        assert r.status_code == 422, r.text
+        assert "market_data_use_validation_refs is required for factor layered backtests" in r.text
+        assert _compiler_record_counts() == before
+    finally:
+        _cleanup(fid)
+
+
+def test_layered_backtest_rejects_unknown_market_data_use_validation_before_run(client):
+    fid = "f2t_layer_unknown_ref"
+    try:
+        created = client.post("/api/factors", json={"factor_id": fid, "formula": "ts_zscore(close, 20)"})
+        assert created.status_code == 200, created.text
+        before = _compiler_record_counts()
+        r = client.post(
+            f"/api/factors/{fid}/layered_backtest",
+            json={"n_quantiles": 5, "market_data_use_validation_refs": ["market_data_use:missing"]},
+        )
+        assert r.status_code == 422, r.text
+        assert "unknown market data use validation" in r.text
+        assert _compiler_record_counts() == before
+    finally:
+        _cleanup(fid)
+
+
+def test_layered_backtest_rejects_unaccepted_or_violation_market_data_use_validation_before_run(client):
+    fid = "f2t_layer_rejected_ref"
+    rejected_ref = _record_factor_market_data_use_validation(
+        "market_data_use:factor_layered:rejected",
+        accepted=False,
+    )
+    violation_ref = _record_factor_market_data_use_validation(
+        "market_data_use:factor_layered:violation",
+        violation_codes=("market_data_use_backtest_matrix_unavailable",),
+    )
+    try:
+        created = client.post("/api/factors", json={"factor_id": fid, "formula": "ts_zscore(close, 20)"})
+        assert created.status_code == 200, created.text
+        before = _compiler_record_counts()
+        rejected = client.post(
+            f"/api/factors/{fid}/layered_backtest",
+            json={"n_quantiles": 5, "market_data_use_validation_refs": [rejected_ref]},
+        )
+        assert rejected.status_code == 422, rejected.text
+        assert "is not accepted" in rejected.text
+        assert _compiler_record_counts() == before
+        violation = client.post(
+            f"/api/factors/{fid}/layered_backtest",
+            json={"n_quantiles": 5, "market_data_use_validation_refs": [violation_ref]},
+        )
+        assert violation.status_code == 422, violation.text
+        assert "has unresolved violations" in violation.text
+        assert _compiler_record_counts() == before
+    finally:
+        _cleanup(fid)
+
+
+def test_layered_backtest_rejects_refs_without_market_or_pit_timing_coverage(client):
+    fid = "f2t_layer_wrong_market"
+    wrong_market_ref = _record_factor_market_data_use_validation(
+        "market_data_use:factor_layered:crypto",
+        market="crypto",
+    )
+    missing_timing_ref = _record_factor_market_data_use_validation(
+        "market_data_use:factor_layered:missing_timing",
+        timing_refs=False,
+    )
+    try:
+        created = client.post("/api/factors", json={"factor_id": fid, "formula": "ts_zscore(close, 20)"})
+        assert created.status_code == 200, created.text
+        before = _compiler_record_counts()
+        wrong_market = client.post(
+            f"/api/factors/{fid}/layered_backtest",
+            json={"market": "equity_cn", "n_quantiles": 5, "market_data_use_validation_refs": [wrong_market_ref]},
+        )
+        assert wrong_market.status_code == 422, wrong_market.text
+        assert "do not cover factor layered backtest market: equity_cn" in wrong_market.text
+        assert _compiler_record_counts() == before
+        missing_timing = client.post(
+            f"/api/factors/{fid}/layered_backtest",
+            json={"market": "equity_cn", "n_quantiles": 5, "market_data_use_validation_refs": [missing_timing_ref]},
+        )
+        assert missing_timing.status_code == 422, missing_timing.text
+        assert "missing PIT timing refs" in missing_timing.text
+        assert _compiler_record_counts() == before
     finally:
         _cleanup(fid)
 
@@ -147,9 +675,14 @@ def test_lifecycle_events_endpoint(client):
 
 def test_audit_normal_path_structure(client):
     fid = "f2t_audit"
+    formula = "ts_zscore(close, 20)"
+    validation_ref = _record_factor_market_data_use_validation("market_data_use:factor_audit:normal")
     try:
-        client.post("/api/factors", json={"factor_id": fid, "formula": "ts_zscore(close, 20)"})
-        r = client.post(f"/api/factors/{fid}/audit", json={"tier": "standard"})
+        client.post("/api/factors", json={"factor_id": fid, "formula": formula})
+        r = client.post(
+            f"/api/factors/{fid}/audit",
+            json={"tier": "standard", "market_data_use_validation_refs": [validation_ref, validation_ref]},
+        )
         assert r.status_code == 200, r.text
         body = r.json()
         # 多证据三角原语全在（cscv_pbo/DSR/N_eff/bootstrap/IC）
@@ -157,6 +690,12 @@ def test_audit_normal_path_structure(client):
         assert "bootstrap_ci" in body and "ic" in body
         assert body["verdict"] in ("consistent", "concern", "blocked")
         assert isinstance(body["checks"], list) and len(body["checks"]) == 4
+        assert body["market_data_use_validation_refs"] == [validation_ref]
+        _assert_factor_audit_compiler_coverage(
+            body,
+            formula=formula,
+            market_data_use_validation_refs=(validation_ref,),
+        )
     finally:
         _cleanup(fid)
 
@@ -252,15 +791,142 @@ def test_threshold_override_clamped_and_disclosed():
 def test_audit_override_path_endpoint(client):
     """端点接受 tier + 阈值覆盖；覆盖计入 thresholds_overridden 披露。"""
     fid = "f2t_ovr"
+    formula = "ts_zscore(close, 20)"
+    validation_ref = _record_factor_market_data_use_validation("market_data_use:factor_audit:override")
     try:
-        client.post("/api/factors", json={"factor_id": fid, "formula": "ts_zscore(close, 20)"})
-        r = client.post(f"/api/factors/{fid}/audit", json={"tier": "lenient", "min_dsr": 0.5})
+        client.post("/api/factors", json={"factor_id": fid, "formula": formula})
+        r = client.post(
+            f"/api/factors/{fid}/audit",
+            json={"tier": "lenient", "min_dsr": 0.5, "market_data_use_validation_refs": [validation_ref]},
+        )
         assert r.status_code == 200, r.text
         body = r.json()
         assert body["tier"] == "lenient"
         assert body["thresholds_overridden"].get("min_dsr") == 0.5
         # 调松不改通缩真相：DSR 原值仍在 body
         assert "dsr" in body
+        _assert_factor_audit_compiler_coverage(
+            body,
+            formula=formula,
+            market_data_use_validation_refs=(validation_ref,),
+        )
+    finally:
+        _cleanup(fid)
+
+
+def test_audit_invalid_tier_writes_no_partial_graph_or_compiler_records(client):
+    """audit 输入失败时不能留下 Graph/Compiler/Coverage 半截记录。"""
+    fid = "f2t_audit_bad_tier"
+    validation_ref = _record_factor_market_data_use_validation("market_data_use:factor_audit:bad_tier")
+    try:
+        created = client.post("/api/factors", json={"factor_id": fid, "formula": "ts_zscore(close, 20)"})
+        assert created.status_code == 200, created.text
+        before = _compiler_record_counts()
+        r = client.post(
+            f"/api/factors/{fid}/audit",
+            json={"tier": "unknown", "market_data_use_validation_refs": [validation_ref]},
+        )
+        assert r.status_code == 422, r.text
+        assert _compiler_record_counts() == before
+    finally:
+        _cleanup(fid)
+
+
+def test_audit_requires_market_data_use_validation_refs_before_report(client):
+    fid = "f2t_audit_missing_refs"
+    try:
+        created = client.post("/api/factors", json={"factor_id": fid, "formula": "ts_zscore(close, 20)"})
+        assert created.status_code == 200, created.text
+        before = _compiler_record_counts()
+        r = client.post(f"/api/factors/{fid}/audit", json={"tier": "standard"})
+        assert r.status_code == 422, r.text
+        assert "market_data_use_validation_refs is required for factor audits" in r.text
+        assert _compiler_record_counts() == before
+    finally:
+        _cleanup(fid)
+
+
+def test_audit_rejects_unknown_market_data_use_validation_before_report(client):
+    fid = "f2t_audit_unknown_ref"
+    try:
+        created = client.post("/api/factors", json={"factor_id": fid, "formula": "ts_zscore(close, 20)"})
+        assert created.status_code == 200, created.text
+        before = _compiler_record_counts()
+        r = client.post(
+            f"/api/factors/{fid}/audit",
+            json={"tier": "standard", "market_data_use_validation_refs": ["market_data_use:missing"]},
+        )
+        assert r.status_code == 422, r.text
+        assert "unknown market data use validation" in r.text
+        assert _compiler_record_counts() == before
+    finally:
+        _cleanup(fid)
+
+
+def test_audit_rejects_unaccepted_or_violation_market_data_use_validation_before_report(client):
+    fid = "f2t_audit_rejected_ref"
+    rejected_ref = _record_factor_market_data_use_validation(
+        "market_data_use:factor_audit:rejected",
+        accepted=False,
+    )
+    violation_ref = _record_factor_market_data_use_validation(
+        "market_data_use:factor_audit:violation",
+        violation_codes=("market_data_use_audit_matrix_unavailable",),
+    )
+    try:
+        created = client.post("/api/factors", json={"factor_id": fid, "formula": "ts_zscore(close, 20)"})
+        assert created.status_code == 200, created.text
+        before = _compiler_record_counts()
+        rejected = client.post(
+            f"/api/factors/{fid}/audit",
+            json={"tier": "standard", "market_data_use_validation_refs": [rejected_ref]},
+        )
+        assert rejected.status_code == 422, rejected.text
+        assert "is not accepted" in rejected.text
+        assert _compiler_record_counts() == before
+        violation = client.post(
+            f"/api/factors/{fid}/audit",
+            json={"tier": "standard", "market_data_use_validation_refs": [violation_ref]},
+        )
+        assert violation.status_code == 422, violation.text
+        assert "has unresolved violations" in violation.text
+        assert _compiler_record_counts() == before
+    finally:
+        _cleanup(fid)
+
+
+def test_audit_rejects_refs_without_market_or_pit_timing_coverage(client):
+    fid = "f2t_audit_wrong_market"
+    wrong_market_ref = _record_factor_market_data_use_validation(
+        "market_data_use:factor_audit:crypto",
+        market="crypto",
+    )
+    missing_timing_ref = _record_factor_market_data_use_validation(
+        "market_data_use:factor_audit:missing_timing",
+        timing_refs=False,
+    )
+    try:
+        created = client.post("/api/factors", json={"factor_id": fid, "formula": "ts_zscore(close, 20)"})
+        assert created.status_code == 200, created.text
+        before = _compiler_record_counts()
+        wrong_market = client.post(
+            f"/api/factors/{fid}/audit",
+            json={"market": "equity_cn", "tier": "standard", "market_data_use_validation_refs": [wrong_market_ref]},
+        )
+        assert wrong_market.status_code == 422, wrong_market.text
+        assert "do not cover factor audit market: equity_cn" in wrong_market.text
+        assert _compiler_record_counts() == before
+        missing_timing = client.post(
+            f"/api/factors/{fid}/audit",
+            json={
+                "market": "equity_cn",
+                "tier": "standard",
+                "market_data_use_validation_refs": [missing_timing_ref],
+            },
+        )
+        assert missing_timing.status_code == 422, missing_timing.text
+        assert "missing PIT timing refs" in missing_timing.text
+        assert _compiler_record_counts() == before
     finally:
         _cleanup(fid)
 
@@ -277,10 +943,22 @@ def test_adversarial_lookahead_formula_never_reaches_ic(client):
 
 def test_validate_lookahead_rejected(client):
     """构建台即时预览：前视公式 valid=False stage=lookahead（绝不假绿灯放预览）。"""
-    r = client.post("/api/factors/validate", json={"formula": "ts_delta(close, -5)"})
+    formula = "ts_delta(close, -5)"
+    r = client.post("/api/factors/validate", json={"formula": formula})
     assert r.status_code == 200
     body = r.json()
     assert body["valid"] is False and body["stage"] == "lookahead" and body["ic"] is None
+    _assert_factor_preview_compiler_coverage(body, formula=formula, stage="lookahead", valid=False)
+
+
+def test_validate_uncompilable_records_rejected_preview_dossier(client):
+    """构建台即时预览：编译失败也写 rejected preview dossier，但不注册因子、不泄露原公式。"""
+    formula = "totally_unknown_op(close)"
+    r = client.post("/api/factors/validate", json={"formula": formula, "market": "equity_cn"})
+    assert r.status_code == 200
+    body = r.json()
+    assert body["valid"] is False and body["stage"] == "compile" and body["ic"] is None
+    _assert_factor_preview_compiler_coverage(body, formula=formula, stage="compile", valid=False)
 
 
 def test_check_no_lookahead_catches_negative_shift():
@@ -322,9 +1000,13 @@ def test_adversarial_verdict_note_no_banned_words(tier):
 def test_adversarial_verdict_note_endpoint_no_banned(client):
     """端点返回的 verdict_note/disclosure 同样禁词（守门贯穿到 HTTP 边界）。"""
     fid = "f2t_words"
+    validation_ref = _record_factor_market_data_use_validation("market_data_use:factor_audit:words")
     try:
         client.post("/api/factors", json={"factor_id": fid, "formula": "ts_zscore(close, 20)"})
-        r = client.post(f"/api/factors/{fid}/audit", json={"tier": "standard"})
+        r = client.post(
+            f"/api/factors/{fid}/audit",
+            json={"tier": "standard", "market_data_use_validation_refs": [validation_ref]},
+        )
         assert r.status_code == 200
         body = r.json()
         for text in (body["verdict_note"], body["disclosure"]):

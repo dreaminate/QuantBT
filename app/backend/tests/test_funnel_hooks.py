@@ -118,7 +118,7 @@ def test_devllm_mode2_refuses_a_share_live():
     from app.agent.llm_client import DevLocalLLM, LLMMessage
     llm = DevLocalLLM()
     reply = llm.chat([
-        LLMMessage(role="system", content="你是 QuantBT 的 Mode 2 教学型量化 Agent，研究流程教练 + 风控副驾驶"),
+        LLMMessage(role="system", content="你是 QuantBT 的 Mode 2 研究诊断，负责研究诊断 + 风险复核"),
         LLMMessage(role="user", content="我该买入哪只 a股实盘"),
     ])
     assert "拒答" in reply.content or "不能" in reply.content
@@ -128,7 +128,7 @@ def test_devllm_mode2_explains_pbo():
     from app.agent.llm_client import DevLocalLLM, LLMMessage
     llm = DevLocalLLM()
     reply = llm.chat([
-        LLMMessage(role="system", content="Mode 2 研究流程教练"),
+        LLMMessage(role="system", content="Mode 2 研究诊断"),
         LLMMessage(role="user", content="pbo 是什么"),
     ])
     assert "PBO" in reply.content or "过拟合" in reply.content
@@ -150,10 +150,10 @@ def test_devllm_mode2_socratic_on_credibility_question():
     from app.agent.llm_client import DevLocalLLM, LLMMessage
     llm = DevLocalLLM()
     reply = llm.chat([
-        LLMMessage(role="system", content="Mode 2 研究流程教练"),
+        LLMMessage(role="system", content="Mode 2 研究诊断"),
         LLMMessage(role="user", content="这个策略可信吗"),
     ])
-    # 应该是 Socratic ask 而不是直接给答案
+    # 应该是提问式复核，而不是直接给答案
     assert "?" in reply.content or "？" in reply.content
 
 
@@ -161,7 +161,7 @@ def test_devllm_mode2_recommends_experiment_on_improve_question():
     from app.agent.llm_client import DevLocalLLM, LLMMessage
     llm = DevLocalLLM()
     reply = llm.chat([
-        LLMMessage(role="system", content="Mode 2 研究流程教练"),
+        LLMMessage(role="system", content="Mode 2 研究诊断"),
         LLMMessage(role="user", content="我该怎么改进这个策略"),
     ])
     assert "实验" in reply.content or "变量" in reply.content or "label" in reply.content.lower()

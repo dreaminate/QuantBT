@@ -76,6 +76,8 @@ class ModelVersion:
     metrics: dict[str, float] = field(default_factory=dict)
     artifact_path: str | None = None
     source_run_id: str | None = None
+    model_passport_ref: str | None = None
+    validation_dossier_ref: str | None = None
     note: str = ""
 
     def to_dict(self) -> dict[str, Any]:
@@ -207,11 +209,12 @@ class RunStore:
 
 
 class ModelRegistry:
-    def __init__(self, root: Path, *, gate_service: Any = None) -> None:
+    def __init__(self, root: Path, *, gate_service: Any = None, model_governance_registry: Any = None) -> None:
         self._root = Path(root)
         self._store = _JsonlStore(self._root / "models.jsonl")
         # T-019：注入审批门服务。None = dev/archived 直翻（向后兼容）；staging/production 在 None 时 raise（禁裸翻）。
         self._gate_service = gate_service
+        self._model_governance_registry = model_governance_registry
 
     def register_version(
         self,
@@ -219,6 +222,8 @@ class ModelRegistry:
         artifact_path: str | None = None,
         source_run_id: str | None = None,
         metrics: dict[str, float] | None = None,
+        model_passport_ref: str | None = None,
+        validation_dossier_ref: str | None = None,
         note: str = "",
     ) -> ModelVersion:
         versions = [v.version for v in self.list_versions(model_id)]
@@ -231,6 +236,8 @@ class ModelRegistry:
             metrics=metrics or {},
             artifact_path=artifact_path,
             source_run_id=source_run_id,
+            model_passport_ref=model_passport_ref,
+            validation_dossier_ref=validation_dossier_ref,
             note=note,
         )
         self._store.append(mv.to_dict())
@@ -282,6 +289,7 @@ class ModelRegistry:
         verification_record_id: str | None = None,
         evidence: dict[str, Any] | None = None,
         strategy_goal_ref: str | None = None,
+        model_passport_ref: str | None = None,
     ) -> Any:
         """T-019：dev/archived 直翻（探索通道，向后兼容）；staging/production 走审批门。
 
@@ -300,11 +308,18 @@ class ModelRegistry:
         cur = next((v for v in self.list_versions(model_id) if v.version == version), None)
         if cur is None:
             raise KeyError(f"model={model_id} version={version} 未注册")
+        passport_metadata = self._validated_model_passport_metadata(
+            cur,
+            stage=stage,
+            model_passport_ref=model_passport_ref,
+        )
+        governed_evidence = dict(evidence or {})
+        governed_evidence.update(passport_metadata)
         gate = self._gate_service.open_gate(
             model_id=model_id, version=version, from_stage=cur.stage, to_stage=stage,
             action_kind=("promote_production" if stage == "production" else "promote_staging"),
             created_by=created_by or "unknown", verification_record_id=verification_record_id,
-            evidence=evidence, strategy_goal_ref=strategy_goal_ref,
+            evidence=governed_evidence, strategy_goal_ref=strategy_goal_ref,
         )
         if gate.decision == "rejected":
             return GateRejection(gate_id=gate.gate_id, model_id=model_id, version=version,
@@ -320,6 +335,46 @@ class ModelRegistry:
 
     def list_models(self) -> list[str]:
         return sorted({row["model_id"] for row in self._store.read_all()})
+
+    def _validated_model_passport_metadata(
+        self,
+        model_version: ModelVersion,
+        *,
+        stage: ModelStage,
+        model_passport_ref: str | None,
+    ) -> dict[str, Any]:
+        from ..approval.schema import GateStateError
+
+        ref = model_passport_ref or model_version.model_passport_ref
+        if not ref:
+            raise GateStateError(
+                f"promote 到 {stage} 必须提供已记录的 model_passport_ref（GOAL §15 ModelPassport 门）"
+            )
+        if self._model_governance_registry is None:
+            raise GateStateError(
+                "ModelRegistry 缺 model_governance_registry，无法校验 model_passport_ref（fail-closed）"
+            )
+        try:
+            passport = self._model_governance_registry.passport(ref)
+        except KeyError as exc:
+            raise GateStateError(f"model_passport_ref 未登记: {ref}") from exc
+
+        expected_refs = {
+            f"{model_version.model_id}:v{model_version.version}",
+            f"{model_version.model_id}:{model_version.version}",
+            f"model_version:{model_version.model_id}:v{model_version.version}",
+            f"model_version:{model_version.model_id}:{model_version.version}",
+        }
+        if str(passport.model_version_ref) not in expected_refs:
+            raise GateStateError(
+                "model_passport_ref 与晋级模型版本不匹配: "
+                f"passport.model_version_ref={passport.model_version_ref!r}, "
+                f"expected one of {sorted(expected_refs)!r}"
+            )
+        return {
+            "model_passport_ref": passport.passport_id,
+            "validation_dossier_ref": passport.validation_dossier_ref,
+        }
 
 
 __all__ = [

@@ -46,6 +46,10 @@ import {
 } from "./TeachingPopups";
 import { streamAgentWorkbench } from "./agentLive";
 import { authFetch } from "../../../lib/auth";
+import { MethodologyValidationPanel } from "./MethodologyValidationPanel";
+import { RDPExportPanel } from "./RDPExportPanel";
+import { ResearchRAGPanel } from "./ResearchRAGPanel";
+import { TrustDisclosurePanel } from "./TrustDisclosurePanel";
 
 /**
  * 研究执行台（独立 agent desk · DeskShell data-desk="agent" 橙 accent · 顶层子标签 workbench/diagnostics）。
@@ -511,7 +515,7 @@ export function AgentWorkbenchPage() {
       desk="agent"
       topbar={
         <DeskTopBar>
-          <DeskSwitcher current="agent" soon={[]} />
+          <DeskSwitcher current="agent" />
           <span
             style={{
               color: "var(--desk-text-faint)",
@@ -1146,7 +1150,15 @@ function WorkspaceInner({
       ? "实时产物 · 点对话 ↗ 或进度线节点切换"
       : tab === "code"
         ? "可复现配置 · 随进度累积"
-        : "回测报告";
+        : tab === "rag"
+          ? "Research Asset RAG · candidate context"
+        : tab === "rdp"
+          ? "Research Delivery Package · 后端导出"
+          : tab === "methodology"
+            ? "Methodology validation · backend evidence"
+            : tab === "trust"
+              ? "Trust disclosure · backend evidence"
+              : "回测报告";
   return (
     <div
       style={{
@@ -1180,11 +1192,27 @@ function WorkspaceInner({
             ▤ Report.md
           </WsTab>
         )}
+        <WsTab on={tab === "rag"} onClick={() => onTab("rag")}>
+          ⧉ RAG
+        </WsTab>
+        <WsTab on={tab === "rdp"} onClick={() => onTab("rdp")}>
+          ⇩ RDP.zip
+        </WsTab>
+        <WsTab on={tab === "methodology"} onClick={() => onTab("methodology")}>
+          ∑ Methodology
+        </WsTab>
+        <WsTab on={tab === "trust"} onClick={() => onTab("trust")}>
+          Trust
+        </WsTab>
         <div style={{ flex: 1 }} />
         <span style={{ fontSize: 11, color: "var(--desk-text-faint)" }}>
           {hint}
         </span>
-        <Pill tone="mock">MOCK</Pill>
+        {tab === "rdp" || tab === "rag" || tab === "methodology" || tab === "trust" ? (
+          <Pill tone="success">Backend</Pill>
+        ) : (
+          <Pill tone="mock">MOCK</Pill>
+        )}
         <button
           onClick={onClose}
           aria-label="收起产物工作区"
@@ -1220,6 +1248,10 @@ function WorkspaceInner({
         )}
         {tab === "code" && <CodeView reached={reached} />}
         {tab === "report" && reportReady && <ReportView />}
+        {tab === "rag" && <ResearchRAGPanel />}
+        {tab === "rdp" && <RDPExportPanel />}
+        {tab === "methodology" && <MethodologyValidationPanel />}
+        {tab === "trust" && <TrustDisclosurePanel />}
       </div>
     </div>
   );

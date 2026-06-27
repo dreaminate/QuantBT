@@ -64,12 +64,13 @@ def test_build_charts_empty_result() -> None:
     assert build_eval_charts({}) == []
 
 
-def test_eval_endpoint_after_training() -> None:
+def test_eval_endpoint_after_training(training_market_data_use_validation_ref) -> None:
     r = client.post(
         "/api/training/jobs",
         json={
             "name": "eval-xgb", "model": "xgboost", "task": "regression",
             "dataset_id": "demo_ashare_xsec",
+            "market_data_use_validation_refs": [training_market_data_use_validation_ref],
             "feature_cols": ["f_mom5", "f_mom20", "f_vol20", "f_value"], "label_col": "label",
             "hyperparams": {"n_estimators": 40, "max_depth": 3},
         },

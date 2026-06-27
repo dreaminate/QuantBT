@@ -18,8 +18,10 @@
 
 from __future__ import annotations
 
+import json
 from dataclasses import asdict, dataclass, field
 from datetime import UTC, datetime
+from pathlib import Path
 from typing import Any, Literal
 
 from ..lineage.ids import content_hash
@@ -172,8 +174,56 @@ class SignalContractRegistry:
     - 泄露声明门：leakage 三项（OOF/purge/embargo）须自报齐全，否则拒（R18）。
     """
 
-    def __init__(self) -> None:
+    def __init__(self, path: str | Path | None = None) -> None:
+        self._path = Path(path) if path is not None else None
         self._items: dict[str, SignalContract] = {}
+        if self._path is not None:
+            self._path.parent.mkdir(parents=True, exist_ok=True)
+            self._load_existing()
+
+    def _load_existing(self) -> None:
+        assert self._path is not None
+        if not self._path.exists():
+            return
+        for line_no, line in enumerate(self._path.read_text(encoding="utf-8").splitlines(), start=1):
+            if not line.strip():
+                continue
+            try:
+                row = json.loads(line)
+                if row.get("schema_version") != 1:
+                    raise ValueError("unsupported signal contract schema_version")
+                payload = row.get("signal_contract")
+                if not isinstance(payload, dict):
+                    raise ValueError("missing signal_contract")
+                signal_id = str(payload.get("signal_id") or "")
+                contract = SignalContract(
+                    signal_id=signal_id,
+                    name=str(payload.get("name") or ""),
+                    source_lib=str(payload.get("source_lib") or "ml"),  # type: ignore[arg-type]
+                    model_ref=str(payload.get("model_ref") or ""),
+                    output_kind=str(payload.get("output_kind") or ""),
+                    horizon=int(payload.get("horizon") or 0),
+                    leakage=LeakageDeclaration.from_dict(payload.get("leakage")),
+                    author=str(payload.get("author") or "system"),
+                    created_at_utc=str(payload.get("created_at_utc") or datetime.now(UTC).isoformat()),
+                    description=str(payload.get("description") or ""),
+                )
+                if not signal_id:
+                    raise ValueError("signal_contract missing signal_id")
+                self._items[signal_id] = contract
+            except Exception as exc:  # noqa: BLE001 - corrupt governance history must be visible.
+                raise ValueError(f"invalid persisted signal contract row at {self._path}:{line_no}") from exc
+
+    def _append(self, contract: SignalContract) -> None:
+        if self._path is None:
+            return
+        row = {
+            "schema_version": 1,
+            "event_type": "signal_contract_registered",
+            "signal_contract": contract.to_dict(),
+        }
+        with self._path.open("a", encoding="utf-8") as fh:
+            fh.write(json.dumps(row, ensure_ascii=False, sort_keys=True, separators=(",", ":")) + "\n")
 
     def register(
         self,
@@ -223,6 +273,7 @@ class SignalContractRegistry:
             description=description,
         )
         self._items[sid] = contract
+        self._append(contract)
         return contract
 
     def get(self, signal_id: str) -> SignalContract:

@@ -63,18 +63,21 @@ describe("研究执行台 · 渲染骨架（T-040 / A2）", () => {
     }
   });
 
-  it("台 switcher：研究执行台 active（正名后非伪策略台）+ 其余 6 台皆可跳（无 soon 占位、无死链）", () => {
+  it("台 switcher：六个台都可跳，研究执行台只用 aria-current 标记 active", () => {
     const { container } = renderWithDesk(<AgentWorkbenchPage />);
-    const links = Array.from(container.querySelectorAll("a")).map(
-      (a) => a.textContent,
+    const byLabel = Object.fromEntries(
+      Array.from(container.querySelectorAll("a")).map((a) => [
+        a.textContent ?? "",
+        a.getAttribute("href"),
+      ]),
     );
-    // 正名：active 台是研究执行台，渲染为实心 <span>，不是 <a> 链接。
-    expect(links).not.toContain("研究执行台");
-    // soon=[] → 其余台全部为可跳 <Link>（含此前被灰的因子台/模拟台）。
-    expect(links).toContain("因子台");
-    expect(links).toContain("模拟台");
-    expect(links).toContain("Model台");
-    expect(links).toContain("策略台");
+    expect(byLabel["总览台"]).toBe("/overview");
+    expect(byLabel["策略台"]).toBe("/strategy");
+    expect(byLabel["因子台"]).toBe("/factors");
+    expect(byLabel["Model台"]).toBe("/models");
+    expect(byLabel["模拟台"]).toBe("/paper");
+    expect(byLabel["研究执行台"]).toBe("/agent-workbench");
+    expect(screen.getByText("研究执行台").closest("a")).toHaveAttribute("aria-current", "page");
   });
 
   it("双栏可折叠 + splitter 双开时在；收起工作区后 splitter 消失", () => {

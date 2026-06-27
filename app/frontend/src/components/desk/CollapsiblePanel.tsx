@@ -47,7 +47,7 @@ export function CollapsiblePanel({
     <aside
       style={{
         flex: "none",
-        width,
+        width: `var(--desk-${side}-pane-width, ${width}px)`,
         display: "flex",
         flexDirection: "column",
         background: "var(--desk-panel)",

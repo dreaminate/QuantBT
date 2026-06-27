@@ -1,13 +1,13 @@
 import { ReactNode, useEffect, useState } from "react";
 import { NavLink, useLocation } from "react-router-dom";
+import { ThemeModeControl } from "../ThemeModeControl";
 import { clearSession, getStoredUser, logout, type AuthUser } from "../../lib/auth";
+import { type ThemeMode, useThemeMode } from "../../lib/theme";
 
 /**
  * Claude Code 风 shell：顶部 nav + 左侧 sidebar + 底部 status bar
  * RunDetailPage 走 wide layout 时由 App.tsx 跳过整个 shell（不动它）
  */
-
-export type Theme = "dark" | "light";
 
 interface SidebarItem {
   to: string;
@@ -42,19 +42,8 @@ const AREA_LABEL: Record<string, string> = {
 };
 
 export function Shell({ children, wide = false }: { children: ReactNode; wide?: boolean }) {
-  const [theme, setTheme] = useState<Theme>(() => {
-    const stored = typeof window !== "undefined" ? localStorage.getItem("cc-theme") : null;
-    return (stored as Theme) || "dark";
-  });
+  const theme = useThemeMode();
   const [drawerOpen, setDrawerOpen] = useState(false);
-  useEffect(() => {
-    document.documentElement.setAttribute("data-theme", theme);
-    try {
-      localStorage.setItem("cc-theme", theme);
-    } catch {
-      /* noop */
-    }
-  }, [theme]);
 
   const location = useLocation();
   const area = areaOf(location.pathname);
@@ -68,8 +57,8 @@ export function Shell({ children, wide = false }: { children: ReactNode; wide?: 
   return (
     <div className="cc-app">
       <TopNav
-        theme={theme}
-        onToggleTheme={() => setTheme(theme === "dark" ? "light" : "dark")}
+        themeMode={theme.mode}
+        onThemeModeChange={theme.setMode}
         onHamburger={() => setDrawerOpen((v) => !v)}
       />
       <div className="cc-shell">
@@ -121,7 +110,15 @@ function MobileDrawer({ open, onClose, currentArea }: { open: boolean; onClose: 
   );
 }
 
-function TopNav({ theme, onToggleTheme, onHamburger }: { theme: Theme; onToggleTheme: () => void; onHamburger: () => void }) {
+function TopNav({
+  themeMode,
+  onThemeModeChange,
+  onHamburger,
+}: {
+  themeMode: ThemeMode;
+  onThemeModeChange: (mode: ThemeMode) => void;
+  onHamburger: () => void;
+}) {
   const location = useLocation();
   const area = areaOf(location.pathname);
   return (
@@ -150,14 +147,7 @@ function TopNav({ theme, onToggleTheme, onHamburger }: { theme: Theme; onToggleT
       </nav>
       <div className="cc-topbar-right">
         <UserMenu />
-        <button
-          type="button"
-          className="cc-btn cc-btn--ghost cc-btn--sm"
-          onClick={onToggleTheme}
-          title="切换深/浅"
-        >
-          {theme === "dark" ? "☾ dark" : "☀ light"}
-        </button>
+        <ThemeModeControl value={themeMode} onChange={onThemeModeChange} />
         <a
           className="cc-btn cc-btn--ghost cc-btn--sm"
           href="https://github.com"

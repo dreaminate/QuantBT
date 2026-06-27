@@ -15,19 +15,30 @@
 from __future__ import annotations
 
 import json
+import hashlib
 import time
 from concurrent.futures import Future, ThreadPoolExecutor
 from dataclasses import asdict, dataclass, field, replace
 from datetime import UTC, datetime
 from pathlib import Path
-from typing import Any
+from typing import Any, Callable
 
 import pandas as pd
 
 from ..experiments.store import ExperimentStore, ModelRegistry, RunStore
 from ..models.catalog import get_model_card
 from ..models.training import ModelSpec, train_model
+from ..research_os import (
+    ModelArtifactInspectionRecord,
+    ModelArtifactManifestEntry,
+    ModelArtifactSource,
+    ModelGovernancePassport,
+    ModelRiskTier,
+    RecertificationTrigger,
+    SafeLoadingPolicy,
+)
 from . import artifact_trust
+from .artifact_inspection import inspect_artifact_in_subprocess
 from .codegen import load_pit_panel, spec_to_code
 from .lib import predict_with
 from .runner import run_code
@@ -43,6 +54,26 @@ _TRUST_ENFORCE_DEFAULT = True
 
 def _now() -> str:
     return datetime.now(UTC).isoformat()
+
+
+def _stable_json_hash(payload: dict[str, Any]) -> str:
+    encoded = json.dumps(payload, ensure_ascii=False, sort_keys=True, default=str).encode("utf-8")
+    return hashlib.sha256(encoded).hexdigest()
+
+
+def _sha256_file(path: Path) -> str:
+    if not path.exists() or not path.is_file():
+        raise FileNotFoundError(f"训练产物不存在，不能登记 ModelPassport: {path}")
+    h = hashlib.sha256()
+    with path.open("rb") as fh:
+        for chunk in iter(lambda: fh.read(1024 * 1024), b""):
+            h.update(chunk)
+    return "sha256:" + h.hexdigest()
+
+
+def _next_model_version(registry: ModelRegistry, model_id: str) -> int:
+    versions = [version.version for version in registry.list_versions(model_id)]
+    return (max(versions) + 1) if versions else 1
 
 
 def _slice_front_dates(panel: pd.DataFrame, ts_col: str, train_fraction: float) -> pd.DataFrame:
@@ -86,6 +117,8 @@ class TrainingRequest:
     # 严格无泄露 OOS：只用**前** train_fraction 比例的交易日训练（与回测 oos_fraction=1-train_fraction
     # 同一切点互补）。None=用全程数据训练（默认，与历史行为一致）。
     train_fraction: float | None = None
+    dataset_id: str | None = None
+    market_data_use_validation_refs: list[str] = field(default_factory=list)
     experiment_name: str | None = None
     # R28 双时态 PIT 点查（堵 look-ahead）：训练只见「截至 as_of_known 已知」的行（重述 as-of），
     # 晚于该知识时点的未来重述/未来行被挡在训练之外。ISO 日期/时间字符串。
@@ -111,6 +144,8 @@ class TrainingService:
         experiment_store: ExperimentStore | None = None,
         run_store: RunStore | None = None,
         model_registry: ModelRegistry | None = None,
+        model_governance_registry: Any | None = None,
+        result_recorder: Callable[[TrainingJob], dict[str, Any]] | None = None,
         max_concurrency: int = 1,
         timeout: float | None = None,
         trust_enforce: bool = _TRUST_ENFORCE_DEFAULT,
@@ -125,6 +160,12 @@ class TrainingService:
         self._exp = experiment_store or ExperimentStore(m12_root)
         self._runs = run_store or RunStore(m12_root)
         self._models = model_registry or ModelRegistry(m12_root)
+        self._model_governance = model_governance_registry or getattr(
+            self._models,
+            "_model_governance_registry",
+            None,
+        )
+        self._result_recorder = result_recorder
         # 有界线程池：真正限流并发（不再为每个提交预先 spawn 一个阻塞线程→内存/线程泄漏）。
         self._pool = ThreadPoolExecutor(
             max_workers=max(1, max_concurrency), thread_name_prefix="train"
@@ -283,18 +324,32 @@ class TrainingService:
                     finished=True,
                 )
                 if result.get("artifact_path") and request is not None:
-                    self._models.register_version(
-                        model_id=request.model,
-                        artifact_path=result.get("artifact_path"),
-                        source_run_id=run_id,
+                    version_record = self._register_model_version(
+                        request=request,
+                        job=job,
+                        job_dir=job_dir,
+                        result=result,
                         metrics=metrics,
-                        note=job.name,
+                        run_id=run_id,
+                        spec_dump=spec_dump,
                     )
+                    job.model_version = version_record.version
+                    job.model_passport_ref = version_record.model_passport_ref
+                    job.validation_dossier_ref = version_record.validation_dossier_ref
                 job.status = "succeeded"
                 job.metrics = metrics
                 job.experiment_id = exp.experiment_id
                 job.run_id = run_id
                 job.artifact_dir = str(job_dir)
+                if self._result_recorder is not None and job.model_version is not None:
+                    graph_refs = self._result_recorder(job)
+                    job.qro_id = str(graph_refs.get("qro_id") or "") or None
+                    job.research_graph_command_id = (
+                        str(graph_refs.get("research_graph_command_id") or "") or None
+                    )
+                    job.compiler_ir_ref = str(graph_refs.get("compiler_ir_ref") or "") or None
+                    job.compiler_pass_ref = str(graph_refs.get("compiler_pass_ref") or "") or None
+                    job.entrypoint_coverage_ref = str(graph_refs.get("entrypoint_coverage_ref") or "") or None
             except Exception as exc:  # noqa: BLE001 — 失败要落 job.error，不冒泡崩线程
                 job.status = "failed"
                 job.error = f"{type(exc).__name__}: {exc}"
@@ -377,6 +432,122 @@ class TrainingService:
             group_col=request.group_col,
         )
         return train_model(spec, panel, artifact_dir=job_dir).to_dict()
+
+    def _register_model_version(
+        self,
+        *,
+        request: TrainingRequest,
+        job: TrainingJob,
+        job_dir: Path,
+        result: dict[str, Any],
+        metrics: dict[str, float],
+        run_id: str,
+        spec_dump: dict[str, Any],
+    ):
+        artifact_path = Path(str(result["artifact_path"]))
+        artifact_hash = _sha256_file(artifact_path)
+        inspection = inspect_artifact_in_subprocess(artifact_path, expected_hash=artifact_hash)
+        (job_dir / "artifact_inspection.json").write_text(
+            json.dumps(inspection, ensure_ascii=False, indent=2, sort_keys=True),
+            encoding="utf-8",
+        )
+        next_version = _next_model_version(self._models, request.model)
+        model_version_ref = f"model_version:{request.model}:v{next_version}"
+        validation_dossier_ref = f"validation_dossier:{job.job_id}"
+        training_run_ref = f"training_run:{run_id}"
+        dataset_ref = request.dataset_id or f"training_panel:{job.job_id}"
+        market_data_use_validation_refs = tuple(
+            str(ref).strip()
+            for ref in request.market_data_use_validation_refs
+            if str(ref).strip()
+        )
+        dossier = {
+            "validation_dossier_ref": validation_dossier_ref,
+            "model_version_ref": model_version_ref,
+            "training_run_ref": training_run_ref,
+            "dataset_refs": [dataset_ref],
+            "market_data_use_validation_refs": list(market_data_use_validation_refs),
+            "feature_refs": list(request.feature_cols),
+            "label_refs": [request.label_col],
+            "cv_scheme": request.cv_scheme,
+            "n_splits": request.n_splits,
+            "metrics": metrics,
+            "artifact_path": str(artifact_path),
+            "artifact_hash": artifact_hash,
+            "artifact_inspection_ref": inspection["inspection_ref"],
+            "artifact_inspection_mode": inspection["inspection_mode"],
+            "result_oos_metrics": result.get("oos_metrics") or {},
+            "fold_count": len(result.get("fold_metrics") or []),
+        }
+        (job_dir / "validation_dossier.json").write_text(
+            json.dumps(dossier, ensure_ascii=False, indent=2, sort_keys=True),
+            encoding="utf-8",
+        )
+        passport_ref: str | None = None
+        if self._model_governance is not None:
+            passport = ModelGovernancePassport(
+                model_version_ref=model_version_ref,
+                model_type_card_ref=f"model_type_card:{request.model}",
+                training_plan_ref=f"training_plan:{job.job_id}",
+                training_run_ref=training_run_ref,
+                model_risk_tier=ModelRiskTier.MEDIUM,
+                materiality=f"{request.asset_class} {request.task} training artifact",
+                intended_use=(f"{request.task} research model review",),
+                prohibited_use=("direct live order placement",),
+                dataset_refs=(dataset_ref,),
+                feature_refs=tuple(request.feature_cols),
+                label_refs=(request.label_col,),
+                training_code_hash="sha256:" + _stable_json_hash(spec_dump),
+                artifact_manifest=(
+                    ModelArtifactManifestEntry(
+                        artifact_ref=f"model_artifact:{job.job_id}",
+                        uri=str(artifact_path),
+                        source=ModelArtifactSource.PROJECT_PRODUCED,
+                        content_hash=artifact_hash,
+                        producer_run_ref=training_run_ref,
+                        sandbox_inspection_ref=inspection["inspection_ref"],
+                    ),
+                ),
+                safe_loading_policy=SafeLoadingPolicy(
+                    sandboxed_load_inspect=True,
+                    prefer_safe_tensors=True,
+                    torch_weights_only=True,
+                    direct_load_allowed=False,
+                    policy_ref="training_produced_local_artifact_hash_inspection_v1",
+                ),
+                vendor_dependency_refs=("none",),
+                foundation_model_dependency_refs=("none",),
+                monitoring_requirements=("performance degradation monitor",),
+                recertification_triggers=tuple(RecertificationTrigger),
+                validation_dossier_ref=validation_dossier_ref,
+                challenger_result="not required for medium risk training artifact",
+            )
+            recorded_passport = self._model_governance.record_passport(passport)
+            passport_ref = recorded_passport.passport_id
+            self._model_governance.record_artifact_inspection(
+                ModelArtifactInspectionRecord(
+                    model_version_ref=model_version_ref,
+                    model_passport_ref=recorded_passport.passport_id,
+                    artifact_ref=f"model_artifact:{job.job_id}",
+                    inspection_ref=inspection["inspection_ref"],
+                    artifact_hash=artifact_hash,
+                    inspection_status="accepted",
+                    inspection_mode=str(inspection.get("inspection_mode") or ""),
+                    inspector_ref=str(inspection.get("inspector_ref") or ""),
+                    checks=tuple(str(value) for value in inspection.get("checks") or ()),
+                    limitations=tuple(str(value) for value in inspection.get("limitations") or ()),
+                    recorded_by="training_service",
+                )
+            )
+        return self._models.register_version(
+            model_id=request.model,
+            artifact_path=str(artifact_path),
+            source_run_id=run_id,
+            metrics=metrics,
+            model_passport_ref=passport_ref,
+            validation_dossier_ref=validation_dossier_ref,
+            note=job.name,
+        )
 
     def _run_code(self, code: str, panel: pd.DataFrame, job_dir: Path) -> dict[str, Any]:
         panel_path = job_dir / "panel.parquet"

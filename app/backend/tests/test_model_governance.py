@@ -1,0 +1,1143 @@
+from __future__ import annotations
+
+import hashlib
+import json
+import pickle
+from types import SimpleNamespace
+
+import pytest
+from fastapi.testclient import TestClient
+
+from app import main as app_main
+from app.approval import ApprovalGateService, ApprovalGateStore, EvidenceSnapshot, GateStateError
+from app.auth import require_user_dependency
+from app.experiments.store import ModelRegistry
+from app.lineage.ledger import Ledger
+from app.research_os import (
+    ModelArtifactFormat,
+    ModelArtifactInspectionRecord,
+    ModelArtifactManifestEntry,
+    ModelArtifactSource,
+    ModelGovernancePassport,
+    ModelMonitoringProfile,
+    ModelRecertificationRecord,
+    ModelRiskTier,
+    PersistentCompilerIRStore,
+    PersistentGoalEntrypointCoverageRegistry,
+    PersistentModelGovernanceRegistry,
+    RecertificationTrigger,
+    ResearchGraphStore,
+    SafeLoadingPolicy,
+    model_passport_from_dict,
+    validate_model_promotion,
+)
+
+
+class _ConstantPredictor:
+    def predict(self, frame):
+        return [float(row["f1"] + row["f2"]) for _, row in frame.iterrows()]
+
+
+def _sha256_file(path) -> str:
+    h = hashlib.sha256()
+    with open(path, "rb") as fh:
+        for chunk in iter(lambda: fh.read(1024 * 1024), b""):
+            h.update(chunk)
+    return "sha256:" + h.hexdigest()
+
+
+def _artifact(**overrides) -> ModelArtifactManifestEntry:
+    data = {
+        "artifact_ref": "artifact:model:v1",
+        "uri": "registry://models/momentum/v1/model.safetensors",
+        "artifact_format": ModelArtifactFormat.SAFE_TENSORS,
+        "source": ModelArtifactSource.PROJECT_PRODUCED,
+        "content_hash": "sha256:abc123",
+        "producer_run_ref": "training_run:001",
+        "sandbox_inspection_ref": "inspect:model:v1",
+    }
+    data.update(overrides)
+    return ModelArtifactManifestEntry(**data)
+
+
+def _passport(**overrides) -> ModelGovernancePassport:
+    data = {
+        "model_version_ref": "model_version:momentum:v1",
+        "model_type_card_ref": "model_type_card:gbdt",
+        "training_plan_ref": "training_plan:momentum",
+        "training_run_ref": "training_run:001",
+        "model_risk_tier": ModelRiskTier.MEDIUM,
+        "materiality": "paper-trading research signal",
+        "intended_use": ("forecast next-period relative return",),
+        "prohibited_use": ("direct live order placement",),
+        "dataset_refs": ("dataset_version:btc_daily:v1",),
+        "feature_refs": ("feature:momentum_20d",),
+        "label_refs": ("label:forward_return_1d",),
+        "training_code_hash": "codehash:train:001",
+        "artifact_manifest": (_artifact(),),
+        "safe_loading_policy": SafeLoadingPolicy(
+            sandboxed_load_inspect=True,
+            prefer_safe_tensors=True,
+            torch_weights_only=True,
+        ),
+        "vendor_dependency_refs": ("none",),
+        "foundation_model_dependency_refs": ("none",),
+        "monitoring_requirements": ("performance degradation monitor",),
+        "recertification_triggers": tuple(RecertificationTrigger),
+        "validation_dossier_ref": "validation_dossier:momentum:v1",
+        "challenger_result": "challenger did not outperform champion",
+    }
+    data.update(overrides)
+    return ModelGovernancePassport(**data)
+
+
+def _codes(decision) -> set[str]:
+    return {violation.code for violation in decision.violations}
+
+
+def _promotion_evidence(**overrides) -> dict:
+    data = EvidenceSnapshot(
+        config_hash="cfg_v1_model_governance",
+        dataset_version="dataset_version:btc_daily:v1",
+        n_eff=5,
+        n_trials_raw=5,
+        dsr=0.92,
+        pbo=0.10,
+        bootstrap_ci=(0.4, 1.8),
+        bootstrap_estimate=1.0,
+        champion_challenger={"verdict": "challenger_wins", "delta_sharpe": 0.3},
+        returns_sha256="sha256:returns",
+    ).to_dict()
+    data.update(overrides)
+    return data
+
+
+def _approval_service(tmp_path):
+    return ApprovalGateService(
+        ApprovalGateStore(tmp_path / "approval_gates"),
+        ledger=Ledger(tmp_path / "ledger"),
+    )
+
+
+def _payload(passport: ModelGovernancePassport) -> dict:
+    data = passport.__dict__.copy()
+    data["artifact_manifest"] = [artifact.__dict__.copy() for artifact in passport.artifact_manifest]
+    data["safe_loading_policy"] = passport.safe_loading_policy.__dict__.copy()
+    return data
+
+
+def _inspection(passport: ModelGovernancePassport, **overrides) -> ModelArtifactInspectionRecord:
+    artifact = passport.artifact_manifest[0]
+    data = {
+        "model_version_ref": passport.model_version_ref,
+        "model_passport_ref": passport.passport_id,
+        "artifact_ref": artifact.artifact_ref,
+        "inspection_ref": artifact.sandbox_inspection_ref,
+        "artifact_hash": artifact.content_hash,
+        "inspection_status": "accepted",
+        "inspection_mode": "metadata_only",
+        "inspector_ref": "test-inspector:v1",
+        "checks": ("sha256_match",),
+        "recorded_by": "test",
+    }
+    data.update(overrides)
+    return ModelArtifactInspectionRecord(**data)
+
+
+@pytest.fixture(autouse=True)
+def _clear_dependency_overrides():
+    yield
+    app_main.app.dependency_overrides.pop(require_user_dependency, None)
+
+
+def _client_with_model_governance_registry(tmp_path, monkeypatch):
+    registry = PersistentModelGovernanceRegistry(tmp_path / "model_governance.jsonl")
+    graph = ResearchGraphStore()
+    compiler_store = PersistentCompilerIRStore(tmp_path / "compiler_ir.jsonl")
+    coverage_store = PersistentGoalEntrypointCoverageRegistry(tmp_path / "goal_entrypoint_coverage.jsonl")
+    monkeypatch.setattr(app_main, "MODEL_GOVERNANCE_REGISTRY", registry)
+    monkeypatch.setattr(app_main, "RESEARCH_GRAPH_STORE", graph)
+    monkeypatch.setattr(app_main, "COMPILER_IR_STORE", compiler_store)
+    monkeypatch.setattr(app_main, "GOAL_ENTRYPOINT_COVERAGE_REGISTRY", coverage_store)
+    app_main.app.dependency_overrides[require_user_dependency] = lambda: SimpleNamespace(
+        username="u1",
+        user_id="u1",
+    )
+    return TestClient(app_main.app), registry
+
+
+def _client_with_model_registry(tmp_path, monkeypatch):
+    registry = PersistentModelGovernanceRegistry(tmp_path / "model_governance.jsonl")
+    graph = ResearchGraphStore()
+    compiler_store = PersistentCompilerIRStore(tmp_path / "compiler_ir.jsonl")
+    coverage_store = PersistentGoalEntrypointCoverageRegistry(tmp_path / "goal_entrypoint_coverage.jsonl")
+    model_registry = ModelRegistry(
+        tmp_path / "experiments",
+        gate_service=_approval_service(tmp_path),
+        model_governance_registry=registry,
+    )
+    monkeypatch.setattr(app_main, "MODEL_GOVERNANCE_REGISTRY", registry)
+    monkeypatch.setattr(app_main, "RESEARCH_GRAPH_STORE", graph)
+    monkeypatch.setattr(app_main, "COMPILER_IR_STORE", compiler_store)
+    monkeypatch.setattr(app_main, "GOAL_ENTRYPOINT_COVERAGE_REGISTRY", coverage_store)
+    monkeypatch.setattr(app_main, "MODEL_REGISTRY", model_registry)
+    app_main.app.dependency_overrides[require_user_dependency] = lambda: SimpleNamespace(
+        username="u1",
+        user_id="u1",
+    )
+    return TestClient(app_main.app), registry, model_registry
+
+
+def _compiler_record_counts() -> tuple[int, int, int, int]:
+    return (
+        len(app_main.RESEARCH_GRAPH_STORE.commands()),
+        len(app_main.COMPILER_IR_STORE.irs()),
+        len(app_main.COMPILER_IR_STORE.passes()),
+        len(app_main.GOAL_ENTRYPOINT_COVERAGE_REGISTRY.records()),
+    )
+
+
+def _assert_model_governance_compiler_coverage(
+    body: dict,
+    *,
+    qro_type: str,
+    entrypoint_ref: str,
+    permission_ref: str,
+    forbidden_fragments: tuple[str, ...] = (),
+):
+    assert body["qro_id"]
+    assert body["research_graph_command_id"]
+    assert body["compiler_ir_ref"]
+    assert body["compiler_pass_ref"]
+    assert body["entrypoint_coverage_ref"]
+    qro = app_main.RESEARCH_GRAPH_STORE.qro(body["qro_id"])
+    ir = app_main.COMPILER_IR_STORE.ir(body["compiler_ir_ref"])
+    compiler_pass = app_main.COMPILER_IR_STORE.compiler_pass(body["compiler_pass_ref"])
+    coverage = app_main.GOAL_ENTRYPOINT_COVERAGE_REGISTRY.coverage(body["entrypoint_coverage_ref"])
+    assert getattr(qro.qro_type, "value", qro.qro_type) == qro_type
+    assert ir.source_qro_refs == (body["qro_id"],)
+    assert ir.graph_command_refs == (body["research_graph_command_id"],)
+    assert ir.permission_ref == permission_ref
+    assert compiler_pass.input_qro_refs == (body["qro_id"],)
+    assert compiler_pass.entry_source == "api"
+    assert compiler_pass.actor_source == "user_manual"
+    assert compiler_pass.permission_ref == permission_ref
+    assert coverage.entry_source == "api"
+    assert coverage.entrypoint_ref == entrypoint_ref
+    assert coverage.qro_refs == (body["qro_id"],)
+    assert coverage.research_graph_command_refs == (body["research_graph_command_id"],)
+    assert coverage.compiler_ir_refs == (body["compiler_ir_ref"],)
+    assert coverage.compiler_pass_refs == (body["compiler_pass_ref"],)
+    assert compiler_pass.direct_graph_mutation is False
+    assert compiler_pass.bypassed_permission is False
+    assert compiler_pass.raw_llm_output_embedded_as_ir is False
+    assert coverage.silent_mock_fallback_used is False
+    assert coverage.raw_payload_persisted is False
+    compiled_text = f"{qro.__dict__} {ir.__dict__} {compiler_pass.__dict__} {coverage.__dict__}"
+    for fragment in forbidden_fragments:
+        assert fragment not in compiled_text
+    return qro, ir, compiler_pass, coverage
+
+
+def _write_pickled_predictor(tmp_path):
+    artifact_dir = tmp_path / "artifact"
+    artifact_dir.mkdir()
+    artifact_path = artifact_dir / "model.pkl"
+    with artifact_path.open("wb") as fh:
+        pickle.dump(_ConstantPredictor(), fh)
+    artifact_hash = _sha256_file(artifact_path)
+    inspection_ref = "inspect:model:v1"
+    dossier = {
+        "validation_dossier_ref": "validation_dossier:momentum:v1",
+        "model_version_ref": "model_version:momentum:v1",
+        "artifact_path": str(artifact_path),
+        "artifact_hash": artifact_hash,
+        "artifact_inspection_ref": inspection_ref,
+    }
+    inspection = {
+        "accepted": True,
+        "artifact_path": str(artifact_path.resolve()),
+        "artifact_hash": artifact_hash,
+        "artifact_format": "pickle",
+        "inspection_ref": inspection_ref,
+        "inspection_mode": "metadata_only_no_deserialize",
+        "inspector_ref": "test-inspector:v1",
+        "process_isolation": "subprocess",
+        "deserialize_executed": False,
+        "checks": ["regular_file", "sha256_match", "serialized_deserialize_skipped"],
+        "limitations": ["test fixture"],
+    }
+    (artifact_dir / "validation_dossier.json").write_text(json.dumps(dossier), encoding="utf-8")
+    (artifact_dir / "artifact_inspection.json").write_text(json.dumps(inspection), encoding="utf-8")
+    return artifact_path, artifact_hash, inspection_ref
+
+
+def test_model_promotion_accepts_complete_passport():
+    decision = validate_model_promotion(_passport())
+    assert decision.accepted
+    assert decision.violations == ()
+
+
+def test_model_promotion_rejects_missing_validation_dossier():
+    decision = validate_model_promotion(_passport(validation_dossier_ref=None))
+    assert not decision.accepted
+    assert "missing_validation_dossier_ref" in _codes(decision)
+
+
+def test_external_pickle_direct_load_is_rejected():
+    artifact = _artifact(
+        uri="s3://vendor/model.pkl",
+        artifact_format=ModelArtifactFormat.PICKLE,
+        source=ModelArtifactSource.EXTERNAL,
+        direct_load=True,
+    )
+    decision = validate_model_promotion(_passport(artifact_manifest=(artifact,)))
+    assert not decision.accepted
+    assert _codes(decision) >= {
+        "external_serialized_artifact_blocked",
+        "external_pickle_direct_load",
+        "unsafe_serialized_direct_load",
+    }
+
+
+def test_high_risk_model_requires_challenger_result():
+    decision = validate_model_promotion(
+        _passport(model_risk_tier=ModelRiskTier.HIGH, challenger_result=None)
+    )
+    assert not decision.accepted
+    assert "missing_challenger_result" in _codes(decision)
+
+
+def test_material_model_change_requires_recertification_record():
+    decision = validate_model_promotion(
+        _passport(recertification_records=()),
+        change_events=(RecertificationTrigger.MATERIAL_MODEL_CHANGE,),
+    )
+    assert not decision.accepted
+    assert "material_model_change_without_recertification" in _codes(decision)
+
+
+def test_torch_artifact_requires_weights_only_policy():
+    artifact = _artifact(uri="registry://models/momentum/v1/model.pt", artifact_format=ModelArtifactFormat.TORCH)
+    passport = _passport(
+        artifact_manifest=(artifact,),
+        safe_loading_policy=SafeLoadingPolicy(
+            sandboxed_load_inspect=True,
+            prefer_safe_tensors=True,
+            torch_weights_only=False,
+        ),
+    )
+    decision = validate_model_promotion(passport)
+    assert not decision.accepted
+    assert "torch_weights_only_required" in _codes(decision)
+
+
+def test_artifact_requires_sandbox_inspection_ref_when_policy_requires_inspection():
+    artifact = _artifact(sandbox_inspection_ref=None)
+    decision = validate_model_promotion(_passport(artifact_manifest=(artifact,)))
+    assert not decision.accepted
+    assert "missing_sandbox_inspection_ref" in _codes(decision)
+
+
+def test_project_produced_pickle_can_be_governed_with_hash_producer_and_sandbox():
+    artifact = _artifact(
+        uri="registry://models/momentum/v1/model.pkl",
+        artifact_format=ModelArtifactFormat.PICKLE,
+        source=ModelArtifactSource.PROJECT_PRODUCED,
+        direct_load=False,
+    )
+    decision = validate_model_promotion(_passport(artifact_manifest=(artifact,)))
+    assert decision.accepted
+
+
+def test_model_passport_from_dict_round_trips_nested_payload():
+    passport = model_passport_from_dict(_payload(_passport()))
+    assert passport.model_version_ref == "model_version:momentum:v1"
+    assert passport.artifact_manifest[0].artifact_ref == "artifact:model:v1"
+    assert passport.safe_loading_policy.sandboxed_load_inspect is True
+
+
+def test_persistent_model_governance_registry_replays_passport(tmp_path):
+    path = tmp_path / "model_governance.jsonl"
+    passport = _passport()
+    registry = PersistentModelGovernanceRegistry(path)
+
+    recorded = registry.record_passport(passport)
+    reloaded = PersistentModelGovernanceRegistry(path)
+
+    assert reloaded.passport(recorded.passport_id).model_version_ref == passport.model_version_ref
+    assert [a.artifact_ref for a in reloaded.passport(recorded.passport_id).artifact_manifest] == [
+        "artifact:model:v1"
+    ]
+
+
+def test_persistent_model_governance_registry_rejects_invalid_passport_without_write(tmp_path):
+    path = tmp_path / "model_governance.jsonl"
+    registry = PersistentModelGovernanceRegistry(path)
+
+    with pytest.raises(ValueError, match="missing_validation_dossier_ref"):
+        registry.record_passport(_passport(validation_dossier_ref=None))
+
+    assert not path.exists()
+
+
+def test_persistent_model_governance_registry_replays_monitoring_and_recertification(tmp_path):
+    path = tmp_path / "model_governance.jsonl"
+    registry = PersistentModelGovernanceRegistry(path)
+    passport = registry.record_passport(_passport())
+
+    profile = registry.record_monitoring_profile(
+        ModelMonitoringProfile(
+            model_version_ref=passport.model_version_ref,
+            model_passport_ref=passport.passport_id,
+            metric_refs=("metric:rolling_dsr",),
+            schedule_ref="schedule:weekly",
+            alert_policy_ref="alert:model_degradation",
+            drift_signal_refs=("drift:feature_distribution",),
+            performance_threshold_refs=("threshold:dsr_floor",),
+            recertification_trigger_refs=(RecertificationTrigger.PERFORMANCE_DEGRADATION,),
+        )
+    )
+    recertification = registry.record_recertification_record(
+        ModelRecertificationRecord(
+            model_version_ref=passport.model_version_ref,
+            model_passport_ref=passport.passport_id,
+            trigger=RecertificationTrigger.PERFORMANCE_DEGRADATION,
+            change_event_ref="change_event:perf_drop:001",
+            evidence_refs=("validation_dossier:momentum:v2",),
+            decision="accepted",
+            recorded_by="reviewer",
+        )
+    )
+
+    reloaded = PersistentModelGovernanceRegistry(path)
+
+    assert reloaded.monitoring_profile(profile.monitoring_profile_id).schedule_ref == "schedule:weekly"
+    assert (
+        reloaded.recertification_record(recertification.recertification_record_id).change_event_ref
+        == "change_event:perf_drop:001"
+    )
+    assert len(reloaded.monitoring_profiles()) == 1
+    assert len(reloaded.recertification_records()) == 1
+
+
+def test_persistent_model_governance_registry_replays_artifact_inspection(tmp_path):
+    path = tmp_path / "model_governance.jsonl"
+    registry = PersistentModelGovernanceRegistry(path)
+    passport = registry.record_passport(_passport())
+
+    record = registry.record_artifact_inspection(_inspection(passport))
+    reloaded = PersistentModelGovernanceRegistry(path)
+
+    replayed = reloaded.artifact_inspection(record.artifact_inspection_record_id)
+    assert replayed.inspection_ref == "inspect:model:v1"
+    assert replayed.artifact_hash == "sha256:abc123"
+    assert len(reloaded.artifact_inspections()) == 1
+
+
+def test_model_governance_registry_rejects_artifact_inspection_hash_mismatch(tmp_path):
+    path = tmp_path / "model_governance.jsonl"
+    registry = PersistentModelGovernanceRegistry(path)
+    passport = registry.record_passport(_passport())
+
+    with pytest.raises(ValueError, match="artifact inspection hash does not match"):
+        registry.record_artifact_inspection(_inspection(passport, artifact_hash="sha256:bad"))
+
+    assert registry.artifact_inspections() == []
+
+
+def test_model_governance_registry_rejects_accepted_external_pickle_inspection(tmp_path):
+    path = tmp_path / "model_governance.jsonl"
+    registry = PersistentModelGovernanceRegistry(path)
+    artifact = _artifact(
+        artifact_format=ModelArtifactFormat.PICKLE,
+        source=ModelArtifactSource.EXTERNAL,
+        direct_load=False,
+    )
+    unsafe_passport = _passport(artifact_manifest=(artifact,))
+
+    with pytest.raises(ValueError, match="external_serialized_artifact_blocked"):
+        registry.record_passport(unsafe_passport)
+
+    assert not path.exists()
+
+
+def test_model_governance_api_records_passport_summary(tmp_path, monkeypatch):
+    client, _registry = _client_with_model_governance_registry(tmp_path, monkeypatch)
+
+    response = client.post("/api/research-os/model_governance/passports", json=_payload(_passport()))
+    assert response.status_code == 200
+    assert response.json()["model_version_ref"] == "model_version:momentum:v1"
+    assert response.json()["recorded_by"] == "u1"
+
+    summary = client.get("/api/research-os/model_governance/summary")
+    assert summary.status_code == 200
+    body = summary.json()
+    assert body["passport_total"] == 1
+    assert body["passports"][0]["artifact_refs"] == ["artifact:model:v1"]
+    assert body["passports"][0]["validation_dossier_ref"] == "validation_dossier:momentum:v1"
+
+
+def test_model_governance_api_records_monitoring_profile_and_recertification(tmp_path, monkeypatch):
+    client, registry = _client_with_model_governance_registry(tmp_path, monkeypatch)
+    passport = registry.record_passport(_passport())
+
+    profile = client.post(
+        "/api/research-os/model_governance/monitoring_profiles",
+        json={
+            "model_version_ref": passport.model_version_ref,
+            "model_passport_ref": passport.passport_id,
+            "metric_refs": ["metric:rolling_dsr"],
+            "schedule_ref": "schedule:weekly",
+            "alert_policy_ref": "alert:model_degradation",
+            "drift_signal_refs": ["drift:feature_distribution"],
+            "performance_threshold_refs": ["threshold:dsr_floor"],
+            "recertification_trigger_refs": [RecertificationTrigger.PERFORMANCE_DEGRADATION.value],
+        },
+    )
+    assert profile.status_code == 200, profile.text
+    profile_body = profile.json()
+    assert profile_body["model_passport_ref"] == passport.passport_id
+    monitoring_qro, monitoring_ir, _, _ = _assert_model_governance_compiler_coverage(
+        profile_body,
+        qro_type="Model",
+        entrypoint_ref="api:research_os.model_governance.monitoring_profiles",
+        permission_ref="model_governance.monitoring_profile:user_manual",
+    )
+    assert monitoring_qro.input_contract["metric_ref_count"] == 1
+    assert monitoring_qro.output_contract["monitoring_profile_id"] == profile_body["monitoring_profile_id"]
+    assert passport.passport_id in monitoring_ir.validation_refs
+
+    recertification = client.post(
+        "/api/research-os/model_governance/recertification_records",
+        json={
+            "model_version_ref": passport.model_version_ref,
+            "model_passport_ref": passport.passport_id,
+            "trigger": RecertificationTrigger.PERFORMANCE_DEGRADATION.value,
+            "change_event_ref": "change_event:perf_drop:001",
+            "evidence_refs": ["validation_dossier:momentum:v2"],
+            "decision": "accepted",
+        },
+    )
+    assert recertification.status_code == 200, recertification.text
+    recertification_body = recertification.json()
+    assert recertification_body["recorded_by"] == "u1"
+    recertification_qro, recertification_ir, _, _ = _assert_model_governance_compiler_coverage(
+        recertification_body,
+        qro_type="ValidationDossier",
+        entrypoint_ref="api:research_os.model_governance.recertification_records",
+        permission_ref="model_governance.recertification:user_manual",
+    )
+    assert recertification_qro.input_contract["evidence_ref_count"] == 1
+    assert recertification_qro.output_contract["decision"] == "accepted"
+    assert passport.passport_id in recertification_ir.validation_refs
+
+    summary = client.get("/api/research-os/model_governance/summary")
+    assert summary.status_code == 200
+    body = summary.json()
+    assert body["monitoring_profile_total"] == 1
+    assert body["recertification_record_total"] == 1
+    assert body["monitoring_profiles"][0]["metric_refs"] == ["metric:rolling_dsr"]
+    assert body["recertification_records"][0]["evidence_refs"] == ["validation_dossier:momentum:v2"]
+
+
+def test_model_governance_api_records_artifact_inspection(tmp_path, monkeypatch):
+    client, registry = _client_with_model_governance_registry(tmp_path, monkeypatch)
+    passport = registry.record_passport(_passport())
+
+    response = client.post(
+        "/api/research-os/model_governance/artifact_inspections",
+        json={
+            "model_version_ref": passport.model_version_ref,
+            "model_passport_ref": passport.passport_id,
+            "artifact_ref": "artifact:model:v1",
+            "inspection_ref": "inspect:model:v1",
+            "artifact_hash": "sha256:abc123",
+            "inspection_status": "accepted",
+            "inspection_mode": "metadata_only",
+            "inspector_ref": "test-inspector:v1",
+            "checks": ["sha256_match"],
+            "limitations": ["raw loader stack trace must stay out of compiler"],
+        },
+    )
+    assert response.status_code == 200, response.text
+    response_body = response.json()
+    assert response_body["inspection_ref"] == "inspect:model:v1"
+    qro, ir, _, _ = _assert_model_governance_compiler_coverage(
+        response_body,
+        qro_type="ValidationDossier",
+        entrypoint_ref="api:research_os.model_governance.artifact_inspections",
+        permission_ref="model_governance.artifact_inspection:user_manual",
+        forbidden_fragments=("raw loader stack trace",),
+    )
+    assert qro.output_contract["checks_count"] == 1
+    assert qro.output_contract["limitations_count"] == 1
+    assert passport.passport_id in ir.validation_refs
+
+    summary = client.get("/api/research-os/model_governance/summary")
+    assert summary.status_code == 200
+    body = summary.json()
+    assert body["artifact_inspection_total"] == 1
+    assert body["artifact_inspections"][0]["artifact_ref"] == "artifact:model:v1"
+
+
+def test_model_governance_api_rejects_recertification_without_declared_trigger(tmp_path, monkeypatch):
+    client, registry = _client_with_model_governance_registry(tmp_path, monkeypatch)
+    passport = registry.record_passport(
+        _passport(recertification_triggers=(RecertificationTrigger.MATERIAL_MODEL_CHANGE,))
+    )
+
+    response = client.post(
+        "/api/research-os/model_governance/recertification_records",
+        json={
+            "model_version_ref": passport.model_version_ref,
+            "model_passport_ref": passport.passport_id,
+            "trigger": RecertificationTrigger.PERFORMANCE_DEGRADATION.value,
+            "change_event_ref": "change_event:perf_drop:001",
+            "evidence_refs": ["validation_dossier:momentum:v2"],
+            "decision": "accepted",
+        },
+    )
+
+    assert response.status_code == 422
+    assert "recertification trigger not declared" in response.text
+    assert registry.recertification_records() == []
+    assert _compiler_record_counts() == (0, 0, 0, 0)
+
+
+def test_model_governance_api_rejects_material_change_without_recertification(tmp_path, monkeypatch):
+    client, registry = _client_with_model_governance_registry(tmp_path, monkeypatch)
+    payload = {
+        "passport": _payload(_passport(recertification_records=())),
+        "change_events": [RecertificationTrigger.MATERIAL_MODEL_CHANGE.value],
+    }
+
+    response = client.post("/api/research-os/model_governance/passports", json=payload)
+
+    assert response.status_code == 422
+    assert "material_model_change_without_recertification" in response.text
+    assert registry.passports() == []
+    assert not registry.path.exists()
+
+
+def test_model_predict_api_requires_stage_monitoring_and_records_invocation(tmp_path, monkeypatch):
+    client, registry, model_registry = _client_with_model_registry(tmp_path, monkeypatch)
+    artifact_path, artifact_hash, inspection_ref = _write_pickled_predictor(tmp_path)
+    artifact = _artifact(
+        uri=str(artifact_path),
+        artifact_format=ModelArtifactFormat.PICKLE,
+        content_hash=artifact_hash,
+        sandbox_inspection_ref=inspection_ref,
+        direct_load=False,
+    )
+    passport = registry.record_passport(
+        _passport(
+            artifact_manifest=(artifact,),
+            feature_refs=("f1", "f2"),
+            validation_dossier_ref="validation_dossier:momentum:v1",
+        )
+    )
+    registry.record_artifact_inspection(
+        _inspection(
+            passport,
+            artifact_hash=artifact_hash,
+            inspection_ref=inspection_ref,
+            inspection_mode="metadata_only_no_deserialize",
+            checks=("sha256_match", "serialized_deserialize_skipped"),
+        )
+    )
+    profile = registry.record_monitoring_profile(
+        ModelMonitoringProfile(
+            model_version_ref=passport.model_version_ref,
+            model_passport_ref=passport.passport_id,
+            metric_refs=("metric:prediction_error",),
+            schedule_ref="schedule:per_batch",
+            alert_policy_ref="alert:prediction_drift",
+        )
+    )
+    version = model_registry.register_version(
+        "momentum",
+        artifact_path=str(artifact_path),
+        model_passport_ref=passport.passport_id,
+        validation_dossier_ref="validation_dossier:momentum:v1",
+    )
+    model_registry._apply_stage_unchecked("momentum", version.version, "staging")
+
+    response = client.post(
+        f"/api/models/momentum/versions/{version.version}/predict",
+        json={
+            "feature_cols": ["f1", "f2"],
+            "rows": [{"f1": 1.5, "f2": 2.0}],
+            "signal_contract": {
+                "name": "Momentum prediction signal",
+                "source_lib": "ml",
+                "output_kind": "signed_prediction",
+                "horizon": 5,
+                "leakage": {"oof": True, "purge": True, "embargo": True},
+                "train_test_lock_ref": "split_lock:momentum:v1",
+                "honest_n_ref": "honest_n:momentum:v1",
+                "forecast_time_ref": "time:asof",
+                "prediction_horizon_ref": "horizon:5d",
+                "unit_ref": "unit:expected_return",
+                "direction_semantics_ref": "direction:signed_score",
+                "confidence_ref": "confidence:model_score",
+                "expires_at_ref": "expiry:next_rebalance",
+            },
+        },
+    )
+    assert response.status_code == 200, response.text
+    body = response.json()
+    assert body["predictions"] == [3.5]
+    assert body["monitoring_profile_ref"] == profile.monitoring_profile_id
+    assert body["artifact_inspection_ref"] == inspection_ref
+    assert body["signal_ref"].startswith("sig::")
+    qro, ir, _, _ = _assert_model_governance_compiler_coverage(
+        body,
+        qro_type="Forecast",
+        entrypoint_ref="api:models.predict",
+        permission_ref="model_governance.serving_invocation:user_manual",
+        forbidden_fragments=("'f1': 1.5", "'f2': 2.0", "'predictions': [3.5]", str(artifact_path)),
+    )
+    assert qro.input_contract["row_count"] == 1
+    assert qro.output_contract["prediction_hash"] == body["prediction_hash"]
+    assert passport.passport_id in ir.validation_refs
+    contracts = client.get("/api/factors/signal_contracts").json()
+    assert any(item["signal_ref"] == body["signal_ref"] for item in contracts)
+
+    summary = client.get("/api/research-os/model_governance/summary").json()
+    assert summary["serving_invocation_total"] == 1
+    invocation = summary["serving_invocations"][0]
+    assert invocation["row_count"] == 1
+    assert invocation["feature_refs"] == ["f1", "f2"]
+    assert invocation["prediction_hash"]
+    assert "1.5" not in str(invocation)
+    assert "3.5" not in str(invocation)
+
+
+def test_model_predict_api_rejects_incomplete_signal_protocol(tmp_path, monkeypatch):
+    client, registry, model_registry = _client_with_model_registry(tmp_path, monkeypatch)
+    artifact_path, artifact_hash, inspection_ref = _write_pickled_predictor(tmp_path)
+    artifact = _artifact(
+        uri=str(artifact_path),
+        artifact_format=ModelArtifactFormat.PICKLE,
+        content_hash=artifact_hash,
+        sandbox_inspection_ref=inspection_ref,
+        direct_load=False,
+    )
+    passport = registry.record_passport(
+        _passport(
+            artifact_manifest=(artifact,),
+            feature_refs=("f1", "f2"),
+            validation_dossier_ref="validation_dossier:momentum:v1",
+        )
+    )
+    registry.record_artifact_inspection(
+        _inspection(
+            passport,
+            artifact_hash=artifact_hash,
+            inspection_ref=inspection_ref,
+            inspection_mode="metadata_only_no_deserialize",
+        )
+    )
+    registry.record_monitoring_profile(
+        ModelMonitoringProfile(
+            model_version_ref=passport.model_version_ref,
+            model_passport_ref=passport.passport_id,
+            metric_refs=("metric:prediction_error",),
+            schedule_ref="schedule:per_batch",
+            alert_policy_ref="alert:prediction_drift",
+        )
+    )
+    version = model_registry.register_version(
+        "momentum",
+        artifact_path=str(artifact_path),
+        model_passport_ref=passport.passport_id,
+        validation_dossier_ref="validation_dossier:momentum:v1",
+    )
+    model_registry._apply_stage_unchecked("momentum", version.version, "staging")
+
+    response = client.post(
+        f"/api/models/momentum/versions/{version.version}/predict",
+        json={
+            "feature_cols": ["f1", "f2"],
+            "rows": [{"f1": 1.5, "f2": 2.0}],
+            "signal_contract": {
+                "output_kind": "signed_prediction",
+                "horizon": 5,
+                "leakage": {"oof": True, "purge": True, "embargo": True},
+                "train_test_lock_ref": "split_lock:momentum:v1",
+                "honest_n_ref": "honest_n:momentum:v1",
+                "forecast_time_ref": "time:asof",
+                "prediction_horizon_ref": "horizon:5d",
+                "unit_ref": "unit:expected_return",
+                "direction_semantics_ref": "direction:signed_score",
+                "confidence_ref": "confidence:model_score",
+            },
+        },
+    )
+    assert response.status_code == 422
+    assert "signal_protocol_incomplete" in response.text
+    assert registry.serving_invocations() == []
+    assert _compiler_record_counts() == (0, 0, 0, 0)
+
+
+def test_model_predict_api_rejects_dev_stage_without_serving_invocation(tmp_path, monkeypatch):
+    client, registry, model_registry = _client_with_model_registry(tmp_path, monkeypatch)
+    artifact_path, artifact_hash, inspection_ref = _write_pickled_predictor(tmp_path)
+    artifact = _artifact(
+        uri=str(artifact_path),
+        artifact_format=ModelArtifactFormat.PICKLE,
+        content_hash=artifact_hash,
+        sandbox_inspection_ref=inspection_ref,
+        direct_load=False,
+    )
+    passport = registry.record_passport(
+        _passport(artifact_manifest=(artifact,), feature_refs=("f1", "f2"))
+    )
+    registry.record_artifact_inspection(
+        _inspection(
+            passport,
+            artifact_hash=artifact_hash,
+            inspection_ref=inspection_ref,
+            inspection_mode="metadata_only_no_deserialize",
+        )
+    )
+    model_registry.register_version(
+        "momentum",
+        artifact_path=str(artifact_path),
+        model_passport_ref=passport.passport_id,
+        validation_dossier_ref=passport.validation_dossier_ref,
+    )
+
+    response = client.post(
+        "/api/models/momentum/versions/1/predict",
+        json={"feature_cols": ["f1", "f2"], "rows": [{"f1": 1.5, "f2": 2.0}]},
+    )
+    assert response.status_code == 422
+    assert "staging or production stage" in response.text
+    assert registry.serving_invocations() == []
+    assert _compiler_record_counts() == (0, 0, 0, 0)
+
+
+def test_model_registry_promotion_requires_recorded_model_passport_ref(tmp_path):
+    registry = PersistentModelGovernanceRegistry(tmp_path / "model_governance.jsonl")
+    model_registry = ModelRegistry(
+        tmp_path / "experiments",
+        gate_service=_approval_service(tmp_path),
+        model_governance_registry=registry,
+    )
+    model_registry.register_version("momentum", artifact_path="a.safetensors")
+
+    with pytest.raises(GateStateError, match="model_passport_ref"):
+        model_registry.promote(
+            "momentum",
+            1,
+            "staging",
+            created_by="alice",
+            verification_record_id="verdict:001",
+            evidence=_promotion_evidence(),
+            strategy_goal_ref="theme",
+        )
+
+
+def test_model_registry_promotion_rejects_unrecorded_model_passport_ref(tmp_path):
+    model_registry = ModelRegistry(
+        tmp_path / "experiments",
+        gate_service=_approval_service(tmp_path),
+        model_governance_registry=PersistentModelGovernanceRegistry(tmp_path / "model_governance.jsonl"),
+    )
+    model_registry.register_version("momentum", artifact_path="a.safetensors")
+
+    with pytest.raises(GateStateError, match="未登记"):
+        model_registry.promote(
+            "momentum",
+            1,
+            "staging",
+            created_by="alice",
+            verification_record_id="verdict:001",
+            evidence=_promotion_evidence(),
+            strategy_goal_ref="theme",
+            model_passport_ref="model_passport:missing",
+        )
+
+
+def test_model_registry_promotion_rejects_mismatched_model_passport_ref(tmp_path):
+    registry = PersistentModelGovernanceRegistry(tmp_path / "model_governance.jsonl")
+    passport = registry.record_passport(_passport(model_version_ref="model_version:other:v1"))
+    model_registry = ModelRegistry(
+        tmp_path / "experiments",
+        gate_service=_approval_service(tmp_path),
+        model_governance_registry=registry,
+    )
+    model_registry.register_version("momentum", artifact_path="a.safetensors")
+
+    with pytest.raises(GateStateError, match="不匹配"):
+        model_registry.promote(
+            "momentum",
+            1,
+            "staging",
+            created_by="alice",
+            verification_record_id="verdict:001",
+            evidence=_promotion_evidence(),
+            strategy_goal_ref="theme",
+            model_passport_ref=passport.passport_id,
+        )
+
+
+def test_model_registry_promotion_records_passport_and_dossier_refs_in_gate_evidence(tmp_path):
+    registry = PersistentModelGovernanceRegistry(tmp_path / "model_governance.jsonl")
+    passport = registry.record_passport(_passport(model_version_ref="model_version:momentum:v1"))
+    model_registry = ModelRegistry(
+        tmp_path / "experiments",
+        gate_service=_approval_service(tmp_path),
+        model_governance_registry=registry,
+    )
+    model_registry.register_version("momentum", artifact_path="a.safetensors")
+
+    gate = model_registry.promote(
+        "momentum",
+        1,
+        "staging",
+        created_by="alice",
+        verification_record_id="verdict:001",
+        evidence=_promotion_evidence(),
+        strategy_goal_ref="theme",
+        model_passport_ref=passport.passport_id,
+    )
+
+    assert gate.decision == "pending"
+    assert gate.evidence["model_passport_ref"] == passport.passport_id
+    assert gate.evidence["validation_dossier_ref"] == "validation_dossier:momentum:v1"
+
+
+def test_model_promote_api_requires_and_accepts_model_passport_ref(tmp_path, monkeypatch):
+    client, registry, model_registry = _client_with_model_registry(tmp_path, monkeypatch)
+    model_registry.register_version("momentum", artifact_path="a.safetensors")
+
+    missing = client.post(
+        "/api/models/momentum/promote",
+        json={
+            "version": 1,
+            "stage": "staging",
+            "verification_record_id": "verdict:001",
+            "evidence": _promotion_evidence(),
+            "strategy_goal_ref": "theme",
+        },
+    )
+    assert missing.status_code == 422
+    assert "model_passport_ref" in missing.text
+
+    passport = registry.record_passport(_passport(model_version_ref="model_version:momentum:v1"))
+    accepted = client.post(
+        "/api/models/momentum/promote",
+        json={
+            "version": 1,
+            "stage": "staging",
+            "verification_record_id": "verdict:001",
+            "evidence": _promotion_evidence(),
+            "strategy_goal_ref": "theme",
+            "model_passport_ref": passport.passport_id,
+        },
+    )
+
+    assert accepted.status_code == 200
+    body = accepted.json()
+    assert body["decision"] == "pending"
+    assert body["evidence"]["model_passport_ref"] == passport.passport_id
+    assert body["evidence"]["validation_dossier_ref"] == "validation_dossier:momentum:v1"
+
+
+def test_model_promote_api_records_model_qro_without_raw_evidence(tmp_path, monkeypatch):
+    graph = ResearchGraphStore()
+    client, registry, model_registry = _client_with_model_registry(tmp_path, monkeypatch)
+    monkeypatch.setattr(app_main, "RESEARCH_GRAPH_STORE", graph)
+    model_registry.register_version("momentum", artifact_path="a.safetensors")
+    passport = registry.record_passport(_passport(model_version_ref="model_version:momentum:v1"))
+
+    response = client.post(
+        "/api/models/momentum/promote",
+        json={
+            "version": 1,
+            "stage": "staging",
+            "verification_record_id": "verdict:001",
+            "evidence": _promotion_evidence(),
+            "strategy_goal_ref": "theme",
+            "model_passport_ref": passport.passport_id,
+        },
+    )
+
+    assert response.status_code == 200, response.text
+    body = response.json()
+    assert body["decision"] == "pending"
+    assert body["qro_id"]
+    assert body["research_graph_command_id"]
+    assert body["compiler_ir_ref"]
+    assert body["compiler_pass_ref"]
+    assert body["entrypoint_coverage_ref"]
+    qro = graph.qro(body["qro_id"])
+    assert qro.qro_type == "Model" or getattr(qro.qro_type, "value", None) == "Model"
+    assert qro.input_contract["entry_source"] == "api"
+    assert qro.input_contract["target_stage"] == "staging"
+    assert qro.input_contract["gate_id"] == body["gate_id"]
+    assert qro.output_contract["status"] == "promotion_gate_pending"
+    assert qro.output_contract["model_version_ref"] == "model_version:momentum:v1"
+    assert qro.output_contract["model_passport_ref"] == passport.passport_id
+    assert qro.output_contract["validation_dossier_ref"] == "validation_dossier:momentum:v1"
+    assert qro.output_contract["evidence_hash"]
+    qro_contract_text = str(qro.input_contract) + str(qro.output_contract)
+    assert "dsr" not in qro_contract_text
+    assert "pbo" not in qro_contract_text
+    assert "champion_challenger" not in qro_contract_text
+    assert "delta_sharpe" not in qro_contract_text
+    ir = app_main.COMPILER_IR_STORE.ir(body["compiler_ir_ref"])
+    compiler_pass = app_main.COMPILER_IR_STORE.compiler_pass(body["compiler_pass_ref"])
+    coverage = app_main.GOAL_ENTRYPOINT_COVERAGE_REGISTRY.coverage(body["entrypoint_coverage_ref"])
+    assert ir.source_qro_refs == (body["qro_id"],)
+    assert ir.graph_command_refs == (body["research_graph_command_id"],)
+    assert ir.permission_ref == "model_registry.promote:user_manual"
+    assert "validation_dossier:momentum:v1" in ir.validation_refs
+    assert passport.passport_id in ir.validation_refs
+    assert compiler_pass.entry_source == "api"
+    assert compiler_pass.actor_source == "user_manual"
+    assert coverage.entrypoint_ref == "api:models.promote"
+    assert coverage.qro_refs == (body["qro_id"],)
+    assert coverage.compiler_ir_refs == (body["compiler_ir_ref"],)
+    compiled_text = str(ir.__dict__) + str(compiler_pass.__dict__) + str(coverage.__dict__)
+    assert "dsr" not in compiled_text
+    assert "pbo" not in compiled_text
+    assert "champion_challenger" not in compiled_text
+    assert "delta_sharpe" not in compiled_text
+
+    audit = client.get("/api/research-os/graph/commands", params={"limit": 5})
+    assert audit.status_code == 200, audit.text
+    matching = [
+        command["payload"]["qro"]
+        for command in audit.json()["commands"]
+        if command["payload"].get("qro", {}).get("qro_id") == body["qro_id"]
+    ]
+    assert matching
+    assert matching[0]["output_contract"]["evidence_hash"]
+    assert "champion_challenger" not in str(matching[0])
+    assert "delta_sharpe" not in str(matching[0])
+
+
+def test_model_promote_api_records_rejected_model_qro_without_raw_gaps(tmp_path, monkeypatch):
+    graph = ResearchGraphStore()
+    client, registry, model_registry = _client_with_model_registry(tmp_path, monkeypatch)
+    monkeypatch.setattr(app_main, "RESEARCH_GRAPH_STORE", graph)
+    model_registry.register_version("momentum", artifact_path="a.safetensors")
+    passport = registry.record_passport(_passport(model_version_ref="model_version:momentum:v1"))
+
+    rejected = client.post(
+        "/api/models/momentum/promote",
+        json={
+            "version": 1,
+            "stage": "staging",
+            "verification_record_id": "verdict:001",
+            "evidence": _promotion_evidence(dsr=0.10, pbo=0.90, bootstrap_ci=(-0.2, 0.4)),
+            "strategy_goal_ref": "theme",
+            "model_passport_ref": passport.passport_id,
+        },
+    )
+
+    assert rejected.status_code == 422
+    detail = rejected.json()["detail"]
+    assert detail["rejected"] is True
+    assert detail["gate_id"]
+    assert detail["qro_id"]
+    assert detail["research_graph_command_id"]
+    assert detail["compiler_ir_ref"]
+    assert detail["compiler_pass_ref"]
+    assert detail["entrypoint_coverage_ref"]
+    qro = graph.qro(detail["qro_id"])
+    assert qro.output_contract["status"] == "promotion_gate_rejected"
+    assert qro.output_contract["decision"] == "rejected"
+    assert qro.output_contract["gap_count"] >= 1
+    assert qro.output_contract["gaps_hash"]
+    assert qro.output_contract["verdict_hash"]
+    qro_contract_text = str(qro.input_contract) + str(qro.output_contract)
+    assert "三角不同向" not in qro_contract_text
+    assert "证据不足" not in qro_contract_text
+    assert "dsr" not in qro_contract_text
+    assert "pbo" not in qro_contract_text
+    assert "champion_challenger" not in qro_contract_text
+    ir = app_main.COMPILER_IR_STORE.ir(detail["compiler_ir_ref"])
+    compiler_pass = app_main.COMPILER_IR_STORE.compiler_pass(detail["compiler_pass_ref"])
+    coverage = app_main.GOAL_ENTRYPOINT_COVERAGE_REGISTRY.coverage(detail["entrypoint_coverage_ref"])
+    assert ir.source_qro_refs == (detail["qro_id"],)
+    assert ir.graph_command_refs == (detail["research_graph_command_id"],)
+    assert ir.permission_ref == "model_registry.promote:user_manual"
+    assert compiler_pass.entry_source == "api"
+    assert coverage.entrypoint_ref == "api:models.promote"
+    compiled_text = str(ir.__dict__) + str(compiler_pass.__dict__) + str(coverage.__dict__)
+    assert "证据不足" not in compiled_text
+    assert "dsr" not in compiled_text
+    assert "pbo" not in compiled_text
+
+
+def test_model_promotion_approval_records_model_qro_without_reason_payload(tmp_path, monkeypatch):
+    graph = ResearchGraphStore()
+    client, registry, model_registry = _client_with_model_registry(tmp_path, monkeypatch)
+    monkeypatch.setattr(app_main, "RESEARCH_GRAPH_STORE", graph)
+    model_registry.register_version("momentum", artifact_path="a.safetensors")
+    passport = registry.record_passport(_passport(model_version_ref="model_version:momentum:v1"))
+    opened = client.post(
+        "/api/models/momentum/promote",
+        json={
+            "version": 1,
+            "stage": "staging",
+            "created_by": "creator",
+            "verification_record_id": "verdict:001",
+            "evidence": _promotion_evidence(),
+            "strategy_goal_ref": "theme",
+            "model_passport_ref": passport.passport_id,
+        },
+    )
+    assert opened.status_code == 200, opened.text
+    gate_id = opened.json()["gate_id"]
+
+    approved = client.post(
+        f"/api/models/momentum/gates/{gate_id}/approve",
+        json={
+            "approver": "reviewer",
+            "reason": "Reviewed validation dossier and promotion risk before staging.",
+            "risk_restated": "Model remains offline until loading and monitoring checks pass.",
+        },
+    )
+
+    assert approved.status_code == 200, approved.text
+    body = approved.json()
+    assert body["decision"] == "approved"
+    assert body["side_effect_ref"] == "stage:momentum:v1:staging"
+    assert body["qro_id"]
+    assert body["research_graph_command_id"]
+    assert body["compiler_ir_ref"]
+    assert body["compiler_pass_ref"]
+    assert body["entrypoint_coverage_ref"]
+    qro = graph.qro(body["qro_id"])
+    assert qro.output_contract["status"] == "promotion_gate_approved"
+    assert qro.output_contract["gate_id"] == gate_id
+    assert qro.output_contract["reason_hash"]
+    assert qro.output_contract["risk_restated_hash"]
+    assert qro.output_contract["side_effect_ref"] == "stage:momentum:v1:staging"
+    qro_contract_text = str(qro.input_contract) + str(qro.output_contract)
+    assert "Reviewed validation dossier" not in qro_contract_text
+    assert "Model remains offline" not in qro_contract_text
+    assert "dsr" not in qro_contract_text
+    assert "pbo" not in qro_contract_text
+    ir = app_main.COMPILER_IR_STORE.ir(body["compiler_ir_ref"])
+    compiler_pass = app_main.COMPILER_IR_STORE.compiler_pass(body["compiler_pass_ref"])
+    coverage = app_main.GOAL_ENTRYPOINT_COVERAGE_REGISTRY.coverage(body["entrypoint_coverage_ref"])
+    assert ir.source_qro_refs == (body["qro_id"],)
+    assert ir.graph_command_refs == (body["research_graph_command_id"],)
+    assert ir.permission_ref == "model_registry.promotion.approve:user_manual"
+    assert "validation_dossier:momentum:v1" in ir.validation_refs
+    assert passport.passport_id in ir.validation_refs
+    assert compiler_pass.entry_source == "api"
+    assert coverage.entrypoint_ref == "api:models.gates.approve"
+    compiled_text = str(ir.__dict__) + str(compiler_pass.__dict__) + str(coverage.__dict__)
+    assert "Reviewed validation dossier" not in compiled_text
+    assert "Model remains offline" not in compiled_text
+    assert "dsr" not in compiled_text
+    assert "pbo" not in compiled_text
+    assert model_registry.list_versions("momentum")[0].stage == "staging"

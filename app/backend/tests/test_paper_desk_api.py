@@ -1,4 +1,4 @@
-"""P2 模拟台后端接真 · /api/paper/* 端点 + 治理对抗测试。
+"""P2 模拟台真实后端 · /api/paper/* 端点 + 治理对抗测试。
 
 对抗（种已知坏门必抓）：
 - 对抗#1 A股 live 下单端点必拒（致命错误防线：A股永不 live）。
@@ -16,12 +16,20 @@ from fastapi.testclient import TestClient
 
 from app.auth import require_user_dependency
 from app.execution.base import Order
+from app.execution.paper_venue import PaperVenue
 from app.main import PAPER_DESK, app
 from app.paper.desk import (
     AShareLiveForbidden,
     PaperDeskService,
     RiskGateMutationForbidden,
     aggregate_promotion_checks,
+)
+from app.paper.replay_provider import (
+    BUNDLED_SAMPLE_SOURCE,
+    MIXED_REPLAY_SOURCE,
+    SIMULATED_SOURCE,
+    ReplayBarProvider,
+    seed_positions,
 )
 
 
@@ -230,7 +238,49 @@ def test_chain_tamper_detected():
     assert svc.risk.verify_chain("tp") is False
 
 
-# ════════════════ DS-4 · 接真 provider 产净值（非空壳）+ 治理门不破 ════════════════
+# ════════════════ DS-4 · provider 产净值（非空壳）+ 治理门不破 ════════════════
+def test_replay_provider_uses_bundled_btc_sample_and_sample_entry_price():
+    """crypto BTC 有捆绑样本 → bar 来自真样本；建仓 entry_price/qty 按首价，不再硬编码 100。"""
+
+    provider = ReplayBarProvider(symbols=["BTCUSDT"], length=4)
+    first_bar = provider.next_bar("BTCUSDT")
+    assert first_bar is not None
+    assert first_bar["source"] == BUNDLED_SAMPLE_SOURCE
+    assert first_bar["close"] == pytest.approx(47704.35)
+    assert provider.source == BUNDLED_SAMPLE_SOURCE
+    assert provider.first_price("BTCUSDT") == pytest.approx(47704.35)
+
+    venue = PaperVenue(cash=1_000_000)
+    count = seed_positions(venue, ["BTCUSDT"], provider=provider)
+    pos = venue.get_position("BTCUSDT")
+    assert count == 1
+    assert pos.entry_price == pytest.approx(47704.35)
+    assert pos.quantity == pytest.approx(50_000 / 47704.35)
+    assert venue.get_balance()["CASH"].free == pytest.approx(950_000, abs=0.1)
+
+
+def test_replay_provider_accepts_dash_symbol_but_preserves_bar_symbol():
+    """BTC-USDT 可复用 BTCUSDT 样本文件；bar symbol 仍保留调用方符号以匹配 paper book。"""
+
+    provider = ReplayBarProvider(symbols=["BTC-USDT"], length=2)
+    bar = provider.next_bar("BTC-USDT")
+    assert bar is not None
+    assert bar["source"] == BUNDLED_SAMPLE_SOURCE
+    assert bar["symbol"] == "BTC-USDT"
+    assert bar["close"] == pytest.approx(47704.35)
+
+
+def test_replay_provider_missing_sample_falls_back_with_honest_source():
+    """无捆绑样本的 symbol 仍可模拟，但 source 必须标 synthetic fallback。"""
+
+    provider = ReplayBarProvider(symbols=["NO_SAMPLE"], length=2)
+    bar = provider.next_bar("NO_SAMPLE")
+    assert bar is not None
+    assert bar["source"] == SIMULATED_SOURCE
+    assert provider.source == SIMULATED_SOURCE
+    assert provider.first_price("NO_SAMPLE") != pytest.approx(47704.35)
+
+
 def test_register_with_provider_feeds_real_bars_and_produces_equity():
     """种已知坏门反向：注入回放 provider → tick 真喂 bars → 净值非空、bars_fed>0、有持仓。
 
@@ -244,9 +294,7 @@ def test_register_with_provider_feeds_real_bars_and_produces_equity():
                      equity_log_path=_tmp_eqlog("ds4a"))  # simulate=True 默认
     primed = svc.prime_run("ds4a", ticks=12)
     assert primed["bars_fed"] > 0, "真喂 bars 后 bars_fed 必 > 0（非空壳）"
-    # BTC bundled + ETH 合成 → 混源诚实标（含 bundled 与合成，非纯 bundled、非纯 sim）。
-    assert primed["simulated"] is True
-    assert primed["source"] == "mixed:bundled_sample_replay+deterministic_sim_walk"
+    assert primed["simulated"] is True and primed["source"] == MIXED_REPLAY_SOURCE
     eq = svc.equity_log("ds4a")
     assert len(eq) > 0, "MTM 必写出净值序列（非空壳）"
     # 净值是移动的（回放价格变动），不是一条死平线
@@ -331,8 +379,7 @@ def test_post_paper_runs_registers_runnable_run(client):
     body = r.json()
     assert body["register"]["registered"] is True
     assert body["register"]["bars_fed"] > 0
-    # 单 BTCUSDT crypto run → 纯真捆样本回放（source 诚实，非合成）
-    assert body["run"]["simulated_source"] == "bundled_sample_replay"
+    assert body["run"]["simulated_source"] == BUNDLED_SAMPLE_SOURCE
     ids = {x["id"] for x in client.get("/api/paper/runs").json()["runs"]}
     assert "ds4_post" in ids
     eq = client.get("/api/paper/runs/ds4_post/equity_log").json()["equity_log"]

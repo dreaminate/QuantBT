@@ -47,6 +47,8 @@ logger = logging.getLogger(__name__)
 
 # ── source 标签（诚实区分 bar 来源；与 simulated_source 同义域）──
 TESTNET_SOURCE = "binance_testnet_live"  # 交易所 testnet 真实时行情（公共端点，非实盘真钱、非合成）
+TESTNET_REALTIME_SOURCE = TESTNET_SOURCE
+TESTNET_UNAVAILABLE_SOURCE = "testnet_unavailable_replay_fallback"
 
 DEFAULT_TESTNET_KEYSTORE_NAME = "binance_testnet"
 _DEFAULT_INTERVAL = "1d"
@@ -317,11 +319,134 @@ def _keystore_has_name(keystore: Any, keystore_name: str) -> bool:
         return False
 
 
+class _PublicClientAdapter:
+    """Adapt the older BinanceClient-like public() seam to TestnetMarketClient."""
+
+    def __init__(self, client: Any, *, product: str) -> None:
+        self._client = client
+        self._product = product
+
+    def fetch_klines(self, symbol: str, interval: str, limit: int) -> list[list[Any]]:
+        path = "/fapi/v1/klines" if self._product == "usdm_futures" else "/api/v3/klines"
+        data = self._client.public("GET", path, {"symbol": symbol.upper(), "interval": interval, "limit": limit})
+        return data if isinstance(data, list) else []
+
+    def fetch_mark(self, symbol: str) -> float | None:
+        try:
+            if self._product == "usdm_futures":
+                data = self._client.public("GET", "/fapi/v1/premiumIndex", {"symbol": symbol.upper()})
+                if isinstance(data, list):
+                    data = data[0] if data else {}
+                mark = float((data or {}).get("markPrice", 0) or 0)
+            else:
+                data = self._client.public("GET", "/api/v3/ticker/price", {"symbol": symbol.upper()})
+                mark = float((data or {}).get("price", 0) or 0)
+            return mark if mark > 0 else None
+        except Exception:  # noqa: BLE001
+            return None
+
+
+@dataclass
+class BinanceTestnetBarProvider(TestnetBarProvider):
+    def current_marks(self, symbols: list[str]) -> dict[str, float]:
+        marks: dict[str, float] = {}
+        for symbol in symbols:
+            try:
+                mark = self._client.fetch_mark(symbol)
+            except Exception:  # noqa: BLE001
+                mark = None
+            if mark is not None:
+                marks[symbol] = mark
+        if marks:
+            return marks
+        return super().current_marks(symbols)
+
+
+def make_binance_testnet_provider(
+    *,
+    symbols: list[str],
+    keystore: Any,
+    key_name: str | None,
+    product: str = "usdm_futures",
+    interval: str = "1m",
+    client_factory: Callable[[Any, str], Any] | None = None,
+) -> tuple[TestnetBarProvider | None, dict[str, Any]]:
+    """Compatibility status API for callers that need explicit provider diagnostics.
+
+    The production desk path still uses `make_testnet_provider`, which checks key
+    presence without fetching secret material. This path exists for API/status
+    reporting and test injection where the caller supplies a client seam.
+    """
+
+    if not key_name:
+        return None, {
+            "requested_provider": TESTNET_REALTIME_SOURCE,
+            "active_provider": TESTNET_UNAVAILABLE_SOURCE,
+            "connected": False,
+            "credential_configured": False,
+            "fallback_reason": "missing_testnet_key_name",
+        }
+    try:
+        record = keystore.fetch(key_name)
+    except Exception:  # noqa: BLE001
+        return None, {
+            "requested_provider": TESTNET_REALTIME_SOURCE,
+            "active_provider": TESTNET_UNAVAILABLE_SOURCE,
+            "connected": False,
+            "credential_configured": False,
+            "fallback_reason": "testnet_key_not_found",
+        }
+    try:
+        if client_factory is not None:
+            client = client_factory(record, product)
+        else:
+            from ..execution.binance_client import BinanceClient, BinanceCredentials
+
+            client = BinanceClient(BinanceCredentials.from_record(record, network="testnet"), product=product)  # type: ignore[arg-type]
+        safety = client.assert_safe_startup()
+        provider = BinanceTestnetBarProvider(
+            symbols=[str(symbol) for symbol in symbols],
+            _client=_PublicClientAdapter(client, product=product),
+            interval=interval,
+        )
+        n = provider.snapshot_klines()
+    except Exception as exc:  # noqa: BLE001
+        return None, {
+            "requested_provider": TESTNET_REALTIME_SOURCE,
+            "active_provider": TESTNET_UNAVAILABLE_SOURCE,
+            "connected": False,
+            "credential_configured": True,
+            "fallback_reason": f"testnet_provider_unavailable:{type(exc).__name__}",
+        }
+    if n <= 0 or not provider.has_data:
+        return None, {
+            "requested_provider": TESTNET_REALTIME_SOURCE,
+            "active_provider": TESTNET_UNAVAILABLE_SOURCE,
+            "connected": False,
+            "credential_configured": True,
+            "fallback_reason": "testnet_provider_unavailable:no_bars",
+        }
+    return provider, {
+        "requested_provider": TESTNET_REALTIME_SOURCE,
+        "active_provider": TESTNET_REALTIME_SOURCE,
+        "connected": True,
+        "credential_configured": True,
+        "permission_checked": bool((safety or {}).get("ok")),
+        "network": (safety or {}).get("network") or "testnet",
+        "product": product,
+        "warnings": list((safety or {}).get("warnings") or []),
+    }
+
+
 __all__ = [
+    "BinanceTestnetBarProvider",
     "TESTNET_SOURCE",
+    "TESTNET_REALTIME_SOURCE",
+    "TESTNET_UNAVAILABLE_SOURCE",
     "DEFAULT_TESTNET_KEYSTORE_NAME",
     "BinanceTestnetMarketClient",
     "TestnetBarProvider",
     "TestnetMarketClient",
+    "make_binance_testnet_provider",
     "make_testnet_provider",
 ]

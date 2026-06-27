@@ -214,7 +214,7 @@ export function PaperDeskPage() {
   const topbar = (
     <DeskTopBar>
       <div style={{ marginLeft: 8 }}>
-        <DeskSwitcher current="paper" soon={["factor", "model"]} />
+        <DeskSwitcher current="paper" />
       </div>
       <div style={{ flex: 1 }} />
       <SegmentedControl

@@ -18,10 +18,21 @@ from __future__ import annotations
 import json
 import logging
 import os
+from datetime import UTC, datetime
 from typing import Any, Literal
 
 import requests
 
+from ..research_os import (
+    LLMCredentialPoolRecord,
+    LLMGatewayCallRequest,
+    LLMProviderRecord,
+    ModelRoutingPolicyRecord,
+    PersistentOnboardingRegistry,
+    SecretRefRecord,
+    SecretRefStatus,
+    validate_llm_gateway_call,
+)
 from ..security import KeystoreError, SecureKeystore
 from .llm_client import DevLocalLLM, LLMClient, LLMMessage, LLMResponse, NoLLMConfigured
 
@@ -378,6 +389,33 @@ _DEFAULT_MODELS: dict[str, str] = {
     "qwen": "qwen-max",
 }
 
+_DEFAULT_BASE_URLS: dict[str, str] = {
+    "anthropic": "https://api.anthropic.com/v1",
+    "openai": "https://api.openai.com/v1",
+    "qwen": "https://dashscope.aliyuncs.com/compatible-mode/v1",
+}
+
+_PROVIDER_TYPES: dict[str, str] = {
+    "anthropic": "anthropic_api",
+    "openai": "openai_api",
+    "qwen": "dashscope_openai_compatible",
+    "custom": "openai_compatible_custom_endpoint",
+}
+
+_PROVIDER_CAPABILITIES: dict[str, tuple[str, ...]] = {
+    "anthropic": ("tool_calling", "structured_output", "long_context"),
+    "openai": ("tool_calling", "structured_output"),
+    "qwen": ("tool_calling", "structured_output"),
+    "custom": ("openai_compatible",),
+}
+
+_PROVIDER_CONTEXT_WINDOWS: dict[str, int] = {
+    "anthropic": 200_000,
+    "openai": 128_000,
+    "qwen": 128_000,
+    "custom": 0,
+}
+
 
 def _env_key(provider: ProviderName) -> str | None:
     env_map = {
@@ -403,6 +441,156 @@ def _keystore_extras(record_note: str) -> dict[str, str]:
     return {}
 
 
+def llm_secret_ref(provider: ProviderName) -> str:
+    if provider not in ("anthropic", "openai", "qwen", "custom"):
+        raise NoLLMConfigured(f"provider {provider!r} cannot use Settings SecretRef")
+    return f"secretref:llm:{provider}"
+
+
+def llm_credential_pool_ref(provider: ProviderName) -> str:
+    if provider not in ("anthropic", "openai", "qwen", "custom"):
+        raise NoLLMConfigured(f"provider {provider!r} cannot use Settings credential pool")
+    return f"pool:llm:{provider}:default"
+
+
+def llm_routing_policy_ref(provider: ProviderName) -> str:
+    if provider not in ("anthropic", "openai", "qwen", "custom"):
+        raise NoLLMConfigured(f"provider {provider!r} cannot use Settings routing policy")
+    return f"routing:llm:{provider}:default"
+
+
+def _effective_model(provider: ProviderName, model: str | None) -> str:
+    if model:
+        return model
+    if provider == "custom":
+        return ""
+    return _DEFAULT_MODELS.get(provider, "")
+
+
+def _record_if_missing(callable_obj, lookup, key: str, record: Any, *, replace: bool) -> Any:
+    if not replace:
+        try:
+            return lookup(key)
+        except KeyError:
+            pass
+    return callable_obj(record)
+
+
+def ensure_settings_managed_llm_provider(
+    *,
+    registry: PersistentOnboardingRegistry,
+    provider: ProviderName,
+    base_url: str | None = None,
+    model: str | None = None,
+    owner: str = "settings",
+    created_at: str | None = None,
+    replace_secret: bool = False,
+) -> dict[str, str]:
+    """Create the Settings metadata required before a role agent can use an LLM provider.
+
+    The actual secret value stays in SecureKeystore under ``llm_<provider>``.
+    This function only records SecretRef / Provider / CredentialPool /
+    ModelRoutingPolicy metadata and never receives plaintext credentials.
+    """
+
+    if provider not in ("anthropic", "openai", "qwen", "custom"):
+        raise NoLLMConfigured(f"unknown settings-managed provider: {provider}")
+    selected_model = _effective_model(provider, model)
+    if provider == "custom" and not selected_model:
+        raise NoLLMConfigured("custom provider requires model before Settings route can be recorded")
+    now = created_at or datetime.now(UTC).replace(microsecond=0).isoformat().replace("+00:00", "Z")
+    secret_ref = llm_secret_ref(provider)
+    pool_ref = llm_credential_pool_ref(provider)
+    policy_ref = llm_routing_policy_ref(provider)
+    effective_base_url = base_url or _DEFAULT_BASE_URLS.get(provider, "")
+    secret = SecretRefRecord(
+        secret_ref=secret_ref,
+        scope=f"llm:{provider}:call",
+        status=SecretRefStatus.ACTIVE,
+        created_at=now,
+        access_audit=(f"keystore:{KEYSTORE_NAMES[provider]}",),
+        connector_scope_review=f"provider:{provider}",
+    )
+    _record_if_missing(registry.record_secret_ref, registry.secret_ref, secret_ref, secret, replace=replace_secret)
+    provider_record = LLMProviderRecord(
+        provider_id=provider,
+        provider_type=_PROVIDER_TYPES[provider],
+        auth_methods=("api_key",) if provider != "custom" else ("api_key", "local_endpoint_without_external_credential"),
+        base_url=effective_base_url,
+        model_profiles=(selected_model,),
+        capability_tags=_PROVIDER_CAPABILITIES[provider],
+        context_window=_PROVIDER_CONTEXT_WINDOWS[provider],
+        tool_calling_support=provider != "custom",
+        structured_output_support=provider != "custom",
+        cost_model_ref=f"cost:{provider}:settings",
+        rate_limits="provider-managed",
+        data_retention_policy="settings-managed",
+        region_residency="provider-managed",
+        allowed_roles=("coordinator", "researcher", "verifier", "role_agent", "agent"),
+        allowed_desks=("agent", "research", "strategy", "factor", "model", "paper", "settings"),
+        health_status="configured",
+        quota_status="unknown",
+        auth_refs=(secret_ref,),
+    )
+    _record_if_missing(registry.record_llm_provider, registry.llm_provider, provider, provider_record, replace=True)
+    pool_record = LLMCredentialPoolRecord(
+        pool_id=pool_ref,
+        provider_id=provider,
+        auth_refs=(secret_ref,),
+        priority=(secret_ref,),
+        rotation_policy="settings-managed-rotation",
+        fallback_policy="no-cross-provider-without-routing-policy",
+        rate_limit_policy="respect-provider",
+        quota_policy="stop-at-budget",
+        owner=owner,
+    )
+    _record_if_missing(registry.record_credential_pool, registry.credential_pool, pool_ref, pool_record, replace=True)
+    policy_record = ModelRoutingPolicyRecord(
+        routing_policy_id=policy_ref,
+        role_agent="role_agent",
+        desk="all",
+        task_type="llm_chat",
+        required_capabilities=(),
+        allowed_providers=(provider,),
+        allowed_models=(selected_model,),
+        credential_pool_ref=pool_ref,
+        fallback_order=(selected_model,),
+        cost_limit="settings-managed",
+        latency_limit="settings-managed",
+        data_retention_requirement="settings-managed",
+        independence_requirement="record-if-verifier",
+        replay_requirement="decision-level",
+    )
+    _record_if_missing(registry.record_routing_policy, registry.routing_policy, policy_ref, policy_record, replace=True)
+    return {
+        "secret_ref": secret_ref,
+        "credential_pool_ref": pool_ref,
+        "routing_policy_ref": policy_ref,
+        "model": selected_model,
+        "base_url": effective_base_url,
+    }
+
+
+def _registered_gateway_records(
+    *,
+    registry: PersistentOnboardingRegistry,
+    provider: ProviderName,
+) -> tuple[SecretRefRecord, LLMProviderRecord, LLMCredentialPoolRecord, ModelRoutingPolicyRecord]:
+    secret_ref = llm_secret_ref(provider)
+    pool_ref = llm_credential_pool_ref(provider)
+    policy_ref = llm_routing_policy_ref(provider)
+    return (
+        registry.secret_ref(secret_ref),
+        registry.llm_provider(provider),
+        registry.credential_pool(pool_ref),
+        registry.routing_policy(policy_ref),
+    )
+
+
+def _gateway_rejection(decision) -> str:
+    return ", ".join(v.code for v in decision.violations) or "settings_route_rejected"
+
+
 def make_llm_client(
     provider: ProviderName | None = None,
     *,
@@ -410,6 +598,7 @@ def make_llm_client(
     api_key: str | None = None,
     base_url: str | None = None,
     model: str | None = None,
+    allow_env: bool = True,
 ) -> LLMClient:
     """按优先级解析 provider + api_key + base_url + model；失败 fallback DevLocalLLM。"""
 
@@ -420,7 +609,7 @@ def make_llm_client(
         else ["anthropic", "openai", "qwen", "custom"]
     )
     for cand in candidates:
-        key = api_key or _env_key(cand)
+        key = api_key or (_env_key(cand) if allow_env else None)
         extras: dict[str, str] = {}
         if keystore is not None:
             try:
@@ -468,7 +657,99 @@ def make_llm_client(
     return DevLocalLLM()
 
 
-def list_llm_status(keystore: SecureKeystore | None) -> list[dict[str, Any]]:
+def make_settings_managed_llm_client(
+    provider: ProviderName | None = None,
+    *,
+    keystore: SecureKeystore,
+    registry: PersistentOnboardingRegistry,
+    role_agent: str = "role_agent",
+    desk: str = "agent",
+    task_type: str = "llm_chat",
+    model: str | None = None,
+    replay_record_ref: str | None = None,
+) -> LLMClient:
+    """Resolve a role-agent LLM client through Settings metadata and LLM Gateway.
+
+    Env keys are intentionally ignored here. A role agent can use real provider
+    credentials only after the key exists in SecureKeystore and the matching
+    SecretRef / provider / pool / routing policy records validate.
+    """
+
+    explicit = provider or (os.environ.get("LLM_PROVIDER", "").lower() or None)
+    candidates: list[ProviderName] = (
+        [explicit]  # type: ignore[list-item]
+        if explicit in ("anthropic", "openai", "qwen", "custom")
+        else ["anthropic", "openai", "qwen", "custom"]
+    )
+    rejection: str | None = None
+    for cand in candidates:
+        try:
+            record = keystore.fetch(KEYSTORE_NAMES[cand])
+        except KeystoreError:
+            continue
+        extras = _keystore_extras(record.note or "")
+        selected_model = model or extras.get("model") or _DEFAULT_MODELS.get(cand, "")
+        if cand == "custom" and not selected_model:
+            rejection = "custom_missing_model"
+            continue
+        try:
+            ensure_settings_managed_llm_provider(
+                registry=registry,
+                provider=cand,
+                base_url=extras.get("base_url"),
+                model=selected_model,
+                owner="runtime-bootstrap",
+                replace_secret=False,
+            )
+            secret, provider_record, pool, policy = _registered_gateway_records(registry=registry, provider=cand)
+        except (KeyError, ValueError, NoLLMConfigured) as exc:
+            rejection = str(exc)
+            if explicit:
+                raise NoLLMConfigured(f"LLM Gateway settings route missing for {cand}: {exc}") from exc
+            continue
+        if selected_model and selected_model not in policy.allowed_models:
+            selected_model = policy.allowed_models[0] if policy.allowed_models else selected_model
+        request = LLMGatewayCallRequest(
+            role_agent=role_agent,
+            desk=desk,
+            task_type=task_type,
+            provider_id=provider_record.provider_id,
+            model_id=selected_model,
+            routing_policy_ref=policy.routing_policy_id,
+            credential_pool_ref=pool.pool_id,
+            auth_ref=secret.secret_ref,
+            via_gateway=True,
+            replay_record_ref=replay_record_ref,
+        )
+        decision = validate_llm_gateway_call(
+            request,
+            policy=policy,
+            credential_pool=pool,
+            secrets={secret.secret_ref: secret},
+        )
+        if not decision.accepted:
+            rejection = _gateway_rejection(decision)
+            if explicit:
+                raise NoLLMConfigured(f"LLM Gateway route rejected for {cand}: {rejection}")
+            continue
+        return make_llm_client(
+            provider=cand,
+            keystore=keystore,
+            base_url=extras.get("base_url"),
+            model=selected_model,
+            allow_env=False,
+        )
+    if explicit:
+        detail = rejection or "provider not configured in Settings/Secrets"
+        raise NoLLMConfigured(f"LLM Gateway route rejected for {explicit}: {detail}")
+    logger.info("无可用 Settings-managed LLM provider，回退到 DevLocalLLM")
+    return DevLocalLLM()
+
+
+def list_llm_status(
+    keystore: SecureKeystore | None,
+    onboarding_registry: PersistentOnboardingRegistry | None = None,
+) -> list[dict[str, Any]]:
     """供 UI 系统设置页用：列出每个 provider 当前是否就绪（不回显 key）。"""
 
     out: list[dict[str, Any]] = []
@@ -490,6 +771,23 @@ def list_llm_status(keystore: SecureKeystore | None) -> list[dict[str, Any]]:
                 info["model"] = extras.get("model", "")
             except KeystoreError:
                 pass
+        if onboarding_registry is not None:
+            secret_ref = llm_secret_ref(cand)  # type: ignore[arg-type]
+            pool_ref = llm_credential_pool_ref(cand)  # type: ignore[arg-type]
+            policy_ref = llm_routing_policy_ref(cand)  # type: ignore[arg-type]
+            info["settings_managed"] = False
+            info["secret_ref"] = secret_ref
+            info["credential_pool_ref"] = pool_ref
+            info["routing_policy_ref"] = policy_ref
+            try:
+                secret = onboarding_registry.secret_ref(secret_ref)
+                onboarding_registry.llm_provider(cand)
+                onboarding_registry.credential_pool(pool_ref)
+                onboarding_registry.routing_policy(policy_ref)
+                info["settings_managed"] = True
+                info["auth_status"] = secret.status.value if hasattr(secret.status, "value") else str(secret.status)
+            except KeyError:
+                info["auth_status"] = "missing"
         out.append(info)
     return out
 
@@ -501,6 +799,11 @@ __all__ = [
     "OpenAILLM",
     "ProviderName",
     "QwenLLM",
+    "ensure_settings_managed_llm_provider",
     "list_llm_status",
+    "llm_credential_pool_ref",
+    "llm_routing_policy_ref",
+    "llm_secret_ref",
     "make_llm_client",
+    "make_settings_managed_llm_client",
 ]

@@ -114,12 +114,13 @@ def test_backtest_missing_price_col_raises(tmp_path: Path) -> None:
 
 # ─────────── REST 端到端 ───────────
 
-def test_backtest_endpoint(tmp_path: Path) -> None:
+def test_backtest_endpoint(tmp_path: Path, training_market_data_use_validation_ref) -> None:
     r = client.post(
         "/api/training/jobs",
         json={
             "name": "bt-api", "model": "xgboost", "task": "regression",
             "dataset_id": "demo_ashare_xsec",
+            "market_data_use_validation_refs": [training_market_data_use_validation_ref],
             "feature_cols": FEATURES, "label_col": "label",
             "hyperparams": {"n_estimators": 40, "max_depth": 3},
         },
@@ -133,8 +134,32 @@ def test_backtest_endpoint(tmp_path: Path) -> None:
     assert bt.status_code == 200, bt.text
     body = bt.json()
     assert body["job_id"] == job_id
+    assert body["market_data_use_validation_refs"] == [training_market_data_use_validation_ref]
+    assert body["backtest_run_ref"].startswith(f"backtest_run:training_job:{job_id}:")
+    assert body["qro_id"]
+    assert body["research_graph_command_id"]
+    assert body["compiler_ir_ref"]
+    assert body["compiler_pass_ref"]
+    assert body["entrypoint_coverage_ref"]
     assert "sharpe" in body["metrics"]
     assert isinstance(body["equity_curve"], list) and len(body["equity_curve"]) > 0
+    from app import main as app_main
+
+    qro = app_main.RESEARCH_GRAPH_STORE.qro(body["qro_id"])
+    assert getattr(qro.qro_type, "value", qro.qro_type) == "BacktestRun"
+    assert qro.input_contract["market_data_use_validation_refs"] == [training_market_data_use_validation_ref]
+    assert qro.output_contract["market_data_use_validation_refs"] == [training_market_data_use_validation_ref]
+    assert "equity_curve" not in qro.input_contract
+    assert "equity_curve" not in qro.output_contract
+    assert "metrics" not in qro.input_contract
+    assert "metrics" not in qro.output_contract
+    qro_text = str(qro.input_contract) + str(qro.output_contract)
+    assert "artifact_dir" not in qro_text
+    assert "artifact_path" not in qro_text
+    ir = app_main.COMPILER_IR_STORE.ir(body["compiler_ir_ref"])
+    coverage = app_main.GOAL_ENTRYPOINT_COVERAGE_REGISTRY.coverage(body["entrypoint_coverage_ref"])
+    assert training_market_data_use_validation_ref in ir.validation_refs
+    assert coverage.entrypoint_ref == "api:training.jobs.backtest"
 
 
 def test_backtest_endpoint_unknown_job() -> None:
@@ -193,13 +218,16 @@ def test_backtest_feature_mismatch_raises(tmp_path: Path) -> None:
         backtest_job(job.artifact_dir, panel.drop(columns=[FEATURES[0]]), feature_cols=FEATURES)
 
 
-def test_endpoint_oos_cross_dataset(tmp_path: Path) -> None:
+def test_endpoint_oos_cross_dataset(tmp_path: Path, training_market_data_use_validation_refs) -> None:
     """REST：训于 A股 demo，回测换到 crypto demo → is_cross_dataset=True, is_oos=True。"""
+    ashare_ref = training_market_data_use_validation_refs["demo_ashare_xsec"]
+    crypto_ref = training_market_data_use_validation_refs["demo_crypto_ts"]
     r = client.post(
         "/api/training/jobs",
         json={
             "name": "oos-api", "model": "xgboost", "task": "regression",
             "dataset_id": "demo_ashare_xsec", "feature_cols": FEATURES, "label_col": "label",
+            "market_data_use_validation_refs": [ashare_ref],
             "hyperparams": {"n_estimators": 40, "max_depth": 3},
         },
     )
@@ -208,22 +236,35 @@ def test_endpoint_oos_cross_dataset(tmp_path: Path) -> None:
         if client.get(f"/api/training/jobs/{job_id}").json()["status"] in ("succeeded", "failed"):
             break
         time.sleep(0.5)
-    bt = client.post(f"/api/training/jobs/{job_id}/backtest", json={"dataset_id": "demo_crypto_ts", "top_n": 3})
+    missing = client.post(f"/api/training/jobs/{job_id}/backtest", json={"dataset_id": "demo_crypto_ts", "top_n": 3})
+    assert missing.status_code == 422
+    assert "do not cover backtest dataset: demo_crypto_ts" in missing.text
+    bt = client.post(
+        f"/api/training/jobs/{job_id}/backtest",
+        json={
+            "dataset_id": "demo_crypto_ts",
+            "top_n": 3,
+            "market_data_use_validation_refs": [crypto_ref],
+        },
+    )
     assert bt.status_code == 200, bt.text
     body = bt.json()
     assert body["is_cross_dataset"] is True
     assert body["is_oos"] is True
     assert body["dataset_id"] == "demo_crypto_ts"
     assert body["train_dataset"] == "demo_ashare_xsec"
+    assert body["market_data_use_validation_refs"] == [crypto_ref]
+    assert body["entrypoint_coverage_ref"]
 
 
-def test_endpoint_oos_fraction(tmp_path: Path) -> None:
+def test_endpoint_oos_fraction(tmp_path: Path, training_market_data_use_validation_ref) -> None:
     """REST：同数据集 + oos_fraction → is_oos=True, oos_cutoff 非空。"""
     r = client.post(
         "/api/training/jobs",
         json={
             "name": "oosf-api", "model": "xgboost", "task": "regression",
             "dataset_id": "demo_ashare_xsec", "feature_cols": FEATURES, "label_col": "label",
+            "market_data_use_validation_refs": [training_market_data_use_validation_ref],
             "hyperparams": {"n_estimators": 40, "max_depth": 3},
         },
     )
@@ -286,7 +327,7 @@ def test_strict_walkforward_zero_leakage(tmp_path: Path) -> None:
     assert pd.Timestamp(oos["oos_cutoff"]) > pd.Timestamp(max(train_dates))  # 零重叠
 
 
-def test_endpoint_strict_oos_autopairs(tmp_path: Path) -> None:
+def test_endpoint_strict_oos_autopairs(tmp_path: Path, training_market_data_use_validation_ref) -> None:
     """REST：train_fraction=0.7 训练后，回测不传 oos_fraction → 自动后 30%，strict_oos=True。"""
     r = client.post(
         "/api/training/jobs",
@@ -294,6 +335,7 @@ def test_endpoint_strict_oos_autopairs(tmp_path: Path) -> None:
             "name": "wf-api", "model": "xgboost", "task": "regression",
             "dataset_id": "demo_ashare_xsec", "feature_cols": FEATURES, "label_col": "label",
             "train_fraction": 0.7,
+            "market_data_use_validation_refs": [training_market_data_use_validation_ref],
             "hyperparams": {"n_estimators": 40, "max_depth": 3},
         },
     )

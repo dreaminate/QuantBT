@@ -66,6 +66,17 @@ const STATUS_COLOR: Record<string, string> = {
   failed: "var(--cc-danger)",
 };
 
+function splitMarketDataUseValidationRefs(raw: string): string[] {
+  return Array.from(
+    new Set(
+      raw
+        .split(/[,\s]+/)
+        .map((ref) => ref.trim())
+        .filter(Boolean),
+    ),
+  );
+}
+
 export function TrainingBenchPage() {
   const [models, setModels] = useState<ModelCard[]>([]);
   const [datasets, setDatasets] = useState<Dataset[]>([]);
@@ -77,6 +88,7 @@ export function TrainingBenchPage() {
   const [features, setFeatures] = useState<string[]>([]);
   const [hyper, setHyper] = useState<Record<string, number>>({});
   const [trainFraction, setTrainFraction] = useState(0); // 0=用全程训练; >0=只用前N%(严格无泄露 walk-forward)
+  const [marketDataUseValidationRefsRaw, setMarketDataUseValidationRefsRaw] = useState("");
   const [code, setCode] = useState("");
   const [submitting, setSubmitting] = useState(false);
   const [err, setErr] = useState("");
@@ -98,6 +110,11 @@ export function TrainingBenchPage() {
   const [btMeta, setBtMeta] = useState<{ is_oos: boolean; is_cross_dataset: boolean; strict_oos: boolean; dataset_id: string; n_days: number } | null>(null);
   const [btDataset, setBtDataset] = useState("");  // 回测数据集(空=训练集);换数据集=跨集 OOS
   const [btOosFrac, setBtOosFrac] = useState(0);   // >0=只回测末尾该比例交易日(同集时间后段 OOS)
+  const [btMarketDataUseValidationRefsRaw, setBtMarketDataUseValidationRefsRaw] = useState("");
+  const btMarketDataUseValidationRefs = useMemo(
+    () => splitMarketDataUseValidationRefs(btMarketDataUseValidationRefsRaw),
+    [btMarketDataUseValidationRefsRaw],
+  );
 
   const openEval = useCallback((j: Job) => {
     setSelectedJob(j.job_id);
@@ -149,6 +166,9 @@ export function TrainingBenchPage() {
       const payload: Record<string, unknown> = { top_n: 5 };
       if (btDataset) payload.dataset_id = btDataset;       // 换数据集 → 跨集样本外
       if (btOosFrac > 0) payload.oos_fraction = btOosFrac; // 同集只回测末尾比例 → 时间后段样本外
+      if (btMarketDataUseValidationRefs.length > 0) {
+        payload.market_data_use_validation_refs = btMarketDataUseValidationRefs;
+      }
       const r = await fetch(`/api/training/jobs/${selectedJob}/backtest`, {
         method: "POST",
         headers: { "content-type": "application/json" },
@@ -164,10 +184,14 @@ export function TrainingBenchPage() {
     } finally {
       setBtBusy(false);
     }
-  }, [selectedJob, btDataset, btOosFrac]);
+  }, [selectedJob, btDataset, btOosFrac, btMarketDataUseValidationRefs]);
 
   const card = useMemo(() => models.find((m) => m.key === modelKey), [models, modelKey]);
   const ds = useMemo(() => datasets.find((d) => d.dataset_id === dataset), [datasets, dataset]);
+  const marketDataUseValidationRefs = useMemo(
+    () => splitMarketDataUseValidationRefs(marketDataUseValidationRefsRaw),
+    [marketDataUseValidationRefsRaw],
+  );
 
   // 初次加载
   useEffect(() => {
@@ -251,6 +275,7 @@ export function TrainingBenchPage() {
           label_col: ds.label_col,
           asset_class: ds.asset_class,
           hyperparams: hyper,
+          market_data_use_validation_refs: marketDataUseValidationRefs,
           // OOS 无泄露：选了「前 N% 训练」就下发 train_fraction，后端据此只用前段训练、
           // 回测自动取互补后段做严格样本外（service.py/_slice_front_dates + main.py strict_oos）。
           // =0（全程）时 JSON.stringify 自动省略该字段，后端按全样本训练。否则 UI「无泄露」承诺无法兑现。
@@ -284,7 +309,7 @@ export function TrainingBenchPage() {
             type="button"
             className="cc-btn cc-btn--accent"
             onClick={submit}
-            disabled={submitting || !card?.available || features.length === 0}
+            disabled={submitting || !card?.available || features.length === 0 || marketDataUseValidationRefs.length === 0}
             title={card && !card.available ? "该模型依赖未安装(如 torch)" : ""}
           >
             {submitting ? "提交中…" : "▶ 开始训练"}
@@ -360,6 +385,18 @@ export function TrainingBenchPage() {
                 训完点「回测」即自动跑后 {Math.round((1 - trainFraction) * 100)}% 样本外（无泄露）
               </div>
             )}
+          </Field>
+
+          <Field label={`MarketDataUse refs（${marketDataUseValidationRefs.length}）`}>
+            <textarea
+              className="cc-input"
+              data-testid="training-market-data-use-validation-refs"
+              value={marketDataUseValidationRefsRaw}
+              onChange={(e) => setMarketDataUseValidationRefsRaw(e.target.value)}
+              placeholder="market_data_use:..."
+              rows={3}
+              style={{ resize: "vertical", minHeight: 72, fontFamily: "var(--cc-font-mono)" }}
+            />
           </Field>
 
           {card && Object.keys(card.param_schema).length > 0 && (
@@ -507,6 +544,15 @@ export function TrainingBenchPage() {
                   <option value={0.5}>后50%</option>
                 </select>
               </label>
+              <textarea
+                className="cc-input cc-input--sm"
+                data-testid="training-backtest-market-data-use-validation-refs"
+                value={btMarketDataUseValidationRefsRaw}
+                onChange={(e) => setBtMarketDataUseValidationRefsRaw(e.target.value)}
+                placeholder="backtest market_data_use refs"
+                rows={2}
+                style={{ minWidth: 220, maxWidth: 300, minHeight: 42, resize: "vertical", fontFamily: "var(--cc-font-mono)", fontSize: 11 }}
+              />
               <button type="button" className="cc-btn cc-btn--accent cc-btn--sm" onClick={runBacktest} disabled={btBusy} title="用此模型回测；换数据集或选OOS后段=样本外">
                 {btBusy ? "回测中…" : "▶ 回测"}
               </button>

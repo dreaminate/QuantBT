@@ -7,7 +7,7 @@
   · plan 枚举 + 价格信息（与 /pricing 页一致）
   · 用户 plan 切换 record_subscription（模拟支付完成）
   · webhook handler 框架（解析 stripe event payload + 更新 db）
-- v1.0.3 接真 Stripe 时:
+- v1.0.3 接入 Stripe 时:
   · 装 stripe-python
   · 实现 create_checkout_session（user 点"购买"→重定向 stripe.com）
   · 实现 webhook signature 校验

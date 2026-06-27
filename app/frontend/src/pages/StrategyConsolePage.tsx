@@ -57,6 +57,7 @@ import {
   toEdgeView,
   type DomainNode,
   type DomainEdge,
+  type StageKey,
 } from "./strategy/mockGraph";
 import {
   validateGraph,
@@ -70,8 +71,24 @@ import {
   fetchStrategyVersions,
   forkStrategy,
   fetchLiveSnapshot,
+  fetchResearchGraphCanvasProjection,
+  executeResearchGraphCanvasAssetMutation,
+  recordResearchGraphCanvasLayout,
+  recordResearchGraphEdge,
+  deleteResearchGraphEdge,
+  tombstoneResearchGraphQro,
+  applyResearchGraphPatch,
+  saveResearchGraphCanvasParameterValue,
   type BackendVersion,
   type BackendLiveSnapshot,
+  type ResearchGraphCanvasProjection,
+  type CanvasAssetMutationResponse,
+  type CanvasLayoutResponse,
+  type GraphEdgeResponse,
+  type GraphEdgeDeletionResponse,
+  type QROTombstoneResponse,
+  type GraphPatchApplicationResponse,
+  type CanvasParameterValueResponse,
 } from "./strategy/api";
 
 /** runtime 三态（DC runtime：backtest/paper/live）。 */
@@ -94,6 +111,86 @@ function toDict(arr: DomainNode[]): Record<string, DomainNode> {
   const d: Record<string, DomainNode> = {};
   for (const n of arr) d[n.id] = { ...n, params: { ...n.params } };
   return d;
+}
+
+function stageForCat(cat: DomainNode["cat"]): StageKey {
+  switch (cat) {
+    case "scope": return "s2";
+    case "data":
+    case "factor": return "s3";
+    case "model": return "s4";
+    case "signal": return "s5";
+    case "position": return "s6";
+    case "risk":
+    case "exec": return "s7";
+    case "eval": return "s8";
+    default: return "s1";
+  }
+}
+
+function applyResearchGraphProjection(
+  projection: ResearchGraphCanvasProjection,
+): { nodes: Record<string, DomainNode>; edges: DomainEdge[] } {
+  const portTypes = new Map<string, string>();
+  for (const edge of projection.edges) {
+    const dt = `projection:${edge.id}`;
+    portTypes.set(`${edge.from.node}:${edge.from.port}`, dt);
+    portTypes.set(`${edge.to.node}:${edge.to.port}`, dt);
+  }
+  const port = (nodeId: string, p: { id: string; name: string }) => ({
+    id: p.id,
+    name: p.name,
+    dt: portTypes.get(`${nodeId}:${p.id}`) ?? `projection:${nodeId}:${p.id}`,
+    freq: "",
+    scope: "",
+    req: false,
+    role: "",
+    schema: "",
+  });
+  const nodes: Record<string, DomainNode> = {};
+  for (const n of projection.nodes) {
+    const qroId = n.id.startsWith("canvas_node:qro:") ? n.id.slice("canvas_node:qro:".length) : "";
+    nodes[n.id] = {
+      id: n.id,
+      cat: n.cat,
+      stage: stageForCat(n.cat),
+      title: n.title,
+      x: n.x,
+      y: n.y,
+      w: n.w,
+      state: n.state,
+      desc: n.lines.join(" · ") || n.title,
+      params: {
+        source: "research_graph_projection",
+        read_only: projection.read_only ? "true" : "false",
+        ...(qroId ? { qro_id: qroId, qro_type: n.title, canvas_edit_ref: "unset" } : {}),
+      },
+      ins: n.ins.map((p) => port(n.id, p)),
+      outs: n.outs.map((p) => port(n.id, p)),
+      lines: [...n.lines],
+      lineage: "research_graph_projection",
+      badge: n.badge,
+      locked: projection.read_only || n.locked,
+    };
+  }
+  return {
+    nodes,
+    edges: projection.edges.map((e) => ({
+      id: e.id,
+      from: e.from,
+      to: e.to,
+      compat: e.compat,
+    })),
+  };
+}
+
+function graphQroId(node: DomainNode | undefined): string {
+  return String(node?.params.qro_id || "").trim();
+}
+
+function graphEdgeRef(edge: DomainEdge | undefined): string {
+  const prefix = "canvas_edge:graph:";
+  return edge?.id.startsWith(prefix) ? edge.id.slice(prefix.length) : "";
 }
 
 /**
@@ -125,6 +222,15 @@ export function StrategyConsolePage() {
   const [agentMode, setAgentMode] = useState<PermissionMode>("ask");
   const [runtime, setRuntime] = useState<Runtime>("backtest");
   const readOnly = runtime === "live";
+  const [graphProjection, setGraphProjection] = useState<ResearchGraphCanvasProjection | null>(null);
+  const [graphProjectionLoading, setGraphProjectionLoading] = useState(true);
+  const [graphProjectionErr, setGraphProjectionErr] = useState<string | null>(null);
+  const [graphMutationPending, setGraphMutationPending] = useState(false);
+  const [graphMutationMsg, setGraphMutationMsg] = useState<string | null>(null);
+  const [graphParamKey, setGraphParamKey] = useState("");
+  const [graphParamValue, setGraphParamValue] = useState("");
+  const [graphConnectFrom, setGraphConnectFrom] = useState<PortRef | null>(null);
+  const canvasReadOnly = readOnly || (graphProjection?.read_only ?? false);
 
   // ── 面板开合 ──
   const [leftOpen, setLeftOpen] = useState(true);
@@ -155,6 +261,49 @@ export function StrategyConsolePage() {
   const [, forceTick] = useState(0);
 
   const surfSize = useRef({ w: 1000, h: 600 });
+
+  function installGraphProjection(projection: ResearchGraphCanvasProjection): void {
+    const graph = applyResearchGraphProjection(projection);
+    setNodes(graph.nodes);
+    setEdges(graph.edges);
+    setSelection({ nodeIds: [], edgeIds: [] });
+    setProposalLive(false);
+    undoStack.current = [];
+    redoStack.current = [];
+    setGraphProjection(projection);
+  }
+
+  useEffect(() => {
+    let cancelled = false;
+    setGraphProjectionLoading(true);
+    setGraphProjectionErr(null);
+    void fetchResearchGraphCanvasProjection({ limit: 24 })
+      .then((projection) => {
+        if (cancelled) return;
+        if (!Array.isArray(projection.nodes) || !Array.isArray(projection.edges)) {
+          setGraphProjection(null);
+          setGraphProjectionErr("Research Graph 投影响应格式不完整");
+          return;
+        }
+        if (projection.nodes.length === 0) {
+          setGraphProjection(null);
+          setGraphProjectionErr("Research Graph 暂无可投影 QRO");
+          return;
+        }
+        installGraphProjection(projection);
+      })
+      .catch((e: Error) => {
+        if (cancelled) return;
+        setGraphProjection(null);
+        setGraphProjectionErr(e.message || "Research Graph 投影加载失败");
+      })
+      .finally(() => {
+        if (!cancelled) setGraphProjectionLoading(false);
+      });
+    return () => {
+      cancelled = true;
+    };
+  }, []);
 
   function snapshot(): void {
     undoStack.current.push({
@@ -189,6 +338,9 @@ export function StrategyConsolePage() {
   const edgeViews = useMemo(() => edges.map(toEdgeView), [edges]);
 
   const selNode = selection.nodeIds.length === 1 ? nodes[selection.nodeIds[0]] : undefined;
+  const selEdge = selection.edgeIds.length === 1
+    ? edges.find((edge) => edge.id === selection.edgeIds[0])
+    : undefined;
 
   // ── 血缘链路（选中成交时高亮 path）──
   const trace = traceId ? MOCK_TRADES.find((t) => t.id === traceId) ?? null : null;
@@ -227,25 +379,54 @@ export function StrategyConsolePage() {
     setSelection({ nodeIds: [], edgeIds: [id] });
   }, []);
 
-  // ── 节点拖拽（live 只读时不动）──
-  const dragRef = useRef<{ id: string; sx: number; sy: number; ox: number; oy: number; moved: boolean } | null>(null);
+  // ── 节点拖拽：Graph projection 只允许 QRO 节点把布局 digest 写回 canonical mutation。──
+  const dragRef = useRef<{
+    id: string;
+    sx: number;
+    sy: number;
+    ox: number;
+    oy: number;
+    nx: number;
+    ny: number;
+    moved: boolean;
+    graphLayoutWrite: boolean;
+  } | null>(null);
   const onNodeMove = useCallback(
     (id: string, e: PointerEvent<HTMLDivElement>) => {
       e.stopPropagation();
       if (selection.nodeIds[0] !== id) setSelection({ nodeIds: [id], edgeIds: [] });
-      if (readOnly) return; // Live 只读：节点不可拖
       const n = nodes[id];
-      dragRef.current = { id, sx: e.clientX, sy: e.clientY, ox: n.x, oy: n.y, moved: false };
+      if (!n) return;
+      const graphLayoutWrite = Boolean(graphProjection && !readOnly && graphQroId(n) && !graphMutationPending);
+      if (canvasReadOnly && !graphLayoutWrite) return;
+      dragRef.current = {
+        id,
+        sx: e.clientX,
+        sy: e.clientY,
+        ox: n.x,
+        oy: n.y,
+        nx: n.x,
+        ny: n.y,
+        moved: false,
+        graphLayoutWrite,
+      };
       const onMove = (ev: globalThis.PointerEvent) => {
         const d = dragRef.current;
         if (!d) return;
         const dx = (ev.clientX - d.sx) / zoom;
         const dy = (ev.clientY - d.sy) / zoom;
         if (Math.abs(ev.clientX - d.sx) + Math.abs(ev.clientY - d.sy) > 3) d.moved = true;
-        setNodes((prev) => ({ ...prev, [d.id]: { ...prev[d.id], x: d.ox + dx, y: d.oy + dy } }));
+        d.nx = d.ox + dx;
+        d.ny = d.oy + dy;
+        setNodes((prev) => ({ ...prev, [d.id]: { ...prev[d.id], x: d.nx, y: d.ny } }));
       };
       const onUp = () => {
-        if (dragRef.current?.moved) snapshot();
+        const d = dragRef.current;
+        if (d?.moved && d.graphLayoutWrite) {
+          persistGraphNodeLayout(nodes[d.id], d.nx, d.ny);
+        } else if (d?.moved) {
+          snapshot();
+        }
         dragRef.current = null;
         window.removeEventListener("pointermove", onMove);
         window.removeEventListener("pointerup", onUp);
@@ -254,17 +435,35 @@ export function StrategyConsolePage() {
       window.addEventListener("pointerup", onUp);
     },
     // eslint-disable-next-line react-hooks/exhaustive-deps
-    [nodes, zoom, readOnly, selection.nodeIds],
+    [nodes, zoom, canvasReadOnly, selection.nodeIds, graphProjection, readOnly, graphMutationPending],
   );
 
-  // ── 连线（live 只读时不起线；端口门 compat=bad 不建边）──
+  // ── 连线（只读时不起线；端口门 compat=bad 不建边）──
   const onConnect = useCallback(
-    (_ref: PortRef, _side: "in" | "out") => {
-      if (readOnly) return;
+    (ref: PortRef, side: "in" | "out", e?: PointerEvent<HTMLDivElement>) => {
+      e?.stopPropagation();
+      if (graphProjection) {
+        if (graphMutationPending) return;
+        if (side === "out") {
+          setGraphConnectFrom(ref);
+          setSelection({ nodeIds: [ref.node], edgeIds: [] });
+          setGraphMutationMsg("已选择输出端口，选择一个输入端口记录连接。");
+          return;
+        }
+        if (graphConnectFrom) {
+          recordGraphCanvasConnectMutation(graphConnectFrom, ref);
+          setGraphConnectFrom(null);
+          return;
+        }
+        setSelection({ nodeIds: [ref.node], edgeIds: [] });
+        setGraphMutationMsg("先选择输出端口，再选择输入端口。");
+        return;
+      }
+      if (canvasReadOnly) return;
       // P0：连线门已在 compat() 编码；交互建边走 marquee/手势在后续轮接入真实后端，
       // 此处保留回调签名以满足 GraphCanvas 受控契约。
     },
-    [readOnly],
+    [canvasReadOnly, graphProjection, graphMutationPending, graphConnectFrom],
   );
 
   // ── 框选 ──
@@ -302,7 +501,25 @@ export function StrategyConsolePage() {
 
   // ── 删除门（B6）：locked 节点跳过，不可删 ──
   const deleteSelection = useCallback(() => {
-    if (readOnly) return;
+    if (graphProjection) {
+      const edge = selection.edgeIds.length === 1
+        ? edges.find((item) => item.id === selection.edgeIds[0])
+        : undefined;
+      if (graphEdgeRef(edge)) {
+        recordGraphCanvasGraphEdgeDeletion(edge);
+        return;
+      }
+      if (edge && qroNodeForGraphEdge(edge)) {
+        recordGraphCanvasDeleteMutation({ edge });
+        return;
+      }
+      const node = selection.nodeIds.length === 1 ? nodes[selection.nodeIds[0]] : undefined;
+      if (graphQroId(node)) {
+        recordGraphCanvasQroTombstone(node);
+        return;
+      }
+    }
+    if (canvasReadOnly) return;
     const delIds = selection.nodeIds.filter((id) => canDelete(nodes[id]));
     if (delIds.length === 0 && selection.edgeIds.length === 0) return;
     snapshot();
@@ -321,7 +538,7 @@ export function StrategyConsolePage() {
     );
     setSelection({ nodeIds: [], edgeIds: [] });
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [readOnly, selection, nodes, edges]);
+  }, [canvasReadOnly, selection, nodes, edges, graphProjection]);
 
   // Del/Backspace 删选中（删除门：locked 节点跳过）。
   useEffect(() => {
@@ -344,12 +561,336 @@ export function StrategyConsolePage() {
 
   // ── 参数编辑（live 只读 / locked 时 ParamRow disabled，此处只在可编辑时入栈）──
   function setParam(nodeId: string, k: string, v: string): void {
+    if (canvasReadOnly) return;
     snapshot();
     setNodes((prev) => {
       const n = prev[nodeId];
       const nextState = n.state === "succeeded" ? n.state : "dirty";
       return { ...prev, [nodeId]: { ...n, params: { ...n.params, [k]: v }, state: nextState } };
     });
+  }
+
+  function recordGraphCanvasAssetMutation(
+    node: DomainNode,
+    kind: "edit" | "param" = "edit",
+  ): void {
+    const qroId = graphQroId(node);
+    const qroType = node.params.qro_type || node.title;
+    if (!graphProjection || !qroId || graphMutationPending) return;
+    const stamp = Date.now();
+    const fieldPath = kind === "param"
+      ? "output_contract.canvas_param_ref"
+      : "output_contract.canvas_edit_ref";
+    const valuePrefix = kind === "param" ? "canvas_param" : "canvas_edit";
+    const evidenceRef = kind === "param"
+      ? "frontend:StrategyConsolePage:canvas_param_writeback"
+      : "frontend:StrategyConsolePage:canvas_asset_mutation";
+    setGraphMutationPending(true);
+    setGraphMutationMsg(null);
+    void executeResearchGraphCanvasAssetMutation({
+      command_ref: `canvas_command:strategy_console_${kind}:${qroId}:${stamp}`,
+      source_desk: "strategy",
+      actor_source: "user_manual",
+      target_asset_type: qroType,
+      target_ref: qroId,
+      field_path: fieldPath,
+      operation: "set_ref",
+      canonical_command_ref: `canonical:strategy_console_${kind}:${qroId}:${stamp}`,
+      audit_ref: `audit:strategy_console_${kind}:${qroId}:${stamp}`,
+      value_ref: `${valuePrefix}:strategy_console:${qroId}:${stamp}`,
+      value_hash: `hash_strategy_console_${kind}_${stamp}`,
+      evidence_refs: [evidenceRef],
+    })
+      .then((result: CanvasAssetMutationResponse) => {
+        setGraphMutationMsg(`已写入 QRO v${result.qro_version} · ${result.updated_field_path}`);
+        return fetchResearchGraphCanvasProjection({ limit: 24 });
+      })
+      .then((projection) => {
+        if (projection.nodes.length > 0) installGraphProjection(projection);
+      })
+      .catch((e: Error) => setGraphMutationMsg(`写入失败：${e.message}`))
+      .finally(() => setGraphMutationPending(false));
+  }
+
+  function recordGraphCanvasParameterValue(node: DomainNode): void {
+    const qroId = graphQroId(node);
+    const qroType = node.params.qro_type || node.title;
+    const paramKey = graphParamKey.trim();
+    const paramValue = graphParamValue.trim();
+    if (!paramKey || !paramValue) {
+      setGraphMutationMsg("写入失败：参数名和值必填");
+      return;
+    }
+    if (!graphProjection || !qroId || !qroType || graphMutationPending) return;
+    const stamp = Date.now();
+    setGraphMutationPending(true);
+    setGraphMutationMsg(null);
+    void saveResearchGraphCanvasParameterValue({
+      command_ref: `canvas_command:strategy_console_param_value:${qroId}:${paramKey}:${stamp}`,
+      source_desk: "strategy",
+      actor_source: "user_manual",
+      target_qro_id: qroId,
+      target_asset_type: qroType,
+      param_key: paramKey,
+      param_value: paramValue,
+      canonical_command_ref: `canonical:strategy_console_param_value:${qroId}:${paramKey}:${stamp}`,
+      audit_ref: `audit:strategy_console_param_value:${qroId}:${paramKey}:${stamp}`,
+      evidence_refs: ["frontend:StrategyConsolePage:canvas_parameter_value_save"],
+    })
+      .then((result: CanvasParameterValueResponse) => {
+        setGraphMutationMsg(`已保存参数 ${result.param_key} · ${result.parameter_ref}`);
+        return fetchResearchGraphCanvasProjection({ limit: 24 });
+      })
+      .then((projection) => {
+        if (projection.nodes.length > 0) installGraphProjection(projection);
+      })
+      .catch((e: Error) => setGraphMutationMsg(`写入失败：${e.message}`))
+      .finally(() => setGraphMutationPending(false));
+  }
+
+  function qroNodeForGraphEdge(edge: DomainEdge | undefined): DomainNode | undefined {
+    if (!edge) return undefined;
+    const toNode = nodes[edge.to.node];
+    if (graphQroId(toNode)) return toNode;
+    const fromNode = nodes[edge.from.node];
+    if (graphQroId(fromNode)) return fromNode;
+    return undefined;
+  }
+
+  function recordGraphCanvasDeleteMutation(target: { node?: DomainNode; edge?: DomainEdge }): void {
+    if (target.edge && graphEdgeRef(target.edge)) {
+      recordGraphCanvasGraphEdgeDeletion(target.edge);
+      return;
+    }
+    if (target.node && graphQroId(target.node)) {
+      recordGraphCanvasQroTombstone(target.node);
+      return;
+    }
+    const targetNode = target.node ?? qroNodeForGraphEdge(target.edge);
+    const qroId = graphQroId(targetNode);
+    const qroType = targetNode?.params.qro_type || targetNode?.title || "";
+    if (!graphProjection || !targetNode || !qroId || !qroType || graphMutationPending) return;
+    const stamp = Date.now();
+    const targetKind = target.edge ? "edge" : "node";
+    const targetId = target.edge?.id ?? targetNode.id;
+    setGraphMutationPending(true);
+    setGraphMutationMsg(null);
+    void executeResearchGraphCanvasAssetMutation({
+      command_ref: `canvas_command:strategy_console_delete:${qroId}:${stamp}`,
+      source_desk: "strategy",
+      actor_source: "user_manual",
+      target_asset_type: qroType,
+      target_ref: qroId,
+      field_path: "output_contract.canvas_delete_ref",
+      operation: "set_ref",
+      canonical_command_ref: `canonical:strategy_console_delete:${qroId}:${stamp}`,
+      audit_ref: `audit:strategy_console_delete:${qroId}:${stamp}`,
+      value_ref: `canvas_delete:strategy_console:${qroId}:${targetKind}:${targetId}:${stamp}`,
+      value_hash: `hash_strategy_console_delete_${stamp}`,
+      evidence_refs: ["frontend:StrategyConsolePage:canvas_delete_writeback"],
+    })
+      .then((result: CanvasAssetMutationResponse) => {
+        setGraphMutationMsg(`已写入 QRO v${result.qro_version} · ${result.updated_field_path}`);
+        return fetchResearchGraphCanvasProjection({ limit: 24 });
+      })
+      .then((projection) => {
+        if (projection.nodes.length > 0) installGraphProjection(projection);
+      })
+      .catch((e: Error) => setGraphMutationMsg(`写入失败：${e.message}`))
+      .finally(() => setGraphMutationPending(false));
+  }
+
+  function recordGraphCanvasQroTombstone(node: DomainNode | undefined): void {
+    const qroId = graphQroId(node);
+    if (!graphProjection || !node || !qroId || graphMutationPending) return;
+    const stamp = Date.now();
+    setSelection({ nodeIds: [node.id], edgeIds: [] });
+    setGraphMutationPending(true);
+    setGraphMutationMsg(null);
+    void tombstoneResearchGraphQro({
+      command_ref: `canvas_command:strategy_console_tombstone_qro:${qroId}:${stamp}`,
+      source_desk: "strategy",
+      actor_source: "user_manual",
+      qro_id: qroId,
+      canonical_command_ref: `canonical:strategy_console_tombstone_qro:${qroId}:${stamp}`,
+      audit_ref: `audit:strategy_console_tombstone_qro:${qroId}:${stamp}`,
+      evidence_refs: ["frontend:StrategyConsolePage:qro_tombstone"],
+    })
+      .then((result: QROTombstoneResponse) => {
+        setGraphMutationMsg(`已删除 QRO node · ${result.qro_id}`);
+        return fetchResearchGraphCanvasProjection({ limit: 24 });
+      })
+      .then((projection) => {
+        installGraphProjection(projection);
+      })
+      .catch((e: Error) => setGraphMutationMsg(`写入失败：${e.message}`))
+      .finally(() => setGraphMutationPending(false));
+  }
+
+  function recordGraphCanvasGraphEdgeDeletion(edge: DomainEdge | undefined): void {
+    const edgeRef = graphEdgeRef(edge);
+    if (!graphProjection || !edgeRef || graphMutationPending) return;
+    const edgeId = edge?.id ?? `canvas_edge:graph:${edgeRef}`;
+    const stamp = Date.now();
+    setSelection({ nodeIds: [], edgeIds: [edgeId] });
+    setGraphMutationPending(true);
+    setGraphMutationMsg(null);
+    void deleteResearchGraphEdge({
+      command_ref: `canvas_command:strategy_console_delete_graph_edge:${edgeRef}:${stamp}`,
+      source_desk: "strategy",
+      actor_source: "user_manual",
+      edge_ref: edgeRef,
+      canonical_command_ref: `canonical:strategy_console_delete_graph_edge:${edgeRef}:${stamp}`,
+      audit_ref: `audit:strategy_console_delete_graph_edge:${edgeRef}:${stamp}`,
+      evidence_refs: ["frontend:StrategyConsolePage:graph_edge_delete"],
+    })
+      .then((result: GraphEdgeDeletionResponse) => {
+        setGraphMutationMsg(`已删除 Graph edge · ${result.edge_ref}`);
+        return fetchResearchGraphCanvasProjection({ limit: 24 });
+      })
+      .then((projection) => {
+        if (projection.nodes.length > 0) installGraphProjection(projection);
+      })
+      .catch((e: Error) => setGraphMutationMsg(`写入失败：${e.message}`))
+      .finally(() => setGraphMutationPending(false));
+  }
+
+  function recordGraphCanvasConnectMutation(from: PortRef, to: PortRef): void {
+    const fromNode = nodes[from.node];
+    const toNode = nodes[to.node];
+    const fromQroId = graphQroId(fromNode);
+    const toQroId = graphQroId(toNode);
+    if (!graphProjection || graphMutationPending) return;
+    if (!fromQroId || !toQroId || fromQroId === toQroId) {
+      setSelection({ nodeIds: toNode ? [toNode.id] : [], edgeIds: [] });
+      setGraphMutationMsg("Graph edge 只支持两个不同 QRO 节点之间的连接。");
+      return;
+    }
+    const stamp = Date.now();
+    setSelection({ nodeIds: [toNode.id], edgeIds: [] });
+    setGraphMutationPending(true);
+    setGraphMutationMsg(null);
+    void recordResearchGraphEdge({
+      command_ref: `canvas_command:strategy_console_graph_edge:${fromQroId}:${toQroId}:${stamp}`,
+      source_desk: "strategy",
+      actor_source: "user_manual",
+      from_qro_id: fromQroId,
+      to_qro_id: toQroId,
+      relation_type: "canvas_connect",
+      canonical_command_ref: `canonical:strategy_console_graph_edge:${fromQroId}:${toQroId}:${stamp}`,
+      audit_ref: `audit:strategy_console_graph_edge:${fromQroId}:${toQroId}:${stamp}`,
+      evidence_refs: ["frontend:StrategyConsolePage:graph_edge_create"],
+    })
+      .then((result: GraphEdgeResponse) => {
+        setGraphMutationMsg(`已创建 Graph edge · ${result.edge_ref}`);
+        return fetchResearchGraphCanvasProjection({ limit: 24 });
+      })
+      .then((projection) => {
+        if (projection.nodes.length > 0) installGraphProjection(projection);
+      })
+      .catch((e: Error) => setGraphMutationMsg(`写入失败：${e.message}`))
+      .finally(() => setGraphMutationPending(false));
+  }
+
+  function firstGraphQroNode(): DomainNode | undefined {
+    return Object.values(nodes).find((node) => Boolean(graphQroId(node)));
+  }
+
+  function recordGraphCanvasPatchMutation(kind: "ghost" | "auto"): void {
+    const targetNode = firstGraphQroNode();
+    const qroId = graphQroId(targetNode);
+    if (!graphProjection || !targetNode || !qroId || graphMutationPending) return;
+    const stamp = Date.now();
+    const patchId = kind === "ghost" ? MOCK_PROPOSAL.patchId : "pt_auto";
+    setSelection({ nodeIds: [targetNode.id], edgeIds: [] });
+    setGraphMutationPending(true);
+    setGraphMutationMsg(null);
+    void applyResearchGraphPatch({
+      command_ref: `canvas_command:strategy_console_apply_${kind}:${qroId}:${stamp}`,
+      source_desk: "strategy",
+      actor_source: "user_manual",
+      target_qro_id: qroId,
+      patch_kind: kind,
+      patch_ref: `canvas_patch:${kind}:strategy_console:${qroId}:${patchId}:${stamp}`,
+      patch_hash: `hash_strategy_console_${kind}_${stamp}`,
+      canonical_command_ref: `canonical:strategy_console_apply_${kind}:${qroId}:${stamp}`,
+      audit_ref: `audit:strategy_console_apply_${kind}:${qroId}:${stamp}`,
+      evidence_refs: [`frontend:StrategyConsolePage:canvas_${kind}_patch_application`],
+    })
+      .then((result: GraphPatchApplicationResponse) => {
+        setGraphMutationMsg(`已应用 Graph patch · ${result.application_ref}`);
+        return fetchResearchGraphCanvasProjection({ limit: 24 });
+      })
+      .then((projection) => {
+        if (projection.nodes.length > 0) installGraphProjection(projection);
+      })
+      .catch((e: Error) => setGraphMutationMsg(`写入失败：${e.message}`))
+      .finally(() => setGraphMutationPending(false));
+  }
+
+  function recordGraphCanvasEdgeMutation(edge: DomainEdge): void {
+    const targetNode = qroNodeForGraphEdge(edge);
+    const qroId = graphQroId(targetNode);
+    const qroType = targetNode?.params.qro_type || targetNode?.title || "";
+    if (!graphProjection || !targetNode || !qroId || !qroType || graphMutationPending) return;
+    const stamp = Date.now();
+    setGraphMutationPending(true);
+    setGraphMutationMsg(null);
+    void executeResearchGraphCanvasAssetMutation({
+      command_ref: `canvas_command:strategy_console_edge:${qroId}:${stamp}`,
+      source_desk: "strategy",
+      actor_source: "user_manual",
+      target_asset_type: qroType,
+      target_ref: qroId,
+      field_path: "output_contract.canvas_edge_ref",
+      operation: "set_ref",
+      canonical_command_ref: `canonical:strategy_console_edge:${qroId}:${stamp}`,
+      audit_ref: `audit:strategy_console_edge:${qroId}:${stamp}`,
+      value_ref: `canvas_edge:strategy_console:${qroId}:${edge.id}:${stamp}`,
+      value_hash: `hash_strategy_console_edge_${stamp}`,
+      evidence_refs: ["frontend:StrategyConsolePage:canvas_edge_relation_writeback"],
+    })
+      .then((result: CanvasAssetMutationResponse) => {
+        setGraphMutationMsg(`已写入 QRO v${result.qro_version} · ${result.updated_field_path}`);
+        return fetchResearchGraphCanvasProjection({ limit: 24 });
+      })
+      .then((projection) => {
+        if (projection.nodes.length > 0) installGraphProjection(projection);
+      })
+      .catch((e: Error) => setGraphMutationMsg(`写入失败：${e.message}`))
+      .finally(() => setGraphMutationPending(false));
+  }
+
+  function persistGraphNodeLayout(node: DomainNode | undefined, x: number, y: number): void {
+    const qroId = graphQroId(node);
+    const qroType = node?.params.qro_type || node?.title || "";
+    if (!graphProjection || !node || !qroId || !qroType || graphMutationPending) return;
+    const stamp = Date.now();
+    setGraphMutationPending(true);
+    setGraphMutationMsg(null);
+    void recordResearchGraphCanvasLayout({
+      command_ref: `canvas_command:strategy_console_layout:${qroId}:${stamp}`,
+      source_desk: "strategy",
+      actor_source: "user_manual",
+      target_asset_type: qroType,
+      target_ref: qroId,
+      node_id: node.id,
+      x,
+      y,
+      w: node.w,
+      canonical_command_ref: `canonical:strategy_console_layout:${qroId}:${stamp}`,
+      audit_ref: `audit:strategy_console_layout:${qroId}:${stamp}`,
+      evidence_refs: ["frontend:StrategyConsolePage:qro_node_layout_drag"],
+    })
+      .then((result: CanvasLayoutResponse) => {
+        setGraphMutationMsg(`已写入 QRO v${result.qro_version} · ${result.updated_field_path}`);
+        return fetchResearchGraphCanvasProjection({ limit: 24 });
+      })
+      .then((projection) => {
+        if (projection.nodes.length > 0) installGraphProjection(projection);
+      })
+      .catch((e: Error) => setGraphMutationMsg(`写入失败：${e.message}`))
+      .finally(() => setGraphMutationPending(false));
   }
 
   // ── Agent send：ask→重挂提议；auto/bypass→事务化加 DrawdownGuard + 可整轮撤销 ──
@@ -372,6 +913,17 @@ export function StrategyConsolePage() {
 
   // ── 接受提议（Ask）：入栈 → 应用 ops → 清提议 → 追加 patch 块 ──
   function acceptProposal(): void {
+    if (canvasReadOnly) {
+      if (graphProjection) {
+        recordGraphCanvasPatchMutation("ghost");
+      }
+      setProposalLive(false);
+      setBlocks((prev) => [
+        ...prev,
+        { id: `ro${Date.now()}`, type: "say", text: graphProjection ? "Ghost patch 已应用到 Research Graph，projection 已重拉。" : "当前画布来自 Research Graph 只读投影，未应用 Ghost patch。" },
+      ]);
+      return;
+    }
     snapshot();
     applyOps();
     setProposalLive(false);
@@ -418,6 +970,16 @@ export function StrategyConsolePage() {
 
   // ── Auto/Bypass：事务化加 DrawdownGuard，对话里可整轮撤销 ──
   function applyAuto(): void {
+    if (canvasReadOnly) {
+      if (graphProjection) {
+        recordGraphCanvasPatchMutation("auto");
+      }
+      setBlocks((prev) => [
+        ...prev,
+        { id: `auto_ro${Date.now()}`, type: "say", text: graphProjection ? "Auto patch 已应用到 Research Graph，projection 已重拉。" : "当前画布只读，Auto 未改图。" },
+      ]);
+      return;
+    }
     snapshot();
     setNodes((prev) =>
       prev[MOCK_AUTO_NODE.id]
@@ -530,42 +1092,45 @@ export function StrategyConsolePage() {
   const topbar = (
     <DeskTopBar>
       <DeskSwitcher current="strategy" />
-      <span style={vDiv} aria-hidden />
-      <span style={{ fontWeight: 600 }}>strat_wk_cn_01</span>
-      <button style={ghostBtn} onClick={toggleVersionMenu} aria-haspopup="true" data-version-toggle>
-        {ver} ▾
-      </button>
-      <SegmentedControl<Runtime>
-        options={[
-          { value: "backtest", label: "Backtest" },
-          { value: "paper", label: "Paper" },
-          { value: "live", label: "Live" },
-        ]}
-        value={runtime}
-        onChange={changeRuntime}
-        size="sm"
-      />
-      {readOnly && (
-        <>
-          <Pill tone="warning" title="已发布 Live 只读（B7）">🔒 Live 只读</Pill>
-          <button style={greenBtn} onClick={fork}>⑂ Fork 草稿</button>
-          <button
-            style={killArmed ? killArmedBtn : killOffBtn}
-            onClick={() => setKillArmed((a) => !a)}
-            aria-label="Kill Switch"
-          >
-            {killArmed ? "● ARMED" : "○ OFF"}
-          </button>
-        </>
-      )}
-      <span style={{ flex: 1 }} />
-      <button style={iconBtn(canUndo)} disabled={!canUndo} onClick={undo} aria-label="撤销" title="撤销 ⌘Z">↺</button>
-      <button style={iconBtn(canRedo)} disabled={!canRedo} onClick={redo} aria-label="重做" title="重做 ⌘⇧Z">↻</button>
-      <span style={vDiv} aria-hidden />
-      <button style={errBtn(errTone)} onClick={runValidate} data-validate>{errLabel}</button>
-      <button style={greenBtn} data-run-backtest onClick={() => { setDockOpen(true); setDockTab("logs"); }}>▷ 运行回测</button>
-      <button style={blueBtn} data-compile>{"⟨/⟩"} 编译源码</button>
-      <button style={ghostBtn} data-publish>发布 ▸</button>
+      <div style={strategyTopbarMeta}>
+        <span style={vDiv} aria-hidden />
+        <span style={strategyTopbarName}>strat_wk_cn_01</span>
+        <button style={topbarGhostBtn} onClick={toggleVersionMenu} aria-haspopup="true" data-version-toggle>
+          {ver} ▾
+        </button>
+        <SegmentedControl<Runtime>
+          options={[
+            { value: "backtest", label: "Backtest" },
+            { value: "paper", label: "Paper" },
+            { value: "live", label: "Live" },
+          ]}
+          value={runtime}
+          onChange={changeRuntime}
+          size="sm"
+        />
+        {readOnly && (
+          <>
+            <Pill tone="warning" title="已发布 Live 只读（B7）">🔒 Live 只读</Pill>
+            <button style={topbarGreenBtn} onClick={fork}>⑂ Fork 草稿</button>
+            <button
+              style={killArmed ? topbarKillArmedBtn : topbarKillOffBtn}
+              onClick={() => setKillArmed((a) => !a)}
+              aria-label="Kill Switch"
+            >
+              {killArmed ? "● ARMED" : "○ OFF"}
+            </button>
+          </>
+        )}
+      </div>
+      <div style={strategyTopbarActions}>
+        <button style={topbarIconBtn(canUndo)} disabled={!canUndo} onClick={undo} aria-label="撤销" title="撤销 ⌘Z">↺</button>
+        <button style={topbarIconBtn(canRedo)} disabled={!canRedo} onClick={redo} aria-label="重做" title="重做 ⌘⇧Z">↻</button>
+        <span style={vDiv} aria-hidden />
+        <button style={topbarErrBtn(errTone)} onClick={runValidate} data-validate>{errLabel}</button>
+        <button style={topbarGreenBtn} data-run-backtest onClick={() => { setDockOpen(true); setDockTab("logs"); }}>▷ 运行回测</button>
+        <button style={topbarBlueBtn} data-compile>{"⟨/⟩"} 编译源码</button>
+        <button style={topbarGhostBtn} data-publish>发布 ▸</button>
+      </div>
     </DeskTopBar>
   );
 
@@ -672,6 +1237,11 @@ export function StrategyConsolePage() {
   const canvasSelection: Selection = trace
     ? { nodeIds: trace.path, edgeIds: traceEdgeIds }
     : selection;
+  const canvasSourceLabel = graphProjection
+    ? `Research Graph · ${graphProjection.total} QRO · 只读`
+    : graphProjectionLoading
+      ? "MOCK fallback · 查询 Research Graph"
+      : `MOCK fallback · ${graphProjectionErr ?? "无真实投影"}`;
 
   // 现有编排 UI（console 视图本体）—— 原 DOM 结构保持不变。
   const consoleCenter = (
@@ -688,7 +1258,21 @@ export function StrategyConsolePage() {
           {STAGES.length} 阶段 · {Object.keys(nodes).length} 节点 · {edges.length} 连线
         </span>
         <span style={{ flex: 1 }} />
-        <MockBadge />
+        <span
+          style={{
+            fontSize: 10.5,
+            color: graphProjection ? "var(--desk-info)" : "var(--desk-text-faint)",
+            maxWidth: 260,
+            overflow: "hidden",
+            textOverflow: "ellipsis",
+            whiteSpace: "nowrap",
+          }}
+          title={canvasSourceLabel}
+          data-canvas-source={graphProjection ? "research_graph" : "mock_fallback"}
+        >
+          {canvasSourceLabel}
+        </span>
+        {!graphProjection && <MockBadge />}
         <span style={{ fontSize: 10.5, color: "var(--desk-text-dim)", marginLeft: 8 }} data-sel-count>
           {selection.nodeIds.length + selection.edgeIds.length > 0
             ? `已选 ${selection.nodeIds.length} 节点 / ${selection.edgeIds.length} 连线`
@@ -711,7 +1295,13 @@ export function StrategyConsolePage() {
         onConnect={onConnect}
         onMarquee={onMarquee}
       >
-        {readOnly && (
+        {graphProjection ? (
+          <CanvasBanner tone="info">
+            <span data-graph-projection-banner>
+              Research Graph 只读投影 · {graphProjection.source_projection_refs.length} refs · 无 raw payload
+            </span>
+          </CanvasBanner>
+        ) : readOnly && (
           liveErr ? (
             <CanvasBanner tone="lineage"><span data-live-error>🔒 Live 只读 · 快照加载失败：{liveErr}</span></CanvasBanner>
           ) : liveSnap && !liveSnap.live_allowed ? (
@@ -726,12 +1316,12 @@ export function StrategyConsolePage() {
             <CanvasBanner tone="lineage">🔒 Live 只读 · 画布与参数已锁定（编辑请 Fork 草稿）</CanvasBanner>
           )
         )}
-        {!readOnly && diffOn && (
+        {!canvasReadOnly && diffOn && (
           <CanvasBanner tone="diff" actionLabel="退出对比" onAction={() => setDiffOn(false)}>
             对比 v2 → v3 · +1 新增 / ~2 改动
           </CanvasBanner>
         )}
-        {!readOnly && !diffOn && trace && (
+        {!canvasReadOnly && !diffOn && trace && (
           <CanvasBanner tone="lineage" actionLabel="清除高亮" onAction={() => setTraceId(null)}>
             血缘 · {trace.symbol} · 链路 {trace.path.length} 节点
           </CanvasBanner>
@@ -791,7 +1381,7 @@ export function StrategyConsolePage() {
   // ── RIGHT · Inspector ──
   const right = rightOpen ? (
     <Inspector
-      title={selNode ? selNode.title : "Inspector"}
+      title={selNode ? selNode.title : selEdge ? "Canvas Edge" : "Inspector"}
       onCollapse={() => setRightOpen(false)}
       selectionHead={
         selNode ? (
@@ -804,19 +1394,123 @@ export function StrategyConsolePage() {
             </div>
             <div style={{ fontSize: 11.5, color: "var(--desk-text-dim)", lineHeight: 1.5 }}>{selNode.desc}</div>
           </div>
+        ) : selEdge ? (
+          <div style={{ display: "flex", flexDirection: "column", gap: 6 }} data-edge-insp-head>
+            <div style={{ display: "flex", alignItems: "center", gap: 8 }}>
+              <Pill tone="info">edge</Pill>
+              <Pill tone={selEdge.compat === "bad" ? "danger" : selEdge.compat === "adapt" ? "warning" : "success"}>
+                {selEdge.compat}
+              </Pill>
+            </div>
+            <div style={{ fontSize: 11.5, color: "var(--desk-text-dim)", lineHeight: 1.5 }}>
+              {selEdge.from.node}:{selEdge.from.port} → {selEdge.to.node}:{selEdge.to.port}
+            </div>
+          </div>
         ) : undefined
       }
       tabs={selNode ? <InspectorTabs value={inspTab} onChange={setInspTab} /> : undefined}
     >
       {selNode ? (
-        <InspectorBody
-          node={selNode}
-          tab={inspTab}
-          readOnly={readOnly}
-          issues={nodeIssues(selNode.id, validation)}
-          onParam={(k, v) => setParam(selNode.id, k, v)}
-          onOpenRun={() => openRunDetail(CURRENT_RUN_ID)}
-        />
+        <>
+          {graphProjection && selNode.params.qro_id && (
+            <div style={{ display: "flex", flexDirection: "column", gap: 6, marginBottom: 10 }} data-canvas-asset-edit-panel>
+              <button
+                style={blueBtn}
+                data-canvas-asset-mutation
+                onClick={() => recordGraphCanvasAssetMutation(selNode)}
+                disabled={graphMutationPending}
+                aria-label="记录 Graph 编辑"
+              >
+                ↯ {graphMutationPending ? "写入中" : "记录编辑"}
+              </button>
+              <button
+                style={ghostBtn}
+                data-canvas-param-mutation
+                onClick={() => recordGraphCanvasParameterValue(selNode)}
+                disabled={graphMutationPending}
+                aria-label="记录 Graph 参数"
+              >
+                {graphMutationPending ? "写入中" : "记录参数"}
+              </button>
+              <div style={{ display: "grid", gridTemplateColumns: "minmax(0, 1fr) minmax(0, 1fr)", gap: 6 }} data-canvas-param-value-row>
+                <input
+                  style={paramValueInput}
+                  value={graphParamKey}
+                  onChange={(event) => setGraphParamKey(event.target.value)}
+                  placeholder="参数名"
+                  aria-label="Graph 参数名"
+                  disabled={graphMutationPending}
+                />
+                <input
+                  style={paramValueInput}
+                  value={graphParamValue}
+                  onChange={(event) => setGraphParamValue(event.target.value)}
+                  placeholder="参数值"
+                  aria-label="Graph 参数值"
+                  disabled={graphMutationPending}
+                />
+              </div>
+              <button
+                style={ghostBtn}
+                data-canvas-delete-mutation
+                onClick={() => recordGraphCanvasDeleteMutation({ node: selNode })}
+                disabled={graphMutationPending}
+                aria-label="记录 Graph 删除"
+              >
+                {graphMutationPending ? "写入中" : "记录删除"}
+              </button>
+              {graphMutationMsg && (
+                <div style={{ fontSize: 11, color: graphMutationMsg.startsWith("写入失败") ? "var(--desk-danger)" : "var(--desk-success)" }} data-canvas-asset-mutation-status>
+                  {graphMutationMsg}
+                </div>
+              )}
+            </div>
+          )}
+          <InspectorBody
+            node={selNode}
+            tab={inspTab}
+            readOnly={canvasReadOnly}
+            issues={nodeIssues(selNode.id, validation)}
+            onParam={(k, v) => setParam(selNode.id, k, v)}
+            onOpenRun={() => openRunDetail(CURRENT_RUN_ID)}
+          />
+        </>
+      ) : selEdge ? (
+        <div style={{ display: "flex", flexDirection: "column", gap: 10 }} data-canvas-edge-edit-panel>
+          <div style={{ fontSize: 11.5, color: "var(--desk-text-dim)", lineHeight: 1.5 }}>
+            这条连线来自 Research Graph 投影。记录连线会把 relation ref 写入关联 QRO 的 output contract，
+            不提交端口 raw payload。
+          </div>
+          {graphProjection && qroNodeForGraphEdge(selEdge) ? (
+            <>
+              <button
+                style={blueBtn}
+                data-canvas-edge-mutation
+                onClick={() => recordGraphCanvasEdgeMutation(selEdge)}
+                disabled={graphMutationPending}
+                aria-label="记录 Graph 连线"
+              >
+                ↯ {graphMutationPending ? "写入中" : "记录连线"}
+              </button>
+              <button
+                style={ghostBtn}
+                data-canvas-delete-mutation
+                onClick={() => recordGraphCanvasDeleteMutation({ edge: selEdge })}
+                disabled={graphMutationPending}
+                aria-label="记录 Graph 删除"
+              >
+                {graphMutationPending ? "写入中" : "记录删除"}
+              </button>
+            </>
+          ) : (
+            <div style={faint}>当前连线没有可写回的 QRO target。</div>
+          )}
+          {graphMutationMsg && (
+            <div style={{ fontSize: 11, color: graphMutationMsg.startsWith("写入失败") ? "var(--desk-danger)" : "var(--desk-success)" }} data-canvas-edge-mutation-status>
+              {graphMutationMsg}
+            </div>
+          )}
+        </div>
       ) : (
         <GraphValidationOverview
           ok={validation.ok}
@@ -1171,7 +1865,37 @@ function catTone(cat: DomainNode["cat"]): string {
   }
 }
 
-const vDiv: CSSProperties = { width: 1, height: 18, background: "var(--desk-border)" };
+const vDiv: CSSProperties = { width: 1, height: 18, background: "var(--desk-border)", flex: "0 0 auto" };
+const strategyTopbarMeta: CSSProperties = {
+  display: "flex",
+  alignItems: "center",
+  gap: 6,
+  minWidth: 0,
+  flex: "0 1 auto",
+  overflow: "hidden",
+  whiteSpace: "nowrap",
+};
+const strategyTopbarName: CSSProperties = {
+  fontWeight: 600,
+  minWidth: 0,
+  maxWidth: 132,
+  overflow: "hidden",
+  textOverflow: "ellipsis",
+  whiteSpace: "nowrap",
+};
+const strategyTopbarActions: CSSProperties = {
+  display: "flex",
+  alignItems: "center",
+  justifyContent: "flex-end",
+  gap: 6,
+  marginLeft: "auto",
+  minWidth: 0,
+  flex: "1 1 auto",
+  overflowX: "auto",
+  overflowY: "hidden",
+  whiteSpace: "nowrap",
+};
+const topbarButton: CSSProperties = { flex: "0 0 auto", whiteSpace: "nowrap" };
 const panelHeader: CSSProperties = {
   flex: "none", display: "flex", alignItems: "center", gap: 8,
   padding: "9px 13px", borderBottom: "1px solid var(--desk-border)",
@@ -1187,26 +1911,32 @@ const toolbar: CSSProperties = {
 const ghostBtn: CSSProperties = {
   fontFamily: "inherit", fontSize: 11, padding: "4px 9px", borderRadius: "var(--desk-radius-sm)",
   background: "transparent", border: "1px solid var(--desk-border)", color: "var(--desk-text-dim)", cursor: "pointer",
+  whiteSpace: "nowrap",
 };
 const greenBtn: CSSProperties = {
   fontFamily: "inherit", fontSize: 11, padding: "4px 9px", borderRadius: "var(--desk-radius-sm)",
   background: "transparent", border: "1px solid var(--desk-success)", color: "var(--desk-success)", cursor: "pointer",
+  whiteSpace: "nowrap",
 };
 const blueBtn: CSSProperties = {
   fontFamily: "inherit", fontSize: 11, padding: "4px 9px", borderRadius: "var(--desk-radius-sm)",
   background: "transparent", border: "1px solid var(--desk-info)", color: "var(--desk-info)", cursor: "pointer", marginTop: 6,
+  whiteSpace: "nowrap",
 };
 const purpleBtn: CSSProperties = {
   fontFamily: "inherit", fontSize: 11.5, padding: "5px 11px", borderRadius: "var(--desk-radius-sm)",
   background: "transparent", border: "1px solid var(--desk-ghost)", color: "var(--desk-ghost)", cursor: "pointer",
+  whiteSpace: "nowrap",
 };
 const killArmedBtn: CSSProperties = {
   fontFamily: "inherit", fontSize: 11, padding: "4px 9px", borderRadius: "var(--desk-radius-sm)",
   background: "transparent", border: "1px solid var(--desk-danger)", color: "var(--desk-danger)", cursor: "pointer",
+  whiteSpace: "nowrap",
 };
 const killOffBtn: CSSProperties = {
   fontFamily: "inherit", fontSize: 11, padding: "4px 9px", borderRadius: "var(--desk-radius-sm)",
   background: "transparent", border: "1px solid var(--desk-border)", color: "var(--desk-text-faint)", cursor: "pointer",
+  whiteSpace: "nowrap",
 };
 function iconBtn(enabled: boolean): CSSProperties {
   return {
@@ -1220,7 +1950,19 @@ function errBtn(tone: "success" | "danger"): CSSProperties {
   return {
     fontFamily: "inherit", fontSize: 11.5, padding: "5px 11px", borderRadius: "var(--desk-radius-sm)",
     background: "var(--desk-soft-btn)", border: `1px solid var(--desk-${tone})`, color: `var(--desk-${tone})`, cursor: "pointer",
+    whiteSpace: "nowrap",
   };
+}
+const topbarGhostBtn: CSSProperties = { ...ghostBtn, ...topbarButton };
+const topbarGreenBtn: CSSProperties = { ...greenBtn, ...topbarButton };
+const topbarBlueBtn: CSSProperties = { ...blueBtn, marginTop: 0, ...topbarButton };
+const topbarKillArmedBtn: CSSProperties = { ...killArmedBtn, ...topbarButton };
+const topbarKillOffBtn: CSSProperties = { ...killOffBtn, ...topbarButton };
+function topbarIconBtn(enabled: boolean): CSSProperties {
+  return { ...iconBtn(enabled), ...topbarButton };
+}
+function topbarErrBtn(tone: "success" | "danger"): CSSProperties {
+  return { ...errBtn(tone), ...topbarButton };
 }
 const ghostCard: CSSProperties = {
   margin: "0 13px 10px", border: "1px dashed var(--desk-ghost)", background: "var(--desk-card)",
@@ -1250,6 +1992,16 @@ const tinyBtn: CSSProperties = {
   background: "transparent", border: "1px solid var(--desk-border)", color: "var(--desk-text-dim)", cursor: "pointer",
 };
 const faint: CSSProperties = { fontSize: 11, color: "var(--desk-text-faint)" };
+const paramValueInput: CSSProperties = {
+  minWidth: 0,
+  fontFamily: "inherit",
+  fontSize: 11,
+  padding: "6px 7px",
+  borderRadius: "var(--desk-radius-sm)",
+  border: "1px solid var(--desk-border)",
+  background: "var(--desk-input)",
+  color: "var(--desk-text)",
+};
 const pre: CSSProperties = {
   fontFamily: "inherit", fontSize: 10.5, color: "var(--desk-text-soft)",
   background: "var(--desk-input)", borderRadius: "var(--desk-radius-sm)", padding: 10, margin: 0, whiteSpace: "pre-wrap",

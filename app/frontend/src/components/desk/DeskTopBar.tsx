@@ -1,5 +1,6 @@
 import { type ReactNode } from "react";
 import { Link } from "react-router-dom";
+import { ConnectedThemeModeControl } from "../ThemeModeControl";
 
 export type DeskKey = "overview" | "factor" | "model" | "strategy" | "paper" | "agent";
 
@@ -12,62 +13,42 @@ const DESKS: { key: DeskKey; label: string; to: string }[] = [
   { key: "agent", label: "研究执行台", to: "/agent-workbench" },
 ];
 
-/** 台切换器：当前台实心 accent，可跳台为 <Link>，soon 台灰占位（不渲染链接，防死链）。 */
-export function DeskSwitcher({
-  current,
-  soon = [],
-}: {
-  current: DeskKey;
-  soon?: DeskKey[];
-}) {
+/** 台切换器：六个台都可点击；当前台只做 active 样式和 aria-current 标记。 */
+export function DeskSwitcher({ current }: { current: DeskKey }) {
   return (
     <div
       style={{
         display: "flex",
+        flex: "0 0 auto",
         gap: 2,
         background: "var(--desk-soft-btn)",
         border: "1px solid var(--desk-border)",
         borderRadius: "var(--desk-radius)",
         padding: 3,
+        whiteSpace: "nowrap",
       }}
     >
       {DESKS.map((d) => {
+        const active = d.key === current;
         const base = {
           fontSize: 11,
           padding: "3px 9px",
           borderRadius: "var(--desk-radius-sm)",
         } as const;
-        if (d.key === current) {
-          return (
-            <span
-              key={d.key}
-              style={{
-                ...base,
-                background: "var(--desk-accent)",
-                color: "var(--desk-accent-ink)",
-                fontWeight: 700,
-              }}
-            >
-              {d.label}
-            </span>
-          );
-        }
-        if (soon.includes(d.key)) {
-          return (
-            <span
-              key={d.key}
-              title="敬请期待"
-              style={{ ...base, color: "var(--desk-text-faint)" }}
-            >
-              {d.label}
-            </span>
-          );
-        }
         return (
           <Link
             key={d.key}
             to={d.to}
-            style={{ ...base, color: "var(--desk-text-dim)" }}
+            aria-current={active ? "page" : undefined}
+            style={{
+              ...base,
+              display: "inline-flex",
+              alignItems: "center",
+              whiteSpace: "nowrap",
+              background: active ? "var(--desk-accent)" : undefined,
+              color: active ? "var(--desk-accent-ink)" : "var(--desk-text-dim)",
+              fontWeight: active ? 700 : undefined,
+            }}
           >
             {d.label}
           </Link>
@@ -93,13 +74,15 @@ export function DeskTopBar({
         display: "flex",
         alignItems: "center",
         gap: 10,
+        minWidth: 0,
+        overflow: "hidden",
         padding: "0 14px",
         background: "var(--desk-topbar)",
         borderBottom: "1px solid var(--desk-border)",
       }}
     >
       {dots && (
-        <span style={{ display: "flex", gap: 6 }} aria-hidden>
+        <span style={{ display: "flex", gap: 6, flex: "0 0 auto" }} aria-hidden>
           {[0, 1, 2].map((i) => (
             <span
               key={i}
@@ -113,9 +96,10 @@ export function DeskTopBar({
           ))}
         </span>
       )}
-      <span style={{ color: "var(--desk-accent)", fontWeight: 700 }}>✳</span>
-      <span style={{ fontWeight: 600 }}>QuantBT</span>
+      <span style={{ color: "var(--desk-accent)", fontWeight: 700, flex: "0 0 auto" }}>✳</span>
+      <span style={{ fontWeight: 600, flex: "0 0 auto" }}>QuantBT</span>
       {children}
+      <ConnectedThemeModeControl />
     </div>
   );
 }

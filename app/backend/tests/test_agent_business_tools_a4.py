@@ -19,11 +19,19 @@ from fastapi.testclient import TestClient
 
 from app.agent.agent_runtime import AgentRuntime, permission_gate
 from app.agent.business_tools import register_business_tools
+from app.agent.llm_client import LLMResponse
 from app.agent.tool_schema import TOOL_SCHEMA
 from app.main import app
+from app.research_os import (
+    AssetRAGDocument,
+    MarketDataUseValidationRecord,
+    PersistentResearchAssetRAGIndex,
+    RAGPermission,
+    ResearchGraphStore,
+)
 
 
-# ── 测试替身：最小 store 接口（接真 store 契约，不打真盘） ───────────────────
+# ── 测试替身：最小 store 接口（真实 store 契约，不打真盘） ───────────────────
 class _FakeCard:
     def __init__(self, **kw):
         self.__dict__.update(kw)
@@ -63,13 +71,75 @@ class _FakeModelRegistry:
         return [_FakeMV(1, "dev"), _FakeMV(2, "staging")]
 
 
-def _make_runtime():
+REPORT_MARKET_DATA_USE_REF = "market_data_use:report:accepted"
+REPORT_DATASET_REF = "dataset:report:demo"
+
+
+class _FakeDatasetSemantics:
+    def __init__(
+        self,
+        *,
+        known_at_ref: str | None = "known_at:report:demo",
+        effective_at_ref: str | None = "effective_at:report:demo",
+        pit_bitemporal_rules_ref: str | None = "pit:report:demo",
+    ):
+        self.dataset_ref = REPORT_DATASET_REF
+        self.known_at_ref = known_at_ref
+        self.effective_at_ref = effective_at_ref
+        self.pit_bitemporal_rules_ref = pit_bitemporal_rules_ref
+
+
+def _report_market_data_use(**overrides) -> MarketDataUseValidationRecord:
+    data = {
+        "validation_ref": REPORT_MARKET_DATA_USE_REF,
+        "request_ref": "market_data_use:report:request",
+        "use_context": "backtest",
+        "dataset_refs": (REPORT_DATASET_REF,),
+        "instrument_refs": ("BTC-USDT",),
+        "capability_matrix_ref": "capability:report:demo",
+        "capital_record_ref": None,
+        "transformation_refs": (),
+        "accepted": True,
+        "violation_codes": (),
+        "evidence_refs": ("evidence:report_market_data_use",),
+        "recorded_by": "test",
+        "created_at_utc": "2026-06-27T00:00:00Z",
+    }
+    data.update(overrides)
+    return MarketDataUseValidationRecord(**data)
+
+
+class _FakeMarketDataRegistry:
+    def __init__(
+        self,
+        records: list[MarketDataUseValidationRecord] | None = None,
+        datasets: dict[str, _FakeDatasetSemantics] | None = None,
+    ):
+        source = [_report_market_data_use()] if records is None else records
+        self._records = {record.validation_ref: record for record in source}
+        self._datasets = {REPORT_DATASET_REF: _FakeDatasetSemantics()} if datasets is None else datasets
+
+    def use_validation(self, validation_ref: str) -> MarketDataUseValidationRecord:
+        if validation_ref not in self._records:
+            raise KeyError(validation_ref)
+        return self._records[validation_ref]
+
+    def dataset(self, dataset_ref: str) -> _FakeDatasetSemantics:
+        if dataset_ref not in self._datasets:
+            raise KeyError(dataset_ref)
+        return self._datasets[dataset_ref]
+
+
+def _make_runtime(*, market_data_registry=None, verdict_store=None, verifier=None):
     rt = AgentRuntime(_DummyLLM(), permission_mode="auto")
     register_business_tools(
         rt,
         hypothesis_store=_FakeHypStore(),
         factor_registry=_FakeFactorRegistry(),
         model_registry=_FakeModelRegistry(),
+        verdict_store=verdict_store,
+        verifier=verifier,
+        market_data_registry=market_data_registry,
     )
     return rt
 
@@ -78,8 +148,37 @@ class _DummyLLM:
     provider = "test"
 
     def chat(self, messages, *, tools=None, model=None, temperature=0.2):  # noqa: ANN001, ARG002
-        from app.agent.llm_client import LLMResponse
         return LLMResponse(content="(end)")
+
+
+class _CapturingLLM:
+    provider = "test"
+
+    def __init__(self):
+        self.messages = []
+
+    def chat(self, messages, *, tools=None, model=None, temperature=0.2):  # noqa: ANN001, ARG002
+        self.messages = list(messages)
+        return LLMResponse(content="workbench grounded answer")
+
+
+def _rag_doc():
+    return AssetRAGDocument(
+        source_id="doc:workbench-risk",
+        version="v1",
+        title="Workbench risk parity note",
+        body="covariance covariance shrinkage workbench portfolio risk",
+        projection="ResearchRAG",
+        asset_ref="qro:workbench-risk",
+        permission=RAGPermission(
+            allowed_desks=("research",),
+            allowed_assets=("qro:workbench-risk",),
+            permission_tags=("research.read",),
+        ),
+        applicability="candidate context for workbench stream research",
+        source_kind="EvidenceSpan",
+        evidence_label="candidate_context",
+    )
 
 
 # ── ① 动钱/晋级工具永不注册（全部 side_effect=none） ────────────────────────
@@ -125,11 +224,146 @@ def test_factor_set_compose_lineage_gate():
 
 
 def test_eval_pbo_real_compute():
-    """eval.pbo 接真：返回真 PBO 结构（非 queued 占位）。"""
+    """eval.pbo 真实计算：返回 PBO 结构（非 queued 占位）。"""
     rt = _make_runtime()
     out = rt._tools["eval.pbo"]("eval.pbo", {"s_blocks": 8})  # noqa: SLF001
     assert "pbo" in out and "n_strategies" in out, "eval.pbo 应返回 CSCV 真结果，非占位"
     assert out.get("queued") is None, "eval.pbo 不应是 queued 占位"
+
+
+def test_report_generate_schema_requires_market_data_use_refs():
+    schema = next(item for item in TOOL_SCHEMA if item["name"] == "report.generate")
+    params = schema["parameters"]
+    assert "market_data_use_validation_refs" in params["properties"]
+    assert "market_data_use_validation_refs" in params["required"]
+    assert "run_id" in params["required"]
+
+
+def _patch_report_projection(monkeypatch):
+    import app.run_verdict as run_verdict
+
+    calls: list[str] = []
+
+    def _project_verdict(run_id, *, verdict_store, verifier):  # noqa: ANN001
+        calls.append("verdict")
+        return {
+            "run_id": run_id,
+            "verdict": "concern",
+            "verdictNote": "本 run 尚需进一步验证。",
+            "has_authoritative_verdict": False,
+        }
+
+    def _project_overfit(run_id):  # noqa: ANN001
+        calls.append("overfit")
+        return {"run_id": run_id, "pbo": 0.25, "dsr": 0.9, "gate_label": "证据分歧"}
+
+    def _project_cost_sensitivity(run_id):  # noqa: ANN001
+        calls.append("cost")
+        return {
+            "run_id": run_id,
+            "cost": [{"preset": "neutral", "sharpe": 1.1, "excess": 0.03}],
+        }
+
+    monkeypatch.setattr(run_verdict, "project_verdict", _project_verdict)
+    monkeypatch.setattr(run_verdict, "project_overfit", _project_overfit)
+    monkeypatch.setattr(run_verdict, "project_cost_sensitivity", _project_cost_sensitivity)
+    return calls
+
+
+def test_backtest_run_existing_run_requires_market_data_use_refs_before_projection(monkeypatch):
+    calls = _patch_report_projection(monkeypatch)
+    rt = _make_runtime(market_data_registry=_FakeMarketDataRegistry(), verdict_store=object(), verifier=object())
+    out = rt._tools["backtest.run"]("backtest.run", {"run_id": "run_report_1"})  # noqa: SLF001
+    assert "market_data_use_validation_refs" in (out.get("error") or "")
+    assert out.get("no_write") is True
+    assert calls == [], "existing-run backtest projection must not run without MarketDataUse refs"
+
+
+def test_backtest_run_existing_run_includes_market_data_use_refs_after_gate(monkeypatch):
+    calls = _patch_report_projection(monkeypatch)
+    rt = _make_runtime(market_data_registry=_FakeMarketDataRegistry(), verdict_store=object(), verifier=object())
+    out = rt._tools["backtest.run"](  # noqa: SLF001
+        "backtest.run",
+        {"run_id": "run_report_1", "market_data_use_validation_refs": [REPORT_MARKET_DATA_USE_REF]},
+    )
+    assert out.get("error") is None, out
+    assert out["source"] == "projected_existing_run"
+    assert out["market_data_use_validation_refs"] == [REPORT_MARKET_DATA_USE_REF]
+    assert calls == ["verdict", "overfit"]
+
+
+def test_report_generate_requires_market_data_use_refs_before_projection(monkeypatch):
+    calls = _patch_report_projection(monkeypatch)
+    rt = _make_runtime(market_data_registry=_FakeMarketDataRegistry(), verdict_store=object(), verifier=object())
+    out = rt._tools["report.generate"]("report.generate", {"run_id": "run_report_1"})  # noqa: SLF001
+    assert "market_data_use_validation_refs" in (out.get("error") or "")
+    assert out.get("no_write") is True
+    assert calls == [], "MarketDataUse gate must run before report projection"
+
+
+@pytest.mark.parametrize(
+    ("registry", "refs", "message"),
+    [
+        (_FakeMarketDataRegistry([]), ["market_data_use:report:missing"], "unknown"),
+        (
+            _FakeMarketDataRegistry([
+                _report_market_data_use(validation_ref="market_data_use:report:rejected", accepted=False)
+            ]),
+            ["market_data_use:report:rejected"],
+            "not accepted",
+        ),
+        (
+            _FakeMarketDataRegistry([
+                _report_market_data_use(
+                    validation_ref="market_data_use:report:violation",
+                    violation_codes=("missing_pit_rules",),
+                )
+            ]),
+            ["market_data_use:report:violation"],
+            "violations",
+        ),
+        (
+            _FakeMarketDataRegistry([
+                _report_market_data_use(validation_ref="market_data_use:report:research", use_context="research")
+            ]),
+            ["market_data_use:report:research"],
+            "wrong use_context",
+        ),
+        (
+            _FakeMarketDataRegistry(
+                [_report_market_data_use(validation_ref="market_data_use:report:no_timing")],
+                datasets={REPORT_DATASET_REF: _FakeDatasetSemantics(pit_bitemporal_rules_ref=None)},
+            ),
+            ["market_data_use:report:no_timing"],
+            "PIT/bitemporal timing",
+        ),
+    ],
+)
+def test_report_generate_rejects_bad_market_data_use_refs_before_report(monkeypatch, registry, refs, message):
+    calls = _patch_report_projection(monkeypatch)
+    rt = _make_runtime(market_data_registry=registry, verdict_store=object(), verifier=object())
+    out = rt._tools["report.generate"](  # noqa: SLF001
+        "report.generate",
+        {"run_id": "run_report_1", "market_data_use_validation_refs": refs},
+    )
+    assert message in (out.get("error") or "")
+    assert out.get("no_write") is True
+    assert out.get("run_id") is None
+    assert calls == [], "bad MarketDataUse refs must not project a report"
+
+
+def test_report_generate_includes_market_data_use_refs_after_gate(monkeypatch):
+    calls = _patch_report_projection(monkeypatch)
+    rt = _make_runtime(market_data_registry=_FakeMarketDataRegistry(), verdict_store=object(), verifier=object())
+    out = rt._tools["report.generate"](  # noqa: SLF001
+        "report.generate",
+        {"run_id": "run_report_1", "market_data_use_validation_refs": [REPORT_MARKET_DATA_USE_REF]},
+    )
+    assert out.get("error") is None, out
+    assert out["market_data_use_validation_refs"] == [REPORT_MARKET_DATA_USE_REF]
+    assert REPORT_MARKET_DATA_USE_REF in out["markdown"]
+    assert "数据使用证明" in out["markdown"]
+    assert calls == ["verdict", "overfit", "cost"]
 
 
 def test_portfolio_gate_tool_no_alpha_not_green():
@@ -169,7 +403,7 @@ def test_tool_status_business_tools_side_effect_truth():
                  "hypothesis.create", "factor_set.compose", "model_registry.select",
                  "signal.define", "portfolio.construct"):
         assert m[name]["side_effect"] == "none", f"{name} side_effect 真值必须 none"
-        assert m[name]["status"] == "live", f"{name} 应 live（接真），实得 {m[name]['status']}"
+        assert m[name]["status"] == "live", f"{name} 应 live（真实引擎），实得 {m[name]['status']}"
 
 
 def test_forged_side_effect_does_not_bypass_gate():
@@ -329,3 +563,42 @@ def test_workbench_stream_emits_structured_events():
     assert "event: user" in raw
     assert ("event: done" in raw) or ("event: error" in raw), \
         "workbench 流必须发结构化终态事件（done/error），非裸 chunk"
+
+
+def test_workbench_stream_auto_retrieves_research_asset_rag(tmp_path, monkeypatch):
+    import app.main as main
+
+    index = PersistentResearchAssetRAGIndex(tmp_path / "research_asset_rag.jsonl")
+    index.add(_rag_doc())
+    store = ResearchGraphStore()
+    llm = _CapturingLLM()
+    monkeypatch.setattr(main, "RESEARCH_ASSET_RAG_INDEX", index)
+    monkeypatch.setattr(main, "RESEARCH_GRAPH_STORE", store)
+    monkeypatch.setattr(main, "_current_agent_llm", lambda run_id=None: llm)
+
+    client = _login_client()
+    with client.stream(
+        "GET",
+        "/api/agent/workbench/stream",
+        params={
+            "q": "covariance shrinkage portfolio risk",
+            "permission_mode": "auto",
+            "desk": "research",
+            "visible_asset_refs": ["qro:workbench-risk"],
+            "permission_tags": ["research.read"],
+            "projections": ["ResearchRAG"],
+            "rag_search": "vector",
+        },
+    ) as r:
+        assert r.status_code == 200
+        raw = "".join(chunk for chunk in r.iter_text())
+
+    assert "event: user" in raw
+    assert "event: say" in raw
+    assert "event: done" in raw
+    assert "rag:doc:workbench-risk@v1:qro:workbench-risk" in raw
+    assert "rag_usage_ids" in raw
+    assert index.agent_usage(source_id="doc:workbench-risk")
+    prompt_text = "\n".join(message.content for message in llm.messages)
+    assert "Research Asset RAG candidate context" in prompt_text
+    assert "covariance covariance shrinkage" in prompt_text

@@ -13,17 +13,25 @@ from .desk import (
     PromotionGate,
     RiskGateMutationForbidden,
 )
-from .replay_provider import ReplayBarProvider, SIMULATED_SOURCE
+from .replay_provider import BUNDLED_SAMPLE_SOURCE, BUNDLED_SOURCE, MIXED_REPLAY_SOURCE, ReplayBarProvider, SIMULATED_SOURCE
 from .scheduler import PaperScheduler, PaperSchedulerConfig
 from .testnet_provider import (
+    BinanceTestnetBarProvider,
+    TESTNET_REALTIME_SOURCE,
     TESTNET_SOURCE,
+    TESTNET_UNAVAILABLE_SOURCE,
     TestnetBarProvider,
+    make_binance_testnet_provider,
     make_testnet_provider,
 )
 
 __all__ = [
     "AShareLiveForbidden",
+    "BinanceTestnetBarProvider",
+    "BUNDLED_SAMPLE_SOURCE",
+    "BUNDLED_SOURCE",
     "FrozenRiskGate",
+    "MIXED_REPLAY_SOURCE",
     "PaperDeskService",
     "PaperRunNotFound",
     "PaperScheduler",
@@ -32,7 +40,10 @@ __all__ = [
     "ReplayBarProvider",
     "RiskGateMutationForbidden",
     "SIMULATED_SOURCE",
+    "TESTNET_REALTIME_SOURCE",
     "TESTNET_SOURCE",
+    "TESTNET_UNAVAILABLE_SOURCE",
     "TestnetBarProvider",
+    "make_binance_testnet_provider",
     "make_testnet_provider",
 ]

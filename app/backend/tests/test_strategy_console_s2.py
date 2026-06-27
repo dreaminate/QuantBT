@@ -25,6 +25,12 @@ from app.ide.strategy_graph import (
     validate_graph,
 )
 from app.lineage import content_hash
+from app.research_os import (
+    MarketDataUseValidationRecord,
+    PersistentCompilerIRStore,
+    PersistentGoalEntrypointCoverageRegistry,
+    ResearchGraphStore,
+)
 
 
 # ──────────────────────────────────────────────────────────────────────
@@ -207,6 +213,14 @@ def http(tmp_path, monkeypatch):
 
     isolated = IDEService(tmp_path / "ide_http.db", run_root=tmp_path / "runs_http")
     monkeypatch.setattr(main, "IDE_SERVICE", isolated)
+    monkeypatch.setattr(main, "RESEARCH_GRAPH_STORE", ResearchGraphStore())
+    monkeypatch.setattr(main, "COMPILER_IR_STORE", PersistentCompilerIRStore(tmp_path / "compiler_ir.jsonl"))
+    monkeypatch.setattr(
+        main,
+        "GOAL_ENTRYPOINT_COVERAGE_REGISTRY",
+        PersistentGoalEntrypointCoverageRegistry(tmp_path / "goal_entrypoint_coverage.jsonl"),
+    )
+    monkeypatch.setattr(main, "MARKET_DATA_REGISTRY", _MarketDataUseRegistry([_market_data_use_validation()]))
     main.app.dependency_overrides[require_user_dependency] = lambda: SimpleNamespace(
         user_id="tester", username="tester",
     )
@@ -214,6 +228,821 @@ def http(tmp_path, monkeypatch):
         yield TestClient(main.app), isolated
     finally:
         main.app.dependency_overrides.pop(require_user_dependency, None)
+
+
+class _MarketDataUseRegistry:
+    def __init__(self, records: list[MarketDataUseValidationRecord] | None = None) -> None:
+        self._records = {record.validation_ref: record for record in records or []}
+
+    def use_validation(self, validation_ref: str) -> MarketDataUseValidationRecord:
+        if validation_ref not in self._records:
+            raise KeyError(validation_ref)
+        return self._records[validation_ref]
+
+
+def _market_data_use_validation(**overrides) -> MarketDataUseValidationRecord:
+    data = {
+        "validation_ref": "market_data_use:ide_save:accepted",
+        "request_ref": "market_data_request:ide_save",
+        "use_context": "backtest",
+        "dataset_refs": ("dataset:ide_strategy_panel:v1",),
+        "instrument_refs": ("instrument:BTCUSDT",),
+        "capability_matrix_ref": "capability:crypto_perp:backtest",
+        "capital_record_ref": None,
+        "transformation_refs": ("transform:ide_features:v1",),
+        "accepted": True,
+        "violation_codes": (),
+        "evidence_refs": ("evidence:ide_market_data_use_gate",),
+        "recorded_by": "tester",
+        "created_at_utc": "2026-06-27T00:00:00+00:00",
+    }
+    data.update(overrides)
+    return MarketDataUseValidationRecord(**data)
+
+
+def _promotable_ide_code(strategy_name: str = "promo_gate") -> str:
+    rows = [
+        {"t": f"2026-01-{i + 1:02d}", "equity": round(1.0 + i * 0.002, 6), "net_return": 0.002 if i else 0.0}
+        for i in range(30)
+    ]
+    return (
+        "quantbt.emit_result({"
+        f"'equity_curve': {rows!r}, "
+        f"'metadata': {{'strategy_name': '{strategy_name}', 'market': 'crypto_perp', 'frequency': '1d'}}"
+        "})"
+    )
+
+
+def test_http_save_strategy_records_strategybook_qro_without_source_leakage(http):
+    from app import main
+
+    client, _ = http
+    secret = "SHOULD_NOT_ENTER_IDE_STRATEGY_QRO"
+    res = client.post(
+        "/api/ide/strategies",
+        json={
+            "name": "qro_save",
+            "asset_class": "crypto_perp",
+            "description": f"draft description {secret}",
+            "code": f"quantbt.emit_result({{'secret': '{secret}'}})",
+            "market_data_use_validation_refs": ["market_data_use:ide_save:accepted"],
+        },
+    )
+
+    assert res.status_code == 200, res.text
+    body = res.json()
+    assert body["qro_id"].startswith("qro_")
+    assert body["research_graph_command_id"].startswith("rgcmd_")
+    assert body["compiler_ir_ref"].startswith("compiler_ir:")
+    assert body["compiler_pass_ref"].startswith("compiler_pass:")
+    assert body["entrypoint_coverage_ref"].startswith("goal_entrypoint_coverage:")
+    assert body["market_data_use_validation_refs"] == ["market_data_use:ide_save:accepted"]
+
+    audit = client.get("/api/research-os/graph/commands", params={"limit": 10})
+    assert audit.status_code == 200, audit.text
+    audit_body = audit.json()
+    qros = [
+        command["payload"]["qro"]
+        for command in audit_body["commands"]
+        if command["payload"].get("qro", {}).get("qro_id") == body["qro_id"]
+    ]
+    assert qros
+    qro = qros[0]
+    assert qro["qro_type"] == "StrategyBook"
+    assert qro["input_contract"]["entry_source"] == "ide"
+    assert qro["input_contract"]["strategy_id"] == body["strategy_id"]
+    assert qro["input_contract"]["strategy_name"] == "qro_save"
+    assert qro["input_contract"]["asset_class"] == "crypto_perp"
+    assert qro["input_contract"]["code_hash"]
+    assert qro["input_contract"]["description_hash"]
+    assert qro["input_contract"]["market_data_use_validation_refs"] == ["market_data_use:ide_save:accepted"]
+    assert qro["output_contract"]["content_hash"]
+    assert qro["output_contract"]["updated_at_utc"] == body["updated_at_utc"]
+    assert qro["output_contract"]["market_data_use_validation_refs"] == ["market_data_use:ide_save:accepted"]
+    assert "code" not in qro["input_contract_keys"]
+    assert "description" not in qro["input_contract_keys"]
+    assert secret not in str(audit_body)
+    assert "quantbt.emit_result" not in str(audit_body)
+    assert "draft description" not in str(audit_body)
+    assert len(main.RESEARCH_GRAPH_STORE.commands()) == 1
+    ir = main.COMPILER_IR_STORE.ir(body["compiler_ir_ref"])
+    compiler_pass = main.COMPILER_IR_STORE.compiler_pass(body["compiler_pass_ref"])
+    coverage = main.GOAL_ENTRYPOINT_COVERAGE_REGISTRY.coverage(body["entrypoint_coverage_ref"])
+    assert ir.source_qro_refs == (body["qro_id"],)
+    assert ir.graph_command_refs == (body["research_graph_command_id"],)
+    assert compiler_pass.input_qro_refs == (body["qro_id"],)
+    assert compiler_pass.entry_source == "ide"
+    assert coverage.entry_source == "ide"
+    assert coverage.entrypoint_ref == "ide:strategy.save"
+    assert coverage.compiler_ir_refs == (body["compiler_ir_ref"],)
+    assert coverage.compiler_pass_refs == (body["compiler_pass_ref"],)
+    assert secret not in str(ir) + str(compiler_pass) + str(coverage)
+    assert "quantbt.emit_result" not in str(ir) + str(compiler_pass) + str(coverage)
+
+
+def test_http_save_strategy_validation_failure_does_not_fabricate_qro(http):
+    from app import main
+
+    client, svc = http
+    before = len(main.RESEARCH_GRAPH_STORE.commands())
+    res = client.post(
+        "/api/ide/strategies",
+        json={
+            "name": "bad_asset",
+            "asset_class": "forex",
+            "code": "print(1)",
+            "market_data_use_validation_refs": ["market_data_use:ide_save:accepted"],
+        },
+    )
+
+    assert res.status_code == 400
+    assert "qro_id" not in res.text
+    assert len(main.RESEARCH_GRAPH_STORE.commands()) == before
+    assert svc.list_strategies("tester") == []
+
+
+def test_http_save_strategy_requires_market_data_use_validation_before_persisting(http):
+    from app import main
+
+    client, svc = http
+    before = len(main.RESEARCH_GRAPH_STORE.commands())
+    res = client.post(
+        "/api/ide/strategies",
+        json={"name": "missing_market_data_use", "asset_class": "crypto_perp", "code": "print(1)"},
+    )
+
+    assert res.status_code == 422
+    assert "market_data_use_validation_refs" in res.text
+    assert len(main.RESEARCH_GRAPH_STORE.commands()) == before
+    assert svc.list_strategies("tester") == []
+
+
+def test_http_save_strategy_rejects_unknown_market_data_use_validation_before_persisting(http):
+    from app import main
+
+    client, svc = http
+    before = len(main.RESEARCH_GRAPH_STORE.commands())
+    res = client.post(
+        "/api/ide/strategies",
+        json={
+            "name": "unknown_market_data_use",
+            "asset_class": "crypto_perp",
+            "code": "print(1)",
+            "market_data_use_validation_refs": ["market_data_use:ide_save:missing"],
+        },
+    )
+
+    assert res.status_code == 422
+    assert "unknown market data use validation" in res.text
+    assert len(main.RESEARCH_GRAPH_STORE.commands()) == before
+    assert svc.list_strategies("tester") == []
+
+
+def test_http_save_strategy_rejects_unaccepted_market_data_use_validation_before_persisting(http, monkeypatch):
+    from app import main
+
+    client, svc = http
+    rejected = _market_data_use_validation(
+        validation_ref="market_data_use:ide_save:rejected",
+        accepted=False,
+        violation_codes=("market_data_use_backtest_matrix_unavailable",),
+    )
+    monkeypatch.setattr(main, "MARKET_DATA_REGISTRY", _MarketDataUseRegistry([rejected]))
+    before = len(main.RESEARCH_GRAPH_STORE.commands())
+    res = client.post(
+        "/api/ide/strategies",
+        json={
+            "name": "rejected_market_data_use",
+            "asset_class": "crypto_perp",
+            "code": "print(1)",
+            "market_data_use_validation_refs": [rejected.validation_ref],
+        },
+    )
+
+    assert res.status_code == 422
+    assert "not accepted" in res.text
+    assert len(main.RESEARCH_GRAPH_STORE.commands()) == before
+    assert svc.list_strategies("tester") == []
+
+
+def test_http_save_strategy_rejects_violation_market_data_use_validation_before_persisting(http, monkeypatch):
+    from app import main
+
+    client, svc = http
+    violation = _market_data_use_validation(
+        validation_ref="market_data_use:ide_save:violation",
+        accepted=True,
+        violation_codes=("market_data_use_dataset_missing_pit",),
+    )
+    monkeypatch.setattr(main, "MARKET_DATA_REGISTRY", _MarketDataUseRegistry([violation]))
+    before = len(main.RESEARCH_GRAPH_STORE.commands())
+    res = client.post(
+        "/api/ide/strategies",
+        json={
+            "name": "violation_market_data_use",
+            "asset_class": "crypto_perp",
+            "code": "print(1)",
+            "market_data_use_validation_refs": [violation.validation_ref],
+        },
+    )
+
+    assert res.status_code == 422
+    assert "unresolved violations" in res.text
+    assert len(main.RESEARCH_GRAPH_STORE.commands()) == before
+    assert svc.list_strategies("tester") == []
+
+
+def test_http_run_strategy_records_backtestrun_qro_without_log_or_result_leakage(http):
+    from app import main
+
+    client, svc = http
+    secret = "SHOULD_NOT_ENTER_IDE_RUN_QRO"
+    svc.save_strategy(
+        "tester",
+        "run_qro",
+        f"print('{secret}'); quantbt.emit_result({{'alpha_secret_key': 1}})",
+        asset_class="crypto_perp",
+        market_data_use_validation_refs=["market_data_use:ide_save:accepted"],
+    )
+
+    res = client.post("/api/ide/strategies/run_qro/run", json={})
+
+    assert res.status_code == 200, res.text
+    body = res.json()
+    assert body["status"] == "ok"
+    assert body["result_keys"] == ["alpha_secret_key"]
+    assert body["qro_id"].startswith("qro_")
+    assert body["research_graph_command_id"].startswith("rgcmd_")
+    assert body["compiler_ir_ref"].startswith("compiler_ir:")
+    assert body["compiler_pass_ref"].startswith("compiler_pass:")
+    assert body["entrypoint_coverage_ref"].startswith("goal_entrypoint_coverage:")
+    assert body["market_data_use_validation_refs"] == ["market_data_use:ide_save:accepted"]
+
+    audit = client.get("/api/research-os/graph/commands", params={"limit": 10})
+    assert audit.status_code == 200, audit.text
+    audit_body = audit.json()
+    qros = [
+        command["payload"]["qro"]
+        for command in audit_body["commands"]
+        if command["payload"].get("qro", {}).get("qro_id") == body["qro_id"]
+    ]
+    assert qros
+    qro = qros[0]
+    assert qro["qro_type"] == "BacktestRun"
+    assert qro["input_contract"]["entry_source"] == "ide"
+    assert qro["input_contract"]["strategy_name"] == "run_qro"
+    assert qro["input_contract"]["asset_class"] == "crypto_perp"
+    assert qro["input_contract"]["code_hash"]
+    assert qro["input_contract"]["strategy_content_hash"]
+    assert qro["input_contract"]["market_data_use_validation_refs"] == ["market_data_use:ide_save:accepted"]
+    assert qro["output_contract"]["run_id"] == body["run_id"]
+    assert qro["output_contract"]["status"] == "ok"
+    assert qro["output_contract"]["result_key_count"] == 1
+    assert qro["output_contract"]["market_data_use_validation_refs"] == ["market_data_use:ide_save:accepted"]
+    assert qro["status_axes"]["evidence"] == "exploratory"
+    assert "code" not in qro["input_contract_keys"]
+    assert "stdout" not in qro["output_contract_keys"]
+    assert "stderr" not in qro["output_contract_keys"]
+    assert "result_keys" not in qro["output_contract_keys"]
+    assert secret not in str(audit_body)
+    assert "alpha_secret_key" not in str(audit_body)
+    assert len(main.RESEARCH_GRAPH_STORE.commands()) == 1
+    ir = main.COMPILER_IR_STORE.ir(body["compiler_ir_ref"])
+    compiler_pass = main.COMPILER_IR_STORE.compiler_pass(body["compiler_pass_ref"])
+    coverage = main.GOAL_ENTRYPOINT_COVERAGE_REGISTRY.coverage(body["entrypoint_coverage_ref"])
+    assert ir.source_qro_refs == (body["qro_id"],)
+    assert ir.graph_command_refs == (body["research_graph_command_id"],)
+    assert compiler_pass.entry_source == "ide"
+    assert coverage.entrypoint_ref == "ide:strategy.run"
+    assert secret not in str(ir) + str(compiler_pass) + str(coverage)
+    assert "alpha_secret_key" not in str(ir) + str(compiler_pass) + str(coverage)
+
+
+def test_http_run_strategy_failed_code_records_failed_qro_without_stderr_leakage(http):
+    from app import main
+
+    client, svc = http
+    secret = "SHOULD_NOT_ENTER_IDE_RUN_FAILURE_QRO"
+    svc.save_strategy(
+        "tester",
+        "run_fail_qro",
+        f"raise RuntimeError('{secret}')",
+        market_data_use_validation_refs=["market_data_use:ide_save:accepted"],
+    )
+
+    res = client.post("/api/ide/strategies/run_fail_qro/run", json={})
+
+    assert res.status_code == 200, res.text
+    body = res.json()
+    assert body["status"] == "failed"
+    assert secret in body["stderr_excerpt"]
+    assert body["qro_id"]
+    assert body["compiler_ir_ref"]
+    assert body["compiler_pass_ref"]
+    assert body["entrypoint_coverage_ref"]
+    qro = main.RESEARCH_GRAPH_STORE.qro(body["qro_id"])
+    assert qro.qro_type == "BacktestRun" or getattr(qro.qro_type, "value", None) == "BacktestRun"
+    assert qro.input_contract["market_data_use_validation_refs"] == ["market_data_use:ide_save:accepted"]
+    assert qro.output_contract["status"] == "failed"
+    assert qro.output_contract["market_data_use_validation_refs"] == ["market_data_use:ide_save:accepted"]
+    assert qro.status_axes()["evidence"] == "insufficient"
+
+    audit = client.get("/api/research-os/graph/commands", params={"limit": 10})
+    assert audit.status_code == 200, audit.text
+    assert secret not in str(audit.json())
+    coverage = main.GOAL_ENTRYPOINT_COVERAGE_REGISTRY.coverage(body["entrypoint_coverage_ref"])
+    assert coverage.entrypoint_ref == "ide:strategy.run"
+
+
+def test_http_run_unknown_strategy_does_not_fabricate_qro(http):
+    from app import main
+
+    client, _ = http
+    before = len(main.RESEARCH_GRAPH_STORE.commands())
+    res = client.post("/api/ide/strategies/nope/run", json={})
+
+    assert res.status_code == 404
+    assert len(main.RESEARCH_GRAPH_STORE.commands()) == before
+
+
+def test_http_run_strategy_requires_market_data_use_validation_before_sandbox(http):
+    from app import main
+
+    client, svc = http
+    svc.save_strategy("tester", "run_missing_market_data_use", "quantbt.emit_result({'x': 1})")
+    before = len(main.RESEARCH_GRAPH_STORE.commands())
+
+    res = client.post("/api/ide/strategies/run_missing_market_data_use/run", json={})
+
+    assert res.status_code == 422
+    assert "market_data_use_validation_refs" in res.text
+    assert len(main.RESEARCH_GRAPH_STORE.commands()) == before
+    assert svc.list_runs("tester") == []
+
+
+def test_http_run_strategy_rejects_unknown_market_data_use_validation_before_sandbox(http):
+    from app import main
+
+    client, svc = http
+    svc.save_strategy(
+        "tester",
+        "run_unknown_market_data_use",
+        "quantbt.emit_result({'x': 1})",
+        market_data_use_validation_refs=["market_data_use:ide_save:accepted"],
+    )
+    before = len(main.RESEARCH_GRAPH_STORE.commands())
+
+    res = client.post(
+        "/api/ide/strategies/run_unknown_market_data_use/run",
+        json={"market_data_use_validation_refs": ["market_data_use:ide_save:missing"]},
+    )
+
+    assert res.status_code == 422
+    assert "unknown market data use validation" in res.text
+    assert len(main.RESEARCH_GRAPH_STORE.commands()) == before
+    assert svc.list_runs("tester") == []
+
+
+def test_http_run_strategy_rejects_unaccepted_market_data_use_validation_before_sandbox(http, monkeypatch):
+    from app import main
+
+    client, svc = http
+    rejected = _market_data_use_validation(
+        validation_ref="market_data_use:ide_run:rejected",
+        accepted=False,
+        violation_codes=("market_data_use_backtest_matrix_unavailable",),
+    )
+    monkeypatch.setattr(main, "MARKET_DATA_REGISTRY", _MarketDataUseRegistry([rejected]))
+    svc.save_strategy("tester", "run_rejected_market_data_use", "quantbt.emit_result({'x': 1})")
+    before = len(main.RESEARCH_GRAPH_STORE.commands())
+
+    res = client.post(
+        "/api/ide/strategies/run_rejected_market_data_use/run",
+        json={"market_data_use_validation_refs": [rejected.validation_ref]},
+    )
+
+    assert res.status_code == 422
+    assert "not accepted" in res.text
+    assert len(main.RESEARCH_GRAPH_STORE.commands()) == before
+    assert svc.list_runs("tester") == []
+
+
+def test_http_run_strategy_rejects_violation_market_data_use_validation_before_sandbox(http, monkeypatch):
+    from app import main
+
+    client, svc = http
+    violation = _market_data_use_validation(
+        validation_ref="market_data_use:ide_run:violation",
+        accepted=True,
+        violation_codes=("market_data_use_dataset_missing_pit",),
+    )
+    monkeypatch.setattr(main, "MARKET_DATA_REGISTRY", _MarketDataUseRegistry([violation]))
+    svc.save_strategy("tester", "run_violation_market_data_use", "quantbt.emit_result({'x': 1})")
+    before = len(main.RESEARCH_GRAPH_STORE.commands())
+
+    res = client.post(
+        "/api/ide/strategies/run_violation_market_data_use/run",
+        json={"market_data_use_validation_refs": [violation.validation_ref]},
+    )
+
+    assert res.status_code == 422
+    assert "unresolved violations" in res.text
+    assert len(main.RESEARCH_GRAPH_STORE.commands()) == before
+    assert svc.list_runs("tester") == []
+
+
+def test_http_promote_ide_run_records_backtestrun_qro_without_artifact_leakage(http, tmp_path, monkeypatch):
+    from app import main
+
+    real_promote = main.promote_ide_run
+
+    def _promote_tmp(**kwargs):
+        kwargs["run_root"] = tmp_path / "promoted_runs"
+        return real_promote(**kwargs)
+
+    monkeypatch.setattr(main, "promote_ide_run", _promote_tmp)
+    client, svc = http
+    secret = "SHOULD_NOT_ENTER_IDE_PROMOTE_QRO"
+    rows = [
+        {"t": f"2026-01-{i + 1:02d}", "equity": round(1.0 + i * 0.002, 6), "net_return": 0.002 if i else 0.0}
+        for i in range(30)
+    ]
+    code = (
+        f"print('{secret}')\n"
+        "quantbt.emit_result({"
+        f"'equity_curve': {rows!r}, "
+        f"'trades': [{{'timestamp': '2026-01-02', 'symbol': '{secret}', 'side': 'BUY', 'quantity': 1, 'price': 1}}], "
+        "'metadata': {'strategy_name': 'promo_qro', 'market': 'crypto_perp', 'frequency': '1d', 'benchmark': 'BTC-USDT'}"
+        "})"
+    )
+    svc.save_strategy(
+        "tester",
+        "promo_qro",
+        code,
+        asset_class="crypto_perp",
+        market_data_use_validation_refs=["market_data_use:ide_save:accepted"],
+    )
+    ide_run = svc.run_strategy("tester", "promo_qro")
+
+    res = client.post(f"/api/ide/runs/{ide_run.run_id}/promote", json={"record_name": f"record {secret}"})
+
+    assert res.status_code == 200, res.text
+    body = res.json()
+    assert body["run_id"].startswith("ide_tester_")
+    assert body["qro_id"].startswith("qro_")
+    assert body["research_graph_command_id"].startswith("rgcmd_")
+    assert body["compiler_ir_ref"].startswith("compiler_ir:")
+    assert body["compiler_pass_ref"].startswith("compiler_pass:")
+    assert body["entrypoint_coverage_ref"].startswith("goal_entrypoint_coverage:")
+    assert body["market_data_use_validation_refs"] == ["market_data_use:ide_save:accepted"]
+    assert (tmp_path / "promoted_runs" / body["run_id"] / "run.json").exists()
+
+    audit = client.get("/api/research-os/graph/commands", params={"limit": 10})
+    assert audit.status_code == 200, audit.text
+    audit_body = audit.json()
+    qros = [
+        command["payload"]["qro"]
+        for command in audit_body["commands"]
+        if command["payload"].get("qro", {}).get("qro_id") == body["qro_id"]
+    ]
+    assert qros
+    qro = qros[0]
+    assert qro["qro_type"] == "BacktestRun"
+    assert qro["input_contract"]["entry_source"] == "ide"
+    assert qro["input_contract"]["source_run_id"] == ide_run.run_id
+    assert qro["input_contract"]["strategy_name"] == "promo_qro"
+    assert qro["input_contract"]["market_data_use_validation_refs"] == ["market_data_use:ide_save:accepted"]
+    assert qro["output_contract"]["promoted_run_id"] == body["run_id"]
+    assert qro["output_contract"]["source_run_id"] == ide_run.run_id
+    assert qro["output_contract"]["status"] == "completed"
+    assert qro["output_contract"]["metric_count"] > 0
+    assert qro["output_contract"]["market_data_use_validation_refs"] == ["market_data_use:ide_save:accepted"]
+    assert qro["status_axes"]["evidence"] == "exploratory"
+    assert "equity_curve" not in qro["output_contract_keys"]
+    assert "trades" not in qro["output_contract_keys"]
+    assert "gate_verdict" not in qro["output_contract_keys"]
+    assert secret not in str(audit_body)
+    assert "BUY" not in str(audit_body)
+    assert "record " not in str(audit_body)
+    assert len(main.RESEARCH_GRAPH_STORE.commands()) == 1
+    ir = main.COMPILER_IR_STORE.ir(body["compiler_ir_ref"])
+    compiler_pass = main.COMPILER_IR_STORE.compiler_pass(body["compiler_pass_ref"])
+    coverage = main.GOAL_ENTRYPOINT_COVERAGE_REGISTRY.coverage(body["entrypoint_coverage_ref"])
+    assert ir.source_qro_refs == (body["qro_id"],)
+    assert ir.graph_command_refs == (body["research_graph_command_id"],)
+    assert compiler_pass.entry_source == "ide"
+    assert coverage.entrypoint_ref == "ide:run.promote"
+    assert secret not in str(ir) + str(compiler_pass) + str(coverage)
+    assert "BUY" not in str(ir) + str(compiler_pass) + str(coverage)
+
+
+def test_http_promote_requires_market_data_use_validation_before_promoting(http, tmp_path, monkeypatch):
+    from app import main
+
+    real_promote = main.promote_ide_run
+
+    def _promote_tmp(**kwargs):
+        kwargs["run_root"] = tmp_path / "promoted_runs"
+        return real_promote(**kwargs)
+
+    monkeypatch.setattr(main, "promote_ide_run", _promote_tmp)
+    client, svc = http
+    svc.save_strategy("tester", "promote_missing_market_data_use", _promotable_ide_code("promote_missing"))
+    ide_run = svc.run_strategy("tester", "promote_missing_market_data_use")
+    before = len(main.RESEARCH_GRAPH_STORE.commands())
+
+    res = client.post(f"/api/ide/runs/{ide_run.run_id}/promote", json={})
+
+    assert res.status_code == 422
+    assert "market_data_use_validation_refs" in res.text
+    assert len(main.RESEARCH_GRAPH_STORE.commands()) == before
+    assert not (tmp_path / "promoted_runs").exists()
+
+
+def test_http_promote_rejects_unknown_market_data_use_validation_before_promoting(http, tmp_path, monkeypatch):
+    from app import main
+
+    real_promote = main.promote_ide_run
+
+    def _promote_tmp(**kwargs):
+        kwargs["run_root"] = tmp_path / "promoted_runs"
+        return real_promote(**kwargs)
+
+    monkeypatch.setattr(main, "promote_ide_run", _promote_tmp)
+    client, svc = http
+    svc.save_strategy(
+        "tester",
+        "promote_unknown_market_data_use",
+        _promotable_ide_code("promote_unknown"),
+        market_data_use_validation_refs=["market_data_use:ide_save:accepted"],
+    )
+    ide_run = svc.run_strategy("tester", "promote_unknown_market_data_use")
+    before = len(main.RESEARCH_GRAPH_STORE.commands())
+
+    res = client.post(
+        f"/api/ide/runs/{ide_run.run_id}/promote",
+        json={"market_data_use_validation_refs": ["market_data_use:ide_save:missing"]},
+    )
+
+    assert res.status_code == 422
+    assert "unknown market data use validation" in res.text
+    assert len(main.RESEARCH_GRAPH_STORE.commands()) == before
+    assert not (tmp_path / "promoted_runs").exists()
+
+
+def test_http_promote_rejects_unaccepted_market_data_use_validation_before_promoting(http, tmp_path, monkeypatch):
+    from app import main
+
+    real_promote = main.promote_ide_run
+
+    def _promote_tmp(**kwargs):
+        kwargs["run_root"] = tmp_path / "promoted_runs"
+        return real_promote(**kwargs)
+
+    monkeypatch.setattr(main, "promote_ide_run", _promote_tmp)
+    client, svc = http
+    rejected = _market_data_use_validation(
+        validation_ref="market_data_use:ide_promote:rejected",
+        accepted=False,
+        violation_codes=("market_data_use_backtest_matrix_unavailable",),
+    )
+    svc.save_strategy(
+        "tester",
+        "promote_rejected_market_data_use",
+        _promotable_ide_code("promote_rejected"),
+        market_data_use_validation_refs=["market_data_use:ide_save:accepted"],
+    )
+    ide_run = svc.run_strategy("tester", "promote_rejected_market_data_use")
+    monkeypatch.setattr(main, "MARKET_DATA_REGISTRY", _MarketDataUseRegistry([rejected]))
+    before = len(main.RESEARCH_GRAPH_STORE.commands())
+
+    res = client.post(
+        f"/api/ide/runs/{ide_run.run_id}/promote",
+        json={"market_data_use_validation_refs": [rejected.validation_ref]},
+    )
+
+    assert res.status_code == 422
+    assert "not accepted" in res.text
+    assert len(main.RESEARCH_GRAPH_STORE.commands()) == before
+    assert not (tmp_path / "promoted_runs").exists()
+
+
+def test_http_promote_rejects_violation_market_data_use_validation_before_promoting(http, tmp_path, monkeypatch):
+    from app import main
+
+    real_promote = main.promote_ide_run
+
+    def _promote_tmp(**kwargs):
+        kwargs["run_root"] = tmp_path / "promoted_runs"
+        return real_promote(**kwargs)
+
+    monkeypatch.setattr(main, "promote_ide_run", _promote_tmp)
+    client, svc = http
+    violation = _market_data_use_validation(
+        validation_ref="market_data_use:ide_promote:violation",
+        accepted=True,
+        violation_codes=("market_data_use_dataset_missing_pit",),
+    )
+    svc.save_strategy(
+        "tester",
+        "promote_violation_market_data_use",
+        _promotable_ide_code("promote_violation"),
+        market_data_use_validation_refs=["market_data_use:ide_save:accepted"],
+    )
+    ide_run = svc.run_strategy("tester", "promote_violation_market_data_use")
+    monkeypatch.setattr(main, "MARKET_DATA_REGISTRY", _MarketDataUseRegistry([violation]))
+    before = len(main.RESEARCH_GRAPH_STORE.commands())
+
+    res = client.post(
+        f"/api/ide/runs/{ide_run.run_id}/promote",
+        json={"market_data_use_validation_refs": [violation.validation_ref]},
+    )
+
+    assert res.status_code == 422
+    assert "unresolved violations" in res.text
+    assert len(main.RESEARCH_GRAPH_STORE.commands()) == before
+    assert not (tmp_path / "promoted_runs").exists()
+
+
+def test_http_promote_invalid_result_does_not_fabricate_qro(http, tmp_path, monkeypatch):
+    from app import main
+
+    real_promote = main.promote_ide_run
+
+    def _promote_tmp(**kwargs):
+        kwargs["run_root"] = tmp_path / "promoted_runs"
+        return real_promote(**kwargs)
+
+    monkeypatch.setattr(main, "promote_ide_run", _promote_tmp)
+    client, svc = http
+    svc.save_strategy(
+        "tester",
+        "bad_promote",
+        "quantbt.emit_result({'not_equity_curve': 1})",
+        market_data_use_validation_refs=["market_data_use:ide_save:accepted"],
+    )
+    ide_run = svc.run_strategy("tester", "bad_promote")
+    before = len(main.RESEARCH_GRAPH_STORE.commands())
+
+    res = client.post(f"/api/ide/runs/{ide_run.run_id}/promote", json={})
+
+    assert res.status_code == 400
+    assert len(main.RESEARCH_GRAPH_STORE.commands()) == before
+    assert not (tmp_path / "promoted_runs").exists()
+
+
+def test_http_ide_ai_complete_records_llm_call_qro_without_prompt_context_or_output_leakage(http, monkeypatch):
+    from app import main
+
+    class _FakeLLM:
+        provider = "fake-ide-llm"
+
+        def chat(self, _messages):  # noqa: ANN001
+            return SimpleNamespace(content="print('SHOULD_NOT_ENTER_IDE_AI_QRO')")
+
+    monkeypatch.setattr(main, "_current_agent_llm", lambda run_id=None: _FakeLLM())
+    client, _ = http
+    prompt_secret = "PROMPT_SHOULD_NOT_ENTER_IDE_AI_QRO"
+    context_secret = "CONTEXT_SHOULD_NOT_ENTER_IDE_AI_QRO"
+
+    res = client.post(
+        "/api/ide/ai_complete",
+        json={
+            "mode": "write",
+            "market": "crypto_perp",
+            "prompt": f"write code {prompt_secret}",
+            "context_code": f"# old code {context_secret}",
+            "market_data_use_validation_refs": ["market_data_use:ide_save:accepted"],
+        },
+    )
+
+    assert res.status_code == 200, res.text
+    body = res.json()
+    assert body["code"] == "print('SHOULD_NOT_ENTER_IDE_AI_QRO')"
+    assert body["provider"] == "fake-ide-llm"
+    assert body["market_data_use_validation_refs"] == ["market_data_use:ide_save:accepted"]
+    assert body["qro_id"].startswith("qro_")
+    assert body["research_graph_command_id"].startswith("rgcmd_")
+    assert body["compiler_ir_ref"].startswith("compiler_ir:")
+    assert body["compiler_pass_ref"].startswith("compiler_pass:")
+    assert body["entrypoint_coverage_ref"].startswith("goal_entrypoint_coverage:")
+
+    audit = client.get("/api/research-os/graph/commands", params={"limit": 10})
+    assert audit.status_code == 200, audit.text
+    audit_body = audit.json()
+    qros = [
+        command["payload"]["qro"]
+        for command in audit_body["commands"]
+        if command["payload"].get("qro", {}).get("qro_id") == body["qro_id"]
+    ]
+    assert qros
+    qro = qros[0]
+    assert qro["qro_type"] == "LLMCallRecord"
+    assert qro["input_contract"]["entry_source"] == "ide"
+    assert qro["input_contract"]["mode"] == "write"
+    assert qro["input_contract"]["provider"] == "fake-ide-llm"
+    assert qro["input_contract"]["market_data_use_validation_refs"] == ["market_data_use:ide_save:accepted"]
+    assert qro["input_contract"]["prompt_hash"]
+    assert qro["input_contract"]["context_hash"]
+    assert qro["output_contract"]["output_hash"]
+    assert qro["output_contract"]["output_char_count"] == len(body["code"])
+    assert qro["output_contract"]["market_data_use_validation_refs"] == ["market_data_use:ide_save:accepted"]
+    assert qro["status_axes"]["evidence"] == "untested"
+    assert "prompt" not in qro["input_contract_keys"]
+    assert "context_code" not in qro["input_contract_keys"]
+    assert "output_text" not in qro["output_contract_keys"]
+    assert prompt_secret not in str(audit_body)
+    assert context_secret not in str(audit_body)
+    assert "SHOULD_NOT_ENTER_IDE_AI_QRO" not in str(audit_body)
+    assert len(main.RESEARCH_GRAPH_STORE.commands()) == 1
+    ir = main.COMPILER_IR_STORE.ir(body["compiler_ir_ref"])
+    compiler_pass = main.COMPILER_IR_STORE.compiler_pass(body["compiler_pass_ref"])
+    coverage = main.GOAL_ENTRYPOINT_COVERAGE_REGISTRY.coverage(body["entrypoint_coverage_ref"])
+    assert ir.source_qro_refs == (body["qro_id"],)
+    assert ir.graph_command_refs == (body["research_graph_command_id"],)
+    assert compiler_pass.entry_source == "ide"
+    assert coverage.entrypoint_ref == "ide:ai_complete"
+    assert prompt_secret not in str(ir) + str(compiler_pass) + str(coverage)
+    assert context_secret not in str(ir) + str(compiler_pass) + str(coverage)
+    assert "SHOULD_NOT_ENTER_IDE_AI_QRO" not in str(ir) + str(compiler_pass) + str(coverage)
+
+
+def test_http_ide_ai_complete_requires_market_data_use_validation_before_llm(http, monkeypatch):
+    from app import main
+
+    called = {"llm": False}
+
+    class _FakeLLM:
+        provider = "fake-ide-llm"
+
+        def chat(self, _messages):  # noqa: ANN001
+            called["llm"] = True
+            return SimpleNamespace(content="print('should not run')")
+
+    monkeypatch.setattr(main, "_current_agent_llm", lambda run_id=None: _FakeLLM())
+    client, _ = http
+    before = len(main.RESEARCH_GRAPH_STORE.commands())
+
+    res = client.post(
+        "/api/ide/ai_complete",
+        json={"mode": "write", "market": "crypto_perp", "prompt": "write code"},
+    )
+
+    assert res.status_code == 422
+    assert "market_data_use_validation_refs" in res.text
+    assert called["llm"] is False
+    assert len(main.RESEARCH_GRAPH_STORE.commands()) == before
+
+
+def test_http_ide_ai_complete_rejects_violation_market_data_use_validation_before_llm(
+    http,
+    monkeypatch,
+):
+    from app import main
+
+    called = {"llm": False}
+    violation = _market_data_use_validation(
+        validation_ref="market_data_use:ide_ai:violation",
+        violation_codes=("live_permission_missing",),
+    )
+    monkeypatch.setattr(main, "MARKET_DATA_REGISTRY", _MarketDataUseRegistry([violation]))
+
+    class _FakeLLM:
+        provider = "fake-ide-llm"
+
+        def chat(self, _messages):  # noqa: ANN001
+            called["llm"] = True
+            return SimpleNamespace(content="print('should not run')")
+
+    monkeypatch.setattr(main, "_current_agent_llm", lambda run_id=None: _FakeLLM())
+    client, _ = http
+    before = len(main.RESEARCH_GRAPH_STORE.commands())
+
+    res = client.post(
+        "/api/ide/ai_complete",
+        json={
+            "mode": "write",
+            "market": "crypto_perp",
+            "prompt": "write code",
+            "market_data_use_validation_refs": [violation.validation_ref],
+        },
+    )
+
+    assert res.status_code == 422
+    assert "violation" in res.text
+    assert called["llm"] is False
+    assert len(main.RESEARCH_GRAPH_STORE.commands()) == before
+
+
+def test_http_ide_ai_complete_empty_prompt_does_not_fabricate_qro(http):
+    from app import main
+
+    client, _ = http
+    before = len(main.RESEARCH_GRAPH_STORE.commands())
+    res = client.post("/api/ide/ai_complete", json={"prompt": ""})
+
+    assert res.status_code == 400
+    assert len(main.RESEARCH_GRAPH_STORE.commands()) == before
 
 
 def test_http_validate_seeds_bad_graph_reports_error(http):

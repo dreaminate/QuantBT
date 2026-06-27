@@ -3,11 +3,19 @@
 from __future__ import annotations
 
 from pathlib import Path
+from types import SimpleNamespace
 
 import pytest
+from fastapi.testclient import TestClient
 
+from app.agent.llm_client import LLMResponse
 from app.ide.sandbox import run_user_strategy
 from app.ide.service import IDEError, IDEService
+from app.research_os import (
+    PersistentCompilerIRStore,
+    PersistentGoalEntrypointCoverageRegistry,
+    ResearchGraphStore,
+)
 
 
 # ============================================================
@@ -92,6 +100,37 @@ def test_save_and_get_strategy(svc):
     assert s.name == "momentum_v1"
     fetched = svc.get_strategy("alice", "momentum_v1")
     assert fetched.code == "print(1)"
+
+
+def test_save_strategy_persists_market_data_use_validation_refs(svc):
+    refs = ["market_data_use:ide:accepted"]
+    s = svc.save_strategy(
+        "alice",
+        "with_market_data_use",
+        "print(1)",
+        market_data_use_validation_refs=refs,
+    )
+
+    assert s.market_data_use_validation_refs == refs
+    assert svc.get_strategy("alice", "with_market_data_use").market_data_use_validation_refs == refs
+    listed = svc.list_strategies("alice")
+    assert listed[0].market_data_use_validation_refs == refs
+
+
+def test_run_strategy_persists_market_data_use_validation_refs(svc):
+    refs = ["market_data_use:ide_run:accepted"]
+    svc.save_strategy(
+        "alice",
+        "run_with_market_data_use",
+        "quantbt.emit_result({'x': 1})",
+        market_data_use_validation_refs=refs,
+    )
+
+    run = svc.run_strategy("alice", "run_with_market_data_use")
+
+    assert run.market_data_use_validation_refs == refs
+    assert svc.get_run(run.run_id).market_data_use_validation_refs == refs
+    assert svc.list_runs("alice")[0].market_data_use_validation_refs == refs
 
 
 def test_save_strategy_validates_name(svc):
@@ -187,3 +226,156 @@ def test_get_run_artifact_invalid_kind(svc):
     run = svc.run_strategy("alice", "x")
     with pytest.raises(IDEError):
         svc.get_run_artifact(run.run_id, "binary")
+
+
+# ============================================================
+# IDE API GOAL entrypoint coverage
+# ============================================================
+
+
+class _IDECompleteLLM:
+    provider = "test"
+
+    def chat(self, messages, *, tools=None, model=None, temperature=0.2):  # noqa: ANN001, ARG002
+        self.messages = list(messages)
+        return LLMResponse(content="quantbt.emit_result({'ok': 1})")
+
+
+@pytest.fixture
+def ide_api(tmp_path: Path, monkeypatch):  # noqa: ANN001
+    import app.main as main
+
+    main.app.dependency_overrides[main.require_user_dependency] = lambda: SimpleNamespace(
+        username="alice",
+        user_id="u_alice",
+    )
+    monkeypatch.setattr(main, "IDE_SERVICE", IDEService(tmp_path / "ide_api.db", run_root=tmp_path / "ide_runs"))
+    monkeypatch.setattr(main, "RESEARCH_GRAPH_STORE", ResearchGraphStore())
+    monkeypatch.setattr(main, "COMPILER_IR_STORE", PersistentCompilerIRStore(tmp_path / "compiler_ir.jsonl"))
+    monkeypatch.setattr(
+        main,
+        "GOAL_ENTRYPOINT_COVERAGE_REGISTRY",
+        PersistentGoalEntrypointCoverageRegistry(tmp_path / "goal_entrypoint_coverage.jsonl"),
+    )
+    monkeypatch.setattr(main, "LEDGER", None)
+    monkeypatch.setattr(main, "RETURNS_STORE", None)
+    real_promote = main.promote_ide_run
+
+    def _promote_tmp_root(**kwargs):  # noqa: ANN003
+        kwargs["run_root"] = tmp_path / "promoted_runs"
+        return real_promote(**kwargs)
+
+    monkeypatch.setattr(main, "promote_ide_run", _promote_tmp_root)
+    try:
+        yield TestClient(main.app), main
+    finally:
+        main.app.dependency_overrides.pop(main.require_user_dependency, None)
+
+
+def test_ide_api_success_paths_write_goal_entrypoint_coverage_without_raw_payload(ide_api, monkeypatch):
+    client, main = ide_api
+    secret = "SECRET_SHOULD_NOT_ENTER_IDE_GOAL_COVERAGE"
+    validation_ref = "market_data_use:ide:accepted"
+    monkeypatch.setattr(
+        main,
+        "_ide_strategy_market_data_use_validation_refs",
+        lambda payload, *, operation, fallback_refs=None: (validation_ref,),  # noqa: ARG005
+    )
+    monkeypatch.setattr(main, "_current_agent_llm", lambda run_id=None: _IDECompleteLLM())
+    strategy_code = (
+        f"# {secret}\n"
+        "quantbt.emit_result({'equity_curve': ["
+        "{'t': '2024-01-01', 'equity': 1.0},"
+        "{'t': '2024-01-02', 'equity': 1.02}"
+        "], 'metadata': {'market': 'crypto_perp', 'frequency': '1d', 'benchmark': 'BTC-USDT'}})"
+    )
+
+    saved = client.post(
+        "/api/ide/strategies",
+        json={
+            "name": "coverage_strategy",
+            "asset_class": "crypto_perp",
+            "code": strategy_code,
+            "description": f"description {secret}",
+            "market_data_use_validation_refs": [validation_ref],
+        },
+    )
+    assert saved.status_code == 200, saved.text
+    run = client.post(
+        "/api/ide/strategies/coverage_strategy/run",
+        json={"market_data_use_validation_refs": [validation_ref]},
+    )
+    assert run.status_code == 200, run.text
+    promoted = client.post(
+        f"/api/ide/runs/{run.json()['run_id']}/promote",
+        json={"record_name": f"record {secret}", "market_data_use_validation_refs": [validation_ref]},
+    )
+    assert promoted.status_code == 200, promoted.text
+    completed = client.post(
+        "/api/ide/ai_complete",
+        json={
+            "mode": "write",
+            "prompt": f"write strategy {secret}",
+            "context_code": f"context {secret}",
+            "market_data_use_validation_refs": [validation_ref],
+        },
+    )
+    assert completed.status_code == 200, completed.text
+
+    responses = [saved.json(), run.json(), promoted.json(), completed.json()]
+    for body in responses:
+        assert body["qro_id"]
+        assert body["research_graph_command_id"]
+        assert body["compiler_ir_ref"]
+        assert body["compiler_pass_ref"]
+        assert body["entrypoint_coverage_ref"]
+
+    coverages = main.GOAL_ENTRYPOINT_COVERAGE_REGISTRY.records()
+    assert {(record.entry_source, record.entrypoint_ref) for record in coverages} == {
+        ("ide", "ide:strategy.save"),
+        ("ide", "ide:strategy.run"),
+        ("ide", "ide:run.promote"),
+        ("ide", "ide:ai_complete"),
+    }
+    for record in coverages:
+        assert record.qro_refs
+        assert record.research_graph_command_refs
+        assert record.compiler_ir_refs
+        assert record.compiler_pass_refs
+        assert record.evidence_refs
+        assert record.validation_refs
+        assert record.permission_refs
+        assert record.replay_refs
+
+    persisted = str(coverages)
+    for command in main.RESEARCH_GRAPH_STORE.commands():
+        persisted += str(command.payload)
+    for ir in main.COMPILER_IR_STORE.irs():
+        persisted += str(ir)
+    for compiler_pass in main.COMPILER_IR_STORE.passes():
+        persisted += str(compiler_pass)
+    assert secret not in persisted
+    assert "quantbt.emit_result" not in persisted
+    assert "write strategy" not in persisted
+    assert "context " not in persisted
+
+
+def test_ide_api_unknown_market_data_ref_rejects_before_goal_coverage_write(ide_api):
+    client, main = ide_api
+
+    response = client.post(
+        "/api/ide/strategies",
+        json={
+            "name": "bad_refs",
+            "asset_class": "crypto_perp",
+            "code": "quantbt.emit_result({})",
+            "market_data_use_validation_refs": ["market_data_use:unknown"],
+        },
+    )
+
+    assert response.status_code == 422
+    assert "unknown market data use validation" in response.text
+    assert main.RESEARCH_GRAPH_STORE.commands() == []
+    assert main.COMPILER_IR_STORE.irs() == []
+    assert main.COMPILER_IR_STORE.passes() == []
+    assert main.GOAL_ENTRYPOINT_COVERAGE_REGISTRY.records() == []

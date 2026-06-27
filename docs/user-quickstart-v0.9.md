@@ -7,7 +7,7 @@
 
 从注册到看懂第一个回测，应该 < 15 分钟。
 
-v0.9 提供 4 个核心闭环：
+v0.9 提供 4 条主路径：
 
 1. `/runs` 看已有 run → `/runs/<id>` 看证据状态 + 字段解释
 2. `/ide` 写自己的策略 → 沙箱跑 → promote 进正式 Run
@@ -39,7 +39,7 @@ cd app/frontend && npm run dev
 6. 右侧"运行输出"看 status OK + **风险预览 chip**（证据一致/存疑/高风险/信息不足）
 7. 点"⤴ 提升为正式 Run" → 自动跳 `/runs/<id>` 三联图
 
-## 3. 看懂证据状态（核心教学）
+## 3. 看懂证据状态
 
 `/runs/<id>` 顶部"收益概述"旁的彩色 chip 4 档：
 
@@ -107,14 +107,14 @@ tushare:
 
 | Step | 看什么 | 在哪 |
 |---|---|---|
-| 1 | trust_level chip | RunDetail 顶部 |
+| 1 | 证据状态 chip | RunDetail 顶部 |
 | 2 | Sharpe + ⓘ | 收益概述 metric block |
 | 3 | PBO/DSR（如有）| 风险卡详情 |
 | 4 | 三联图（equity / drawdown / 收益对比）| RunDetail 主区 |
 | 5 | 归因 / 持仓 / 交易 | RunDetail 各 tab |
 | 6 | 诊断建议 | RunDetail 顶部 banner |
 | 7 | 改一个变量 | `/ide` |
-| 8 | Compare | `/compare` 2-3 个 run trust_level 对比 |
+| 8 | Compare | `/compare` 对比 2-3 个 run 的证据状态 |
 
 ## 10. 完整命令
 

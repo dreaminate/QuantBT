@@ -48,7 +48,7 @@ describe("G3 Inspector 组件", () => {
     expect(onChange).toHaveBeenCalledWith<[InspectorTab]>("ports");
   });
 
-  it("Inspector：340 容器渲染标题 + selectionHead + tabs + 内容槽 + 折叠回调", () => {
+  it("Inspector：CSS 变量宽度容器渲染标题 + selectionHead + tabs + 内容槽 + 折叠回调", () => {
     const onCollapse = vi.fn();
     render(
       <Inspector
@@ -65,7 +65,7 @@ describe("G3 Inspector 组件", () => {
     expect(screen.getByTestId("tabs")).toBeInTheDocument();
     expect(screen.getByTestId("body")).toBeInTheDocument();
     const root = document.querySelector("[data-inspector]") as HTMLElement;
-    expect(root.style.width).toBe("340px");
+    expect(root.style.width).toBe("var(--desk-right-pane-width, 340px)");
     fireEvent.click(screen.getByLabelText("折叠 Inspector"));
     expect(onCollapse).toHaveBeenCalledTimes(1);
   });

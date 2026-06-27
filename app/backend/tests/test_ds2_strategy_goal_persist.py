@@ -18,8 +18,49 @@ import app.run_detail_core as rdc
 from app.agent.business_tools import _synth_and_promote
 from app.agent.sample_data import SAMPLE_REL, sample_path
 from app.lineage import Ledger
+from app.research_os import MarketDataUseValidationRecord
 from app.strategy_goal import StrategyGoal, _coerce_cost_model
 from app.strategy_goal_store import StrategyGoalStore, _complete_goal_dict
+
+
+MARKET_DATA_USE_REFS = ["market_data_use:ds2_chain:accepted"]
+MARKET_DATASET_REF = "dataset:btc_daily"
+
+
+class _DatasetSemantics:
+    dataset_ref = MARKET_DATASET_REF
+    known_at_ref = "known_at:btc_daily"
+    effective_at_ref = "effective_at:btc_daily"
+    pit_bitemporal_rules_ref = "pit:btc_daily"
+
+
+class _MarketDataUseRegistry:
+    def __init__(self) -> None:
+        self._record = MarketDataUseValidationRecord(
+            validation_ref=MARKET_DATA_USE_REFS[0],
+            request_ref="market_data_use:ds2_chain:request",
+            use_context="backtest",
+            dataset_refs=(MARKET_DATASET_REF,),
+            instrument_refs=("BTC-USDT",),
+            capability_matrix_ref="capability:crypto_perp_daily",
+            capital_record_ref=None,
+            transformation_refs=(),
+            accepted=True,
+            violation_codes=(),
+            evidence_refs=("evidence:ds2_chain_market_data_use",),
+            recorded_by="test",
+            created_at_utc="2026-06-27T00:00:00Z",
+        )
+
+    def use_validation(self, validation_ref: str) -> MarketDataUseValidationRecord:
+        if validation_ref != self._record.validation_ref:
+            raise KeyError(validation_ref)
+        return self._record
+
+    def dataset(self, dataset_ref: str) -> _DatasetSemantics:
+        if dataset_ref != _DatasetSemantics.dataset_ref:
+            raise KeyError(dataset_ref)
+        return _DatasetSemantics()
 
 
 def test_structured_args_persist_real_goal_id_and_a_share_leverage(tmp_path):
@@ -121,9 +162,14 @@ def test_goal_id_flows_into_backtest_chat_to_backtest_chain(tmp_path, monkeypatc
     monkeypatch.setattr(rdc, "RUN_ROOT", rr)
     # 把 goal_id 当 strategy_goal_ref 喂 backtest
     out = _synth_and_promote(
-        args={"market": "crypto_perp", "strategy_goal_ref": gid, "lookback": 20},
+        args={
+            "market": "crypto_perp",
+            "strategy_goal_ref": gid,
+            "lookback": 20,
+            "market_data_use_validation_refs": MARKET_DATA_USE_REFS,
+        },
         ledger=Ledger(tmp_path / "lineage"), returns_store=None, data_root=tmp_path,
-        verdict_store=None, verifier=None, llm_client=None,
+        verdict_store=None, verifier=None, llm_client=None, market_data_registry=_MarketDataUseRegistry(),
     )
     assert out.get("error") is None, out
     assert out["run_id"], "chat 产的 goal_id 必须能驱动 DS-1 backtest 产真 run"

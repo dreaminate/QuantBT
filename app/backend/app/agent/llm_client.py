@@ -83,7 +83,7 @@ class DevLocalLLM(LLMClient):
     """开发期 / CI 用的可预测 LLM。
 
     根据 user 最后一条 message 的关键词命中规则模板；命中后构造
-    `tool_calls` 让 AgentRuntime 真去调用后端工具，闭环可测。
+    `tool_calls` 让 AgentRuntime 调用后端工具，端到端可测。
 
     支持注入额外模板：`DevLocalLLM(extra_templates=[...])`。
     """
@@ -172,22 +172,22 @@ def _help_template(text: str, messages: list[LLMMessage], tools: list[dict[str, 
     if any(k in text for k in ["你能做什么", "能力", "help"]):
         return LLMResponse(
             content=(
-                "我可以帮你做四件事：\n"
+                "可以处理四类请求：\n"
                 "1. 把一句话需求 → StrategyGoal（说『A股 周频 选股』或『加密 永续 趋势』触发）\n"
                 "2. 跑因子 IC（说『因子 IC』）\n"
                 "3. 复刻你粘贴的 vnpy/backtrader/pandas 策略代码到 QuantBT 模板\n"
-                "4. 解读回测报告并给优化建议\n"
-                "今天用的是开发期 LLM（DevLocalLLM）；接通真实模型后能力会更强。"
+                "4. 解读回测报告并给下一步实验建议\n"
+                "今天用的是开发期 LLM（DevLocalLLM）；接通真实模型后会返回更完整的字段绑定和诊断。"
             )
         )
     return None
 
 
-def _mode2_socratic_template(text: str, messages: list[LLMMessage], tools: list[dict[str, Any]] | None) -> LLMResponse | None:  # noqa: ARG001
-    """v0.8.6.1 · DevLocalLLM 的 Mode 2 教学型 fallback。
+def _mode2_questioning_template(text: str, messages: list[LLMMessage], tools: list[dict[str, Any]] | None) -> LLMResponse | None:  # noqa: ARG001
+    """v0.8.6.1 · DevLocalLLM 的 Mode 2 研究诊断 fallback。
 
-    检查 system prompt 是否含 'Mode 2'/'研究流程教练' → 走教学模板而不是 strategy 模板。
-    针对常见量化问题给 Socratic / explain / refuse 回复，让没接真 LLM 的用户也能体验流程。
+    检查 system prompt 是否含 'Mode 2'/'研究诊断' → 走诊断模板而不是 strategy 模板。
+    针对常见量化问题给 ask / explain / refuse 回复，让没配置真实 LLM 的用户也能跑流程。
     """
 
     # 1. 检测是否 Mode 2 上下文（system prompt 含特征词）
@@ -196,14 +196,14 @@ def _mode2_socratic_template(text: str, messages: list[LLMMessage], tools: list[
         if m.role == "system":
             system_text = m.content
             break
-    is_mode2 = "研究流程教练" in system_text or "Mode 2" in system_text
+    is_mode2 = "研究诊断" in system_text or "Mode 2" in system_text
     if not is_mode2:
         return None
 
     # 2. refuse 类
     if any(s in text for s in ["a股实盘", "下单买入", "买入哪", "推荐买", "稳赚", "100% 收益", "保证收益"]):
         return LLMResponse(content=(
-            "**结论：拒答（高风险问题）**\n\n"
+            "结论：拒答（高风险问题）\n\n"
             "我不能：(1) A 股不接券商，只能 paper trading；(2) 不能推荐具体买卖点；(3) 不能保证任何收益。\n\n"
             "建议你换个问法：\n"
             "- 你这次跑出来的策略 PBO / DSR / MaxDD 怎么样？\n"
@@ -214,27 +214,27 @@ def _mode2_socratic_template(text: str, messages: list[LLMMessage], tools: list[
     # 3. PBO/DSR 解释类
     if "pbo" in text:
         return LLMResponse(content=(
-            "**结论：解释（基于 RAG 命中 pbo 词条）**\n\n"
-            "**证据**：\n"
+            "结论：解释（基于 RAG 命中 pbo 词条）\n\n"
+            "证据：\n"
             "- PBO (Probability of Backtest Overfitting) 是 Bailey-LdP 2014 CSCV 算法\n"
             "- 衡量 IS 选出的最优策略在 OOS 排到下半区的概率\n"
-            "- 业界阈值: < 0.2 可信 / 0.2-0.4 警惕 / > 0.6 强烈过拟合\n\n"
-            "**下一步实验**：先看你当前 run 的 PBO 是多少；如果 > 0.5，建议把参数搜索次数减半重跑。\n\n"
-            "（DevLocalLLM fallback；接通真 LLM 后会给更具体的诊断）"
+            "- 常用阈值: < 0.2 证据较好 / 0.2-0.4 警惕 / > 0.6 强烈过拟合\n\n"
+            "下一步实验：先看你当前 run 的 PBO 是多少；如果 > 0.5，建议把参数搜索次数减半重跑。\n\n"
+            "（DevLocalLLM fallback；配置真实 LLM 后会给更具体的诊断）"
         ))
     if "dsr" in text or "deflated" in text:
         return LLMResponse(content=(
-            "**结论：解释（基于 RAG 命中 deflated_sharpe）**\n\n"
-            "**证据**：DSR = 校正多次试验偏差后的 Sharpe 真实有效概率，∈ [0, 1]。\n"
+            "结论：解释（基于 RAG 命中 deflated_sharpe）\n\n"
+            "证据：DSR = 多次试验偏差校正后的 Sharpe 证据分数，∈ [0, 1]。\n"
             "- > 0.95 强证据 / 0.5-0.8 模糊 / < 0.2 几乎是噪声\n"
             "- 输入需要 N (试验次数) + 收益序列偏度/峰度\n\n"
-            "**下一步实验**：估算你的隐藏试验次数(包括 mentally try 过的参数)。Lopez de Prado 2018 建议至少按显式 N 的 10× 估。"
+            "下一步实验：估算隐藏试验次数（包括脑内筛掉的参数）。Lopez de Prado 2018 建议至少按显式 N 的 10× 估。"
         ))
 
-    # 4. "可信吗" / "好不好" 类 → Socratic ask
-    if any(s in text for s in ["可信", "好不好", "怎么样", "如何评判"]):
+    # 4. 证据状态 / 好不好 类 → 提问式复核
+    if any(s in text for s in ["可信", "证据", "好不好", "怎么样", "如何评判"]):
         return LLMResponse(content=(
-            "**结论：先问几个问题，再判断**\n\n"
+            "结论：先补三个判断条件\n\n"
             "1. 你这次最想验证的是因子方向、标签设计，还是组合约束？\n"
             "2. 如果只允许改一个参数，你认为最可能影响结果的是哪个？\n"
             "3. 你愿意先把 universe 缩小，还是先降低调参次数来检查 PBO？\n\n"
@@ -244,8 +244,8 @@ def _mode2_socratic_template(text: str, messages: list[LLMMessage], tools: list[
     # 5. "怎么改 / 优化" 类 → recommend experiment
     if any(s in text for s in ["怎么改", "下一步", "优化", "试试", "改进"]):
         return LLMResponse(content=(
-            "**结论：下一次只改一个变量**\n\n"
-            "几个常见 minimal experiment：\n"
+            "结论：下一次只改一个变量\n\n"
+            "可选实验：\n"
             "- 把 label horizon 从 20 日 → 10 日\n"
             "- 把 factor lookback 从 20 日 → 30 日（看 IC-IR 是否更稳）\n"
             "- 在组合层加 max_single_weight=0.15 约束\n"
@@ -253,15 +253,15 @@ def _mode2_socratic_template(text: str, messages: list[LLMMessage], tools: list[
             "选一个，跑一次，对比 PBO / DSR / MaxDD。"
         ))
 
-    # 6. 默认 Socratic
+    # 6. 默认提问式复核
     return LLMResponse(content=(
-        "**结论：信息不足**\n\n"
-        "你想先聊收益指标可信度，还是先聊下一步实验设计？或者给我一个 active_run_id 让我对着具体数据说？\n\n"
-        "（这是 DevLocalLLM Mode 2 fallback；正式接 Anthropic/Qwen 后能给更具体回答）"
+        "结论：信息不足\n\n"
+        "你要先看收益指标，还是先看下一步实验设计？也可以给我一个 active_run_id，我按具体数据判断。\n\n"
+        "（这是 DevLocalLLM Mode 2 fallback；配置 Anthropic/Qwen 后会给更具体回答）"
     ))
 
 
-_DEFAULT_TEMPLATES: list[DevTemplate] = [_mode2_socratic_template, _strategy_template, _factor_template, _help_template]
+_DEFAULT_TEMPLATES: list[DevTemplate] = [_mode2_questioning_template, _strategy_template, _factor_template, _help_template]
 
 
 __all__ = [

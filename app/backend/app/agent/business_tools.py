@@ -11,9 +11,9 @@
   · model_registry.select 是【只读】——只 list_versions/挑 stage，绝不 promote/apply_stage（写动作
     永远在端点层经审批门 approver≠creator）。
 
-5 个新业务工具（schema+handler 接真 store）：
+5 个新业务工具（schema+handler 接入真实 store）：
   hypothesis.create · factor_set.compose · model_registry.select · signal.define · portfolio.construct
-3 个有 schema 无 handler → 接真引擎：
+3 个有 schema 无 handler → 接入真实引擎：
   backtest.run · eval.pbo · report.generate
 """
 
@@ -79,6 +79,113 @@ def _synth_execution_blocks(
     }]
 
 
+def _market_data_use_validation_refs(
+    args: dict[str, Any],
+    market_data_registry: Any | None,
+    *,
+    operation: str = "backtest.run",
+    require_dataset_timing: bool = False,
+    allowed_use_contexts: tuple[str, ...] = (),
+) -> tuple[str, ...] | dict[str, Any]:
+    """Validate refs before strategy synthesis/backtest builder side effects."""
+    if market_data_registry is None:
+        return {
+            "error": f"{operation} requires MarketDataUse registry before execution",
+            "field": "market_data_use_validation_refs",
+            "no_write": True,
+        }
+    raw_refs = args.get("market_data_use_validation_refs")
+    if isinstance(raw_refs, str):
+        refs = [part.strip() for part in raw_refs.replace(",", "\n").splitlines() if part.strip()]
+    elif isinstance(raw_refs, (list, tuple)):
+        refs = [str(ref).strip() for ref in raw_refs if str(ref or "").strip()]
+    else:
+        return {
+            "error": f"{operation} requires market_data_use_validation_refs",
+            "field": "market_data_use_validation_refs",
+            "no_write": True,
+        }
+    if not refs:
+        return {
+            "error": f"{operation} requires non-empty market_data_use_validation_refs",
+            "field": "market_data_use_validation_refs",
+            "no_write": True,
+        }
+    resolved: list[str] = []
+    for ref in refs:
+        try:
+            record = market_data_registry.use_validation(ref)
+        except Exception:  # noqa: BLE001
+            return {
+                "error": f"unknown MarketDataUse validation ref: {ref}",
+                "field": "market_data_use_validation_refs",
+                "validation_ref": ref,
+                "no_write": True,
+            }
+        if not bool(getattr(record, "accepted", False)):
+            return {
+                "error": f"MarketDataUse validation ref is not accepted: {ref}",
+                "field": "market_data_use_validation_refs",
+                "validation_ref": ref,
+                "no_write": True,
+            }
+        violations = tuple(getattr(record, "violation_codes", ()) or ())
+        if violations:
+            return {
+                "error": f"MarketDataUse validation ref has violations: {ref}",
+                "field": "market_data_use_validation_refs",
+                "validation_ref": ref,
+                "violation_codes": list(violations),
+                "no_write": True,
+            }
+        context = str(getattr(record, "use_context", "") or "")
+        if allowed_use_contexts and context not in set(allowed_use_contexts):
+            return {
+                "error": f"MarketDataUse validation ref has wrong use_context for {operation}: {ref}",
+                "field": "market_data_use_validation_refs",
+                "validation_ref": ref,
+                "use_context": context,
+                "allowed_use_contexts": list(allowed_use_contexts),
+                "no_write": True,
+            }
+        if require_dataset_timing:
+            dataset_refs = tuple(str(dataset_ref) for dataset_ref in (getattr(record, "dataset_refs", ()) or ()))
+            if not dataset_refs:
+                return {
+                    "error": f"MarketDataUse validation ref has no dataset refs for {operation}: {ref}",
+                    "field": "market_data_use_validation_refs",
+                    "validation_ref": ref,
+                    "no_write": True,
+                }
+            for dataset_ref in dataset_refs:
+                try:
+                    dataset = market_data_registry.dataset(dataset_ref)
+                except Exception:  # noqa: BLE001
+                    return {
+                        "error": f"unknown DatasetSemantics ref for {operation}: {dataset_ref}",
+                        "field": "market_data_use_validation_refs",
+                        "validation_ref": ref,
+                        "dataset_ref": dataset_ref,
+                        "no_write": True,
+                    }
+                missing_timing = [
+                    field
+                    for field in ("known_at_ref", "effective_at_ref", "pit_bitemporal_rules_ref")
+                    if not str(getattr(dataset, field, "") or "").strip()
+                ]
+                if missing_timing:
+                    return {
+                        "error": f"DatasetSemantics missing PIT/bitemporal timing refs for {operation}: {dataset_ref}",
+                        "field": "market_data_use_validation_refs",
+                        "validation_ref": ref,
+                        "dataset_ref": dataset_ref,
+                        "missing_timing_refs": missing_timing,
+                        "no_write": True,
+                    }
+        resolved.append(ref)
+    return tuple(resolved)
+
+
 def _synth_and_promote(
     *,
     args: dict,
@@ -88,6 +195,7 @@ def _synth_and_promote(
     verdict_store: Any,
     verifier: Any,
     llm_client: Any,
+    market_data_registry: Any | None = None,
 ) -> dict[str, Any]:
     """DS-1 脊梁：对话意图 → 合成最小策略 → 沙箱跑真样本 → promote 落 RUN_ROOT → 真 run_id。
 
@@ -101,6 +209,16 @@ def _synth_and_promote(
     from ..ide.sandbox import run_user_strategy
     from .sample_data import has_sample
     from .strategy_synth import synthesize_strategy_code
+
+    validation_refs = _market_data_use_validation_refs(
+        args,
+        market_data_registry,
+        operation="backtest.run strategy synthesis",
+        require_dataset_timing=True,
+        allowed_use_contexts=("strategy_builder_backtest", "backtest", "confirmatory_validation"),
+    )
+    if isinstance(validation_refs, dict):
+        return validation_refs
 
     # 单旋钮 data_root：同控样本读取位置 + run_root 派生（缺省 paths.DATA_ROOT，测试可注入 tmp）。
     if data_root is not None:
@@ -203,6 +321,7 @@ def _synth_and_promote(
         "benchmark": synth.benchmark,
         "strategy_name": synth.strategy_name,
         "synthesis_method": synth.method,
+        "market_data_use_validation_refs": list(validation_refs),
         "metrics": {
             k: promoted.metrics[k]
             for k in ("sharpe", "total_return", "max_drawdown", "annualized_return", "volatility")
@@ -257,6 +376,7 @@ def register_business_tools(
     returns_store=None,
     data_root=None,
     llm_client=None,
+    market_data_registry=None,
 ) -> None:
     """把策略台脊柱业务工具注册进 AgentRuntime（全部 side_effect="none"）。
 
@@ -501,11 +621,20 @@ def register_business_tools(
             "note": "组合层多证据三角守门（预览/只读、不记账）。冷启动 PBO=N/A，A2 凭 DSR+CI 双正放行、过拟合仍 red；honest-N 记账走 promote 治理流。independent_bets=组合成分独立 bet 计数（去重族数·descriptor·不改 verdict·不喂 honest_n）。",
         }
 
-    # ── 6. backtest.run（接真）：组装→回测产 run 摘要（无副作用，本地 run 目录可重置） ──
+    # ── 6. backtest.run（真实引擎）：组装→回测产 run 摘要（无副作用，本地 run 目录可重置） ──
     def _backtest_run(_n: str, args: dict) -> dict[str, Any]:
         # 优先：若给定既有 run_id，投影真 run 摘要（接 run_verdict 单一源）。
         run_id = args.get("run_id")
         if run_id and verdict_store is not None and verifier is not None:
+            validation_refs = _market_data_use_validation_refs(
+                args,
+                market_data_registry,
+                operation="backtest.run existing run projection",
+                require_dataset_timing=True,
+                allowed_use_contexts=("backtest", "confirmatory_validation"),
+            )
+            if isinstance(validation_refs, dict):
+                return validation_refs
             try:
                 from ..run_verdict import project_overfit, project_verdict
 
@@ -518,6 +647,7 @@ def register_business_tools(
                     "overfit": {"pbo": overfit.get("pbo"), "dsr": overfit.get("dsr"),
                                 "gate_label": overfit.get("gate_label")},
                     "source": "projected_existing_run",
+                    "market_data_use_validation_refs": list(validation_refs),
                     "note": "回测摘要由 run_verdict 投影（裁决措辞走 Verifier._verdict_note，未验证不假绿灯）。",
                 }
             except FileNotFoundError:
@@ -534,9 +664,10 @@ def register_business_tools(
             verdict_store=verdict_store,
             verifier=verifier,
             llm_client=llm_client,
+            market_data_registry=market_data_registry,
         )
 
-    # ── 7. eval.pbo（接真）：CSCV → PBO（复用 eval.pbo 单一源，无副作用） ──
+    # ── 7. eval.pbo（真实计算）：CSCV → PBO（复用 eval.pbo 单一源，无副作用） ──
     def _eval_pbo(_n: str, args: dict) -> dict[str, Any]:
         from ..eval.pbo import cscv_pbo
 
@@ -563,11 +694,20 @@ def register_business_tools(
         out["used_demo_matrix"] = matrix is None
         return out
 
-    # ── 8. report.generate（接真）：run → markdown 报告（裁决措辞守门走单一源） ──
+    # ── 8. report.generate（真实报告）：run → markdown 报告（裁决措辞守门走单一源） ──
     def _report_generate(_n: str, args: dict) -> dict[str, Any]:
         run_id = args.get("run_id")
         if not run_id:
             return {"error": "需要 run_id"}
+        validation_refs = _market_data_use_validation_refs(
+            args,
+            market_data_registry,
+            operation="report.generate",
+            require_dataset_timing=True,
+            allowed_use_contexts=("backtest", "confirmatory_validation"),
+        )
+        if isinstance(validation_refs, dict):
+            return validation_refs
         if verdict_store is None or verifier is None:
             return {"error": "report.generate 需注入 verdict_store + verifier（措辞守门单一源）"}
         try:
@@ -596,6 +736,10 @@ def register_business_tools(
             lines.append(f"- {cell['preset']}: sharpe {cell['sharpe']} · excess {cell['excess']}")
         lines += [
             "",
+            "## 数据使用证明",
+            "- MarketDataUse validation refs: " + ", ".join(validation_refs),
+            "- 这些 refs 已在报告生成前回查 accepted/no-violation 和 DatasetSemantics PIT/bitemporal timing refs。",
+            "",
             "## 交接",
             "策略台终点。候选策略可提交模拟台，进场与监控由模拟台决定。",
         ]
@@ -604,6 +748,7 @@ def register_business_tools(
             "markdown": "\n".join(lines),
             "verdict": verdict.get("verdict"),
             "has_authoritative_verdict": verdict.get("has_authoritative_verdict"),
+            "market_data_use_validation_refs": list(validation_refs),
             "note": "报告裁决措辞由 Verifier._verdict_note 守门（禁绝对化措辞 R7）；未验证不当 pass。",
         }
 

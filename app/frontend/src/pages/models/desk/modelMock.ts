@@ -246,7 +246,7 @@ export const CV_FOLDS: CvFold[] = [
   { label: "fold 5", status: "pending", ndcg: "—" },
 ];
 
-/** 训练助手 mock 对话（诊断 + 追问 chip）。 */
+/** 训练诊断 mock 对话（诊断 + 追问 chip）。 */
 export const ASSISTANT_DIAGNOSIS =
   "tcn_alpha_v1 训练中：val loss 仍在降、与 train 间隙稳定，未见过拟合迹象。NDCG 逼近收敛。";
 
@@ -583,7 +583,7 @@ export const BUILD_CODE: string[] = [
   "        return self.head(h)  # score: [N, 1]",
 ];
 
-/** 构建台 agent 助手 mock 对话。 */
+/** 构建台 agent mock 对话。 */
 export const BUILD_CHAT_SEED = [
   { role: "user" as const, text: "帮我在 Linear 后加一个 TCN block 抓时序依赖" },
   {

@@ -4,6 +4,7 @@ import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import { BrowserRouter } from "react-router-dom";
 
 import App from "./App";
+import { applyThemeMode, getStoredThemeMode } from "./lib/theme";
 import "./styles.css";
 import "./theme-cc.css";
 
@@ -17,6 +18,8 @@ const desktopView = new URLSearchParams(window.location.search).get("view");
 if (desktopView && VIEW_ROUTES[desktopView]) {
   window.history.replaceState(null, "", VIEW_ROUTES[desktopView]);
 }
+
+applyThemeMode(getStoredThemeMode());
 
 const queryClient = new QueryClient();
 
