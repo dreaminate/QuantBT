@@ -340,6 +340,15 @@ from .research_os import (
     validate_runtime_promotion_record,
     validate_signal_protocol,
 )
+from .research_os.factor_strategy_boundary import (
+    FactorAssetKind,
+    FactorGeneratorSpec,
+    FactorLibraryEntry,
+    StrategyBookContract,
+    validate_factor_generator,
+    validate_factor_library_entry,
+    validate_strategy_book,
+)
 from .schemas import BinanceFullPullRequest, DataPullRequest, RunQueryRequest
 
 
@@ -2463,6 +2472,102 @@ def _create_strategy_goal_with_compiler_coverage(
         canonical_command_refs=(f"research_graph_command:{result['research_graph_command_id']}", f"strategy_goal:{goal_id}"),
     )
     return {**result, **compiler_refs}
+
+
+# ── GOAL §9 边界验证器 · advisory-first 接线（RULES §3 诚实纪律）────────────────────────
+# 诚实边界（必读）：以下助手把 §9 factor/model/signal/strategy 边界裁决接到真实
+# register/admit 生产路径，但**只记录、不强制**——裁决以 `boundary_verdict` 字段挂到产物
+# 响应上供审计/前端展示，**违例不 raise、不拒请求**。强制（hard-reject）是后续显式决策，
+# 不在本波。任何调用方/前端**不得**把 advisory 的 `ok=False` 渲染成硬保证或硬阻断。
+def _boundary_verdict_payload(decision: Any, *, boundary: str) -> dict[str, Any]:
+    """把一个 §9 BoundaryDecision 转成 advisory-only 的 `boundary_verdict` 载荷。
+
+    诚实纪律（RULES §3）：advisory-first —— 裁决被**记录**（挂到响应），**不被强制**
+    （违例不拒请求）。`ok` 仅表「§9 边界此刻是否被满足」，**不**代表已验证 / 已保证 / 已放行。
+    `enforced=False` 钉死该语义；调用方不得把它当硬门。
+    """
+
+    violations = [
+        {"code": v.code, "message": v.message, "field": v.field, "ref": v.ref}
+        for v in (getattr(decision, "violations", ()) or ())
+    ]
+    return {
+        "boundary": boundary,
+        "ok": bool(getattr(decision, "accepted", False)),
+        "advisory": True,
+        "enforced": False,
+        "violations": violations,
+    }
+
+
+def _strategy_candidate_boundary_verdict(payload: dict, candidate_id: str) -> dict[str, Any]:
+    """§9 `validate_strategy_book` 的 advisory 接线（退役因子默认采用边界）。
+
+    生产现实（诚实 · RULES §3）：StrategyBookContract / pydantic StrategyBook 都**无原生
+    生产端构造方**（仅测试构造），故 strategy-book 整契约属 library-ahead-of-path。本助手在
+    **候选交接**（submit_candidate = 新策略 admit）这一真实路径上，把 `factor_set` 里**能解析到
+    FACTOR_REGISTRY 的因子**当作「该候选默认采用」，交给 `validate_strategy_book` 跑 GOAL §9
+    「退役因子被新策略默认采用 → 拒」这条可证伪验收（advisory，不拒候选）。
+
+    覆盖边界：仅 retired-factor-default-adoption（§9 criterion 4），且只覆盖 factor_set 里**能直接
+    解析到 FACTOR_REGISTRY 的 factor_id**。strategy-book 的 short-intent 执行检查（criterion 3）与
+    run_config 数学绑定（criterion 5）在此路径上**无结构化输入**（submit_candidate 不带 legs /
+    signal_refs / math_refs），仍属 KNOWN_RUN_GAP。
+
+    诚实边界（RULES §3，关键）：不透明 `factor_set_id`（如 UI 的 "fs_core3"）**无法**解析到成员
+    factor_id——本仓库无 fs_id→members 注册表（compose 的 fs_id 是 content_hash，不落可解析存储），
+    属 KNOWN_RUN_GAP。这类 ref 计入 `unresolved_factor_refs` 并置 `evaluated=False`：此时 `ok=True`
+    **只表「无可证伪退役采用」而非「整本已查清」**，消费方**必须**看 `evaluated`，不得当干净通过。
+    （补充：退役采用在真实 UI 流里其实已被上游 `factor_set.compose` 的 QUALIFIED+ 血统门挡在
+    factor_set 之外——RETIRED 因子根本进不了 compose 出的 factor_set；本 advisory 补的是直接给
+    submit_candidate 传裸 factor_id 绕过 compose 的那条路径。）
+    """
+
+    raw = payload.get("factor_set")
+    if isinstance(raw, str):
+        candidate_refs = [s.strip() for s in raw.split(",") if s.strip()]
+    elif isinstance(raw, (list, tuple)):
+        candidate_refs = [str(x).strip() for x in raw if str(x).strip()]
+    else:
+        candidate_refs = []
+
+    factor_library: dict[str, FactorLibraryEntry] = {}
+    resolved_refs: list[str] = []
+    unresolved_refs: list[str] = []
+    for ref in candidate_refs:
+        try:
+            resolved = FACTOR_REGISTRY.get(ref)
+        except KeyError:
+            unresolved_refs.append(ref)  # 不透明 set-id / 非因子标签：无法判定 → 记 unresolved，不假装查过
+            continue
+        resolved_refs.append(ref)
+        factor_library[ref] = FactorLibraryEntry(
+            factor_ref=ref,
+            kind=FactorAssetKind.EXPRESSION,
+            ref=resolved.formula,
+            lifecycle_state=str(resolved.lifecycle_state),
+        )
+    book = StrategyBookContract(
+        strategy_book_ref=str(candidate_id or "candidate"),
+        factor_refs=tuple(resolved_refs),
+        signal_refs=(),
+        legs=(),
+        default_factor_refs=tuple(resolved_refs),
+    )
+    verdict = _boundary_verdict_payload(
+        validate_strategy_book(book, factor_library=factor_library),
+        boundary="strategy_book_§9",
+    )
+    verdict["resolved_factor_refs"] = resolved_refs
+    verdict["unresolved_factor_refs"] = unresolved_refs
+    # 诚实：有未解析 ref（含不透明 factor_set_id）时 evaluated=False —— ok=True 不等于「整本已查清」。
+    verdict["evaluated"] = not unresolved_refs
+    verdict["coverage"] = (
+        "retired_factor_default_adoption over registry-resolvable factor_ids only; "
+        "opaque factor_set_id (no fs_id->members registry), short-intent execution, and "
+        "run_config math binding remain KNOWN_RUN_GAP"
+    )
+    return verdict
 
 
 def _record_factor_qro(factor: Any, check: Any, *, actor: str, overwrite: bool = False) -> dict[str, Any]:
@@ -5377,6 +5482,26 @@ def create_factor(payload: dict = Body(...), user=Depends(require_user_dependenc
         actor=str(getattr(user, "username", None) or getattr(user, "user_id", None) or "system"),
         overwrite=overwrite,
     )
+    # GOAL §9 advisory（只记录不强制）：把 canonical validate_factor_library_entry 裁决挂到产物上。
+    # 本端点是表达式注册路径：kind 固定 expression、ref=formula，故此处实际触发的是「因子数学产物缺
+    # theory/run_config 绑定 → 拒」子准则；mathematical_refs / theory_binding_ref / run_config_binding_ref
+    # 为可选 §9 spine 槽。validator 的「模型本体塞进 Factor Library → 拒」分支在此基本不可达（formula 须过
+    # 编译门，.pt/.pkl 之类编译即 422）——该子准则的**专用硬门**在 POST /api/factors/admit
+    # （admit_artifact_to_factor_lib，既有，已被 test_adv1 钉死）。违例**不拒注册**。
+    boundary_verdict = _boundary_verdict_payload(
+        validate_factor_library_entry(
+            FactorLibraryEntry(
+                factor_ref=factor_id,
+                kind=FactorAssetKind.EXPRESSION,
+                ref=formula,
+                lifecycle_state=str(factor.lifecycle_state),
+                mathematical_refs=payload.get("mathematical_refs"),
+                theory_binding_ref=payload.get("theory_binding_ref"),
+                run_config_binding_ref=payload.get("run_config_binding_ref"),
+            )
+        ),
+        boundary="factor_library_entry_§9",
+    )
     return {
         "registered": True,
         "gates": {
@@ -5385,6 +5510,7 @@ def create_factor(payload: dict = Body(...), user=Depends(require_user_dependenc
             "name_available": check.name_available,
             "detail": check.detail,
         },
+        "boundary_verdict": boundary_verdict,
         **graph_refs,
         **factor.to_dict(),
     }
@@ -5738,13 +5864,28 @@ def factor_mine(payload: dict = Body(...)) -> dict[str, Any]:
         raise HTTPException(status_code=422, detail="exprs 中无有效 expr")
     sort_key = str(payload.get("sort_key", "complexity"))
     try:
-        return run_mining(exprs, sort_key=sort_key)
+        result = run_mining(exprs, sort_key=sort_key)
     except MiningGateLeakError as exc:
         raise HTTPException(
             status_code=422, detail={"gate_leak": True, "reason": str(exc)}
         ) from exc
     except MiningError as exc:
         raise HTTPException(status_code=422, detail=str(exc)) from exc
+    # GOAL §9 advisory（只记录不强制）：生成器/守门解耦边界裁决挂到产物。run_mining 已硬挡
+    # 「守门指标作 sort_key」（gate_leak→422，行为不变）；本裁决在 200 路径上补充 §9 canonical
+    # validator 的超集项「generator 必须命名独立 gatekeeper」（缺 gatekeeper_ref→flag）。违例不拒挖掘。
+    result["boundary_verdict"] = _boundary_verdict_payload(
+        validate_factor_generator(
+            FactorGeneratorSpec(
+                generator_ref=str(payload.get("generator_ref") or "factor_mine_request"),
+                structure_inputs=tuple(sorted({str(item.get("fam", "")) for item in exprs})),
+                fitness_inputs=(sort_key,),
+                gatekeeper_ref=payload.get("gatekeeper_ref"),
+            )
+        ),
+        boundary="factor_generator_§9",
+    )
+    return result
 
 
 # -------- M12 实验追踪 --------
@@ -19721,6 +19862,10 @@ def strategy_submit_candidate(
     out: dict[str, Any] = {**record, "paper_run": paper}
     if paper is not None and paper.get("error"):
         out["paper_run_error"] = paper["error"]
+    # GOAL §9 advisory（只记录不强制）：candidate = 新策略 admit。把 factor_set 里可解析到
+    # FACTOR_REGISTRY 的因子当「默认采用」，跑 validate_strategy_book 的「退役因子被新策略默认采用 → 拒」
+    # 这条可证伪验收；违例**不拒候选**（候选仍登记、仍止于 paper）。覆盖见 helper docstring（含 KNOWN_RUN_GAP）。
+    out["boundary_verdict"] = _strategy_candidate_boundary_verdict(payload, record.get("candidate_id", ""))
     return out
 
 
