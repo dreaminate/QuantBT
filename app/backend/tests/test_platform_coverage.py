@@ -674,10 +674,17 @@ def test_real_backing_rejects_goal_closure_ref_even_if_seeded_in_store(tmp_path)
     # seeded mathematical_spine_chains.jsonl with a math_spine_chain:goal_closure:*
     # record, so a pure resolution check would pass. The token ban rejects the ref
     # up front even though it really resolves in the store.
+    #
+    # SA-4 added a write門 to PersistentMathematicalSpineChainRegistry.record_chain
+    # that now fail-closes a goal_closure seed at the public write path, so the seed
+    # can no longer enter through record_chain(). We inject it straight into the
+    # registry's in-memory index to model a *residual* legacy seed — a line that
+    # predates the write門 and still awaits scripts/purge_goal_closure_seeds.py. The
+    # platform-coverage token ban must keep rejecting the ref during that residual
+    # window; that defense is exactly what this test pins and is unchanged below.
     backing = _real_backing(tmp_path)
-    seeded = backing.spine.record_chain(
-        _mk_chain(chain_ref="math_spine_chain:goal_closure:section_0_17:v1")
-    )
+    seeded = _mk_chain(chain_ref="math_spine_chain:goal_closure:section_0_17:v1")
+    backing.spine._chains[seeded.chain_ref] = seeded
     assert backing.resolver.has_math_spine_chain(seeded.chain_ref) is True
 
     seeded_common = dict(backing.common)
