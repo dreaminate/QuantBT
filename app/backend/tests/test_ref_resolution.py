@@ -159,7 +159,8 @@ def test_goal_closure_ref_banned_even_when_it_resolves_in_store(tmp_path):
     # store (the removed materializer seeded such records), so the raw getter
     # returns True -- but the token ban makes resolve_typed_ref reject it.
     spine, resolver = _real_spine_backing(tmp_path)
-    seeded = spine.record_chain(_mk_chain(chain_ref="math_spine_chain:goal_closure:section_0_17:v1"))
+    seeded = _mk_chain(chain_ref="math_spine_chain:goal_closure:section_0_17:v1")
+    spine._chains[seeded.chain_ref] = seeded
     assert resolver.has_math_spine_chain(seeded.chain_ref) is True  # raw store says backed
     assert resolve_typed_ref(resolver, "math_spine", seeded.chain_ref) is False  # gate says not
 
