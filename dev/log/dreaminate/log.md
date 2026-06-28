@@ -6,6 +6,12 @@
 ## <日期> · <标题>
 - 建/改了什么 + 命门  - 验收：<对抗测试 + 变异 + 全量数字>  - 下一步：<…> -->
 
+## 2026-06-28 · 全落地 CODEMAP + 第零波共享祖先 + wave2 §9 advisory（0e296ca）
+
+- **CODEMAP**：`dev/research/findings/dreaminate/construction-map.md` 完整写入（SA-1..4 祖先·逐节卡目录·波次排序·冲突图·KNOWN_RUN_GAP 登记册·4 条用户锁定决策烘入）。**SA-1**：`app/backend/app/research_os/ref_resolution.py`（6 类真实存储引用 resolver 从 platform_coverage 提取·行为保留·平台测试留绿）。**SA-4**：`spine.py`/`research_graph.py` 写时 ban goal_closure 占位种子 + `scripts/purge_goal_closure_seeds.py`（已在 main data/audit 执行·移除 11 条活种子·已备份）。**SA-3**：`app/backend/app/release_gate/promote_gate_chain.py` + `app/backend/app/governance/enforcement_policy.py`（fail-closed·producer 绿才强执行·未接 ide/promote.py）。**wave2**：§9 边界 validator 三条 advisory-first 接进 main.py 真生产路径。
+- **验收**：后端集成全量 3393 passed / 13 skipped / 0 failed / 346s；validate PASS；main 0e296ca 已 push origin/main（local == remote 已核实）。
+- **下一步**：Wave 1——LLM-Gateway 接线（§7/§8·中心串行 main.py）·PIT-enforce（§11）·§9 boundary-enforce 注册进 promote-gate-chain·§10 成本门 + 控制面强执行·§16 benchmark harness·中心串行把 promote-gate-chain 一次接进 ide/promote.py。
+
 ## 2026-06-28 · 第零波 + 第一波 land（fake-green A/B 双清·dec3bf5）
 
 - **第零波（fake-green A 清档）**：closure-via-materializer 未提交变更（自称 §0–§17 全闭·三标 True·自证合成档案驱动）从未入 origin/main，已归档至安全分支 `wip/uncommitted-closure-20260628`（cdbded9），main 复位至干净基线 a66e741。**第一波（fake-green B 修）**：`platform_coverage.validate_platform_capability_real_backing` 从词法前缀匹配改写为真引用解析（六类引用各对应真实后端存储，fail-closed，占位 token 禁止扫描含 goal_closure 变体），变异三态已证，dec3bf5 合并 main，后端全量 3343 passed / 13 skipped / 0 failed / 355s，validate PASS。生产 `full_platform_coverage` 诚实为 False（manifest 空·main.py resolver 接线延后）。
