@@ -6,6 +6,10 @@
 ## <日期> · <标题>
 - 建/改了什么 + 命门  - 验收：<对抗测试 + 变异 + 全量数字>  - 下一步：<…> -->
 
+## 2026-06-28 · 第零波 + 第一波 land（fake-green A/B 双清·dec3bf5）
+
+- **第零波（fake-green A 清档）**：closure-via-materializer 未提交变更（自称 §0–§17 全闭·三标 True·自证合成档案驱动）从未入 origin/main，已归档至安全分支 `wip/uncommitted-closure-20260628`（cdbded9），main 复位至干净基线 a66e741。**第一波（fake-green B 修）**：`platform_coverage.validate_platform_capability_real_backing` 从词法前缀匹配改写为真引用解析（六类引用各对应真实后端存储，fail-closed，占位 token 禁止扫描含 goal_closure 变体），变异三态已证，dec3bf5 合并 main，后端全量 3343 passed / 13 skipped / 0 failed / 355s，validate PASS。生产 `full_platform_coverage` 诚实为 False（manifest 空·main.py resolver 接线延后）。
+
 ## 2026-06-26 · §8 治理脊柱门 advisory 接进 agent orchestrator Review（卡 a8f3c1d2 · D-GOV-ADVISORY）
 
 - **实现**：新增 `agent/orchestrator/governance_advisory.py`，把已建 `GovernanceSpineGate.evaluate(SpineEvidence)` 接进 orchestrator Review 形态；`AgentOrchestrator` 新增 `advise_governance`，包导出同步。判定零重写，全委派 §8 门；事件 / `to_dict()` 只投 clause id、bool、计数，不投 evidence surface、`verdict_text`、`violation` 文本，secret 不回显。advisory-first：违反只 flag + `VerifierChallengeRaised`，不阻断 `plan/dispatch/replay/repair`；若底层 future `SecretLeakError` 硬停，本层只投 `INV_SECRET_PLAINTEXT` 后 re-raise。
