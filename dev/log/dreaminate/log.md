@@ -6,6 +6,10 @@
 ## <日期> · <标题>
 - 建/改了什么 + 命门  - 验收：<对抗测试 + 变异 + 全量数字>  - 下一步：<…> -->
 
+## 2026-06-28 · Wave 1 部分 land（C-S16 benchmark 3 绿 2 KNOWN_RUN_GAP / C-S11 PIT 3 fail-closed 接缝·d096179）
+
+- **C-S16**：新建 `tests/benchmark/` + 扩展 `engineering_standards.py`（复用 `validate_performance_baseline`）；5 条性能基线 passed=3 gaps=2（HS300 十年/首屏绘制 KNOWN_RUN_GAP·明确不可用非假绿）；codex 修 CLI exit-code 漏洞。**C-S11**：`data_pull.py`·`field_catalog/catalog.py`·`training/codegen.py` 三条 fail-closed 接缝·复用已有 validator（`market_data_contract.py` 未动）；26 条对抗测试；前视泄漏 LATENT（无活跃 confirmatory 调用方）·接缝 READY·在泄漏变活跃前关门。两线各含变异三态对抗测试 + codex review；零安全不变量触碰；main.py/promote.py 未动。  - 验收：后端全量 3434 passed / 13 skipped / 0 failed / 333s；validate PASS；main d096179 已 push origin/main（local == remote 已核实）。  - 下一步：LLM-Gateway 接线 C-S7（§7/§8·中心串行 main.py）·§9 boundary-enforce 注册进 promote-gate-chain·§10 成本门 + 控制面·中心串行把 promote-gate-chain 一次接进 ide/promote.py。
+
 ## 2026-06-28 · 全落地 CODEMAP + 第零波共享祖先 + wave2 §9 advisory（0e296ca）
 
 - **CODEMAP**：`dev/research/findings/dreaminate/construction-map.md` 完整写入（SA-1..4 祖先·逐节卡目录·波次排序·冲突图·KNOWN_RUN_GAP 登记册·4 条用户锁定决策烘入）。**SA-1**：`app/backend/app/research_os/ref_resolution.py`（6 类真实存储引用 resolver 从 platform_coverage 提取·行为保留·平台测试留绿）。**SA-4**：`spine.py`/`research_graph.py` 写时 ban goal_closure 占位种子 + `scripts/purge_goal_closure_seeds.py`（已在 main data/audit 执行·移除 11 条活种子·已备份）。**SA-3**：`app/backend/app/release_gate/promote_gate_chain.py` + `app/backend/app/governance/enforcement_policy.py`（fail-closed·producer 绿才强执行·未接 ide/promote.py）。**wave2**：§9 边界 validator 三条 advisory-first 接进 main.py 真生产路径。
