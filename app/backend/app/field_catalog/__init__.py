@@ -11,7 +11,13 @@
 from __future__ import annotations
 
 from .canonical import CANONICAL, CanonicalField, CanonicalRegistry
-from .catalog import FieldCatalog, FieldEntry, FieldUniverse, SourceFilter
+from .catalog import (
+    ConfirmatoryPanelRejected,
+    FieldCatalog,
+    FieldEntry,
+    FieldUniverse,
+    SourceFilter,
+)
 from .contract import DatasetInfo, FieldRequirement, FileRef, PanelResult, WidePanel
 from .intake import register_official_dataset
 from .mapping import FieldMapping, FieldMappingStore
@@ -22,6 +28,7 @@ __all__ = [
     "CANONICAL",
     "CanonicalField",
     "CanonicalRegistry",
+    "ConfirmatoryPanelRejected",
     "DatasetInfo",
     "DatasetSource",
     "FieldCatalog",
