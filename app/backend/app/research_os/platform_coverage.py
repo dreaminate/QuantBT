@@ -6,7 +6,15 @@ import json
 from dataclasses import dataclass
 from enum import Enum
 from pathlib import Path
-from typing import Any, Protocol
+from typing import Any
+
+from .ref_resolution import (
+    RealRefResolver as RealPlatformCoverageRefResolver,
+    RefResolver as PlatformCoverageRefResolver,
+    build_real_ref_resolver as build_real_platform_coverage_resolver,
+    is_placeholder_ref,
+    resolve_typed_ref,
+)
 
 
 def _tuple(value: Any) -> tuple[Any, ...]:
@@ -229,183 +237,6 @@ def platform_capability_record_to_dict(record: PlatformCapabilityRecord) -> dict
     }
 
 
-# Tokens that mark a ref as a synthetic / placeholder / self-certifying-closure
-# string rather than a real persisted store id. Banned even when the ref happens
-# to resolve, because the closure materializer that was removed seeded some
-# dependency stores (e.g. mathematical_spine_chains.jsonl) with goal_closure:*
-# placeholder records — a pure resolution check alone could be fooled by them.
-_PLACEHOLDER_TOKENS: tuple[str, ...] = (
-    "synthetic",
-    "fixture",
-    "test_only",
-    "test-only",
-    "goal_closure",
-    "goal-closure",
-    "goalclosure",
-    "placeholder",
-)
-
-# Each common platform ref must resolve to a real object in a specific backend
-# store. This maps the record field to the resolver method that owns that store.
-_COMMON_REF_RESOLVER_METHODS: dict[str, str] = {
-    "qro_ref": "has_qro",
-    "research_graph_ref": "has_research_graph_command",
-    "lifecycle_ref": "has_lifecycle_record",
-    "governance_ref": "has_governance_record",
-    "rag_ref": "has_rag_asset",
-    "math_spine_ref": "has_math_spine_chain",
-}
-
-
-class PlatformCoverageRefResolver(Protocol):
-    """Resolves a platform-coverage ref to a real object in a real backend store.
-
-    Implementations MUST return True only when the ref is the id of an object
-    that is actually persisted in the corresponding store. Nonexistent or
-    placeholder ids MUST return False (fail-closed).
-    """
-
-    def has_qro(self, ref: str) -> bool: ...
-
-    def has_research_graph_command(self, ref: str) -> bool: ...
-
-    def has_lifecycle_record(self, ref: str) -> bool: ...
-
-    def has_governance_record(self, ref: str) -> bool: ...
-
-    def has_rag_asset(self, ref: str) -> bool: ...
-
-    def has_math_spine_chain(self, ref: str) -> bool: ...
-
-
-class RealPlatformCoverageRefResolver:
-    """Resolve platform-coverage refs against the real QRO / research graph /
-    lifecycle / governance / RAG / Mathematical Spine stores.
-
-    This reuses the existing store getters (no new store APIs). A ref counts as
-    backed only when the matching getter returns a real persisted object; a
-    missing id raises ``KeyError``/``LookupError`` inside the store and is
-    reported here as not backed (fail-closed). The resolver does NOT mint,
-    materialize, or self-certify anything — it only reads existing stores.
-    """
-
-    def __init__(
-        self,
-        *,
-        research_graph_store: Any,
-        lifecycle_registry: Any,
-        governance_registry: Any,
-        rag_index: Any,
-        spine_chain_registry: Any,
-    ) -> None:
-        self._research_graph_store = research_graph_store
-        self._lifecycle_registry = lifecycle_registry
-        self._governance_registry = governance_registry
-        self._rag_index = rag_index
-        self._spine_chain_registry = spine_chain_registry
-
-    def has_qro(self, ref: str) -> bool:
-        ref = str(ref or "")
-        if not ref:
-            return False
-        try:
-            self._research_graph_store.qro(ref)
-            return True
-        except (KeyError, LookupError):
-            return False
-
-    def has_research_graph_command(self, ref: str) -> bool:
-        ref = str(ref or "")
-        if not ref:
-            return False
-        return any(
-            getattr(command, "command_id", None) == ref
-            for command in self._research_graph_store.commands()
-        )
-
-    def has_lifecycle_record(self, ref: str) -> bool:
-        ref = str(ref or "")
-        if not ref:
-            return False
-        try:
-            self._lifecycle_registry.ingestion_skill_update(ref)
-            return True
-        except (KeyError, LookupError):
-            return False
-
-    def has_governance_record(self, ref: str) -> bool:
-        ref = str(ref or "")
-        if not ref:
-            return False
-        for getter_name in (
-            "passport",
-            "monitoring_profile",
-            "recertification_record",
-            "artifact_inspection",
-            "serving_invocation",
-        ):
-            getter = getattr(self._governance_registry, getter_name, None)
-            if getter is None:
-                continue
-            try:
-                getter(ref)
-                return True
-            except (KeyError, LookupError):
-                continue
-        return False
-
-    def has_rag_asset(self, ref: str) -> bool:
-        ref = str(ref or "")
-        if not ref:
-            return False
-        return any(
-            getattr(vector, "document_id", None) == ref
-            for vector in self._rag_index.dense_vectors()
-        )
-
-    def has_math_spine_chain(self, ref: str) -> bool:
-        ref = str(ref or "")
-        if not ref:
-            return False
-        try:
-            self._spine_chain_registry.chain(ref)
-            return True
-        except (KeyError, LookupError):
-            return False
-
-
-def build_real_platform_coverage_resolver(
-    *,
-    research_graph_store: Any,
-    lifecycle_registry: Any,
-    governance_registry: Any,
-    rag_index: Any,
-    spine_chain_registry: Any,
-) -> RealPlatformCoverageRefResolver:
-    """Build the production resolver from the real backend store singletons.
-
-    Intended to be wired once at startup, e.g. in ``app.main``::
-
-        set_default_platform_coverage_resolver(
-            build_real_platform_coverage_resolver(
-                research_graph_store=RESEARCH_GRAPH_STORE,
-                lifecycle_registry=ASSET_LIFECYCLE_REGISTRY,
-                governance_registry=MODEL_GOVERNANCE_REGISTRY,
-                rag_index=RESEARCH_ASSET_RAG_INDEX,
-                spine_chain_registry=MATHEMATICAL_SPINE_CHAIN_REGISTRY,
-            )
-        )
-    """
-
-    return RealPlatformCoverageRefResolver(
-        research_graph_store=research_graph_store,
-        lifecycle_registry=lifecycle_registry,
-        governance_registry=governance_registry,
-        rag_index=rag_index,
-        spine_chain_registry=spine_chain_registry,
-    )
-
-
 # Dependency-injection seam. Defaults to None == fail-closed: with no resolver
 # configured, no common ref can be proven backed, so manifests are rejected
 # rather than rubber-stamped. Production wires the real resolver via the setter
@@ -420,31 +251,6 @@ def set_default_platform_coverage_resolver(resolver: PlatformCoverageRefResolver
 
 def get_default_platform_coverage_resolver() -> PlatformCoverageRefResolver | None:
     return _DEFAULT_RESOLVER
-
-
-def _ref_is_backed(
-    resolver: PlatformCoverageRefResolver | None,
-    field_name: str,
-    ref: str,
-) -> bool:
-    """Return True only if ``resolver`` proves ``ref`` resolves to a real object.
-
-    Fail-closed: a missing resolver, an unknown field, or any error during
-    resolution all count as not backed.
-    """
-
-    if resolver is None:
-        return False
-    method_name = _COMMON_REF_RESOLVER_METHODS.get(field_name)
-    if method_name is None:
-        return False
-    method = getattr(resolver, method_name, None)
-    if method is None:
-        return False
-    try:
-        return bool(method(ref))
-    except Exception:  # noqa: BLE001 - a gate must fail closed if resolution errors.
-        return False
 
 
 def _real_ref_violation(field: str, row: str, ref: str, reason: str) -> PlatformCoverageViolation:
@@ -493,8 +299,7 @@ def validate_platform_capability_real_backing(
         if not ref:
             # Absence already reported by validate_platform_capability above.
             continue
-        lowered = ref.lower()
-        if any(token in lowered for token in _PLACEHOLDER_TOKENS):
+        if is_placeholder_ref(ref):
             violations.append(
                 _real_ref_violation(
                     field_name,
@@ -509,7 +314,7 @@ def validate_platform_capability_real_backing(
                 _real_ref_violation(field_name, row, ref, "platform coverage refs cannot be row placeholders")
             )
             continue
-        if not _ref_is_backed(active_resolver, field_name, ref):
+        if not resolve_typed_ref(active_resolver, field_name.removesuffix("_ref"), ref):
             violations.append(
                 _real_ref_violation(
                     field_name,
@@ -520,8 +325,7 @@ def validate_platform_capability_real_backing(
             )
     for ref in record.evidence_refs:
         ref = str(ref or "")
-        lowered = ref.lower()
-        if any(token in lowered for token in _PLACEHOLDER_TOKENS) or ref.endswith(":001"):
+        if is_placeholder_ref(ref) or ref.endswith(":001"):
             violations.append(
                 _real_ref_violation(
                     "evidence_refs",
@@ -532,8 +336,7 @@ def validate_platform_capability_real_backing(
             )
     for item in record.specific_refs:
         ref = str(item.ref or "")
-        lowered = ref.lower()
-        if any(token in lowered for token in _PLACEHOLDER_TOKENS) or ref.endswith(":001"):
+        if is_placeholder_ref(ref) or ref.endswith(":001"):
             violations.append(
                 _real_ref_violation(
                     f"specific_refs.{item.key}",
