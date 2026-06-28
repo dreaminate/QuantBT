@@ -6,6 +6,10 @@
 ## <日期> · <标题>
 - 建/改了什么 + 命门  - 验收：<对抗测试 + 变异 + 全量数字>  - 下一步：<…> -->
 
+## 2026-06-29 · Wave 1 再落两线 C-S9（§9 边界→promote-gate-chain·18 测）+ C-S10（§10 成本门 + 控制面·45 测）·main b66f104
+
+- **C-S9**：新建 `section9_boundary_gate.py`（18 条对抗测试）·§9 边界 validator 接进 promote-gate-chain·复用不重建·producer key `s9_boundary_runjson_producers`·advisory 直到 producer 绿·codex 修 3 处 fail-open 漏洞。**C-S10**：新建 `section10_methodology_gate.py`（45 条对抗测试）·成本门 + 控制面两条检查·复用 methodology_validation/control_plane（未动）·producer key `s10_cost_runjson_producers`/`s10_controlplane_runjson_producers`·advisory 直到绿·codex 修 3 处 gaming 漏洞（blank-ref 伪造·空白填充强标签）。两线纯加法·零既有文件触碰·`ide/promote.py` 未接（刻意，大串行步在后）。KNOWN_RUN_GAP：§9/§10 producer 尚未建，两门 advisory-only。  - 验收：后端全量 3497 passed / 13 skipped / 0 failed；validate PASS；main b66f104 已 push origin/main（local == remote 已核实）。  - 下一步：LLM-Gateway 接线 C-S7（§7/§8·中心串行 main.py）·大串行步把 promote-gate-chain 接进 ide/promote.py 注册所有已落检查。
+
 ## 2026-06-28 · Wave 1 部分 land（C-S16 benchmark 3 绿 2 KNOWN_RUN_GAP / C-S11 PIT 3 fail-closed 接缝·d096179）
 
 - **C-S16**：新建 `tests/benchmark/` + 扩展 `engineering_standards.py`（复用 `validate_performance_baseline`）；5 条性能基线 passed=3 gaps=2（HS300 十年/首屏绘制 KNOWN_RUN_GAP·明确不可用非假绿）；codex 修 CLI exit-code 漏洞。**C-S11**：`data_pull.py`·`field_catalog/catalog.py`·`training/codegen.py` 三条 fail-closed 接缝·复用已有 validator（`market_data_contract.py` 未动）；26 条对抗测试；前视泄漏 LATENT（无活跃 confirmatory 调用方）·接缝 READY·在泄漏变活跃前关门。两线各含变异三态对抗测试 + codex review；零安全不变量触碰；main.py/promote.py 未动。  - 验收：后端全量 3434 passed / 13 skipped / 0 failed / 333s；validate PASS；main d096179 已 push origin/main（local == remote 已核实）。  - 下一步：LLM-Gateway 接线 C-S7（§7/§8·中心串行 main.py）·§9 boundary-enforce 注册进 promote-gate-chain·§10 成本门 + 控制面·中心串行把 promote-gate-chain 一次接进 ide/promote.py。
