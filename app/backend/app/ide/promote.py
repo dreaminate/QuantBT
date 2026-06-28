@@ -64,6 +64,7 @@ def promote_ide_run(
     extra_metadata: dict[str, Any] | None = None,
     execution_blocks: list[dict[str, Any]] | None = None,
     registry: Any = None,
+    producer_status: Any = None,
 ) -> PromotedRun:
     """把 IDE 沙箱结果落到 runs/<id>/，跑 metrics，返回新 run_id。
 
@@ -83,6 +84,14 @@ def promote_ide_run(
     `release_gate.promote_assembler` 组装→`evaluate_release` 的 Mock 诚实门核查（§16 致命
     「未注入资产却声称已采用 / template false success」在此被 R4/R5 抓）。不传 → 不写该键、
     行为与既有一致。本函数仅诚实【落数据】，绝不重造分类/判定（单一源 = mock_honesty + evaluate_release）。
+
+    SA-3 promote 门链接线（**opt-in，向后兼容·advisory-first**）：manifest 组装后、run.json 落盘前，经
+    `release_gate.gate_registry.ensure_default_chain()` 把已落地的 §9 边界 + §10 成本/控制面 check 在
+    **真 promote 路径**上跑一次，裁决落进 run.json 的 `promote_gate_chain`。`producer_status`（producer
+    绿灯账·默认 None = 全红）未传/全红 → 每门被 SA-2 策略解析为 advisory → 恒不阻断（纯记录·向后兼容）；
+    仅当某门的证据 producer 经**独立卡**转绿（传入已绿 ledger）后，对应门才翻 enforce、坏 run 才被拒。与
+    §16 `release_verdict` 正交并存（两条 advisory 各记各的·互不改）。加新节门 = `gate_registry` 加一行、
+    本函数一字不动（SA-3 承诺·替代「逐门串改 promote」）。
     """
 
     equity_curve = result.get("equity_curve")
@@ -158,6 +167,31 @@ def promote_ide_run(
             "available": False,
             "error": f"release 自检未运行: {type(exc).__name__}",
         }
+
+    # —— SA-3 promote 门链（中心串行·advisory-first·construction-map §4.D）——
+    # 把已落地的 §9 边界 + §10 成本/控制面 check 经 default_chain 在**真 promote 路径**上跑一次，裁决
+    # 落进 run.json 的 `promote_gate_chain`。producer 全红（无 producer 标绿·诚实默认 producer_status=
+    # None）→ 每门被 SA-2 策略解析为 advisory → result.rejected 恒 False = 纯记录、绝不阻断、向后兼容。
+    # 仅当某门的证据 producer 经**独立卡**转绿（producer_status 传入已绿 ledger）后，对应门才翻 enforce、
+    # 坏 run 才被拒。注册收口单一在 release_gate.gate_registry（加新门 = 那里加一行·本文件一字不动）。
+    # 防御式：门链自检任何异常都不得破坏 promote 主流程（落 available:False 诚实标·不静默吞、不假绿灯）。
+    chain_result = None
+    try:
+        from ..release_gate.gate_registry import ensure_default_chain
+
+        chain_result = ensure_default_chain().evaluate(manifest, producer_status=producer_status)
+        manifest["promote_gate_chain"] = chain_result.to_dict()
+    except Exception as exc:  # noqa: BLE001 — 门链自检不得破坏 promote 主流程
+        chain_result = None
+        manifest["promote_gate_chain"] = {
+            "available": False,
+            "error": f"promote 门链未运行: {type(exc).__name__}",
+        }
+
+    # enforce 门未过 → 拒晋级。advisory-only 时 rejected 恒 False·此分支不触发（纯记录）。在写 run.json
+    # **前**拒：被门链拒的晋级绝不落 run.json（不冒充成功 run·RunDetail 也就不会列出它）。
+    if chain_result is not None and chain_result.rejected:
+        raise PromoteError(f"promote 门链拒绝晋级（enforce 门未过·SA-3）: {chain_result.reason_text}")
 
     (run_dir / "run.json").write_text(
         json.dumps(manifest, ensure_ascii=False, indent=2),
