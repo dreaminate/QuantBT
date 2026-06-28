@@ -39,6 +39,35 @@ _STRUCTURAL = {"ts", "symbol", "market", "interval", "known_at"}
 
 SourceFilter = Callable[[str, str | None], bool]  # (source_name, market) -> 是否启用
 
+# ============================================================
+# C-S11-PIT-ENFORCE · confirmatory 取数物化硬门（GOAL §11 line1759）
+# ============================================================
+# GOAL §11 可证伪验收：「无 PIT 语义的数据进入 confirmatory validation → 拒」。
+# 真前视面在 _materialize_sub：as_of_known 给定但某数据集**无 known_at 列** → 静默落到现行视图
+# （keep="last"），调用方以为做了 PIT 折叠、实拿到含未来重述的当前视图 = 前视。confirmatory run
+# 绝不能吃这口静默 fall-through。本门让 load_panel 在 confirmatory 上下文下 fail-closed：
+#   ① as_of_known 未 pin（无知识时点）→ 拒；② 解析到零数据集 → 拒；③ 任一贡献数据集无 known_at 轴
+#   （静默落空）→ 拒。非 confirmatory（None/research/backtest/...）逐字现状，向后兼容、不误伤探索。
+# 单一源：confirmatory 的判定值镜像 research_os.market_data_contract.ValidationUseContext
+# .CONFIRMATORY_VALIDATION（字符串 "confirmatory_validation"）；field_catalog 是低层数据脊梁
+# （"模块永不 import connector"），同理不引重量级 research_os 包，按值镜像（与 codegen 镜像 load_panel
+# 折叠语义同一手法），canonical 仍在那枚枚举。
+_CONFIRMATORY_CONTEXT = "confirmatory_validation"
+
+# 单点可逆：中心整合跑全量后若某 confirmatory 取数路径破基线 → 翻 False 全局回退（无需改门/调用点）。
+ENFORCE_CONFIRMATORY_PANEL_PIT = True
+
+
+class ConfirmatoryPanelRejected(RuntimeError):
+    """confirmatory 取数缺 PIT —— 未 pin as_of_known / 零数据集 / 无 known_at 轴（静默落空=前视·GOAL §11 line1759）。"""
+
+
+def _is_confirmatory(use_context: object) -> bool:
+    """归一 use_context（Enum/str/None）→ 是否 confirmatory（单一源 = ValidationUseContext.CONFIRMATORY_VALIDATION 值）。"""
+    if use_context is None:
+        return False
+    return str(getattr(use_context, "value", use_context)) == _CONFIRMATORY_CONTEXT
+
 _NON_IDENT = re.compile(r"[^0-9A-Za-z_]+")
 
 # 磁盘真实列名 → 规范键（首个命中）。财报的 end_date/ann_date 排在通用 date 之前，避免选错时间轴；
@@ -201,6 +230,7 @@ class FieldCatalog:
         enabled_only: bool = True,
         as_of_known: AsOf | None = None,
         keep_known_at_axis: bool = False,
+        use_context: object = None,
     ) -> PanelResult:
         """装载 panel（量化流程入口）。R28 双时态：
 
@@ -210,6 +240,10 @@ class FieldCatalog:
         - ``keep_known_at_axis=True``（Stage②）→ 保留 known_at 轴、不折叠（end_date×known_at 双轴
           长表，单财报集重述时间线分析用）。诚实限界：多数据集双轴对齐 ill-defined（各表重述
           known_at 不齐），仅对单数据集需求语义干净。
+        - ``use_context``（C-S11-PIT-ENFORCE）：标 ``confirmatory_validation`` 时 fail-closed —— 未 pin
+          ``as_of_known`` / 零数据集 / 任一数据集无 known_at 轴（静默落空=前视）→ raise
+          ``ConfirmatoryPanelRejected``（GOAL §11 line1759）。缺省 None / 其它 → 逐字现状（向后兼容）。
+          返回的 ``pit_filter_applied`` / ``pit_missing_known_at`` 是显式 PIT 物化证据（不挪用 has_known_at_axis）。
         """
 
         datasets = self.list_datasets(market=req.market, interval=req.interval, enabled_only=enabled_only)
@@ -230,6 +264,8 @@ class FieldCatalog:
         subs: list[pl.DataFrame] = []
         manifest: dict[str, str] = {}
         any_known_axis = False
+        contributing = 0                       # 真贡献字段进 panel 的数据集数（confirmatory 零数据集→拒）
+        missing_known_at: list[str] = []       # 请求 as_of_known 但无 known_at 轴（静默落空=前视面）的 dataset_id
         for dataset_id, entries in by_dataset.items():
             ds = ds_index.get(dataset_id)
             if ds is None:
@@ -251,10 +287,20 @@ class FieldCatalog:
                     seen_fids.add(e.field_id)
             if len(select) <= 2:
                 continue
+            contributing += 1
+            # C-S11-PIT-ENFORCE：请求 PIT 折叠(as_of_known) 但本数据集无 known_at 轴 → _materialize_sub
+            # 会静默落到现行视图（前视面）。记下来供 confirmatory 硬门 + pit_filter_applied 证据（绝不静默放过）。
+            if as_of_known is not None and "known_at" not in cols:
+                missing_known_at.append(dataset_id)
             sub = _materialize_sub(frame, select, as_of_known, keep_known_at_axis)
             if want_known and keep_known_at_axis and "known_at" in sub.columns:
                 any_known_axis = True
             subs.append(sub)
+
+        # C-S11-PIT-ENFORCE：confirmatory 取数硬门——在返回 panel 前 fail-closed 拒非 PIT（look-ahead 红线）。
+        pit_filter_applied = as_of_known is not None and contributing > 0 and not missing_known_at
+        if _is_confirmatory(use_context) and ENFORCE_CONFIRMATORY_PANEL_PIT:
+            self._reject_nonpit_confirmatory(as_of_known, contributing, missing_known_at, req)
 
         panel = _join_on_keys(subs)
 
@@ -283,7 +329,33 @@ class FieldCatalog:
             row_count=panel.height,
             as_of_known=as_of_known,
             has_known_at_axis=any_known_axis,
+            pit_filter_applied=pit_filter_applied,
+            pit_missing_known_at=tuple(missing_known_at),
         )
+
+    @staticmethod
+    def _reject_nonpit_confirmatory(
+        as_of_known: AsOf | None,
+        contributing: int,
+        missing_known_at: list[str],
+        req: FieldRequirement,
+    ) -> None:
+        """confirmatory 取数缺 PIT → raise（GOAL §11 line1759·look-ahead 红线·RULES.project §5）。"""
+        if as_of_known is None:
+            raise ConfirmatoryPanelRejected(
+                f"confirmatory 取数（market={req.market} interval={req.interval}）必须 pin as_of_known"
+                "（PIT 知识时点）→ 拒裸全知视图（无知识时点=前视·GOAL §11 line1759）"
+            )
+        if contributing == 0:
+            raise ConfirmatoryPanelRejected(
+                f"confirmatory 取数（market={req.market} interval={req.interval}）解析到零数据集 —— "
+                "无可核验 PIT，fail-closed 拒（绝不放行不可核验数据进 confirmatory validation·GOAL §11）"
+            )
+        if missing_known_at:
+            raise ConfirmatoryPanelRejected(
+                f"confirmatory 取数：数据集 {sorted(missing_known_at)} 无 known_at 轴，as_of_known 静默落空 "
+                "= 拿到含未来重述的现行视图（前视）→ 拒（GOAL §11 line1759·无 PIT 语义不得进 confirmatory）"
+            )
 
 
 def _materialize_sub(

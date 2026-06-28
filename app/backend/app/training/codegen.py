@@ -45,6 +45,7 @@ def load_pit_panel(
     panel_path: str,
     *,
     as_of_known: Any = None,
+    confirmatory: bool = False,
     ts_col: str = "ts",
     symbol_col: str = "symbol",
     known_at_col: str = "known_at",
@@ -61,17 +62,31 @@ def load_pit_panel(
       （单一 as-of 边界原语，不另造）过滤 ``known_at <= as_of_known``，再同 ``(ts,symbol)``
       取最新已知重述、drop ``known_at``。**晚于 as_of_known 的未来 known_at 行必被挡在训练之外。**
 
+    C-S11-PIT-ENFORCE（``confirmatory=True``）：confirmatory 训练取数 fail-closed —— 未 pin
+    ``as_of_known`` 或 panel 无 ``known_at`` 轴 → **raise**（绝不静默裸读 / 静默落空 = 前视·GOAL
+    §11 line1759）。``confirmatory=False`` 时上面三分支逐字不变（向后兼容·既有训练一字不改）。
+
     诚实边界：panel parquet 是**已预解析面板**、非 ``FieldCatalog``，无法直接调 ``load_panel``；
     这里复用其 as-of 边界原语并镜像其折叠语义（不重造边界/dtype 对齐逻辑）。非法 ``as_of_known``
     由 ``as_of_bound`` 运行时 fail-loud 校验（单一源），绝不静默回落裸读绕过守卫。
     """
     import pandas as pd
 
+    if confirmatory and as_of_known is None:
+        raise ValueError(
+            "confirmatory 训练取数必须 pin as_of_known（PIT 知识时点）→ 拒裸全量读"
+            "（look-ahead 红线·GOAL §11 line1759）"
+        )
     if as_of_known is None:
         return pd.read_parquet(panel_path)  # 逐字现状·向后兼容（既有训练行为不变）
     pdf = pd.read_parquet(panel_path)
     if known_at_col not in pdf.columns:
-        return pdf  # 无 known_at 轴 → as_of_known 无可过滤（mirror _materialize_sub，不假装过滤）
+        if confirmatory:
+            raise ValueError(
+                f"confirmatory 训练 panel 无 {known_at_col!r} 轴 → as_of_known 静默落空 = 拿到含未来重述的"
+                "现行视图（前视）→ 拒（GOAL §11 line1759·无 PIT 语义不得进 confirmatory）"
+            )
+        return pdf  # 非 confirmatory：无 known_at 轴 → as_of_known 无可过滤（mirror _materialize_sub，不假装过滤）
     import polars as pl
 
     from ..universe.resolver import as_of_bound  # 单一 as-of 边界源（read-only 复用，绝不改 resolver）
@@ -99,6 +114,19 @@ def _as_of_known_literal(value: Any) -> str:
     return repr(str(value))
 
 
+def _spec_is_confirmatory(spec: dict[str, Any]) -> bool:
+    """spec 是否标 confirmatory（显式 ``confirmatory=True`` 或 ``use_context=confirmatory_validation``）。
+
+    单一源 = ``research_os.market_data_contract.ValidationUseContext.CONFIRMATORY_VALIDATION`` 的值；codegen
+    是生成脚本拼装层、不引重量级 research_os 包，按值镜像（与本模块镜像 load_panel 折叠语义同一手法），
+    canonical 仍在那枚枚举。
+    """
+    if bool(spec.get("confirmatory")):
+        return True
+    uc = spec.get("use_context")
+    return uc is not None and str(getattr(uc, "value", uc)) == "confirmatory_validation"
+
+
 def _panel_load_header(spec: dict[str, Any]) -> str:
     """脚本顶部 panel 加载段（R28 双时态 PIT 透传 · 堵 look-ahead）。
 
@@ -106,10 +134,22 @@ def _panel_load_header(spec: dict[str, Any]) -> str:
       向后兼容·additive·绝不改既有训练行为（``_HEADER`` 一字不动）。
     - spec 有 ``as_of_known`` → 改走 ``load_pit_panel``：按 ``known_at<=as_of_known`` 折叠点查，
       只让训练见「截至该知识时点已知」的行（重述 as-of），堵 look-ahead。
+    - C-S11-PIT-ENFORCE：spec 标 confirmatory 时 fail-closed —— 缺 ``as_of_known`` → **raise**（绝不
+      回落裸 ``_HEADER`` 的 ``read_parquet`` = 前视）；有 ``as_of_known`` → 生成脚本带 ``confirmatory=True``，
+      让运行期 ``load_pit_panel`` 对「无 known_at 轴」也 fail-closed（堵 codex 抓的 _HEADER 旁路）。
     """
     as_of_known = spec.get("as_of_known")
+    confirmatory = _spec_is_confirmatory(spec)
     if as_of_known is None:
+        if confirmatory:
+            raise ValueError(
+                "confirmatory 训练 spec 必须带 as_of_known（PIT 知识时点）→ 拒裸 read_parquet"
+                "（look-ahead 红线·GOAL §11 line1759）"
+            )
         return _HEADER
+    # 非 confirmatory：逐字保留既有调用串（不追加 confirmatory 实参，向后兼容·守既有断言）。
+    # confirmatory：附 confirmatory=True，让运行期 load_pit_panel 对「无 known_at 轴」也 fail-closed。
+    confirmatory_arg = ", confirmatory=True" if confirmatory else ""
     return f'''import os
 from pathlib import Path
 
@@ -118,7 +158,7 @@ import pandas as pd  # noqa: F401
 from app.training.codegen import load_pit_panel
 from app.training.lib import emit, predict_with  # noqa: F401
 
-panel = load_pit_panel(os.environ["QUANTBT_PANEL_PATH"], as_of_known={_as_of_known_literal(as_of_known)})
+panel = load_pit_panel(os.environ["QUANTBT_PANEL_PATH"], as_of_known={_as_of_known_literal(as_of_known)}{confirmatory_arg})
 job_dir = Path(os.environ["QUANTBT_JOB_DIR"])
 '''
 

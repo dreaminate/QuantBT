@@ -48,6 +48,10 @@ class PanelResult:
     row_count: int = 0                         # panel 行数；ok 不仅看列在、也隐含 row_count>0
     as_of_known: Any = None                    # R28 双时态：本 panel 按哪个 known_at 时点解析（None=当前全知视图）
     has_known_at_axis: bool = False            # R28 Stage②：panel 是否保留 known_at 轴（双轴长表，未折叠）
+    # C-S11-PIT-ENFORCE：显式 PIT 物化证据（绝不用 has_known_at_axis 当「已 PIT 过滤」——它只标 Stage② 保轴，
+    # 正常 as_of_known 折叠后 known_at 被 drop、该旗为 False = 假阴）。
+    pit_filter_applied: bool = False           # as_of_known 在场 且 所有贡献数据集都真按 known_at 过滤了（无静默 fall-through）
+    pit_missing_known_at: tuple[str, ...] = () # 请求 as_of_known 但无 known_at 轴（静默落空=前视风险）的 dataset_id
 
     @property
     def ok(self) -> bool:

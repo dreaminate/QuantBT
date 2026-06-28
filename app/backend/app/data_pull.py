@@ -3,7 +3,7 @@
 import json
 import math
 import time
-from collections.abc import Callable
+from collections.abc import Callable, Iterable
 from datetime import UTC, date, datetime, timedelta
 from pathlib import Path
 from typing import Any
@@ -1043,11 +1043,108 @@ def pull_binance_dataset(
     return {"written_files": written_files}
 
 
+# ============================================================
+# C-S11-PIT-ENFORCE · 真 data-pull 路径 confirmatory PIT 硬门（GOAL §11 line1759）
+# ============================================================
+# GOAL §11 可证伪验收：「无 PIT 语义的数据进入 confirmatory validation → 拒」。
+# 现状死接线：execute_data_pull 不带 use_context、不校验 PIT —— confirmatory run 可拉无
+# known_at/effective_at/bitemporal 语义的数据进证实性验证 = 前视（look-ahead 红线，RULES.project §5）。
+# 本门补这一段：标 confirmatory 的拉取，其声明的每条数据集语义必须过 market_data_contract 的
+# CONFIRMATORY_VALIDATION 校验（带 known_at/effective_at/PIT 规则）；否则【在任何拉取/落盘之前】
+# fail-closed raise —— 不静默放行、不假装过滤。
+#
+# 边界（扩展不替换·向后兼容·诚实不假装）：
+# - **单一源复用** research_os.market_data_contract.validate_dataset_semantics（PIT 契约校验器），
+#   绝不另造第二套 PIT 规则（懒导入，沿用本模块既有 lazy-import 惯例，免模块装载期耦合）。
+# - use_context 缺省 None / research / backtest / paper / ... → advisory no-op（既有拉取一字不改）。
+# - 零声明数据集 + confirmatory → 拒（无可核验 = fail-closed；绝不放行「不可核验」数据进 confirmatory，
+#   守 HONESTY：库超前数据时拒不可核验，不假装 pass）。
+# - 诚实限界：本门校验【声明的 PIT 语义 ref 在场】，不解析 ref 到真 schema（那是 SA-1 ref-resolution
+#   另卡）；物理 known_at 轴的强制在 field_catalog.load_panel / training.codegen 的取数层（互补）。
+
+# confirmatory PIT 门是否默认强制。单点可逆：中心整合跑全量后若某 confirmatory 拉取路径破基线 →
+# 翻 False 全局回退 advisory（无需改门 / 改调用点）。enforce=True 是 §11 终态（GOAL line1759「拒」）。
+ENFORCE_DATA_PULL_CONFIRMATORY_PIT = True
+
+
+class ConfirmatoryPITRejected(RuntimeError):
+    """confirmatory 数据拉取缺 PIT 语义（known_at/effective_at/bitemporal）→ 拒（look-ahead 红线·GOAL §11 line1759）。"""
+
+
+def _pit_context_value(use_context: Any) -> str:
+    """归一 use_context（Enum/str/None）→ 字符串值（单一源 = ValidationUseContext 的 .value）。"""
+    if use_context is None:
+        return ""
+    return str(getattr(use_context, "value", use_context))
+
+
+def enforce_confirmatory_pit(
+    use_context: Any,
+    datasets: Iterable[Any] | None,
+    *,
+    enforce: bool = ENFORCE_DATA_PULL_CONFIRMATORY_PIT,
+    context: str = "data pull",
+) -> list[Any]:
+    """confirmatory 数据拉取的 PIT 硬门（复用 validate_dataset_semantics·绝不重造 PIT 规则）。
+
+    confirmatory 且 enforce → 每条数据集语义必须过 CONFIRMATORY_VALIDATION 校验（带
+    known_at/effective_at/PIT 规则）；任一缺 → raise ``ConfirmatoryPITRejected``。零声明数据集亦拒
+    （无可核验 = fail-closed）。非 confirmatory / enforce=False → advisory no-op（返 ``[]``，向后兼容）。
+
+    ``datasets`` 元素可为 ``DatasetSemanticsRecord`` 或其 ``to_dict()`` 形态（经
+    ``dataset_semantics_record_from_dict`` 解析）。返回各数据集的 ``MarketDataDecision``（均放行时）。
+    """
+    from .research_os.market_data_contract import (  # 单一 PIT 契约源（复用·懒导入免装载期耦合）
+        DatasetSemanticsRecord,
+        ValidationUseContext,
+        dataset_semantics_record_from_dict,
+        validate_dataset_semantics,
+    )
+
+    confirmatory = ValidationUseContext.CONFIRMATORY_VALIDATION.value
+    if not enforce or _pit_context_value(use_context) != confirmatory:
+        return []  # 非 confirmatory / 门未启用：不强制（向后兼容·不误伤探索与既有拉取）
+
+    records = [
+        rec if isinstance(rec, DatasetSemanticsRecord) else dataset_semantics_record_from_dict(rec)
+        for rec in (datasets or [])
+    ]
+    if not records:
+        raise ConfirmatoryPITRejected(
+            f"[{context}] confirmatory 数据拉取未声明任何数据集语义 —— 无 PIT(known_at/effective_at) 可核验，"
+            "fail-closed 拒（绝不放行不可核验数据进 confirmatory validation·GOAL §11 line1759）"
+        )
+
+    decisions: list[Any] = []
+    violations: list[str] = []
+    for rec in records:
+        decision = validate_dataset_semantics(rec, use_context=confirmatory)
+        decisions.append(decision)
+        if not decision.accepted:
+            violations.extend(f"{rec.dataset_ref}:{v.code}" for v in decision.violations)
+    if violations:
+        raise ConfirmatoryPITRejected(
+            f"[{context}] confirmatory 数据缺 PIT 语义 → 拒（look-ahead 红线·GOAL §11 line1759）: "
+            + "; ".join(violations)
+        )
+    return decisions
+
+
 def execute_data_pull(
     payload: DataPullRequest,
     progress: ProgressCallback | None = None,
     is_cancelled: CancelCheck | None = None,
+    *,
+    use_context: Any = None,
+    dataset_semantics: Iterable[Any] | None = None,
 ) -> dict[str, Any]:
+    # C-S11-PIT-ENFORCE：confirmatory run 在【任何拉取/落盘之前】先过 PIT 硬门（拒非 PIT·look-ahead 红线）。
+    # 缺省 use_context=None → no-op，既有调用方（jobs.py 等）行为逐字不变（向后兼容）。
+    enforce_confirmatory_pit(
+        use_context,
+        dataset_semantics,
+        context=f"data pull {payload.market}/{payload.data_kind}",
+    )
     validate_data_pull_request(payload)
     if progress:
         progress(1, "prepare", "准备任务参数...", {"market": payload.market, "data_kind": payload.data_kind})
