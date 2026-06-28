@@ -64,6 +64,24 @@ def _enum_text(value: Any) -> str:
     return str(value.value if isinstance(value, Enum) else value)
 
 
+# ── SA-4 占位种子 write门 ──────────────────────────────────────────────────────
+# 已移除的 "goal closure" 闭合 materializer 曾往运行时账本（mathematical_spine_chains.jsonl /
+# research_graph_commands.jsonl）播种自证闭合的占位记录，使纯解析检查可被骗过
+# （见 platform_coverage._PLACEHOLDER_TOKENS 的 goal_closure 项）。这些 token 是自证闭合
+# 占位、不是真持久化对象的 id。下面的 write门在**写路径**fail-closed 掉新种子；既存残留行由
+# scripts/purge_goal_closure_seeds.py 清理（中心在 main 数据目录跑）。
+# 故意只覆盖 goal_closure 族（不含 synthetic/fixture 等更宽的 platform_coverage 项），避免误伤
+# 合法 synthetic 测试 ref；按子串小写匹配，goal_closure / goal-closure / goalclosure（任意大小写）全抓。
+_GOAL_CLOSURE_SEED_TOKENS: tuple[str, ...] = ("goal_closure", "goal-closure", "goalclosure")
+
+
+def _carries_goal_closure_seed(serialized: str) -> bool:
+    """True 当序列化后的 id/内容携带任一 goal_closure 占位 token（大小写不敏感子串）。"""
+
+    lowered = serialized.lower()
+    return any(token in lowered for token in _GOAL_CLOSURE_SEED_TOKENS)
+
+
 class ResearchGraphError(ValueError):
     """Research Graph command or guard rejected a mutation."""
 
@@ -669,7 +687,15 @@ class PersistentMathematicalSpineChainRegistry:
         return record
 
     def record_chain(self, record: MathematicalSpineChainRecord) -> MathematicalSpineChainRecord:
-        return self._apply_row(_chain_event_row(record), persist=True)
+        row = _chain_event_row(record)
+        # SA-4 write门：拒任何 id/内容携 goal_closure 占位 token 的链（自证闭合种子≠真绑定）。
+        # 扫描的是即将持久化的整行（含每个 ref 字段），故 token 藏在任一字段都抓得到。fail-closed。
+        if _carries_goal_closure_seed(json.dumps(row, ensure_ascii=False, sort_keys=True, default=str)):
+            raise ValueError(
+                "mathematical spine chain rejected: goal_closure placeholder seed is not a real "
+                "Mathematical Spine binding (SA-4 write門 fail-closes self-certifying closure seeds)"
+            )
+        return self._apply_row(row, persist=True)
 
     def chain(self, chain_ref: str) -> MathematicalSpineChainRecord:
         return self._chains[chain_ref]
@@ -1527,6 +1553,14 @@ class PersistentResearchGraphStore(ResearchGraphStore):
 
     def apply(self, command: ResearchGraphCommand) -> str:
         row = _command_to_json(command)
+        # SA-4 write门：拒任何 id/内容携 goal_closure 占位 token 的 research-graph 命令。
+        # 在 super().apply（内存）与落盘之前拒 → 既不污染内存也不留半行（原子 fail-closed）。
+        # 扫的是即将持久化的整行（含 _dataclass_payload 展开的 QRO refs），藏在 payload 里也抓。
+        if _carries_goal_closure_seed(json.dumps(row, ensure_ascii=False, sort_keys=True, default=str)):
+            raise ResearchGraphError(
+                "research graph command rejected: goal_closure placeholder seed is not a real "
+                "research-graph command (SA-4 write門 fail-closes self-certifying closure seeds)"
+            )
         command_id = super().apply(command)
         with self._path.open("a", encoding="utf-8") as fh:
             fh.write(json.dumps(row, ensure_ascii=False, sort_keys=True, separators=(",", ":")) + "\n")

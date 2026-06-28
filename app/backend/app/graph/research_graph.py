@@ -41,7 +41,7 @@ typed projection」做各台投影。**不建 Governed Compiler（A-COMPILER 另
 from __future__ import annotations
 
 import json
-from dataclasses import dataclass, field, replace
+from dataclasses import asdict, dataclass, field, replace
 from typing import Any, Mapping
 
 from ..lineage.ids import content_hash
@@ -561,6 +561,30 @@ def assert_institutional_projection(projection: DeskProjection) -> None:
             )
 
 
+# ── SA-4 占位种子 write门 ──────────────────────────────────────────────────────
+# 已移除的 "goal closure" 闭合 materializer 曾播种自证闭合占位记录（见 research_os.spine 同名门
+# 与 platform_coverage._PLACEHOLDER_TOKENS 的 goal_closure 项）。canonical command 是图的唯一写口，
+# 故在此 fail-closed 掉任何 id/内容携 goal_closure 占位 token 的命令。只覆盖 goal_closure 族（不含
+# synthetic/fixture），与 spine 写门对齐；大小写不敏感子串匹配，三变体全抓。
+_GOAL_CLOSURE_SEED_TOKENS: tuple[str, ...] = ("goal_closure", "goal-closure", "goalclosure")
+
+
+def _command_carries_goal_closure_seed(command: "CanonicalCommand") -> bool:
+    """True 当命令的 id/内容（含 payload 内嵌 QRO/交接的展开字段）携任一 goal_closure 占位 token。
+
+    用 ``asdict`` 递归展开命令及其嵌套 dataclass（QRO 的 natural_key/contract、DeskHandoff…），
+    故 token 即便藏在 QRO 内层字段也抓得到（QRO.identity 是 content_hash·会把明文洗成哈希·不可只扫它）。
+    asdict 万一遇非常规 payload 退化为 ``repr`` 兜底（绝不让扫描自身抛错放过种子）。
+    """
+
+    try:
+        serialized = json.dumps(asdict(command), ensure_ascii=False, sort_keys=True, default=str)
+    except Exception:  # noqa: BLE001 - 扫描兜底：repr 总能拿到全字段文本，宁可多扫不可漏扫。
+        serialized = repr(command)
+    lowered = serialized.lower()
+    return any(token in lowered for token in _GOAL_CLOSURE_SEED_TOKENS)
+
+
 # ─────────────────────────────────────────────────────────────────────────────
 # Research Graph IR（GOAL §1 QRO→Compiler 之间的 typed 图）。
 # 唯一公共写口 = apply(command)；真相状态唯一份存图；各台投影派生只读。
@@ -592,6 +616,13 @@ class ResearchGraph:
         if not isinstance(command, CanonicalCommand):
             raise CanonicalCommandViolation(
                 "apply 只接受 CanonicalCommand（改图必经 canonical command·GOAL §2）"
+            )
+        # SA-4 write门：拒任何 id/内容携 goal_closure 占位 token 的命令（自证闭合种子≠真命令）。
+        # 在 dispatch 落图之前拒 → 不进 _command_log、不动节点/边（原子 fail-closed）。
+        if _command_carries_goal_closure_seed(command):
+            raise CanonicalCommandViolation(
+                "research-graph command rejected: goal_closure placeholder seed is not a real "
+                "canonical command (SA-4 write門 fail-closes self-certifying closure seeds)"
             )
         dispatch = {
             CMD_CREATE_NODE: self._apply_create_node,
