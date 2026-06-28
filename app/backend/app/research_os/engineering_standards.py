@@ -285,6 +285,87 @@ def validate_performance_baseline(record: PerformanceBaselineRecord) -> Engineer
     return EngineeringStandardDecision(accepted=not violations, violations=tuple(violations))
 
 
+PERF_PASS = "pass"
+PERF_FAIL = "fail"
+PERF_KNOWN_RUN_GAP = "known_run_gap"
+
+
+@dataclass(frozen=True)
+class PerformanceBaselineMeasurement:
+    """A benchmark observation for one GOAL §16 performance baseline.
+
+    Two honest states only:
+    - measured=True  -> a real timing was taken; ``observed_seconds`` and
+      ``evidence_ref`` describe it.
+    - measured=False -> the production baseline could not be measured in this
+      environment (missing real data / live corpus / browser). ``unavailable_reason``
+      states why. This is a KNOWN_RUN_GAP and is **never** a pass.
+
+    A fabricated observed time is never allowed to stand in for an unavailable
+    measurement: classify treats measured=False as a gap regardless of any other
+    field, so honesty cannot be gamed into green.
+    """
+
+    baseline_ref: str
+    metric_name: str
+    threshold_seconds: float
+    measured: bool
+    observed_seconds: float | None = None
+    evidence_ref: str | None = None
+    unavailable_reason: str | None = None
+    detail: str = ""
+
+
+@dataclass(frozen=True)
+class PerformanceBaselineVerdict:
+    measurement: PerformanceBaselineMeasurement
+    status: str
+    decision: EngineeringStandardDecision | None
+
+    @property
+    def is_pass(self) -> bool:
+        return self.status == PERF_PASS
+
+    @property
+    def is_known_run_gap(self) -> bool:
+        return self.status == PERF_KNOWN_RUN_GAP
+
+
+def classify_performance_baseline(
+    measurement: PerformanceBaselineMeasurement,
+) -> PerformanceBaselineVerdict:
+    """Honest 3-state verdict for a benchmark observation.
+
+    - not measured -> KNOWN_RUN_GAP (never a pass; no fabricated observed time).
+    - measured     -> reuse ``validate_performance_baseline`` for the threshold +
+      evidence rules. PASS iff the validator accepts, else FAIL.
+
+    This reuses ``validate_performance_baseline`` and does NOT reimplement the
+    over-threshold / missing-evidence logic. It is the single source of pass/fail
+    truth for the benchmark harness, so weakening it (e.g. letting an
+    over-threshold measurement pass, or treating a gap as green) is caught by the
+    harness mutation guard.
+    """
+    if not measurement.measured:
+        return PerformanceBaselineVerdict(measurement, PERF_KNOWN_RUN_GAP, None)
+    if measurement.observed_seconds is None:
+        raise ValueError(
+            "measured performance baseline requires observed_seconds; "
+            "use measured=False to record a KNOWN_RUN_GAP"
+        )
+    decision = validate_performance_baseline(
+        PerformanceBaselineRecord(
+            baseline_ref=measurement.baseline_ref,
+            metric_name=measurement.metric_name,
+            observed_seconds=measurement.observed_seconds,
+            threshold_seconds=measurement.threshold_seconds,
+            evidence_ref=measurement.evidence_ref,
+        )
+    )
+    status = PERF_PASS if decision.accepted else PERF_FAIL
+    return PerformanceBaselineVerdict(measurement, status, decision)
+
+
 def validate_engineering_standards(
     *,
     mock_records: tuple[MockHonestyRecord, ...] = (),
@@ -317,8 +398,14 @@ __all__ = [
     "FatalRuntimeStandardRecord",
     "LLMReplayStandardRecord",
     "MockHonestyRecord",
+    "PERF_FAIL",
+    "PERF_KNOWN_RUN_GAP",
+    "PERF_PASS",
+    "PerformanceBaselineMeasurement",
     "PerformanceBaselineRecord",
+    "PerformanceBaselineVerdict",
     "TheoryImplementationStandardRecord",
+    "classify_performance_baseline",
     "validate_data_update_standard",
     "validate_engineering_standards",
     "validate_fatal_runtime_standard",
