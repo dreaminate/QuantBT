@@ -27,7 +27,7 @@ from dataclasses import dataclass, field
 from datetime import datetime, timezone
 from typing import Any
 
-from ..agent.llm_client import LLMMessage, LLMResponse
+from ..agent.llm_client import LLMClient, LLMMessage, LLMResponse, NoLLMConfigured
 from .call_record import (
     CallStatus,
     IndependenceRecord,
@@ -42,13 +42,16 @@ from .call_record import (
     seal_record,
     verify_record_seal,
 )
-from .credential_pool import LLMCredentialPool, MaterializedCredential
+from .credential_pool import LLMCredentialPool, MaterializedCredential, SecretRef
 from .routing import (
+    LLMModelProfile,
     ModelRoutingPolicy,
     ModelTier,
     RoleCapabilityRequest,
     RoutingDecision,
     RoutingError,
+    RoutingMode,
+    infer_capability_tier,
 )
 
 logger = logging.getLogger(__name__)  # 注意：本模块绝不 log 明文 secret / 原始 prompt。
@@ -140,13 +143,21 @@ class DegradedRoutingError(GatewayError):
 # ============ 默认 client 工厂（wrap 现有 provider 栈）============
 
 def _default_client_factory(cred: MaterializedCredential) -> Any:
-    """用现有 `make_llm_client` 把物化凭据接到既有 provider adapter（不重建 provider）。"""
+    """用现有 `make_llm_client` 把物化凭据接到既有 provider adapter（不重建 provider）。
+
+    deny-by-default（GOAL §8）：只有【显式】登记的 `dev_local` 档才返回 DevLocalLLM；
+    provider 为空/None（misconfiguration）→ 抛 `GatewayError`，**绝不**把缺配置静默当成 mock。
+    """
 
     from ..agent.llm_client import DevLocalLLM
     from ..agent.llm_providers import make_llm_client
 
-    if cred.provider in ("dev_local", "", None):
-        return DevLocalLLM()
+    if cred.provider == "dev_local":
+        return DevLocalLLM()  # 显式 dev_local 档（非静默兜底）——routing 主动选到它才会走这里。
+    if not cred.provider:
+        raise GatewayError(
+            "物化凭据缺 provider —— deny-by-default 拒绝静默落 DevLocalLLM（GOAL §8 no-silent-mock）"
+        )
     prov = "custom" if (cred.auth_kind == "oauth_proxy" or cred.provider == "custom") else cred.provider
     return make_llm_client(
         provider=prov,  # type: ignore[arg-type]
@@ -588,6 +599,174 @@ def assert_admissible_to_graph(result: GatewaySealedResult, gateway: LLMGateway)
     gateway.assert_record_secret_clean(result.record)
 
 
+# ============ agent 注入适配器（§7 唯一入口落地：agent.chat → gateway.complete 产封印账）============
+
+class GatewayBackedLLMClient(LLMClient):
+    """把 `LLMGateway` 包成 agent 可直接注入的 `LLMClient`（§7：role agent 不直调 provider/读 key）。
+
+    agent 的 `self._llm.chat(...)` → `gateway.complete(...)`：每次产一条【封印过的】LLMCallRecord
+    （provider/model/auth_ref/replay_state 必填齐 + prompt/账 secret 门过 + 下游可 `assert_admissible_to_graph`）。
+    record 经 `record_sink` 回传调用方（main.py 落 RDP）。本类绝不 log 明文 secret / 原始 prompt。
+
+    deny-by-default：底层 gateway 由 `build_agent_llm_gateway` 装配——无真实 provider 即 `NoLLMConfigured`，
+    且 dev_local 绝不进 routing profile → agent 调用永不被静默路由到 mock（GOAL §8 no-silent-mock）。
+    """
+
+    provider = "gateway"
+
+    def __init__(
+        self,
+        gateway: LLMGateway,
+        *,
+        role: str = "agent",
+        difficulty: str = "normal",
+        risk: str = "normal",
+        session_id: str = "agent",
+        replay_mode: str = "live",
+        record_sink: Callable[[LLMCallRecord], None] | None = None,
+    ) -> None:
+        self._gateway = gateway
+        self._role = role
+        self._difficulty = difficulty
+        self._risk = risk
+        self._session_id = session_id
+        self._replay_mode = replay_mode
+        self._record_sink = record_sink
+        self.last_result: GatewaySealedResult | None = None
+
+    @property
+    def last_record(self) -> LLMCallRecord | None:
+        return self.last_result.record if self.last_result is not None else None
+
+    def chat(
+        self,
+        messages: list[LLMMessage],
+        *,
+        tools: list[dict[str, Any]] | None = None,
+        model: str | None = None,  # noqa: ARG002 —— 档位/model 由 gateway 路由决定，不由 caller 钉
+        temperature: float = 0.2,
+    ) -> LLMResponse:
+        request = LLMRequest(
+            messages=list(messages),
+            capability=RoleCapabilityRequest(role=self._role, difficulty=self._difficulty, risk=self._risk),
+            tools=tools,
+            temperature=temperature,
+            session_id=self._session_id,
+            replay_mode=self._replay_mode,
+        )
+        result = self._gateway.complete(request)  # 路由+物化+secret门+组账+封印 全在此（§7）
+        self.last_result = result
+        if self._record_sink is not None:
+            self._record_sink(result.record)
+        return result.response
+
+    def stream_chat(self, messages, *, model=None, temperature=0.2):  # noqa: ARG002
+        # 逐 token 过 gateway 较重；先一次性 complete 产账，再按基类语义分块（replay/secret 门已生效）。
+        resp = self.chat(messages, model=model, temperature=temperature)
+        text = resp.content or ""
+        for i in range(0, len(text), 20):
+            yield text[i:i + 20]
+
+
+def build_agent_llm_gateway(
+    keystore: Any,
+    *,
+    mode: RoutingMode | str = RoutingMode.HYBRID_ADAPTIVE,
+    strict_degrade: bool = True,
+    client_factory: Callable[[MaterializedCredential], Any] | None = None,
+) -> LLMGateway:
+    """从 keystore 已配置的【真实】provider 装配 agent LLMGateway（deny-by-default · 复用现有原语不另造）。
+
+    - 只为真有可用 key（custom 为 base_url+model）的 provider 建 routing profile + 凭据池。
+    - **dev_local 绝不进 routing profile**：agent 调用永不被静默路由到 mock。
+    - 一个真实 provider 都没配 → 抛 `NoLLMConfigured`（GOAL §8：拒绝静默落 DevLocalLLM）。
+
+    `client_factory` 仅供测试注入桩（默认 = 真 provider adapter `_default_client_factory`）。
+    """
+
+    from ..agent.llm_providers import KEYSTORE_NAMES, _DEFAULT_MODELS, _keystore_extras
+    from ..security import KeystoreError
+
+    pool = LLMCredentialPool(keystore)
+    profiles: list[LLMModelProfile] = []
+    for provider in ("anthropic", "openai", "qwen", "custom"):
+        ks_name = KEYSTORE_NAMES[provider]
+        try:
+            record = keystore.fetch(ks_name)
+        except KeystoreError:
+            continue
+        extras = _keystore_extras(record.note or "")
+        base_url = extras.get("base_url", "")
+        model = extras.get("model", "") or _DEFAULT_MODELS.get(provider, "")
+        has_key = bool(record.api_secret or record.api_key)
+        if provider == "custom":
+            if not base_url or not model:
+                continue  # 本地/自定义端点至少要 base_url + model
+            auth_kind = "oauth_proxy"
+        else:
+            if not has_key:
+                continue
+            auth_kind = "api_key"
+        pool.register(
+            provider,
+            SecretRef(keystore_name=ks_name, provider=provider, auth_kind=auth_kind, label=provider),
+            base_url=base_url,
+            default_model=model,
+        )
+        profiles.append(
+            LLMModelProfile(
+                provider=provider,
+                model=model,
+                capability_tier=infer_capability_tier(model),
+                pool_id=provider,
+            )
+        )
+    if not profiles:
+        raise NoLLMConfigured(
+            "未配置任何可用 LLM provider —— deny-by-default：agent LLMGateway 拒绝构建，"
+            "绝不静默落 DevLocalLLM（GOAL §8 no-silent-mock）。请在 Settings 配置 provider + key。"
+        )
+    policy = ModelRoutingPolicy(profiles, mode=mode)
+    return LLMGateway(
+        policy=policy,
+        credential_pool=pool,
+        client_factory=client_factory,
+        strict_degrade=strict_degrade,
+    )
+
+
+def make_gateway_backed_agent_llm(
+    keystore: Any,
+    *,
+    role: str = "agent",
+    difficulty: str = "normal",
+    risk: str = "normal",
+    session_id: str = "agent",
+    replay_mode: str = "live",
+    record_sink: Callable[[LLMCallRecord], None] | None = None,
+    mode: RoutingMode | str = RoutingMode.HYBRID_ADAPTIVE,
+    strict_degrade: bool = True,
+    client_factory: Callable[[MaterializedCredential], Any] | None = None,
+) -> GatewayBackedLLMClient:
+    """便捷工厂：装配 agent LLMGateway 并包成可注入 `AgentRuntime` 的 `LLMClient`（每次 chat 产封印账）。
+
+    deny-by-default：keystore 无任何真实 provider → 透传 `build_agent_llm_gateway` 的 `NoLLMConfigured`。
+    """
+
+    gateway = build_agent_llm_gateway(
+        keystore, mode=mode, strict_degrade=strict_degrade, client_factory=client_factory,
+    )
+    return GatewayBackedLLMClient(
+        gateway,
+        role=role,
+        difficulty=difficulty,
+        risk=risk,
+        session_id=session_id,
+        replay_mode=replay_mode,
+        record_sink=record_sink,
+    )
+
+
 __all__ = [
     "DegradedRoutingError",
     "EV_CALL_FINISHED",
@@ -595,6 +774,7 @@ __all__ = [
     "EV_CREDENTIAL_SELECTED",
     "EV_FALLBACK_USED",
     "EV_ROUTE_SELECTED",
+    "GatewayBackedLLMClient",
     "GatewayError",
     "GatewaySealedResult",
     "LLMGateway",
@@ -603,4 +783,6 @@ __all__ = [
     "ProviderHealth",
     "QuotaStatus",
     "assert_admissible_to_graph",
+    "build_agent_llm_gateway",
+    "make_gateway_backed_agent_llm",
 ]

@@ -41,6 +41,7 @@ from .credential_pool import (
 )
 from .gateway import (
     DegradedRoutingError,
+    GatewayBackedLLMClient,
     GatewayError,
     GatewaySealedResult,
     LLMGateway,
@@ -49,6 +50,8 @@ from .gateway import (
     ProviderHealth,
     QuotaStatus,
     assert_admissible_to_graph,
+    build_agent_llm_gateway,
+    make_gateway_backed_agent_llm,
 )
 from .routing import (
     LLMModelProfile,
@@ -89,6 +92,7 @@ __all__ = [
     "SecretRef",
     # gateway
     "DegradedRoutingError",
+    "GatewayBackedLLMClient",
     "GatewayError",
     "GatewaySealedResult",
     "LLMGateway",
@@ -97,6 +101,8 @@ __all__ = [
     "ProviderHealth",
     "QuotaStatus",
     "assert_admissible_to_graph",
+    "build_agent_llm_gateway",
+    "make_gateway_backed_agent_llm",
     # routing
     "LLMModelProfile",
     "ModelRoutingPolicy",
