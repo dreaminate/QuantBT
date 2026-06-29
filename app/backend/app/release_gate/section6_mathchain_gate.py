@@ -119,14 +119,20 @@ def _opt_float(value: Any) -> float | None:
     return float(value)  # 非数 → 抛 → 调用方 fail-closed 记 unparseable
 
 
-def _as_tuple(value: Any) -> tuple[Any, ...]:
-    """判定中立的 tuple coercion：None→()·list/tuple→tuple·标量→1 元组。绝不在此判「present 否」。"""
+def _as_tuple(value: Any) -> tuple[str, ...]:
+    """判定中立的 str-tuple coercion（spine 的 *_refs / 描述 tuple 字段均 tuple[str,...]）。
+
+    None→()·list/tuple→逐项·裸标量→1 元素；**只保留非空白 str**——非 str（dict/标量）与空白元素一律丢弃。
+    为何不裸 `(value,)`：那会把 malformed 值 fabricate 成幽灵 ref，让读 `bool(test_refs)` 的 truthy 子句
+    （binding-exists）误绿（codex 复审堵的 fail-open：`test_refs={...}` / `test_refs=""` / `test_refs=[""]`
+    绝不冒充「有 test/impl binding」）。丢弃 malformed 元素 → 该 tuple 空 → 对应 truthy 子句 fail-closed 拒，
+    与 §17 hollow-values 去空白同纪律。**绝不**判「过没过」——空否的语义后果全留给 evaluate_promotion。
+    """
 
     if value is None:
         return ()
-    if isinstance(value, (list, tuple)):
-        return tuple(value)
-    return (value,)
+    items = value if isinstance(value, (list, tuple)) else (value,)
+    return tuple(x for x in items if isinstance(x, str) and x.strip())
 
 
 # ════════════════════════════════════════════════════════════════════════════
@@ -309,8 +315,18 @@ def _evaluate_claim(claim: Any, idx: int, violations: list[tuple[str, str]]) -> 
         )
         return
 
-    # requested_label 缺省/弱标签 → evaluate_promotion 恒 promotable=True（honest-bound·不误拒）。
-    requested_label = str(claim.get("requested_label") or LABEL_DRAFT)
+    # requested_label：缺省/弱标签 → evaluate_promotion 恒 promotable=True（honest-bound·不误拒）。
+    # ★ fail-closed（codex 复审）：非 str（list/int…）→ malformed·**绝不** str() 成「未知弱标签」把强晋级
+    #   （production_ready 等）悄悄降级放行；str 先 strip——带空白的强标签按真标签判（防 'production_ready '
+    #   被当未知弱标签绕过强标签义务）；strip 后空 → draft（无强声明·honest）。
+    raw_label = claim.get("requested_label")
+    if raw_label is None:
+        requested_label = LABEL_DRAFT
+    elif isinstance(raw_label, str):
+        requested_label = raw_label.strip() or LABEL_DRAFT
+    else:
+        violations.append(("section6_mathchain_requested_label_malformed", asset_ref))
+        return
     current_code_hash = _opt_str(claim.get("current_code_hash"))
     data_contract = dict(dc_d) if dc_d is not None else None
 

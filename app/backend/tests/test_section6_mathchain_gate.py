@@ -415,6 +415,53 @@ def test_bad_check_result_unparseable_failcloses():
     assert "section6_mathchain_claim_unparseable" in cr.missing
 
 
+# —— codex 复审堵的 2 类 malformed-input fail-open（种坏必抓·防回归）——
+def test_nonstring_requested_label_failcloses():
+    """fail-closed（codex①）：非 str requested_label（list/int）→ ok=False·绝不 str() 成未知弱标签放行。
+
+    `['production_ready']` / `123` 若被 `str(...)` 改写成非匹配字符串，会被当弱标签 promotable=True 放行
+    （强晋级悄悄降级）→ fail-open。本门改 fail-closed：记 requested_label_malformed。
+    """
+
+    for bad_label in (["production_ready"], 123, True):
+        cr = section6_mathchain_check(_manifest(_section([
+            {"requested_label": bad_label, "artifact": {}, "binding": {}}
+        ])))
+        assert cr.ok is False, f"非 str requested_label={bad_label!r} 必 fail-closed"
+        assert "section6_mathchain_requested_label_malformed" in cr.missing
+
+
+def test_whitespace_strong_label_not_downgraded():
+    """fail-closed（codex①）：'production_ready '（带空白的强标签）strip 后按真强标签判·不被当未知弱标签绕过。
+
+    残缺 claim（空 artifact/binding）+ 带空白强标签 → ok=False（强标签义务被执行·命中强标签子句），
+    而非 ok=True（若不 strip 会当未知弱标签放行 = fail-open）。
+    """
+
+    cr = section6_mathchain_check(_manifest(_section([
+        {"requested_label": "production_ready ", "asset_ref": "x", "artifact": {}, "binding": {}}
+    ])))
+    assert cr.ok is False
+    assert _has_clause(cr, "claim-grounded") or _has_clause(cr, "binding-exists"), \
+        "带空白强标签必须按强标签判（执行强标签子句）·非降级放行"
+
+
+def test_malformed_test_refs_no_phantom_binding_exists():
+    """fail-closed（codex②）：malformed/空白 test_refs 不得 fabricate 成幽灵 ref 满足 binding-exists。
+
+    test_refs={...}（dict）/ ''（空串）/ ['']（空白项）→ `_as_tuple` 滤成空 → binding-exists 拒（与 §17
+    hollow-values 同纪律）。否则一个无真 test binding 的产物会冒充「有 binding」溜过强标签门 = fail-open。
+    """
+
+    for bad_refs in ({"not": "a-list"}, "", [""], ["  "], 0):
+        claim = _claim()
+        claim["binding"] = {**_BASE_CLAIM["binding"], "test_refs": bad_refs}
+        cr = section6_mathchain_check(_manifest(_section([claim])))
+        assert cr.ok is False, f"malformed test_refs={bad_refs!r} 不得满足 binding-exists"
+        assert _has_clause(cr, "binding-exists"), \
+            f"malformed test_refs={bad_refs!r} → binding-exists 必须拒（不 fabricate 幽灵 ref）"
+
+
 def test_nonmapping_manifest_failcloses_not_open():
     """fail-closed：manifest 不是 Mapping（如 list）→ check **抛**（不静默 ok=True）；门链据此 errored 阻断。"""
 
