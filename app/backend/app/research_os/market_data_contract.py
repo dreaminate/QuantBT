@@ -1,13 +1,41 @@
-"""GOAL §11 market data and instrument capability contracts."""
+"""GOAL §11 market data and instrument capability contracts.
+
+两件标的本体在本模块**单一源**收口（C-S11：flat 升 Pydantic + 吸收 orphan 富能力 + 删 orphan）：
+- `InstrumentSpec`（flat·Pydantic·frozen）= **LIVE 登记记录**（main.py + PersistentMarketDataRegistry）。
+  原 17 个 `*_ref` 字段全保留 + additive typed 值字段；身份恒为 `instrument_ref`。
+- `TypedInstrumentSpec` + 每资产类 typed 子类（EquitySpec/OptionSpec/…）+ 跨币种结算门
+  （FxConversion / assert_currency_settleable / CrossCurrencyError）+ `parse_instrument_spec`。
+  `spec_id` 内容寻址复用 `lineage.ids.content_hash`（同一哈希族），刻意排除装饰字段。
+AssetClass / typed enums 在 `asset_class.py` 单一定义，本模块只引不重定义。
+"""
 
 from __future__ import annotations
 
 import json
 from dataclasses import dataclass
+from datetime import UTC, datetime
 from enum import Enum
 from pathlib import Path
-from typing import Any
+from typing import Annotated, Any, ClassVar, Literal, Union
 
+from pydantic import (
+    BaseModel,
+    ConfigDict,
+    Field,
+    TypeAdapter,
+    ValidationError,
+    model_validator,
+)
+
+from ..lineage.ids import content_hash
+from .asset_class import (
+    AssetClass,
+    DayCount,
+    ExerciseStyle,
+    OptionType,
+    Settlement,
+    SpecKind,
+)
 from .spine import RuntimeStatus
 
 
@@ -95,8 +123,24 @@ class DatasetSemanticsRecord:
         }
 
 
-@dataclass(frozen=True)
-class InstrumentSpec:
+class InstrumentSpec(BaseModel):
+    """GOAL §11 标的元数据登记记录（flat refs + additive typed 值）——**LIVE 单一源**。
+
+    身份 = `instrument_ref`（PersistentMarketDataRegistry 的 key / use_validation 交叉引用锚点）。
+    `asset_class`/`instrument_type`/`currency` 保持 **str**（非 Literal）：持久化历史里带
+    'perpetual'/'cn_equity'/'a_share'/'equity_us'/'crypto' 等窄枚举外的值，收紧成 Literal 会在
+    load 期 fail-closed → app 起不来（test_instrument_spec_consolidation read-back 锁此 hazard）。
+
+    additive（C-S11 Commit 1·扩展不替换）：在原 17 个 flat `*_ref` 字段之上补 typed **值**字段
+    （expiry/strike/contract_multiplier/settlement/roll_rule/coupon_rate/maturity/day_count），
+    **仅当提供时** validator fire（strike>0 / multiplier>0 / settlement∈{physical,cash} …），
+    **不强制 value-required**。`to_dict()` superset-stable（只 emit 原 17 keys + 有值的新字段）→
+    `content_hash(record.to_dict())` 对既有记录零漂移（main.py record_hash 依赖）。
+    """
+
+    model_config = ConfigDict(frozen=True, extra="ignore")
+
+    # ---- 原 17 个 flat 字段（name/type/order/default 全保留·零破坏）----
     instrument_ref: str
     asset_class: str
     instrument_type: str
@@ -115,8 +159,25 @@ class InstrumentSpec:
     exercise_style_ref: str | None = None
     margin_ref: str | None = None
 
+    # ---- additive typed 值字段（Optional·provided 时才 validate·JSON-native 防序列化炸）----
+    expiry: str | None = None
+    strike: float | None = Field(default=None, gt=0)
+    contract_multiplier: float | None = Field(default=None, gt=0)
+    settlement: Settlement | None = None
+    roll_rule: str | None = None
+    coupon_rate: float | None = Field(default=None, ge=0)
+    maturity: str | None = None
+    day_count: DayCount | None = None
+
+    @property
+    def spec_id(self) -> str:
+        """内容寻址指纹（复用 lineage.ids.content_hash）作 **additive·非 PK**：instrument_ref 仍是
+        登记身份/交叉引用锚点，绝不被 spec_id 取代。刻意**不入 to_dict()** → 不扰 record_hash。"""
+
+        return "instr_" + content_hash(self.to_dict())[:12]
+
     def to_dict(self) -> dict[str, Any]:
-        return {
+        data: dict[str, Any] = {
             "instrument_ref": self.instrument_ref,
             "asset_class": self.asset_class,
             "instrument_type": self.instrument_type,
@@ -135,6 +196,21 @@ class InstrumentSpec:
             "exercise_style_ref": self.exercise_style_ref,
             "margin_ref": self.margin_ref,
         }
+        # additive 值字段：仅 emit 有值的（exclude None）→ superset-stable·既有记录 hash 零漂移
+        for key in (
+            "expiry",
+            "strike",
+            "contract_multiplier",
+            "settlement",
+            "roll_rule",
+            "coupon_rate",
+            "maturity",
+            "day_count",
+        ):
+            value = getattr(self, key)
+            if value is not None:
+                data[key] = value
+        return data
 
 
 @dataclass(frozen=True)
@@ -578,25 +654,48 @@ def dataset_semantics_record_from_dict(data: dict[str, Any]) -> DatasetSemantics
 
 
 def instrument_spec_from_dict(data: dict[str, Any]) -> InstrumentSpec:
-    return InstrumentSpec(
-        instrument_ref=_required_str(data, "instrument_ref"),
-        asset_class=_required_str(data, "asset_class"),
-        instrument_type=_required_str(data, "instrument_type"),
-        currency=_required_str(data, "currency"),
-        exchange_calendar_ref=_optional_str(data, "exchange_calendar_ref"),
-        contract_spec_ref=_optional_str(data, "contract_spec_ref"),
-        option_chain_ref=_optional_str(data, "option_chain_ref"),
-        futures_roll_rule_ref=_optional_str(data, "futures_roll_rule_ref"),
-        continuous_contract_rule_ref=_optional_str(data, "continuous_contract_rule_ref"),
-        corporate_actions_ref=_optional_str(data, "corporate_actions_ref"),
-        symbol_mapping_ref=_optional_str(data, "symbol_mapping_ref"),
-        expiry_ref=_optional_str(data, "expiry_ref"),
-        strike_ref=_optional_str(data, "strike_ref"),
-        contract_multiplier_ref=_optional_str(data, "contract_multiplier_ref"),
-        settlement_ref=_optional_str(data, "settlement_ref"),
-        exercise_style_ref=_optional_str(data, "exercise_style_ref"),
-        margin_ref=_optional_str(data, "margin_ref"),
-    )
+    """从 dict 还原 flat InstrumentSpec（持久化 replay + API 入口共用）。
+
+    契约（main.py 422 catch · registry fail-closed 依赖）：
+    - 缺/空 instrument_ref/asset_class/instrument_type/currency → **ValueError**（_required_str；
+      纯 ValueError 不被下方 `except ValidationError` 吞，直接上抛）。
+    - 17 个 flat 字段保 str 强转（与既有口径一致·旧数据含 perpetual/cn_equity 读得回·tolerant）。
+    - additive 值字段 present 时由模型校验（strike>0 / settlement∈{…}），非法 → ValidationError
+      （ValueError 子类）裹成 ValueError；absent→None→不入 to_dict。
+    - 未知键忽略（只读已知键 + 模型 extra="ignore"）。
+    """
+
+    try:
+        return InstrumentSpec(
+            instrument_ref=_required_str(data, "instrument_ref"),
+            asset_class=_required_str(data, "asset_class"),
+            instrument_type=_required_str(data, "instrument_type"),
+            currency=_required_str(data, "currency"),
+            exchange_calendar_ref=_optional_str(data, "exchange_calendar_ref"),
+            contract_spec_ref=_optional_str(data, "contract_spec_ref"),
+            option_chain_ref=_optional_str(data, "option_chain_ref"),
+            futures_roll_rule_ref=_optional_str(data, "futures_roll_rule_ref"),
+            continuous_contract_rule_ref=_optional_str(data, "continuous_contract_rule_ref"),
+            corporate_actions_ref=_optional_str(data, "corporate_actions_ref"),
+            symbol_mapping_ref=_optional_str(data, "symbol_mapping_ref"),
+            expiry_ref=_optional_str(data, "expiry_ref"),
+            strike_ref=_optional_str(data, "strike_ref"),
+            contract_multiplier_ref=_optional_str(data, "contract_multiplier_ref"),
+            settlement_ref=_optional_str(data, "settlement_ref"),
+            exercise_style_ref=_optional_str(data, "exercise_style_ref"),
+            margin_ref=_optional_str(data, "margin_ref"),
+            # additive 值字段：present 才读回（absent→None→不入 to_dict·零漂移）
+            expiry=_optional_str(data, "expiry"),
+            strike=data.get("strike"),
+            contract_multiplier=data.get("contract_multiplier"),
+            settlement=data.get("settlement"),
+            roll_rule=_optional_str(data, "roll_rule"),
+            coupon_rate=data.get("coupon_rate"),
+            maturity=_optional_str(data, "maturity"),
+            day_count=data.get("day_count"),
+        )
+    except ValidationError as exc:
+        raise ValueError(f"invalid InstrumentSpec: {_summarize_validation_error(exc)}") from exc
 
 
 def market_capability_matrix_record_from_dict(data: dict[str, Any]) -> MarketCapabilityMatrixRecord:
@@ -886,7 +985,330 @@ class PersistentMarketDataRegistry:
         return sorted(self._use_validations.values(), key=lambda record: record.validation_ref)
 
 
+# ════════════════════════════════════════════════════════════════════════════════════════════
+# §11 typed 合约本体（吸收自原 instruments/spec.py·orphan 已删·此处单一源）
+#
+# 与上方 flat `InstrumentSpec`（LIVE 登记记录）正交并存：flat 承载 `*_ref` 元数据 + additive 值，
+# typed 这层按 spec_kind 派发每资产类的 typed 合约字段（构造期可证伪门）+ 跨币种结算门。
+# 基类刻意命名 `TypedInstrumentSpec`（≠ flat `InstrumentSpec`），避免单模块内 InstrumentSpec 撞名。
+# `spec_id` 内容寻址复用 `lineage.ids.content_hash`（同一哈希族），排除装饰字段（改名不算新标的）。
+# ════════════════════════════════════════════════════════════════════════════════════════════
+class InstrumentSpecError(ValueError):
+    """typed 合约不完整 / 资产类不匹配 / 解析失败（构造期拒，绝不静默放过半成品 spec）。"""
+
+
+class CrossCurrencyError(InstrumentSpecError):
+    """跨币种结算缺 base currency / FX conversion / 桥接不匹配（§11 跨市场资本账可证伪门）。"""
+
+
+def _now_iso() -> str:
+    return datetime.now(UTC).isoformat()
+
+
+# ── 跨币种结算（§11 跨市场资本账：base currency + FX conversion）──
+class FxConversion(BaseModel):
+    """一条币种换算声明（base ↔ quote）——`assert_currency_settleable` 的桥接凭据。
+
+    诚实：本对象只**声明**换算来源/口径（rate_source 必填），是否真取到汇率、用哪个时点，
+    由数据层落实；本模块绝不自己取汇率。`conversion_rate` 是可选钉值（缺则按 rate_source 实时取）。
+    """
+
+    base_currency: str = Field(..., min_length=1, description="记账本币（账户/组合 base）")
+    quote_currency: str = Field(..., min_length=1, description="标的计价币（instrument quote）")
+    rate_source: str = Field(..., min_length=1, description="汇率来源/口径（如 ecb_daily / binance_spot）——必填，缺则无据")
+    conversion_rate: float | None = Field(None, gt=0, description="钉死的换算率（可选；缺则按 rate_source 实时取）")
+    as_of: datetime | None = Field(None, description="该换算率的 as-of 时点（PIT）")
+
+    def assert_bridges(self, quote: str, base: str) -> None:
+        """校验本换算确实桥接 quote↔base（无序对匹配；汇率可逆，方向不挑）。不匹配即拒。"""
+
+        declared = {self.base_currency.strip().upper(), self.quote_currency.strip().upper()}
+        wanted = {(quote or "").strip().upper(), (base or "").strip().upper()}
+        if declared != wanted:
+            raise CrossCurrencyError(
+                f"FX conversion 桥接不匹配：声明 {sorted(declared)}，需要 {sorted(wanted)}"
+            )
+
+
+# ── typed 合约基类（共享身份 / PIT / 血统 / 跨币种门）──
+class TypedInstrumentSpec(BaseModel):
+    """可交易标的的 typed 合约基类——共享身份、PIT、血统、跨币种结算门。
+
+    身份 `spec_id` 内容寻址自结构性字段（spec_kind/symbol/asset_class/market/quote_currency +
+    各子类 typed 字段），排除装饰字段（name/description/时间戳）。`spec_ref` 即下游
+    `instrument_spec_ref`（strategy_book.ShortExecutionRequirement / Forecast）回填用的字符串。
+    """
+
+    model_config = ConfigDict(arbitrary_types_allowed=True)
+
+    # 子类用 Literal 覆盖此处的 ALLOWED_ASSET_CLASSES（空集=不限）。
+    ALLOWED_ASSET_CLASSES: ClassVar[frozenset[str]] = frozenset()
+
+    spec_kind: SpecKind = Field(..., description="结构判别式（discriminator）：决定有哪些 typed 字段")
+    symbol: str = Field(..., min_length=1, description="标的代码（如 510300.SH / BTC-USDT / ES）")
+    asset_class: AssetClass = Field(..., description="§0 资产类 token")
+    quote_currency: str = Field(..., min_length=1, description="标的计价/结算币（如 CNY/USD/USDT）")
+    market: str = Field("", description="市场/场所 region key（如 CN/US/BINANCE/CME）——matrix 寻址 + 诚实标注")
+    exchange: str | None = Field(None, description="交易所")
+    calendar_ref: str | None = Field(None, description="交易日历引用（exchange calendar）")
+    # PIT / 血统（§11）——本 spec 版本何时可知/生效 + 回指数据层血统。
+    known_at: datetime | None = Field(None, description="known_at：本 spec 版本何时可知（PIT；公司行动/合约变更）")
+    effective_at: datetime | None = Field(None, description="effective_at：本 spec 何时起生效")
+    source_lineage_ref: str | None = Field(None, description="回指数据层 dataset/lineage（source lineage）")
+    theory_binding_ref: str | None = Field(None, description="§9 spine 前向槽：TheoryImplementationBinding 引用（无新公式则空）")
+    name: str = Field("", description="可读名（装饰，不入身份）")
+    description: str = Field("", description="说明（装饰，不入身份）")
+    spec_id: str = Field("", description="内容寻址身份；留空则按结构字段自动计算")
+    created_at_utc: str = Field(default_factory=_now_iso)
+
+    @model_validator(mode="after")
+    def _finalize(self) -> "TypedInstrumentSpec":
+        allowed = type(self).ALLOWED_ASSET_CLASSES
+        if allowed and self.asset_class not in allowed:
+            raise InstrumentSpecError(
+                f"{type(self).__name__} 的 asset_class 必须 ∈ {sorted(allowed)}，得到 {self.asset_class!r}"
+            )
+        if not self.spec_id:
+            structural = self.model_dump(
+                mode="json",
+                exclude={"name", "description", "spec_id", "created_at_utc"},
+            )
+            self.spec_id = "instr_" + content_hash(structural)[:12]
+        return self
+
+    @property
+    def spec_ref(self) -> str:
+        """下游 `instrument_spec_ref` 回填用字符串（= spec_id；非空即可被 strategy_book 引用门接受）。"""
+
+        return self.spec_id
+
+    # ----- 跨币种结算门（§11 跨市场资本账可证伪验收：缺 base currency / FX conversion → 拒）-----
+    def needs_fx(self, base_currency: str | None) -> bool:
+        """本标的相对账户 base currency 是否需要换汇（计价币 ≠ base 即需要）。"""
+
+        if not base_currency or not str(base_currency).strip():
+            return True  # 连 base 都没有 → 必然需要先有 base 才能谈
+        return self.quote_currency.strip().upper() != base_currency.strip().upper()
+
+    def assert_currency_settleable(
+        self, *, base_currency: str | None, conversion: FxConversion | None = None
+    ) -> None:
+        """跨币种结算可证伪门（§11）。违一条即 CrossCurrencyError，绝不静默放过脏账。
+
+          · 缺 base currency（账户本币未声明）→ 拒（无法记账）。
+          · 计价币 ≠ base 且缺 FX conversion → 拒（缺 currency conversion）。
+          · 提供了 conversion 但桥接不上（币对不匹配）→ 拒（伪换算）。
+          · 计价币 == base（同币种）→ 放（无需换汇）。
+        """
+
+        if not base_currency or not str(base_currency).strip():
+            raise CrossCurrencyError(
+                f"标的 {self.symbol!r}（计价 {self.quote_currency}）跨币种结算缺 base currency："
+                "账户本币未声明，无法记账（§11 跨市场资本账）"
+            )
+        qc = self.quote_currency.strip().upper()
+        bc = base_currency.strip().upper()
+        if qc == bc:
+            return
+        if conversion is None:
+            raise CrossCurrencyError(
+                f"跨币种 {qc}->{bc} 缺 FX conversion（标的 {self.symbol!r}）：缺 currency conversion，拒（§11）"
+            )
+        conversion.assert_bridges(quote=qc, base=bc)
+
+
+# ── 每资产类 typed 子类（§11 语义 → typed 字段）──
+class EquitySpec(TypedInstrumentSpec):
+    """股票/指数/ETF/基金（cash equity-like）。"""
+
+    ALLOWED_ASSET_CLASSES: ClassVar[frozenset[str]] = frozenset(
+        {"equity", "equity_cn", "index", "etf", "fund"}
+    )
+    spec_kind: Literal["equity"] = "equity"
+    lot_size: int = Field(1, gt=0, description="最小交易单位（A股=100）")
+    is_etf: bool = Field(False, description="是否 ETF")
+    underlying_index_ref: str | None = Field(None, description="跟踪指数引用（ETF/指数衍生）")
+    board: str | None = Field(None, description="板块（主板/科创板/创业板…）")
+
+
+class BondSpec(TypedInstrumentSpec):
+    """债券/利率（§11：duration/convexity/yield curve/accrued interest/coupon/maturity/day count）。
+
+    duration/convexity 是**声明值**（风险度量字段），非本模块推导的新公式。
+    """
+
+    ALLOWED_ASSET_CLASSES: ClassVar[frozenset[str]] = frozenset({"bond", "rate"})
+    spec_kind: Literal["bond"] = "bond"
+    coupon_rate: float = Field(..., ge=0, description="票息率（年化比率；零息=0）")
+    maturity: datetime = Field(..., description="到期日（maturity）")
+    day_count: DayCount = Field(..., description="计息基准（day count）")
+    face_value: float = Field(100.0, gt=0, description="面值")
+    coupon_frequency: int = Field(2, ge=0, description="年付息次数（0=零息）")
+    duration: float | None = Field(None, ge=0, description="久期（声明值；modified/Macaulay）")
+    convexity: float | None = Field(None, description="凸性（声明值）")
+    accrued_interest: float | None = Field(None, ge=0, description="应计利息（声明值）")
+    yield_curve_ref: str | None = Field(None, description="收益率曲线引用")
+
+
+class FutureSpec(TypedInstrumentSpec):
+    """期货（§11：roll rule/margin/settlement/contract multiplier/delivery/continuous contract）。"""
+
+    ALLOWED_ASSET_CLASSES: ClassVar[frozenset[str]] = frozenset({"futures", "commodity", "rate"})
+    spec_kind: Literal["future"] = "future"
+    expiry: datetime = Field(..., description="合约到期日")
+    contract_multiplier: float = Field(..., gt=0, description="合约乘数")
+    settlement: Settlement = Field(..., description="交割方式（physical/cash）")
+    roll_rule: str = Field(..., min_length=1, description="移仓规则（如 n_days_before_expiry:5 / volume_oi_switch）")
+    delivery: str | None = Field(None, description="交割说明")
+    margin_requirement: float | None = Field(None, ge=0, description="保证金要求（比率或名义）")
+    continuous_contract_rule: str | None = Field(None, description="连续合约构造（panama/ratio/none）")
+    underlying_ref: str | None = Field(None, description="标的物引用")
+
+
+class OptionSpec(TypedInstrumentSpec):
+    """期权（§11：expiry/strike/contract multiplier/settlement/exercise style/assignment/margin）。
+
+    可证伪门（§11）：**expiry/strike/contract_multiplier/settlement 四者缺一即构造期拒**
+    （required field + Field(gt=0)；MUT 把任一改为可选即被 test_instrument_spec 抓红）。
+    Greeks / IV surface / term structure 是**定价/风险引擎**产物（运行期），不在合约 spec 里——
+    本模块绝不算它们（诚实边界），只钉合约条款。
+    """
+
+    ALLOWED_ASSET_CLASSES: ClassVar[frozenset[str]] = frozenset({"options", "crypto_option"})
+    spec_kind: Literal["option"] = "option"
+    expiry: datetime = Field(..., description="到期日（必填·缺即拒）")
+    strike: float = Field(..., gt=0, description="行权价（必填·>0·缺即拒）")
+    contract_multiplier: float = Field(..., gt=0, description="合约乘数（必填·>0·缺即拒）")
+    settlement: Settlement = Field(..., description="交割方式 physical/cash（必填·缺即拒）")
+    exercise_style: ExerciseStyle = Field(..., description="行权方式（european/american/bermudan）")
+    option_type: OptionType = Field(..., description="call/put")
+    underlying_ref: str = Field(..., min_length=1, description="标的物引用（必填）")
+    margin_requirement: float | None = Field(None, ge=0, description="保证金要求（卖方）")
+
+
+class FxSpec(TypedInstrumentSpec):
+    """外汇（§11：base/quote/rollover/funding/holiday calendar/conversion rate）。
+
+    quote_currency（基类）= quote_ccy（_sync_quote_ccy 强制一致），保证跨币种门口径不裂。
+    """
+
+    ALLOWED_ASSET_CLASSES: ClassVar[frozenset[str]] = frozenset({"fx"})
+    spec_kind: Literal["fx"] = "fx"
+    base_ccy: str = Field(..., min_length=3, max_length=3, description="基准货币（如 EUR）")
+    quote_ccy: str = Field(..., min_length=3, max_length=3, description="计价货币（如 USD）")
+    rollover: bool = Field(True, description="是否隔夜滚动（rollover/swap 适用）")
+    funding_basis: str | None = Field(None, description="融资/掉期基准（funding）")
+    holiday_calendar_ref: str | None = Field(None, description="假期日历引用")
+    pip_size: float = Field(0.0001, gt=0, description="最小报价变动（pip）")
+
+    @model_validator(mode="before")
+    @classmethod
+    def _sync_quote_ccy(cls, data: Any) -> Any:
+        # FX 计价币 == quote_ccy。用 mode="before" 在字段校验前对齐，避免与基类 _finalize
+        # （算 spec_id）的 after-validator 次序耦合（顺序无关，spec_id 必含正确 quote_currency）。
+        if isinstance(data, dict):
+            qq = str(data.get("quote_ccy", "")).strip().upper()
+            if qq:
+                existing = str(data.get("quote_currency", "")).strip().upper()
+                if existing and existing != qq:
+                    raise InstrumentSpecError(
+                        f"FxSpec quote_currency({existing}) 必须 == quote_ccy({qq})"
+                    )
+                data = {**data, "quote_currency": qq}
+        return data
+
+
+class CommoditySpec(TypedInstrumentSpec):
+    """商品（§11：storage/delivery/contract spec/seasonality/calendar spread）。
+
+    商品多为期货载体：要 roll/连续合约用 FutureSpec(asset_class=commodity)；要 storage/季节性
+    等商品专属字段用本类。两者按需选，文档化（不强制单选，避免误伤）。
+    """
+
+    ALLOWED_ASSET_CLASSES: ClassVar[frozenset[str]] = frozenset({"commodity"})
+    spec_kind: Literal["commodity"] = "commodity"
+    contract_multiplier: float = Field(..., gt=0, description="合约乘数")
+    settlement: Settlement = Field("physical", description="交割方式")
+    expiry: datetime | None = Field(None, description="到期日（现货商品可空）")
+    storage_cost_bps: float | None = Field(None, ge=0, description="仓储成本 bps（storage）")
+    delivery: str | None = Field(None, description="交割说明")
+    seasonality: str | None = Field(None, description="季节性模式描述/引用")
+    calendar_spread_ref: str | None = Field(None, description="跨期价差引用（calendar spread）")
+    grade: str | None = Field(None, description="品级/质量（contract spec）")
+    underlying_ref: str | None = Field(None, description="标的物引用")
+
+
+class CryptoSpotSpec(TypedInstrumentSpec):
+    """加密现货。"""
+
+    ALLOWED_ASSET_CLASSES: ClassVar[frozenset[str]] = frozenset({"crypto_spot"})
+    spec_kind: Literal["crypto_spot"] = "crypto_spot"
+    base_asset: str | None = Field(None, description="基础资产（如 BTC）")
+    min_qty: float = Field(0.0, ge=0, description="最小下单量")
+    tick_size: float = Field(0.0, ge=0, description="最小价格变动")
+
+
+class CryptoPerpSpec(TypedInstrumentSpec):
+    """加密永续（funding/margin/leverage 语义；唯一可达 live 的资产类之一）。"""
+
+    ALLOWED_ASSET_CLASSES: ClassVar[frozenset[str]] = frozenset({"crypto_perp"})
+    spec_kind: Literal["crypto_perp"] = "crypto_perp"
+    base_asset: str | None = Field(None, description="基础资产（如 BTC）")
+    contract_multiplier: float = Field(1.0, gt=0, description="合约乘数")
+    funding_interval_hours: int = Field(8, gt=0, description="资金费率结算间隔（小时）")
+    funding_rate_ref: str | None = Field(None, description="资金费率来源引用")
+    margin_requirement: float | None = Field(None, ge=0, description="保证金要求")
+    max_leverage: float | None = Field(None, gt=0, description="最大杠杆（合约规则）")
+
+
+class GenericInstrumentSpec(TypedInstrumentSpec):
+    """自定义/未知可交易标的（§0「用户自定义」+「可以添加新内容」）。
+
+    诚实：本类**无资产类专属 typed 门**，只承载自定义属性——不假装有期权/期货那样的结构校验。
+    扩展点：新资产类应优先建专属子类（带 typed 门），GenericInstrumentSpec 是兜底不是默认。
+    """
+
+    ALLOWED_ASSET_CLASSES: ClassVar[frozenset[str]] = frozenset()  # 不限
+    spec_kind: Literal["generic"] = "generic"
+    attributes: dict[str, Any] = Field(default_factory=dict, description="自定义属性（无专属门）")
+
+
+# ── 判别式联合 + 解析工厂（显式可证伪门：缺必填字段 → InstrumentSpecError）──
+ConcreteInstrumentSpec = Union[
+    EquitySpec, BondSpec, FutureSpec, OptionSpec, FxSpec,
+    CommoditySpec, CryptoSpotSpec, CryptoPerpSpec, GenericInstrumentSpec,
+]
+AnyInstrumentSpec = Annotated[ConcreteInstrumentSpec, Field(discriminator="spec_kind")]
+_SPEC_ADAPTER: TypeAdapter[TypedInstrumentSpec] = TypeAdapter(AnyInstrumentSpec)
+
+
+def _summarize_validation_error(exc: ValidationError) -> str:
+    parts: list[str] = []
+    for err in exc.errors():
+        loc = ".".join(str(p) for p in err.get("loc", ()))
+        parts.append(f"{loc or '<root>'}: {err.get('msg', '')}")
+    return "; ".join(parts) or str(exc)
+
+
+def parse_instrument_spec(data: dict[str, Any]) -> TypedInstrumentSpec:
+    """从 dict 解析 typed 合约（按 spec_kind 判别）。
+
+    这是**显式可证伪门**：任一子类必填字段缺失/非法 → 统一抛 InstrumentSpecError（含缺项 loc）。
+    期权缺 expiry/strike/contract_multiplier/settlement 走这里即拒（§11 可证伪验收）。
+    """
+
+    if not isinstance(data, dict) or not data.get("spec_kind"):
+        raise InstrumentSpecError("parse_instrument_spec 需 dict 且含判别式 spec_kind")
+    try:
+        return _SPEC_ADAPTER.validate_python(data)
+    except ValidationError as exc:
+        raise InstrumentSpecError(
+            f"InstrumentSpec({data.get('spec_kind')}) 解析失败（缺/非法字段）：{_summarize_validation_error(exc)}"
+        ) from exc
+
+
 __all__ = [
+    # ---- flat 登记记录族（LIVE）----
     "CrossCurrencyCapitalRecord",
     "DataTransformationClaim",
     "DatasetSemanticsRecord",
@@ -910,4 +1332,26 @@ __all__ = [
     "validate_market_capability_matrix",
     "validate_market_data_use_validation_record",
     "validate_market_data_use",
+    # ---- §11 typed 合约本体（吸收自 orphan·单一源）----
+    "AnyInstrumentSpec",
+    "AssetClass",
+    "BondSpec",
+    "CommoditySpec",
+    "CrossCurrencyError",
+    "CryptoPerpSpec",
+    "CryptoSpotSpec",
+    "DayCount",
+    "EquitySpec",
+    "ExerciseStyle",
+    "FutureSpec",
+    "FxConversion",
+    "FxSpec",
+    "GenericInstrumentSpec",
+    "InstrumentSpecError",
+    "OptionSpec",
+    "OptionType",
+    "Settlement",
+    "SpecKind",
+    "TypedInstrumentSpec",
+    "parse_instrument_spec",
 ]
