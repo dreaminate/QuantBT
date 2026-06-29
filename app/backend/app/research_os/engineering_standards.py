@@ -499,6 +499,15 @@ def build_section16_engineering_standards_record(
 
     [行为] 每族：有 record → 序列化进 payload；无 record → 不发该族 key；6 族全空 → 返回 `{}`（honest-absent）。
     判定全委托门 check → canonical（本 builder 零判定·见上方段头诚实红线）。
+
+    [边界·codex 复核裁决] 只对**族类型**fail-closed（错 record 类 → raise·见 `_serialize_section16_family`），
+    对**字段类型**不另设校验——与 shipped §9/§10/§17 producer 同约（asdict 忠实序列化·零字段判定）。manifest→record
+    的字段适配/coercion（门 `_adapt_*` 的 `bool()`/`_opt_str()`/`float()`）是**门的单一源职责**（RULES §1），
+    producer 不在更低层重复或抢判。故 well-typed record 忠实往返（measured=False→KNOWN_RUN_GAP·codex 实证）；
+    mis-typed record（measured 传 str / ref 传 0 等调用方违约）在门侧的 coercion 由门负责——threshold/observed 非数
+    门已 fail-closed，measured/ref 的宽松 coercion 是**跨 producer 通病**（宜在门 adapter 或共享 hygiene 统一收口·
+    非本 §16 单卡发散）。`None`/falsy 族 → honest-absent `{}`（同 `_typed_list(seq or ())` 约·非空错类型才 raise·
+    完整性由 `s16_engineering_standards_runjson_producers` producer 绿灯门负责）。
     """
 
     bound: dict[str, Sequence[Any]] = {

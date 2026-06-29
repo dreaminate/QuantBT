@@ -462,6 +462,18 @@ def test_failclosed_perf_record_must_be_three_state_measurement():
         es.build_section16_engineering_standards_record(performance_records=[rec])
 
 
+def test_none_or_falsy_family_is_honest_absent_not_silently_judged():
+    """边界（codex 复核裁决）：None/空 list 的族 → honest-absent {}（同 shipped _typed_list(seq or ()) 约）。
+
+    与 fail-closed 不矛盾：**非空错类型**才 raise（test_failclosed_*）；falsy 容器（None/[]/()）= 未声明该族·
+    gate honest-bound（未声明≠违例）·完整性由 producer 绿灯门负责。不把 None 当违例硬拒（否则中心用 .get()
+    取「无该类证据」时反致误拒诚实 run）。
+    """
+
+    assert es.build_section16_engineering_standards_record(mock_records=None, performance_records=None) == {}
+    assert es.build_section16_engineering_standards_record(mock_records=[], data_updates=()) == {}
+
+
 def test_input_flip_flips_gate_verdict_not_constant():
     """反作弊：同一 mock 补回 label+reason → 门由拒翻过（producer 真把字段变化传给门·非常量门）。"""
 
