@@ -418,15 +418,18 @@ class LLMGateway:
             events.append(LLMGatewayEvent(EV_CALL_STARTED, {
                 "provider": cred.provider, "model": profile.model, "tier": profile.capability_tier,
             }))
-            client = self._client_factory(cred)
             try:
+                # client 工厂构造也纳入 sanitized 块（C-S7 Gap1 · GOAL §8）：provider/custom 构造
+                # 异常（如 base_url 夹 user:pass@host 的明文）一律被本 except 收敛成 type-name，
+                # 绝不让携明文的原始异常漏出 _invoke_with_fallback 之外。
+                client = self._client_factory(cred)
                 resp = client.chat(
                     request.messages,
                     tools=request.tools,
                     model=profile.model or cred.model or None,
                     temperature=request.temperature,
                 )
-            except Exception as exc:  # noqa: BLE001  —— 唯一外部操作 = provider 调用；失败即 fallback。
+            except Exception as exc:  # noqa: BLE001  —— 外部操作 = provider 构造 + 调用；失败即 fallback。
                 kind = type(exc).__name__
                 self._mark_fail(profile.provider, kind)
                 excluded.add(profile.signature)
@@ -434,7 +437,11 @@ class LLMGateway:
                 nxt, ok = self._refallback(req, excluded, builder_signature, events)
                 fallback_used = True
                 if not ok or nxt is None:
-                    raise GatewayError(f"全部 provider 调用失败（chain={fallback_chain}）") from exc
+                    # from None：切断异常链——原始 provider 异常的 str()/traceback 可能夹明文
+                    # secret（经上游 ERROR_REPORTER.report → traceback.format_exception 落
+                    # errors.jsonl 即泄）。GatewayError 自带 message 里 chain 仅含 provider/model/
+                    # type-name（够定位、不回显 str(exc) 的配置细节/secret）。GOAL §8 红线。
+                    raise GatewayError(f"全部 provider 调用失败（chain={fallback_chain}）") from None
                 current = nxt
                 self._enforce_strict_degrade(current, req)
                 continue
