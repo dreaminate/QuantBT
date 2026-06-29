@@ -34,10 +34,11 @@
 
 from __future__ import annotations
 
-from dataclasses import dataclass
+from dataclasses import asdict, dataclass, field, is_dataclass
+from enum import Enum
 from typing import Any, Mapping, Sequence
 
-from ..delivery.rdp import DatasetVersionRef
+from ..delivery.rdp import DatasetVersionRef, PromotionClaim, RDPManifest
 from ..lineage.spine import (
     LABEL_EXPLORATORY,
     ConsistencyCheck,
@@ -46,8 +47,29 @@ from ..lineage.spine import (
     TheoryImplementationBinding,
 )
 from ..llm.call_record import LLMCallRecord
+from ..methodology.control_plane import MethodologyTier
+from ..research_os.factor_strategy_boundary import (
+    FactorGeneratorSpec,
+    FactorLibraryEntry,
+    SignalPerformanceValidationRecord,
+    SignalProtocolRecord,
+    StrategyBookContract,
+)
+from ..research_os.methodology_validation import (
+    ValidationDepthRecord,
+    ValidationMethodologyRecord,
+)
 from .mock_honesty import ExecutionBlock
 from .release_gate import ReleaseCandidate, ReleaseValidation, evaluate_release
+
+# producer 契约 key = 各 section_*_gate 的 MANIFEST_KEY 单一源（**只读复用·不重定义**·防漂；
+# 门若重命名 key → 此 import 立刻炸·loud-fail）。section gate 模块经实证冷导入安全（各自 cold-import 测）。
+from .section9_boundary_gate import SECTION9_BOUNDARY_MANIFEST_KEY
+from .section10_methodology_gate import (
+    SECTION10_CONTROLPLANE_MANIFEST_KEY,
+    SECTION10_COST_MANIFEST_KEY,
+)
+from .section17_rdp_gate import SECTION17_RDP_MANIFEST_KEY
 
 # run.json 缺省（`ide/promote.py.promote_ide_run` 当前不写）→ 组装器对这些 run 恒留空标缺的证据类。
 # 中心接真 promote 端点时要知道：携带这些证据是 run/ledger 端 follow-on，不是组装器能凭空补的。
@@ -503,6 +525,292 @@ def evaluate_run_releasable(
     )
 
 
+# ════════════════════════════════════════════════════════════════════════════
+# C-S17-RUNJSON-PRODUCERS · promote 门链 section 记录组装（§9 边界 / §10 成本+控制面 / §17 RDP）
+# ════════════════════════════════════════════════════════════════════════════
+# 缺口（codemap C-S17-RUNJSON-PRODUCERS）：promote 真路径未把各 section 记录如实组装进 manifest，故
+# §9/§10/§17 节门恒见「未声明」→ producer 接线测试无真对象、producer 无从诚实转绿。本段补这块：从
+# **真血统/真运行产物**（typed domain 对象）如实序列化成各 section_*_gate 的 producer 契约 dict——
+# 让门有真对象可判（合规 run 过、坏 run 拒）。**只组装·零判定**：判定全留给 section_*_gate→canonical。
+#
+# 诚实红线（= 模块顶 KNOWN_RUN_GAPS / GOAL §0「no silent mock / no template false success」对准本段自己）：
+#   - **缺即真缺（honest-absent）**：某节无真证据 → **不发该 section key**。节门对「未声明」honest-bound
+#     （不声明≠违例·ok=True），故不误拒「只是没那类资产」的诚实 run。**绝不**发空壳/占位 section 让门误判
+#     合规（那就是假绿灯·撞 RULES.project「未验证≠已验证」）。
+#   - **零重造判定（单一源）**：本段**只序列化**真对象成 dict，判定（完整性/边界/成本/封顶）全委托给
+#     section_*_gate → canonical（`validate_rdp` / `factor_strategy_boundary` / `methodology_validation` /
+#     `control_plane`）。坏对象（artifact_hash 空的 RDP / model_body 因子 / 强标签缺成本 record / 放宽档强
+#     verdict）**如实序列化** → 门据真值拒，**绝不**在此预判/过滤/洗白（洗白=假绿灯）。
+#   - **faithful 往返**：序列化口径 = 各 section_*_gate 的 `_*_from_dict` 读的 key（key 名 import 自各门
+#     MANIFEST_KEY 常量·单一源）。§17 复用 `RDPManifest.to_dict`/`from_dict`（已测内容寻址往返）。
+#   - **fail-closed 入参**：喂错类型对象 → raise `AssemblyError`（不静默吞坏输入·不产占位 dict）。
+
+
+def _json_safe(value: Any) -> Any:
+    """typed 对象 → 纯 JSON 结构（dataclass→dict·enum→value·tuple→list·递归）。
+
+    **无损序列化·不改任何字段值**（坏值如实保留 → 让门据真值判·绝不洗白）。镜像
+    `factor_strategy_boundary._stable` / `methodology_validation._json_value` 同款口径。
+    `unverified_residual=None` 这类哨兵原样保留（None 不被强转·门据此判「未声明残余」）。
+    """
+
+    if is_dataclass(value) and not isinstance(value, type):
+        value = asdict(value)  # 递归展开嵌套 dataclass→dict（enum/tuple 仍留待下方逐项归一）
+    if isinstance(value, Enum):
+        return value.value
+    if isinstance(value, Mapping):
+        return {str(k): _json_safe(v) for k, v in value.items()}
+    if isinstance(value, (list, tuple)):
+        return [_json_safe(v) for v in value]
+    return value
+
+
+def _typed_list(seq: Sequence[Any] | None, typ: type, what: str) -> list[Any]:
+    """把入参序列归一为 list，并 fail-closed 校验每项类型（不静默吞坏输入·不产占位）。"""
+
+    items = list(seq or ())
+    for it in items:
+        if not isinstance(it, typ):
+            raise AssemblyError(
+                f"{what} 须为 {typ.__name__}，得到 {type(it).__name__}"
+                "（fail-closed·不静默吞坏输入·不伪造 section 记录）"
+            )
+    return items
+
+
+# ── §10 控制面 tier-claim 与 §9 StrategyBook 交叉引用的 producer 输入类型（复用 canonical 类型·不重造）──
+@dataclass(frozen=True)
+class Section10TierClaim:
+    """一条 §10 控制面 tier-claim（producer 契约·复用 `control_plane` 档位语义·不重造 tier 规则）。
+
+    定档二选一：`tier`（`MethodologyTier` 或档名串）/ `methodology_choice`（含 `chosen_path`·门复用
+    `tier_of` 反推）。`claimed_label` = 下游证据门拟授标签。控制面门据 `effective_label` 判放宽档是否把
+    强 verdict 显出（封顶）。两者皆缺而 `claimed_label` 强 → 序列化只带 claimed_label，门 fail-closed 记
+    `tier_unresolved`（堵「省档位躲封顶」dodge·诚实暴露·非洗白）。
+    """
+
+    claimed_label: str
+    tier: "MethodologyTier | str | None" = None
+    methodology_choice: "MethodologyChoiceRecord | None" = None
+
+
+@dataclass(frozen=True)
+class Section9StrategyBook:
+    """一条 §9 StrategyBook + 其交叉引用（producer 契约·喂 `validate_strategy_book` 的交叉校验）。
+
+    `book` 主契约；`factor_library`/`signal_protocols`/`signal_validations` 是交叉校验所需的 ref→record
+    映射（退役因子默认采用 / 信号契约缺失 / 信号验证未通过 等判定要用）；`require_signal_validation` 透传。
+    全由 §9 节门 canonical 判定·本段只序列化。
+    """
+
+    book: StrategyBookContract
+    factor_library: "Mapping[str, FactorLibraryEntry]" = field(default_factory=dict)
+    signal_protocols: "Mapping[str, SignalProtocolRecord]" = field(default_factory=dict)
+    signal_validations: "Mapping[str, SignalPerformanceValidationRecord]" = field(default_factory=dict)
+    require_signal_validation: bool = False
+
+
+@dataclass(frozen=True)
+class AssembledSections:
+    """promote 门链 section 组装结果（要 merge 进 manifest 的 section dict + 诚实账）。
+
+    `sections` **只含真有证据的节**（honest-absent·无证据的节不出现）；`emitted`/`absent` 让中心一眼看清
+    哪些节有真证据被组装、哪些诚实留空（无该类资产·非违例）；`honest_gaps` 软披露每个留空节的诚实限界。
+    """
+
+    sections: Mapping[str, Any]
+    emitted: tuple[str, ...]
+    absent: tuple[str, ...]
+    honest_gaps: tuple[str, ...]
+
+    def apply_to(self, run_manifest: Mapping[str, Any]) -> dict[str, Any]:
+        """返回 `run_manifest` 浅拷贝 + 已组装 section（中心串 promote.py 时 `evaluate` 前调）。
+
+        **扩展不替换**：只新增 section key、不动 manifest 既有字段（section key 与 run.json 既有字段不重名）；
+        绝不就地改入参 manifest（返回新 dict）。
+        """
+
+        merged = dict(run_manifest)
+        merged.update(self.sections)
+        return merged
+
+
+# ── 各节序列化（只组装·缺子键即不发·绝不补占位）──────────────────────────────────────────
+def _assemble_section17(
+    rdp: RDPManifest | None, promotion: PromotionClaim | None
+) -> dict[str, Any] | None:
+    """§17：rdp/promotion 任一在场 → `{"rdp": ..., "promotion": ...}`（缺即不放该子键）；皆缺 → None。
+
+    复用 `RDPManifest.to_dict`/`PromotionClaim.to_dict`（单一源序列化·与 §17 节门 `from_dict` 内容寻址往返
+    一致）。rdp 缺而 promotion 在 → 仍发节（只带 promotion）：门据 gate4「无 RDP 可追溯」**真拒**
+    （self-promote without RDP·诚实暴露·非洗白）。
+    """
+
+    if rdp is None and promotion is None:
+        return None
+    if rdp is not None and not isinstance(rdp, RDPManifest):
+        raise AssemblyError(f"rdp 须为 RDPManifest，得到 {type(rdp).__name__}（fail-closed）")
+    if promotion is not None and not isinstance(promotion, PromotionClaim):
+        raise AssemblyError(f"promotion 须为 PromotionClaim，得到 {type(promotion).__name__}（fail-closed）")
+    section: dict[str, Any] = {}
+    if rdp is not None:
+        section["rdp"] = _json_safe(rdp)
+    if promotion is not None:
+        section["promotion"] = _json_safe(promotion)
+    return section
+
+
+def _serialize_strategy_book(bundle: Section9StrategyBook) -> dict[str, Any]:
+    """§9 StrategyBook bundle → producer dict（主契约 + 交叉引用映射·faithful 喂 validate_strategy_book）。"""
+
+    out = _json_safe(bundle.book)  # StrategyBookContract → dict（fresh·可加交叉引用键）
+    if not isinstance(out, dict):  # 防御：book 非 dataclass（理应被类型挡住）
+        raise AssemblyError("Section9StrategyBook.book 序列化非 dict（fail-closed）")
+    if bundle.factor_library:
+        out["factor_library"] = {str(k): _json_safe(v) for k, v in bundle.factor_library.items()}
+    if bundle.signal_protocols:
+        out["signal_protocols"] = {str(k): _json_safe(v) for k, v in bundle.signal_protocols.items()}
+    if bundle.signal_validations:
+        out["signal_validations"] = {str(k): _json_safe(v) for k, v in bundle.signal_validations.items()}
+    if bundle.require_signal_validation:
+        out["require_signal_validation"] = True
+    return out
+
+
+def _assemble_section9(
+    factor_library_entries: Sequence[FactorLibraryEntry],
+    factor_generators: Sequence[FactorGeneratorSpec],
+    signal_protocols: Sequence[SignalProtocolRecord],
+    strategy_books: Sequence[Section9StrategyBook],
+) -> dict[str, Any]:
+    """§9：四族 boundary 记录 → producer dict（每族非空才发其 key·全空 → {}）。"""
+
+    section: dict[str, Any] = {}
+    fle = _typed_list(factor_library_entries, FactorLibraryEntry, "factor_library_entries[*]")
+    if fle:
+        section["factor_library_entries"] = [_json_safe(e) for e in fle]
+    fg = _typed_list(factor_generators, FactorGeneratorSpec, "factor_generators[*]")
+    if fg:
+        section["factor_generators"] = [_json_safe(g) for g in fg]
+    sp = _typed_list(signal_protocols, SignalProtocolRecord, "signal_protocols[*]")
+    if sp:
+        section["signal_protocols"] = [_json_safe(s) for s in sp]
+    sb = _typed_list(strategy_books, Section9StrategyBook, "strategy_books[*]")
+    if sb:
+        section["strategy_books"] = [_serialize_strategy_book(b) for b in sb]
+    return section
+
+
+def _assemble_section10_cost(
+    validation_methodologies: Sequence[ValidationMethodologyRecord],
+    validation_depths: Sequence[ValidationDepthRecord],
+) -> dict[str, Any]:
+    """§10 成本：方法学/深度记录 → producer dict（每族非空才发其 key·全空 → {}）。"""
+
+    section: dict[str, Any] = {}
+    vm = _typed_list(validation_methodologies, ValidationMethodologyRecord, "validation_methodologies[*]")
+    if vm:
+        section["validation_methodologies"] = [_json_safe(r) for r in vm]
+    vd = _typed_list(validation_depths, ValidationDepthRecord, "validation_depths[*]")
+    if vd:
+        section["validation_depths"] = [_json_safe(r) for r in vd]
+    return section
+
+
+def _serialize_tier_claim(claim: Section10TierClaim) -> dict[str, Any]:
+    """§10 控制面 tier-claim → producer dict（tier 或 methodology_choice 定档·皆缺只带 claimed_label）。"""
+
+    out: dict[str, Any] = {"claimed_label": claim.claimed_label}
+    if claim.tier is not None:
+        out["tier"] = claim.tier.value if isinstance(claim.tier, MethodologyTier) else str(claim.tier)
+    elif claim.methodology_choice is not None:
+        out["methodology_choice"] = {"chosen_path": str(claim.methodology_choice.chosen_path)}
+    return out
+
+
+def _assemble_section10_controlplane(
+    tier_claims: Sequence[Section10TierClaim],
+) -> dict[str, Any]:
+    """§10 控制面：tier-claims → producer dict（非空才发 tier_claims key·空 → {}）。"""
+
+    claims = _typed_list(tier_claims, Section10TierClaim, "tier_claims[*]")
+    if not claims:
+        return {}
+    return {"tier_claims": [_serialize_tier_claim(c) for c in claims]}
+
+
+# ── 主入口：真血统 → 四节 producer 契约 dict（honest-absent）──────────────────────────────
+def assemble_promote_sections(
+    run_manifest: Mapping[str, Any],
+    *,
+    # —— §17 RDP（复用 delivery.rdp / rdp_gate 单一源）——
+    rdp: RDPManifest | None = None,
+    promotion: PromotionClaim | None = None,
+    # —— §9 边界（复用 factor_strategy_boundary 单一源）——
+    factor_library_entries: Sequence[FactorLibraryEntry] = (),
+    factor_generators: Sequence[FactorGeneratorSpec] = (),
+    signal_protocols: Sequence[SignalProtocolRecord] = (),
+    strategy_books: Sequence[Section9StrategyBook] = (),
+    # —— §10 成本/控制面（复用 methodology_validation / control_plane 单一源）——
+    validation_methodologies: Sequence[ValidationMethodologyRecord] = (),
+    validation_depths: Sequence[ValidationDepthRecord] = (),
+    tier_claims: Sequence[Section10TierClaim] = (),
+) -> AssembledSections:
+    """从真血统/真运行产物（typed 对象）组装 §9/§10/§17 节门的 producer 契约 dict（honest-absent）。
+
+    每节：有真证据 → 序列化进 `sections`（key = 对应 section_*_gate 的 MANIFEST_KEY）；无证据 → **不发**该
+    key（门 honest-bound·不误拒「只是没那类资产」的诚实 run）。**只序列化·零判定**：坏对象如实序列化让门据
+    真值拒，绝不预判/洗白（防假绿灯）。返回 `AssembledSections`（`.apply_to(manifest)` 得待评估 manifest）。
+    """
+
+    if not isinstance(run_manifest, Mapping):
+        raise AssemblyError(
+            f"run_manifest 须为 Mapping，得到 {type(run_manifest).__name__}"
+        )
+
+    sections: dict[str, Any] = {}
+    emitted: list[str] = []
+    absent: list[str] = []
+    gaps: list[str] = []
+
+    def _take(key: str, payload: dict[str, Any] | None, undeclared_gap: str) -> None:
+        if payload:
+            sections[key] = payload
+            emitted.append(key)
+        else:
+            absent.append(key)
+            gaps.append(undeclared_gap)
+
+    _take(
+        SECTION17_RDP_MANIFEST_KEY,
+        _assemble_section17(rdp, promotion),
+        "section17_rdp:undeclared——本 run 无 RDP/晋级断言，§17 节诚实留空"
+        "（门 honest-bound：未声明≠违例·非『已查清 §17』·查清由 producer 绿灯负责）",
+    )
+    _take(
+        SECTION9_BOUNDARY_MANIFEST_KEY,
+        _assemble_section9(factor_library_entries, factor_generators, signal_protocols, strategy_books),
+        "section9_boundary:undeclared——本 run 无 §9 边界资产，诚实留空（未声明≠违例）",
+    )
+    _take(
+        SECTION10_COST_MANIFEST_KEY,
+        _assemble_section10_cost(validation_methodologies, validation_depths),
+        "section10_cost:undeclared——本 run 无 §10 方法学/成本记录，诚实留空（未声明≠违例）",
+    )
+    _take(
+        SECTION10_CONTROLPLANE_MANIFEST_KEY,
+        _assemble_section10_controlplane(tier_claims),
+        "section10_control_plane:undeclared——本 run 无 §10 档位声明，诚实留空（未声明≠违例）",
+    )
+
+    return AssembledSections(
+        sections=sections,
+        emitted=tuple(emitted),
+        absent=tuple(absent),
+        honest_gaps=tuple(gaps),
+    )
+
+
 __all__ = [
     "AssemblyError",
     "AssembledRelease",
@@ -512,4 +820,9 @@ __all__ = [
     "assemble",
     "assemble_release_candidate",
     "evaluate_run_releasable",
+    # —— C-S17-RUNJSON-PRODUCERS：promote 门链 section 组装 ——
+    "Section10TierClaim",
+    "Section9StrategyBook",
+    "AssembledSections",
+    "assemble_promote_sections",
 ]
