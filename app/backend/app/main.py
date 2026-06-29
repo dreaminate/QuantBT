@@ -31,6 +31,7 @@ from .agent import (
     list_llm_status,
     make_settings_managed_llm_client,
 )
+from .llm import make_gateway_backed_agent_llm
 from .auth import AuthError, AuthService, current_user_dependency, require_user_dependency
 from .auth.service import set_service as set_auth_service
 from .community import CommunityService
@@ -1202,7 +1203,7 @@ AGENT_TRANSLATOR = ControlledTranslator(leverage_cap=_agent_leverage_cap())
 
 
 def _current_agent_llm(run_id: str | None = None):
-    """按 keystore + env 选最优 provider；都失败 fallback DevLocalLLM。
+    """C-S7 deny-by-default：两层治理（Settings 撤销/路由校验 + gateway-backed 产封印 LLMCallRecord）·无可用 provider → NoLLMConfigured（绝不静默 DevLocalLLM）。
     不缓存 client，让 secrets 热加载立即生效。LLM_REPLAY_MODE!=passthrough 时套 record/replay 装饰器（R11）。
 
     复核 #1/#7：run_id 缺省时【每次生成唯一值】，绝不退化为进程级常量——否则同 prompt 跨 turn
@@ -1212,26 +1213,60 @@ def _current_agent_llm(run_id: str | None = None):
     replay_ref = None
     if mode in ("record", "replay"):
         replay_ref = f"llm_replay:{run_id or 'agent-runtime'}"
-    try:
-        inner = make_settings_managed_llm_client(
-            keystore=KEYSTORE,
-            registry=ONBOARDING_REGISTRY,
-            role_agent="agent",
-            desk="agent",
-            task_type="llm_chat",
-            replay_record_ref=replay_ref,
-        )
-    except NoLLMConfigured as exc:
-        _main_logger.warning("Agent LLM Gateway route unavailable; using DevLocalLLM: %s", exc)
-        inner = DevLocalLLM()
+    # 第一层治理（C-S7·中心裁决两层都要）：验 Settings 元数据（SecretRef 撤销 / 路由策略）。
+    # make_settings_managed_llm_client 已 deny-by-default（C-S7：无可用 provider → NoLLMConfigured）；
+    # 此处只用它做撤销/路由治理校验·**不再静默兜底 DevLocalLLM**——NoLLMConfigured 上抛（探针兜住·
+    # 运行时端点由全局 handler 转明确 503）。返回 client 丢弃（治理校验副作用），实际 client 走第二层。
+    make_settings_managed_llm_client(
+        keystore=KEYSTORE,
+        registry=ONBOARDING_REGISTRY,
+        role_agent="agent",
+        desk="agent",
+        task_type="llm_chat",
+        replay_record_ref=replay_ref,
+    )
+    # 第二层（C-S7）：gateway-backed client 产封印 LLMCallRecord（路由 + 凭据物化 + secret 门 + 必填四要素门）。
+    # deny-by-default（无真 provider → NoLLMConfigured）·dev_local 三处拒。record_sink 暂 None
+    # （LLMCallRecord→RDP 落账 sink 待接·KNOWN_RUN_GAP·gateway 内 last_record 仍可取）。
+    rid = run_id or f"agent-{uuid.uuid4().hex[:12]}"
+    # record/replay 单层（防双计）：RecordingLLMClient 外层管 R11 fixture（LLM_REPLAY_MODE）；gateway
+    # replay_mode 固定 "live"（replay 时 RecordingLLMClient 外层拦截·不触达 gateway·不双 replay）。
+    inner = make_gateway_backed_agent_llm(
+        KEYSTORE,
+        role="agent",
+        session_id=rid,
+        replay_mode="live",
+        record_sink=None,
+    )
     if mode in ("record", "replay"):
-        rid = run_id or f"agent-{uuid.uuid4().hex[:12]}"
         return RecordingLLMClient(inner, FIXTURE_STORE, mode=mode, run_id=rid, translator=AGENT_TRANSLATOR)
     return inner
 
 
-# 启动时探一次，仅用于 /api/agent/tools status 显示
-AGENT_LLM = _current_agent_llm()
+# 启动时探一次，仅用于 /api/agent/tools status 显示。C-S7 deny-by-default 后：无可用 provider →
+# _current_agent_llm() 抛 NoLLMConfigured；探针单独兜住存哨兵（None）·保 import app.main 不炸——
+# 运行时 agent 端点仍按 deny-by-default 经全局 handler 返明确 503（非静默 mock）。
+try:
+    AGENT_LLM = _current_agent_llm()
+except NoLLMConfigured as _agent_llm_probe_exc:
+    _main_logger.warning("Agent LLM 未配置（deny-by-default·探针存哨兵）：%s", _agent_llm_probe_exc)
+    AGENT_LLM = None
+
+
+@app.exception_handler(NoLLMConfigured)
+async def _no_llm_configured_exception_handler(request, exc):  # noqa: ANN001 — FastAPI handler
+    # C-S7：agent LLM 未配/不可用 → 明确 503（deny-by-default·绝不静默 mock）·不回显 secret（只 type 名）。
+    from fastapi.responses import JSONResponse
+
+    _main_logger.warning("NoLLMConfigured at %s: %s", getattr(request, "url", "?"), type(exc).__name__)
+    return JSONResponse(
+        status_code=503,
+        content={
+            "ok": False,
+            "error": "LLM provider 未配置或不可用（deny-by-default）：请在 Settings 配置 LLM 凭据后重试。",
+            "detail": type(exc).__name__,
+        },
+    )
 
 
 _DEFAULT_AGENT_RAG_PROJECTIONS = (
@@ -19713,7 +19748,7 @@ def agent_tools() -> dict[str, Any]:
         name = fn.get("name") or fn.get("function", {}).get("name", "")
         status = "unwired" if name not in registered else ("stub" if name in stub else "live")
         tool_status.append({"name": name, "status": status, "side_effect": rt._side_effects.get(name, "none")})
-    return {"functions": TOOL_SCHEMA, "llm_provider": AGENT_LLM.provider, "tool_status": tool_status}
+    return {"functions": TOOL_SCHEMA, "llm_provider": getattr(AGENT_LLM, "provider", "unconfigured"), "tool_status": tool_status}
 
 
 @app.post("/api/agent/chat")
@@ -22396,6 +22431,9 @@ def chat_send_message(
         raise HTTPException(status_code=422, detail=str(exc)) from exc
     except ValueError as exc:
         raise HTTPException(status_code=422, detail=str(exc)) from exc
+    except NoLLMConfigured:
+        # C-S7 deny-by-default：LLM 未配置不吞·穿透到全局 503 handler（非静默业务错误消息）。
+        raise
     except Exception as exc:  # noqa: BLE001
         reply_text = f"[LLM 错误] {exc}"
         coverage_refs = {
@@ -22517,6 +22555,12 @@ def chat_stream(
             ]):
                 full_text += token
                 yield f"data: {_json.dumps({'chunk': token}, ensure_ascii=False)}\n\n"
+        except NoLLMConfigured:
+            # C-S7 deny-by-default：LLM 未配置 → 明确 deny chunk（SSE 头已发·503 不适用）·非静默业务
+            # 错误·不回显异常细节（固定文案·不含 str(exc) 配置细节）。
+            deny_text = "[LLM 未配置] agent LLM provider 未配置或不可用（deny-by-default）：请在 Settings 配置 LLM 凭据。"
+            full_text = full_text or deny_text
+            yield f"data: {_json.dumps({'chunk': deny_text, 'error': True, 'deny': True}, ensure_ascii=False)}\n\n"
         except Exception as exc:  # noqa: BLE001
             err_text = f"[LLM 错误] {exc}"
             full_text = full_text or err_text
