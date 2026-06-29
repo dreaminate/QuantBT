@@ -1736,6 +1736,15 @@ class Section6PromotionClaim:
 
     def __post_init__(self) -> None:
         object.__setattr__(self, "consistency_checks", tuple(self.consistency_checks))
+        # fail-closed（codex 复审 High）：requested_label 必须是真 str。非 str（如 ['production_ready']）若被
+        # 下面序列化 str() 洗成 "['production_ready']"，门的 isinstance 守卫（section6_mathchain_gate
+        # _evaluate_claim·拒非 str label）就不会触发 → 强标签被悄悄当未知弱标签 promotable=True 放行
+        # （假绿灯）。在源头就拒，绝不让强晋级义务被类型洗白绕过。
+        if not isinstance(self.requested_label, str):
+            raise Section6RecordError(
+                f"requested_label 须为 str，得到 {type(self.requested_label).__name__}"
+                "（fail-closed·拒非 str 强标签被 str() 洗成弱标签溜过门）"
+            )
         _require_text(self.requested_label, "requested_label")
 
 
@@ -1819,7 +1828,15 @@ def build_section6_mathchain_record(
     fail-closed：claim 携错 flavor / 错类型对象 → raise `Section6RecordError`（不静默吞坏输入·不产骗门 dict）。
     """
 
-    typed = list(claims or ())
+    # fail-closed（codex 复审 Medium）：honest-absent（无 theory 声明）须**显式**传空序列 []/()；拒 None
+    # 静默当作「无 claim」躲过判定——上游抽取失败返回 None 时，`list(claims or ())` 会把它洗成 honest-absent
+    # 放行（fail-open：失败的抽取悄悄躲过门）。None ≠ 空声明，强制调用方区分。
+    if claims is None:
+        raise Section6RecordError(
+            "claims 不能为 None——honest-absent（无 theory 声明）须显式传空序列 []；"
+            "拒 None 静默当作『无 claim』躲过判定（防上游抽取失败返回 None 的 fail-open）"
+        )
+    typed = list(claims)
     if not typed:
         return None  # honest-absent：无 theory 声明 → 整节不发（门未声明≠违例·绝不误拒诚实 run）
     for claim in typed:

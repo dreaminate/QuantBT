@@ -332,6 +332,35 @@ def test_builder_failcloses_non_claim_item():
         build_section6_mathchain_record(["not-a-claim"])  # type: ignore[list-item]
 
 
+def test_builder_failcloses_nonstr_requested_label_no_whitewash():
+    """fail-closed（codex 复审 High·种坏必抓）：非 str requested_label → 构造即 raise·绝不被 str() 洗成弱标签放行。
+
+    `['production_ready']` 这类非 str 强标签若被 builder `str()` 洗成 "['production_ready']"，门的 isinstance
+    守卫不触发 → 当未知弱标签 promotable=True 放行（强晋级义务被类型洗白绕过 = 假绿灯）。在源头拒死。
+    """
+
+    for bad_label in (["production_ready"], 123, True, ("evidence_sufficient",)):
+        with pytest.raises(Section6RecordError):
+            Section6PromotionClaim(
+                requested_label=bad_label,  # type: ignore[arg-type]
+                artifact=_artifact(), binding=_binding(), consistency_checks=(_check(),),
+            )
+
+
+def test_builder_failcloses_none_claims_not_silent_absent():
+    """fail-closed（codex 复审 Medium·种坏必抓）：claims=None → raise·绝不静默当 honest-absent 躲过判定。
+
+    上游抽取失败返回 None 时，`list(claims or ())` 会把 None 洗成「无 claim」→ 返回 None → 门放行
+    （fail-open：失败的抽取悄悄躲过门）。None ≠ 显式空声明 []，强制区分。空序列仍正常 honest-absent。
+    """
+
+    with pytest.raises(Section6RecordError):
+        build_section6_mathchain_record(None)  # type: ignore[arg-type]
+    # 对照：显式空序列仍是合法 honest-absent（返回 None·不 raise）
+    assert build_section6_mathchain_record(()) is None
+    assert build_section6_mathchain_record([]) is None
+
+
 # ════════════════════════════════════════════════════════════════════════════
 # 非常量门 + proof_status 携带证明（验证 lineage-flavor 选择）
 # ════════════════════════════════════════════════════════════════════════════
