@@ -393,6 +393,12 @@ class LLMGateway:
         current = decision
 
         while True:
+            # strict_degrade 单点 enforce（C-S7 Gap1 补修 · GOAL §8）：唯一执行点在 while 顶，
+            # 永在任何 except / fallback 分支的活跃异常上下文【之外】——fallback 落「降级强档」时
+            # 抛的 DegradedRoutingError 绝不隐式 chain 上一轮 provider 异常（其 str()/traceback
+            # 可能夹明文 → 经 ERROR_REPORTER 落 errors.jsonl 即泄）。complete() 入口已先校验初始
+            # decision；此处再校验每个 fallback 目标（同决策幂等、无副作用、不破降级语义）。
+            self._enforce_strict_degrade(current, req)
             profile = current.profile
             cred = self._pool.materialize(profile.pool_id, capability=self._cap)
             events.append(LLMGatewayEvent(EV_CREDENTIAL_SELECTED, {
@@ -412,8 +418,7 @@ class LLMGateway:
                         f"无任何带可用凭据的 provider（chain={fallback_chain}）",
                     )
                 current = nxt
-                self._enforce_strict_degrade(current, req)
-                continue
+                continue  # strict_degrade 于 while 顶单点 enforce（统一出分支上下文）
 
             events.append(LLMGatewayEvent(EV_CALL_STARTED, {
                 "provider": cred.provider, "model": profile.model, "tier": profile.capability_tier,
@@ -443,8 +448,7 @@ class LLMGateway:
                     # type-name（够定位、不回显 str(exc) 的配置细节/secret）。GOAL §8 红线。
                     raise GatewayError(f"全部 provider 调用失败（chain={fallback_chain}）") from None
                 current = nxt
-                self._enforce_strict_degrade(current, req)
-                continue
+                continue  # strict_degrade 于 while 顶单点 enforce（已脱离 exc 活跃上下文 → 不 chain 明文）
 
             self._mark_ok(profile.provider)
             return resp, current, cred, fallback_used, fallback_chain

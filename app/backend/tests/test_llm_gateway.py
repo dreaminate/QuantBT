@@ -542,6 +542,61 @@ def test_terminal_gateway_error_does_not_chain_provider_exception():
     assert "RuntimeError" in str(exc)              # type-name 够调试（定位 provider 失败类型）
 
 
+_DEGRADE_LEAK = "https://svc:sk-DEGRADE-LEAK-cafef00d@vault.internal/v1"
+
+
+def test_strict_degrade_fallback_does_not_chain_provider_secret():
+    """姊妹向量（C-S7 Gap1 补修 · GOAL §8 红线）：首选强档携明文异常失败 → fallback 落「降级强档」
+    → strict_degrade 拒绝 → 其 DegradedRoutingError 绝不经 __context__ 链带出原始明文异常
+    （否则经 ERROR_REPORTER 落 errors.jsonl 泄漏）。strict-degrade 仍真降级、只是不带明文进日志。
+
+    变异（手验，见卡）：把 `_enforce_strict_degrade` 移回 except 块内（保留 __context__ 链）→ 本测必红。
+    """
+    import traceback as _tb
+
+    # 1 强档 + 1 轻档：HARD 初路由走强档（不降级 → 过 complete() 入口 enforce），
+    # 强档 factory 携明文异常失败 → fallback 只剩轻档 → 降级强档 → strict_degrade 在 while 顶 raise。
+    profiles = [
+        LLMModelProfile(provider="anthropic", model="claude-opus-4",
+                        capability_tier=ModelTier.STRONG.value, pool_id="anthropic"),
+        LLMModelProfile(provider="openai", model="gpt-4o-mini",
+                        capability_tier=ModelTier.LIGHT.value, pool_id="openai"),
+    ]
+
+    def factory(cred):
+        if cred.provider == "anthropic":
+            # 模拟 provider 构造把夹 userinfo 的 base_url 明文回显进异常。
+            raise ValueError(f"connect failed base_url={_DEGRADE_LEAK}")
+        return StubLLMClient(content="should-not-reach")
+
+    gw = _gateway(profiles, factory=factory, strict_degrade=True)
+    with pytest.raises(DegradedRoutingError) as ei:        # 真降级拒绝（语义不变）
+        gw.complete(_req(difficulty="hard"))
+    exc = ei.value
+
+    # 明文不在 DegradedRoutingError 的 message / 完整异常链 traceback（__context__ 未带出原始 exc）
+    formatted = "".join(_tb.format_exception(exc))
+    assert _DEGRADE_LEAK not in str(exc)
+    assert _DEGRADE_LEAK not in formatted
+    assert "sk-DEGRADE-LEAK" not in formatted
+    assert exc.__context__ is None                         # 链已断（既非 suppress、根本未挂原始 exc）
+    # 喂真 ErrorReporter（生产落 errors.jsonl 同一序列化路径）：落盘 payload 不含明文
+    import tempfile
+    from pathlib import Path as _Path
+
+    from app.observability.errors import ErrorReporter, LocalErrorLog
+
+    with tempfile.TemporaryDirectory() as td:
+        rep = ErrorReporter(local_log=LocalErrorLog(path=_Path(td) / "errors.jsonl"))
+        rep.report(exc, {"path": "/x"})
+        blob = (_Path(td) / "errors.jsonl").read_text(encoding="utf-8")
+    assert _DEGRADE_LEAK not in blob
+    assert "sk-DEGRADE-LEAK" not in blob
+    # 降级语义仍在：DegradedRoutingError 是 GatewayError 子类、message 含降级说明（够调试、不夹明文）
+    assert isinstance(exc, GatewayError)
+    assert "strict_degrade" in str(exc) or "降" in str(exc)
+
+
 # ============ replay_state 如实记录 ============
 
 def test_replay_state_reflected_from_response():
