@@ -454,7 +454,7 @@ def _engineering_record_to_manifest_dict(record: Any) -> dict[str, Any]:
       provider / 强理论缺 binding；又凭空造假违例——把合规记录的 None user_waiver_ref 洗成「有 waiver」误拒
       合规 run；还把性能 observed_seconds=None 洗成非数串使 float() 炸成 unparseable）；与 None 正交的
       bool/数值/tuple 判定（生产档 mock 兜底 / 致命密钥 tuple / perf 超标数值）+ honest-absent（无 record 可洗）
-      + 结构/类型/冷导入测试 共 12 个仍 GREEN → 还原 → 全 24 GREEN。
+      + 结构/类型/冷导入测试 共 13 个仍 GREEN → 还原 → 全 25 GREEN。
     """
 
     return _to_json_safe(asdict(record))

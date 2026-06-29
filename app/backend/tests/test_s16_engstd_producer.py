@@ -20,7 +20,7 @@ fail-closed：喂错族类型（mock 塞 data 槽 / 性能族塞非 3 态 Perfor
   **测试态本地** ProducerStatusLedger.mark_green(...) 证明 enforce 行为为真——绝非生产假绿灯（生产 producer_status
   默认 None=红·见 test_absent_producer_status_advisory_only）。
 
-★ producer mutation 三态（已手验：GREEN 24 → 洗白 RED 12/GREEN 12 → 还原 GREEN 24）：把
+★ producer mutation 三态（已手验：GREEN 25 → 洗白 RED 12/GREEN 13 → 还原 GREEN 25）：把
   engineering_standards._engineering_record_to_manifest_dict 的 `return _to_json_safe(asdict(record))` 改成 None-洗白
   `return _to_json_safe({k: (v if v is not None else "__filled__") for k, v in asdict(record).items()})`（= 假绿灯）。
   洗白双向作恶 → 12 个依赖「忠实保留 None/缺省」的测试转 RED：
@@ -33,12 +33,13 @@ fail-closed：喂错族类型（mock 塞 data 槽 / 性能族塞非 3 态 Perfor
       float() 炸成 unparseable·gap 码变）/ test_no_whitewash_unmeasured_perf_preserved
     ④ 忠实/反作弊探针：test_no_whitewash_none_ref_preserved / test_serialization_faithful_to_canonical_validator /
       test_input_flip_flips_gate_verdict_not_constant / test_bad_run_under_red_producer_advisory_only_not_blocking（断言 v.ok is False）
-  与 None 正交 → 12 个仍 GREEN：bool/数值/tuple 判定（test_bad_production_mock_fallback_rejected_under_green /
+  与 None 正交 → 13 个仍 GREEN：bool/数值/tuple 判定（test_bad_production_mock_fallback_rejected_under_green /
     test_bad_perf_exceeded_rejected_under_green / test_bad_fatal_secret_plaintext_rejected_under_green）+ honest-absent
-    无 record 可洗（test_honest_absent_*×3 / test_absent_producer_status_advisory_only）+ 结构/类型/冷导入
+    无 record 可洗（test_honest_absent_*×3 / test_absent_producer_status_advisory_only /
+    test_none_or_falsy_family_is_honest_absent_not_silently_judged）+ 结构/类型/冷导入
     （test_builder_emits_only_nonempty_families / test_builder_field_names_match_gate_adapter_contract_and_json_safe /
     test_failclosed_wrong_record_type_in_family / test_failclosed_perf_record_must_be_three_state_measurement /
-    test_builder_module_cold_importable）→ 还原 → 全 24 GREEN。
+    test_builder_module_cold_importable）→ 还原 → 全 25 GREEN。
 """
 
 from __future__ import annotations
