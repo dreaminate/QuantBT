@@ -16,7 +16,7 @@
 
 ## dreaminate
 - `dreaminate/conformal-intervals.md` — FINDING · R23 不确定性预测区间（split conformal / CQR / ACI）+ abstain
-- `dreaminate/construction-map.md` — 全量落地施工图 (2026-06-28 · codemap-first)
+- `dreaminate/construction-map.md` — 全量落地施工图 v2 · duet 三方并集定稿（2026-06-29 · 评估锚点 main=540b2d56）
 - `dreaminate/cpcv.md` — FINDING · R4 CPCV（Combinatorial Purged Cross-Validation）多路径回
 - `dreaminate/drift-detectors.md` — FINDING · §5 生产期漂移检测器（rolling-PSR / CUSUM / Page-Hinkley / P
 - `dreaminate/factor-lifecycle-institutional.md` — FINDING · §3 因子机构级生命周期度量（衰减半衰期 / 容量 / 因子族 / 拥挤）

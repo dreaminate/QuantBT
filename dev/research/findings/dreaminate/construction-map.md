@@ -1,3 +1,99 @@
+# 全量落地施工图 v2 · duet 三方并集定稿（2026-06-29 · 评估锚点 main=540b2d56）
+
+> **三方并集**：中心 Claude ‖ deep-opus（6 探针逐节核 540b2d56 真代码 + 实跑 141+48 测试 + perf harness）‖ codex（gpt-5.5 xhigh），中心亲手裁决定稿、唯一写入。
+> **诚实边界**：本地代码 proof + 局部实跑；非 CI、非线上、非用户验收；全量 pytest 未叠跑（守 memory）。**旧 v1 图（下方）§7/§9/§14/§15 四处已被真代码推翻，以本 v2 为准。**
+> **结构源**：本 v2 = 结构源；逐节真实度 = 本表 + 当前代码；实时前沿 = dev/state/dreaminate/state.md 顶部块。
+
+## ★ 头号结论：证据脊柱「三重失效」· 第一张多米诺是 PRODUCER（不是 enforce 翻转）
+门套件 §6/§9/§10×2/§13/§16/§17 共 7 门已注册 gate_registry、接进 promote.py、490+ 测试过——**但 promote 从未被真治理/enforce**，三层叠加每层独立致命：
+- (a) **advisory**：producer 出厂全红（`mark_green` 零非测试调用）·enforce 永不触发（`ide/promote.py:200` 两真调用方 `main.py:21172`+`agent/business_tools.py:300` 都不传 producer_status）。
+- (b) **空过**：门「节缺省→ok=True」+ **无 producer 把 typed 记录写进 manifest**（`promote_assembler.py:77-80` 真路径 honest-absent）→ 即便翻 enforce 也空过。
+- (c) **路径孤岛**：唯一真 promote 是 IDE 沙箱 + agent 回测·approval-gate/paper-desk 真晋级根本不走门链。
+→ 真闭合**第一张多米诺 = PRODUCER**（从真研究 run 把 §6/§9/§10/§13/§16/§17+RDP typed 记录写进 run.json）→ 标绿 → 翻 enforce → 并所有 promote 路径。这是「机械齐备 + 测试齐备」与「真·enforced 研究到晋级」之间唯一结构鸿沟。
+
+## 一、逐节 §0-§17 真实度（540b2d56 真代码核验）
+| 节 | 裁定 | 真状态（承重 file:line） | 关键 gap |
+|---|---|---|---|
+| §0 北极星 | key_gap | install/真回测/单 LLM turn 真·无单条 stranger 端到端全链·full_product 诚实 False(goal_coverage.py:277) | 无可走的「配数据/LLM→QRO→跑→判证据→导RDP→ladder」流 |
+| §1 对象 | genuine_partial | QRO/Graph/Compiler store 已建·覆盖校验只查结构存在不解析真对象(goal_coverage.py:11) | cited ref 解析真 QRO/Graph 横切未接 |
+| §2 多台 | genuine_partial | canvas projection/mutation 已建·DeskHandoff 仅库无 REST·canonical_command_ref 可选 | 跨台 handoff REST + canvas 强制 canonical command |
+| §3 生命周期 | genuine_partial | asset_lifecycle 校验器真·ingestion 写时 enforce·退役/缺 state 拒未挂全 registry 写路径 | 跨 registry lifecycle 门(factor/model/signal/strategy 写点) |
+| §4 数据接入 | genuine_partial | **真 data pull 真**(Tushare/Binance/Stooq·keyring→token 桥 main.py:636)·keystore 真 | OAuth/device=KRG·health reactive·revoke 校验拒非自动扫·GE ingest 不跑 |
+| §5 RAG | genuine_partial | 4 registry 写自动 sync(权限+source/version main.py:1045)·best-effort 吞异常 | embedding=local-hash(KRG)·广义检索类型未覆盖 |
+| §6 文档/数学 | genuine_partial | doc parser 真 no-network sandbox·§6 门委托 spine_gate 8 子句真拒残缺强标签 | 门 advisory+节缺省 ok=True+**无 producer 写数学链** |
+| §7 Agent Shell | key_gap | **LLM Gateway 真 path+deny-by-default 真**(main.py:1205→NoLLMConfigured→503)·单 role turn 真 | **AgentOrchestrator 零生产调用方**(orchestrator.py:299)·多 role DAG 仅库 |
+| §8 治理脊柱 | genuine_partial | gateway secret-scan/admissibility/seal inline enforce 可达·deny-by-default·honest-N/approval/replay 真 | **LLMCallRecord 不落账**(record_sink=None main.py:1239)·promote 门 advisory 空过 |
+| §9 边界 | genuine_partial(强) | **3/5 bar 真 enforce 422**(模型体入因子库/守门指标入 fitness/孤儿信号) | StrategyBookContract 无生产构造方→short-intent/math-binding 库超前不可达 |
+| §10 方法学 | genuine_partial | 计算器全真测过(DSR/PSR/MinTRL/CSCV-PBO/conformal/N_eff)·overfit_gate 对噪声真返红 | verdict-阻断 advisory·cost-cap research-hole·control-plane caps 零真调用方 |
+| §11 数据层/标的 | genuine_partial | InstrumentSpec 单一源(C-S11)·TypedInstrumentSpec 逐类构造门真 | PIT enforce 4 层 fail-closed 但 LATENT(无端点 thread registry)·逐类数学 DECLARED-only KRG |
+| §12 执行边界 | genuine_partial | ladder-jump 真 enforce 422·OrderGuard 唯一入口真·A股 live 封死·Binance adapter 真 | 真下单 materialize 刻意 disabled(KRG)·monitor IC observation=None(live KRG·interim 未接) |
+| §13 信任层 | genuine_partial | trust_layer(2253 行)真+测·每 acceptance 映真 violation code | 门 advisory 且真 run no-op(无 producer)·require_trustworthy 零 release 调用方 |
+| §14 平台 M1-M21 | key_gap | platform_coverage:317 真用 SA-1 resolver fail-closed | **main.py 从不 wire resolver**(_DEFAULT_RESOLVER 恒 None)→拒一切 honest-absent·无 relevance 证书 |
+| §15 模型治理 | **genuine_full** | **真 fail-closed enforce 在写/晋级/serving**(缺 Dossier/challenger/recert/外来 pickle→拒)·pickle 默认 block 实证(runner.py:60)·serving 真(422+invocation record) | 自训 passport 硬编 MEDIUM tier·serving 主进程无 trust=(残余)·无 A-B 路由 |
+| §16 工程标准 | genuine_partial | 校验器全真·真 benchmark harness 实跑 3 测/2 KRG | 门 advisory+节缺省 ok=True+producer 未接 CI |
+| §17 交付/RDP | genuine_partial | rdp_gate 4 门真能拒(manifest/血统/残余/可追溯) | 门 advisory+节缺省 ok=True·4 producer 真路径 honest-absent·真 runner 全 None·require_rdp=False |
+
+**旧 v1 推翻更正**：①§7 LLM Gateway 已 land（旧图「实例化 0 次」陈旧）·orchestrator-wire 未 land ②§9 已 3×422 真 enforce（非「无消费方」）③§15 genuine_full·pickle 默认 True 实证 ④§14 是 resolver=None 拒一切（非接受 synthetic·方向相反）。
+
+## 二、距「真实可运行研究」三大结构 gap
+- **GAP-1【最关键】证据脊柱三重失效**（见头号结论）→ 第一张多米诺 = PRODUCER。
+- **GAP-2 无单条 stranger 端到端研究流**：真件孤岛（真 data pull/真回测/真单 LLM turn/真因子台/真模型治理都真），未连成 Quant Intent→QRO→Graph→Compiler→Run→Evidence→Promote→RDP→ladder→Monitor·Agent-native Chat/Canvas→QRO 非 live 默认（前端 P0=mock）·多 role orchestrator 仅库。
+- **GAP-3 大量 fail-closed 最后一公里未接真生产调用点**（头号假绿面）：§14 resolver 未 wire·confirmatory-PIT registry 未 thread·§10 control-plane caps 零调用方·goal_coverage 不 import ref_resolution·LLMCallRecord 不落账·§9 StrategyBook 无生产构造方。
+
+## 三、新 codemap 卡（闭哪节·可证伪·领地·依赖·分类）
+### STREAM-1 PRODUCER 层 + ENFORCE 激活（GAP-1·最高杠杆·第一波 PARALLEL-SAFE）
+- **NC-S17-RDP-PRODUCER**(§17·SHARED-ANCESTOR)：真 run→完整 RDP typed 记录写 run.json·标 s17_rdp 绿翻 enforce。可证伪:缺 repro-command 晋级拒·honest-absent 不误拒。领地:delivery/rdp_gate.py+promote_assembler.py+ide/promote.py。PARALLEL-SAFE(producer)→CENTER-SERIAL(翻)。
+- **NC-S6-MATHCHAIN-PRODUCER**(§6)：theory-backed 自动写 TheorySpec→Binding→ConsistencyCheck 进 run/RDP·标 s6_mathchain 绿。可证伪:强标签缺 ConsistencyCheck 拒。领地:research_os/spine.py+promote_assembler.py。
+- **NC-S10-COST/CTRL-PRODUCER**(§10)：写 cost/TCA+tier/effective_label·接 validate_validation_methodology+control_plane.constrain_promotion 进真 verdict 路径(今零调用方)·修 cost research-hole(按 claim_label 非 target_env)·标 s10_cost/s10_controlplane 绿。领地:methodology_validation.py+control_plane.py+eval/+promote_assembler.py。
+- **NC-S13-TRUST-PRODUCER**(§13)：写 section13_trust·接 require_trustworthy 进真 release·标 s13_trust 绿。领地:trust_layer.py+promote_assembler.py。
+- **NC-S16-ENGSTD-PRODUCER**(§16)：写工程证据进 manifest·标 s16 绿·接 CI。领地:engineering_standards.py+promote_assembler.py+CI。
+- **NC-DATAQUALITY-INGEST-ENFORCE**(§4/§16·PARALLEL-SAFE+轻 main.py)：connector ingest 跑 ≥5 GE 测试+require_provenance·known_at/secret_ref 绑不可变 DatasetVersion。可证伪:违声明数据测试的表隔离非冒充 clean。领地:main.py:9520 ingest+data_quality.py+connectors/base.py。
+- **NC-S13-WAIVER-SWEEP**(§13·PARALLEL-SAFE 前端)：每面诚实显 waiver 不渲染 proof-backed。
+### STREAM-2 ENFORCE 翻 + 最后一公里（CENTER-SERIAL）
+- **NC-PRODUCER-FLIP-LEDGER**(横切·SHARED-ANCESTOR)：真 ProducerStatusLedger 接 ide/promote.py 两真调用方·只标 wiring 测试过的 producer 绿。可证伪:标 wiring 红的 producer 绿→enforcement_policy 结构 fail-closed 拒(:114)。领地:ide/promote.py+agent/business_tools.py+gate_registry.py。依赖:各 producer。
+- **NC-PROMOTE-PATH-UNIFY**(§17/§8)：approval-gate+paper-desk 真晋级并进同一门链。领地:approval/+paper/+ide/promote.py+main.py。
+- **NC-PIT-REGISTRY-WIRE**(§11)：真 promote/gate 端点 thread registry+CONFIRMATORY·confirmatory-PIT 门真触发。可证伪:confirmatory 带未注册 dataset_version 拒。领地:main.py:21864+ide/promote.py+portfolio/gate.py+jobs.py。
+- **NC-INSTRUMENT-RESOLVER-WIRE**(§11)：parse_instrument_spec 接 strategy_book/onboarding·逐类语义门可达。可证伪:期权策略缺 strike 拒。领地:strategy/strategy_book.py+market_data_contract.py+main.py。
+- **NC-S14-RESOLVER-WIRE**(§14)：RealRefResolver wire 进 main.py platform_coverage(今 None 拒一切)。可证伪:真 ref backed·synthetic not-backed。领地:main.py:16519+platform_coverage.py。依赖 SA-1。
+- **NC-LLMCALLRECORD-PERSIST**(§8/§17)：record_sink 落 LLMCallRecord 进 durable ledger·补 tool_schema_hash/cost。可证伪:agent turn→LLMCallRecord 带 cost·缺 cost 拒。领地:llm/gateway.py+llm/call_record.py+main.py+ledger。
+- **NC-S14-RELEVANCE-CERT**(§14·PARALLEL-SAFE 库)：行↔ref 语义相关性证书。
+### STREAM-3 Agent-native OS（GAP-2·CENTER-SERIAL）
+- **NC-ORCHESTRATOR-WIRE**(§7·最强上游)：真 agent 端点实例化 AgentOrchestrator·多 role DAG 派发·投 24 事件经 gateway。可证伪:研究 turn 经 DAG·绕 DAG 拒·verifier 共 builder 上下文 flag 独立性。领地:agent/orchestrator/+main.py agent 端点。注:advise_trust/advise_governance 已 advisory 接·勿重做。
+- **NC-AGENTCODECHANGE-GATE**(§7/§8)：AgentCodeChange⇒diff+test+rollback enforce。依赖 NC-ORCHESTRATOR-WIRE。
+### STREAM-4 覆盖完整性 + 真研究 promote（GAP-2/3·CENTER-SERIAL）
+- **NC-REAL-RESEARCH-PROMOTE**(§0/§1/§17·关键)：建真研究 run(QRO/Graph/Compiler/Evidence+RDP)→promote 路径(非 IDE 沙箱)·天然携 §6/§9/§10 记录。可证伪:promote run.json 带真 DatasetVersion+LLMCallRecord+ConsistencyCheck ref。领地:main.py 研究端点+compiler.py+promote_assembler.py。依赖多 producer。
+- **NC-S0-COVERAGE-RESOLVER-WIRE**(§0/§1)：goal_coverage 接 ref_resolution·cited ref 解析真对象·停硬编 4 节。可证伪:cite 不存在 qro_id 拒·full_product 全节真接才 True。领地:goal_coverage.py+main.py。
+- **NC-S9-STRATEGYBOOK-PATH**(§9)：建 StrategyBookContract 生产构造方·math-binding 可达·翻 §9 release 门。领地:strategy/+factor_strategy_boundary.py+main.py+promote_assembler.py。
+- **NC-S3-LIFECYCLE-GATE**(§3·advisory-first 用户裁定)：退役/缺 state 门挂全 registry 写路径(advisory 起·Factor.evidence_refs from_dict 兜底)。领地:factor_factory/registry.py+main.py。
+- **NC-S2-HANDOFF/CANVAS**(§2)：DeskHandoff REST+canvas mutation 强制 canonical command。领地:desk_projection.py+main.py。
+### STREAM-5 前端/装/用/信（PARALLEL-SAFE·RunDetailPage 冻结·新页）
+- **NC-AGENT-UI-LIVE-DEFAULT**(§2/§7)：agent-workbench 默认走 agentLive.ts SSE 非 mock。领地:frontend agent-workbench。
+- **NC-DESK-LIVE-WIRE**(§14)：honest-mock 台接真端点。
+- **NC-STRANGER-SMOKE-E2E**(§0·末波)：全栈 stranger smoke(净机→装→QRO→跑→导 RDP)。可证伪:断 RDP 导出红·跳 paper 直 live 红。
+### STREAM-6 KNOWN_RUN_GAP 诚实 seam（不闭·保持诚实）
+C-S4-PROVIDER-AUTH(OAuth/device §4)·C-S4-HEALTH-POLL(§4)·C-S5-EMBEDDING(§5)·C-S11-ASSETCLASS-MATH(Greeks/IV/duration §11)·C-S12-VENUE+真下单(§12·A股禁·用户按键)·**C-S12-MONITOR-IC-INTERIM(§12·可建·helper monitor/production.py:174 未接默认)**·C-S17-REAL-RUNNERS(CI/部署/canary §17·main.py:448 全 None)·C-S13-ORG-INDEPENDENCE(§13)。§10 池卡 MinTRL/CPCV/CONFORMAL(pool 31289338/861182e6/92a2182f)。
+
+## 四、波次 + 争用图
+- **第一波 PRODUCER 建**(PARALLEL-SAFE·5 线零热文件):NC-S17/S6/S10/S13/S16-PRODUCER + NC-DATAQUALITY-INGEST。前端 NC-S13-WAIVER-SWEEP 机动。
+- **第二波 ENFORCE 翻 + 最后一公里**(CENTER-SERIAL 一次一张·promote_assembler+ide/promote.py+main.py):NC-PRODUCER-FLIP-LEDGER→各翻 enforce→NC-PROMOTE-PATH-UNIFY→NC-PIT-REGISTRY-WIRE→NC-INSTRUMENT-RESOLVER-WIRE→NC-S14-RESOLVER-WIRE→NC-LLMCALLRECORD-PERSIST。并发非热:NC-S14-RELEVANCE-CERT(库)‖前端 live。
+- **第三波 Agent OS**(CENTER-SERIAL):NC-ORCHESTRATOR-WIRE→NC-AGENTCODECHANGE-GATE。并发前端 NC-AGENT-UI-LIVE-DEFAULT。
+- **第四波 真研究 promote + 覆盖**:NC-REAL-RESEARCH-PROMOTE→NC-S0-COVERAGE-RESOLVER-WIRE→NC-S9-STRATEGYBOOK-PATH→NC-S3-LIFECYCLE-GATE→NC-S2-HANDOFF/CANVAS。
+- **第五波 总闸 + 诚实 seam**:NC-STRANGER-SMOKE-E2E ‖ C-S0-DELIVERY-TOTALGATE ‖ STREAM-6 各 seam(含 C-S12-MONITOR-IC-INTERIM)‖ §10 池卡。
+
+**争用图（绝不两张同飞）**:`main.py`(22862 行·全 *-WIRE+producer-flip+orchestrator+LLMCallRecord+PIT+instrument+coverage resolver 碰·硬串)·`ide/promote.py`+`release_gate/promote_assembler.py`(promote 收口枢纽·全 producer-flip+enforce+path-unify·SA-3 给门注册零争用但 producer 写入仍中心串)·`agent/orchestrator/orchestrator.py`(orchestrator+codechange agent 线内串)·`research_os/market_data_contract.py`(instrument-resolver 数据线内串)·`research_os/trust_layer.py`(trust-producer+waiver 排序)·`RunDetailPage.tsx` 冻结(新 UI 走新页)。
+
+## 五、工程取舍待拍板（中心摆代价·不替拍）
+1. **真研究 promote 路径**:建独立全链(重·合 GOAL 全生命周期) vs 从 IDE/agent 合成 honest-absent 记录(轻·已选 C-S17-RUNJSON 范式)。效果不等价(前者才满足 GOAL「已晋级=可追溯 RDP」)。建议后者作桥前者作真闭合·**点名用户拍**。
+2. **§10 cost-cap research-hole 修法**:按 claim_label 门 cost(闭 GOAL bar·改 research 档行为) vs 维持 target_env。建议改 claim_label·flag 用户(行为变更)。
+3. **enforce 翻转时机**:GOAL「拒」要 enforce·早翻(producer 未在全合法路径可靠写记录前)误拒诚实 run(违锁定决策)。SA-2/SA-3 advisory-first+producer-green 对冲·每翻前强制 mutation 三态(honest-absent 过/坏 run 拒/注释接线变红)。
+4. **orchestrator 接法**:全多 role DAG(重·北极星·库已测) vs 单 role 增量。建议 DAG。
+
+**风险**:第二波集中改 promote 枢纽·producer 翻绿不严→误拒诚实 run(缓解:每翻前 mutation 三态)。§15 自训 passport 硬编 MEDIUM·高风险 challenger bar 自训路径不触(真残余·建议补卡)。
+**假绿灯风险点（状态卡必诚实标）**:①7 门注册≠promote 被 enforce(三重失效)②C-S7 全闭≠Agent OS 可用③ENFORCE_PIT=True≠生效④真 connector≠真数据进治理 run⑤§14 覆盖校验=拒一切 honest-absent⑥goal_coverage 覆盖=只查结构存在。
+
+---
+> ↓↓↓ 2026-06-28 v1 施工图（历史保留·v2 已据 540b2d56 真代码更正逐节真实度，§7/§9/§14/§15 四处已推翻·以 v2 为准）↓↓↓
+
 ## 全量落地施工图 (2026-06-28 · codemap-first)
 
 > 三方独立思考并集（中心 Claude ‖ deep-opus ‖ codex gpt-5.5·xhigh）+ 4 条代码核验子探针，**中心已接收为项目 codemap**。覆盖 §0-§17 真·闭合全路径（≠ 仅当前收敛）。本节是【全量导航】，实时依据永远是卡原文 + 代码 + dev/state；与下方 2026-06-26 版互补不冲突。
