@@ -1,16 +1,18 @@
 """M14b · 真实 LLM 客户端三档（Anthropic / OpenAI / Qwen）+ 工厂。
 
-设计原则（对齐 GOAL §M14 + §6.5 安全）：
+设计原则（对齐 GOAL §M14 + §6.5 安全 + §8 no-silent-mock）：
 - 所有 provider 走同一份 `LLMClient` 接口（消息往返 + tool calls 同构）
 - API key 永远从 `SecureKeystore` 取，绝不入 YAML / 日志
-- 无可用 key 时优雅 fallback 到 `DevLocalLLM`，让 Agent 永远能跑
+- **deny-by-default**：无可用 provider/key → 抛 `NoLLMConfigured`（明确错误·fail-closed），
+  **绝不静默落 `DevLocalLLM`**（GOAL §8：任一生产结果走 silent mock fallback → 拒）。
+  开发期要 mock 须**显式**构造 `DevLocalLLM()`，绝不由工厂在缺配置时悄悄替换。
 - HTTP 客户端用 `requests`（同步，不引 anthropic/openai SDK 减依赖体积）
 
 provider 选择优先级：
 1. caller 显式指定
 2. `LLM_PROVIDER` 环境变量
 3. keystore 第一个匹配名（`llm_anthropic` / `llm_openai` / `llm_qwen`）
-4. fallback 到 DevLocalLLM
+4. 都未配 → 抛 `NoLLMConfigured`（deny-by-default，绝不静默落 DevLocalLLM）
 """
 
 from __future__ import annotations
@@ -34,7 +36,7 @@ from ..research_os import (
     validate_llm_gateway_call,
 )
 from ..security import KeystoreError, SecureKeystore
-from .llm_client import DevLocalLLM, LLMClient, LLMMessage, LLMResponse, NoLLMConfigured
+from .llm_client import LLMClient, LLMMessage, LLMResponse, NoLLMConfigured
 
 
 logger = logging.getLogger(__name__)
@@ -600,7 +602,11 @@ def make_llm_client(
     model: str | None = None,
     allow_env: bool = True,
 ) -> LLMClient:
-    """按优先级解析 provider + api_key + base_url + model；失败 fallback DevLocalLLM。"""
+    """按优先级解析 provider + api_key + base_url + model。
+
+    deny-by-default（GOAL §8 no-silent-mock）：解析不出任何可用真实 provider →
+    抛 `NoLLMConfigured`（明确错误），**绝不**静默返回 `DevLocalLLM`。要 mock 走显式 `DevLocalLLM()`。
+    """
 
     explicit = provider or (os.environ.get("LLM_PROVIDER", "").lower() or None)
     candidates: list[ProviderName] = (
@@ -653,8 +659,12 @@ def make_llm_client(
         except Exception as exc:  # noqa: BLE001
             logger.warning("LLM provider %s 初始化失败：%s", cand, exc)
             continue
-    logger.info("无可用真实 LLM provider，回退到 DevLocalLLM")
-    return DevLocalLLM()
+    # deny-by-default（GOAL §8）：没有任何可用真实 provider → 明确报错，绝不静默落 DevLocalLLM。
+    raise NoLLMConfigured(
+        "无可用 LLM provider：env/keystore 未配置任何 anthropic/openai/qwen/custom 凭据。"
+        "deny-by-default —— 拒绝静默落 DevLocalLLM（GOAL §8 no-silent-mock）。"
+        "开发期请显式构造 DevLocalLLM()，生产请在 Settings 配置 provider + key。"
+    )
 
 
 def make_settings_managed_llm_client(
@@ -742,8 +752,13 @@ def make_settings_managed_llm_client(
     if explicit:
         detail = rejection or "provider not configured in Settings/Secrets"
         raise NoLLMConfigured(f"LLM Gateway route rejected for {explicit}: {detail}")
-    logger.info("无可用 Settings-managed LLM provider，回退到 DevLocalLLM")
-    return DevLocalLLM()
+    # deny-by-default（GOAL §8）：未显式指定且无任何就绪的 Settings-managed provider →
+    # 明确报错，绝不静默落 DevLocalLLM（旧行为是 silent mock fallback，§8 拒）。
+    detail = rejection or "no Settings-managed LLM provider configured in Settings/Secrets"
+    raise NoLLMConfigured(
+        f"LLM Gateway route unavailable: {detail}. deny-by-default —— 拒绝静默落 DevLocalLLM"
+        "（GOAL §8 no-silent-mock）。请在 Settings 配置 provider 并完成 SecretRef/路由登记。"
+    )
 
 
 def list_llm_status(

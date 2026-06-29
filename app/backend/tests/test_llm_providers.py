@@ -9,10 +9,13 @@ from app.agent import (
     AnthropicLLM,
     DevLocalLLM,
     LLMMessage,
+    NoLLMConfigured,
     OpenAILLM,
     QwenLLM,
     make_llm_client,
+    make_settings_managed_llm_client,
 )
+from app.research_os import PersistentOnboardingRegistry
 from app.security import InMemoryKeystore, KeystoreRecord, SecureKeystore
 
 
@@ -105,12 +108,49 @@ def test_make_llm_client_respects_env(monkeypatch) -> None:
     assert isinstance(client, OpenAILLM)
 
 
-def test_make_llm_client_fallback_to_dev_local(monkeypatch) -> None:
+def test_make_llm_client_denies_when_unconfigured(monkeypatch) -> None:
+    """deny-by-default（GOAL §8 no-silent-mock）：未配任何 provider → 抛 NoLLMConfigured，
+    绝不静默落 DevLocalLLM。
+
+    行为变更（诚实更新）：旧 `test_make_llm_client_fallback_to_dev_local` 断言 fallback→DevLocalLLM；
+    用户已拍板「彻底移除静默 DevLocalLLM 兜底」，故本测试翻为断言明确报错（非偷削覆盖）。
+    """
     monkeypatch.delenv("LLM_PROVIDER", raising=False)
     for env_var in ("ANTHROPIC_API_KEY", "OPENAI_API_KEY", "DASHSCOPE_API_KEY"):
         monkeypatch.delenv(env_var, raising=False)
-    client = make_llm_client()
-    assert isinstance(client, DevLocalLLM)
+    with pytest.raises(NoLLMConfigured):
+        make_llm_client()
+
+
+def test_make_llm_client_deny_never_returns_devlocal(monkeypatch) -> None:
+    """对抗（种坏门必抓）：未配时即便不抛、也绝不能产出 DevLocalLLM 这种 mock client。
+
+    若有人把静默兜底加回来（`return DevLocalLLM()`），本测试会拿到 DevLocalLLM 实例而非异常 → 必红。
+    """
+    monkeypatch.delenv("LLM_PROVIDER", raising=False)
+    for env_var in ("ANTHROPIC_API_KEY", "OPENAI_API_KEY", "DASHSCOPE_API_KEY"):
+        monkeypatch.delenv(env_var, raising=False)
+    ks = SecureKeystore(InMemoryKeystore())  # 空 keystore：无任何 provider 配置
+    produced: object | None = None
+    try:
+        produced = make_llm_client(keystore=ks)
+    except NoLLMConfigured:
+        produced = None
+    assert not isinstance(produced, DevLocalLLM), "deny-by-default 被违反：缺配置仍静默落 DevLocalLLM"
+    assert produced is None
+
+
+def test_make_settings_managed_denies_when_unconfigured(tmp_path, monkeypatch) -> None:
+    """deny-by-default：未显式指定 provider 且无任何就绪 Settings-managed provider →
+    抛 NoLLMConfigured（旧行为是静默落 DevLocalLLM，§8 拒）。
+    """
+    monkeypatch.delenv("LLM_PROVIDER", raising=False)
+    for env_var in ("ANTHROPIC_API_KEY", "OPENAI_API_KEY", "DASHSCOPE_API_KEY"):
+        monkeypatch.delenv(env_var, raising=False)
+    ks = SecureKeystore(InMemoryKeystore())
+    registry = PersistentOnboardingRegistry(tmp_path / "onboarding_settings.jsonl")
+    with pytest.raises(NoLLMConfigured):
+        make_settings_managed_llm_client(keystore=ks, registry=registry)
 
 
 def test_make_llm_client_explicit_provider_with_explicit_key() -> None:
