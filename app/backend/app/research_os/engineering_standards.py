@@ -448,10 +448,13 @@ def _engineering_record_to_manifest_dict(record: Any) -> dict[str, Any]:
     None/空字段原样保留 → 门 check 据真值 surface 违例 / KNOWN_RUN_GAP。本函数无任何「补默认 / 填占位 /
     造时间」分支 → producer 不洗白的硬保证。
 
-    ★ producer mutation 三态锚点（见 test 文件头）：把本函数改成洗白（如
-      `{k: (v if v is not None else "__filled__") for k, v in asdict(record).items()}`）→ 缺 ref 的坏 record
-      （mock 缺 label / data 缺 version / llm 缺 provider / 强理论缺 binding）被洗成合规·门误绿 → 对抗测试转
-      RED；性能 measured=False(gap) / 致命旗 / perf 超标 这类 bool/数值判定与 None-洗白正交 → 仍 GREEN → 还原 → 全 GREEN。
+    ★ producer mutation 三态锚点（已手验·见 test 文件头）：把本函数改成 None-洗白
+      `{k: (v if v is not None else "__filled__") for k, v in asdict(record).items()}` → 12 个依赖「忠实保留
+      None/缺省」的对抗测试转 RED（洗白双向作恶：既抹掉真违例——mock 缺 label / data 缺 version / llm 缺
+      provider / 强理论缺 binding；又凭空造假违例——把合规记录的 None user_waiver_ref 洗成「有 waiver」误拒
+      合规 run；还把性能 observed_seconds=None 洗成非数串使 float() 炸成 unparseable）；与 None 正交的
+      bool/数值/tuple 判定（生产档 mock 兜底 / 致命密钥 tuple / perf 超标数值）+ honest-absent（无 record 可洗）
+      + 结构/类型/冷导入测试 共 12 个仍 GREEN → 还原 → 全 24 GREEN。
     """
 
     return _to_json_safe(asdict(record))
