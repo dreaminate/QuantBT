@@ -24,7 +24,8 @@ from datetime import UTC, datetime
 import pytest
 from pydantic import ValidationError
 
-from app.instruments import (
+# C-S11：typed 合约本体单一源 = research_os.market_data_contract（orphan instruments/spec.py 已删）。
+from app.research_os.market_data_contract import (
     BondSpec,
     CommoditySpec,
     CrossCurrencyError,
@@ -36,12 +37,15 @@ from app.instruments import (
     FxSpec,
     GenericInstrumentSpec,
     InstrumentSpecError,
+    OptionSpec,
+    parse_instrument_spec,
+)
+# capability 层仍在 instruments.capability（C-S11 外·不动）。
+from app.instruments import (
     MarketCapability,
     MarketCapabilityError,
     MarketCapabilityMatrix,
-    OptionSpec,
     live_forbidden,
-    parse_instrument_spec,
 )
 from app.security.gate.policy import TrustTier, classify
 
