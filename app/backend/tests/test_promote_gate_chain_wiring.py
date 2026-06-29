@@ -46,6 +46,9 @@ from app.release_gate.promote_gate_chain import (  # noqa: E402
     PromoteGateChain,
     reset_default_chain,
 )
+from app.release_gate.section6_mathchain_gate import (  # noqa: E402
+    SECTION6_MATHCHAIN_GATE_NAME,
+)
 from app.release_gate.section9_boundary_gate import (  # noqa: E402
     SECTION9_BOUNDARY_GATE_NAME,
     SECTION9_BOUNDARY_MANIFEST_KEY,
@@ -79,6 +82,7 @@ _S10CP_VIOLATION = {"tier_claims": [{"tier": "loose", "claimed_label": "evidence
 _S10CP_CODE = "s10_relaxed_tier_strong_verdict_capped"
 
 _ALL_GATE_NAMES = {
+    SECTION6_MATHCHAIN_GATE_NAME,  # §6 数学链发版门经 gate_registry 落地接进 promote 路径（C-S6-MATHCHAIN·advisory-first）
     SECTION9_BOUNDARY_GATE_NAME,
     SECTION10_COST_GATE_NAME,
     SECTION10_CONTROLPLANE_GATE_NAME,

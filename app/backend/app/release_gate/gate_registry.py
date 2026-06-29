@@ -25,6 +25,7 @@ from __future__ import annotations
 from typing import Callable
 
 from .promote_gate_chain import PromoteGateChain, default_chain
+from .section6_mathchain_gate import register_section6_mathchain_gate
 from .section9_boundary_gate import register_section9_boundary_gate
 from .section10_methodology_gate import (
     register_section10_controlplane_gate,
@@ -41,10 +42,11 @@ GateRegistrar = Callable[[PromoteGateChain], None]
 
 # ════════════════════════════════════════════════════════════════════════════
 # 单一注册清单（**加新门 = 这里加一行**·绝不改 promote.py·这就是 SA-3 的承诺）
-# 已落地：§9 边界 · §10 成本 · §10 控制面 · §13 信任 · §16 工程标准 · §17 RDP。
+# 已落地：§6 数学链 · §9 边界 · §10 成本 · §10 控制面 · §13 信任 · §16 工程标准 · §17 RDP。
 # 加新门 = 本元组追加一行即可——promote.py 一字不动。
 # ════════════════════════════════════════════════════════════════════════════
 _GATE_REGISTRARS: tuple[GateRegistrar, ...] = (
+    register_section6_mathchain_gate,
     register_section9_boundary_gate,
     register_section10_cost_gate,
     register_section10_controlplane_gate,
