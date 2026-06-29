@@ -393,6 +393,12 @@ class LLMGateway:
         current = decision
 
         while True:
+            # strict_degrade 单点 enforce（C-S7 Gap1 补修 · GOAL §8）：唯一执行点在 while 顶，
+            # 永在任何 except / fallback 分支的活跃异常上下文【之外】——fallback 落「降级强档」时
+            # 抛的 DegradedRoutingError 绝不隐式 chain 上一轮 provider 异常（其 str()/traceback
+            # 可能夹明文 → 经 ERROR_REPORTER 落 errors.jsonl 即泄）。complete() 入口已先校验初始
+            # decision；此处再校验每个 fallback 目标（同决策幂等、无副作用、不破降级语义）。
+            self._enforce_strict_degrade(current, req)
             profile = current.profile
             cred = self._pool.materialize(profile.pool_id, capability=self._cap)
             events.append(LLMGatewayEvent(EV_CREDENTIAL_SELECTED, {
@@ -412,35 +418,45 @@ class LLMGateway:
                         f"无任何带可用凭据的 provider（chain={fallback_chain}）",
                     )
                 current = nxt
-                self._enforce_strict_degrade(current, req)
-                continue
+                continue  # strict_degrade 于 while 顶单点 enforce（统一出分支上下文）
 
             events.append(LLMGatewayEvent(EV_CALL_STARTED, {
                 "provider": cred.provider, "model": profile.model, "tier": profile.capability_tier,
             }))
-            client = self._client_factory(cred)
             try:
+                # client 工厂构造也纳入 sanitized 块（C-S7 Gap1 · GOAL §8）：provider/custom 构造
+                # 异常（如 base_url 夹 user:pass@host 的明文）也被收敛成 type-name，绝不让携明文的
+                # 原始异常漏出 _invoke_with_fallback 之外。
+                client = self._client_factory(cred)
                 resp = client.chat(
                     request.messages,
                     tools=request.tools,
                     model=profile.model or cred.model or None,
                     temperature=request.temperature,
                 )
-            except Exception as exc:  # noqa: BLE001  —— 唯一外部操作 = provider 调用；失败即 fallback。
-                kind = type(exc).__name__
-                self._mark_fail(profile.provider, kind)
-                excluded.add(profile.signature)
-                fallback_chain.append(f"{profile.provider}/{profile.model}:{kind}")
-                nxt, ok = self._refallback(req, excluded, builder_signature, events)
-                fallback_used = True
-                if not ok or nxt is None:
-                    raise GatewayError(f"全部 provider 调用失败（chain={fallback_chain}）") from exc
-                current = nxt
-                self._enforce_strict_degrade(current, req)
-                continue
+            except Exception as exc:  # noqa: BLE001  —— 外部操作 = provider 构造 + 调用；失败即 fallback。
+                # 在活跃异常上下文里【只】取 type-name 这一无密信息，随即跳出 except——后续 fallback
+                # 解析（_refallback→resolve，可能抛非 RoutingError）与终态 raise 全在 except 之外执行，
+                # 任何异常都不会隐式 chain 原始 provider 异常（其 str()/traceback 可能夹明文 → 经
+                # ERROR_REPORTER 落 errors.jsonl）。GOAL §8 红线·结构性断掉 __context__ 泄漏整类。
+                failure_kind = type(exc).__name__
+            else:
+                self._mark_ok(profile.provider)
+                return resp, current, cred, fallback_used, fallback_chain
 
-            self._mark_ok(profile.provider)
-            return resp, current, cred, fallback_used, fallback_chain
+            # —— 出 except：exc 活跃上下文已结束（sys.exc_info() 复位）。fallback 簿记/解析/终态 raise
+            #    在此执行，均不可能再隐式 chain 原始 provider 异常。——
+            self._mark_fail(profile.provider, failure_kind)
+            excluded.add(profile.signature)
+            fallback_chain.append(f"{profile.provider}/{profile.model}:{failure_kind}")
+            nxt, ok = self._refallback(req, excluded, builder_signature, events)
+            fallback_used = True
+            if not ok or nxt is None:
+                # 终态 message 内 chain 仅含 provider/model/type-name（够定位、不回显 str(exc) 配置
+                # 细节/secret）。from None 再保险切链（此处本已无活跃 context）。GOAL §8 红线。
+                raise GatewayError(f"全部 provider 调用失败（chain={fallback_chain}）") from None
+            current = nxt
+            continue  # strict_degrade 于 while 顶单点 enforce
 
     def _refallback(
         self,

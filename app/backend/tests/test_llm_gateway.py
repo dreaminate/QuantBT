@@ -466,6 +466,191 @@ def test_fallback_missing_credential_triggers_fallback():
     assert any("no_key" in c for c in res.record.fallback_chain)
 
 
+# ============ secret 不经异常链 / traceback 漏出（C-S7 Gap1 · GOAL §8 红线）============
+
+# 明文 secret tripwire：夹在 base_url userinfo / Authorization 里，模拟 provider 异常回显配置明文。
+_FACTORY_LEAK = "https://admin:sk-FACTORY-LEAK-deadbeef9876@host.internal/v1"
+_CHAT_LEAK = "Authorization: Bearer sk-CHAT-LEAK-feedface5566"
+
+
+def test_factory_construction_error_no_plaintext_leak():
+    """种坏门（Finding2 ①②）：provider 构造（client_factory）抛含明文 secret 的异常
+    （如 custom base_url 夹 user:pass@host）→ 工厂调用已纳入 sanitized try、终态 GatewayError 用
+    `from None` 切链 → message / traceback / 真 ERROR_REPORTER 落盘面都只剩 type-name，绝不带出明文。
+
+    变异三态（手动验，见卡）：把工厂移出 try → 裸 ValueError 漏出（pytest.raises(GatewayError) 红）；
+    恢复 `from exc` → traceback.format_exception 带出明文（assert 明文不在 红）。
+    """
+    import traceback as _tb
+
+    profiles = _profiles_two_strong()
+
+    def exploding_factory(cred):
+        # 模拟 make_llm_client 对夹了 userinfo 的 base_url 校验失败、把明文 url 回显进异常。
+        raise ValueError(f"invalid base_url for provider {cred.provider}: {_FACTORY_LEAK}")
+
+    gw = _gateway(profiles, factory=exploding_factory)
+    with pytest.raises(GatewayError) as ei:        # ① 工厂异常被收敛成 GatewayError（非裸 ValueError 漏出）
+        gw.complete(_req(difficulty="hard"))
+    exc = ei.value
+
+    # ② GatewayError message 绝不回显明文
+    assert _FACTORY_LEAK not in str(exc)
+    assert "sk-FACTORY-LEAK" not in str(exc)
+    # ③ 完整异常链（= ERROR_REPORTER 用的 traceback.format_exception）不含明文（from None 切链）
+    formatted = "".join(_tb.format_exception(exc))
+    assert _FACTORY_LEAK not in formatted
+    assert "sk-FACTORY-LEAK" not in formatted
+    # ④ 仍保留够调试的 type-name（ValueError 出现在 fallback_chain，定位失败 provider）
+    assert "ValueError" in str(exc)
+
+    # ⑤ 喂真 ErrorReporter（生产落 data/audit/errors.jsonl 的同一序列化路径）：落盘 payload 不含明文
+    import tempfile
+    from pathlib import Path as _Path
+
+    from app.observability.errors import ErrorReporter, LocalErrorLog
+
+    with tempfile.TemporaryDirectory() as td:
+        rep = ErrorReporter(local_log=LocalErrorLog(path=_Path(td) / "errors.jsonl"))
+        rep.report(exc, {"path": "/x"})
+        blob = (_Path(td) / "errors.jsonl").read_text(encoding="utf-8")
+    assert _FACTORY_LEAK not in blob
+    assert "sk-FACTORY-LEAK" not in blob
+
+
+def test_terminal_gateway_error_does_not_chain_provider_exception():
+    """正常 provider 失败（chat 抛错）→ 终态 GatewayError（type-name 够调试、不泄）：
+    即便 provider 异常 str() 夹明文，`from None` 也保证 traceback.format_exception 不带出（chat 路径同护）。"""
+    import traceback as _tb
+
+    profiles = _profiles_two_strong()
+
+    class _BoomLeak:
+        provider = "x"
+
+        def chat(self, *a, **k):
+            raise RuntimeError(f"upstream 401 ({_CHAT_LEAK})")
+
+    gw = _gateway(profiles, factory=lambda c: _BoomLeak())
+    with pytest.raises(GatewayError) as ei:
+        gw.complete(_req(difficulty="hard"))
+    exc = ei.value
+    formatted = "".join(_tb.format_exception(exc))
+    assert _CHAT_LEAK not in str(exc)
+    assert _CHAT_LEAK not in formatted
+    assert "sk-CHAT-LEAK" not in formatted
+    assert "RuntimeError" in str(exc)              # type-name 够调试（定位 provider 失败类型）
+
+
+_DEGRADE_LEAK = "https://svc:sk-DEGRADE-LEAK-cafef00d@vault.internal/v1"
+
+
+def test_strict_degrade_fallback_does_not_chain_provider_secret():
+    """姊妹向量（C-S7 Gap1 补修 · GOAL §8 红线）：首选强档携明文异常失败 → fallback 落「降级强档」
+    → strict_degrade 拒绝 → 其 DegradedRoutingError 绝不经 __context__ 链带出原始明文异常
+    （否则经 ERROR_REPORTER 落 errors.jsonl 泄漏）。strict-degrade 仍真降级、只是不带明文进日志。
+
+    变异（手验，见卡）：把 `_enforce_strict_degrade` 移回 except 块内（保留 __context__ 链）→ 本测必红。
+    """
+    import traceback as _tb
+
+    # 1 强档 + 1 轻档：HARD 初路由走强档（不降级 → 过 complete() 入口 enforce），
+    # 强档 factory 携明文异常失败 → fallback 只剩轻档 → 降级强档 → strict_degrade 在 while 顶 raise。
+    profiles = [
+        LLMModelProfile(provider="anthropic", model="claude-opus-4",
+                        capability_tier=ModelTier.STRONG.value, pool_id="anthropic"),
+        LLMModelProfile(provider="openai", model="gpt-4o-mini",
+                        capability_tier=ModelTier.LIGHT.value, pool_id="openai"),
+    ]
+
+    def factory(cred):
+        if cred.provider == "anthropic":
+            # 模拟 provider 构造把夹 userinfo 的 base_url 明文回显进异常。
+            raise ValueError(f"connect failed base_url={_DEGRADE_LEAK}")
+        return StubLLMClient(content="should-not-reach")
+
+    gw = _gateway(profiles, factory=factory, strict_degrade=True)
+    with pytest.raises(DegradedRoutingError) as ei:        # 真降级拒绝（语义不变）
+        gw.complete(_req(difficulty="hard"))
+    exc = ei.value
+
+    # 明文不在 DegradedRoutingError 的 message / 完整异常链 traceback（__context__ 未带出原始 exc）
+    formatted = "".join(_tb.format_exception(exc))
+    assert _DEGRADE_LEAK not in str(exc)
+    assert _DEGRADE_LEAK not in formatted
+    assert "sk-DEGRADE-LEAK" not in formatted
+    assert exc.__context__ is None                         # 链已断（既非 suppress、根本未挂原始 exc）
+    # 喂真 ErrorReporter（生产落 errors.jsonl 同一序列化路径）：落盘 payload 不含明文
+    import tempfile
+    from pathlib import Path as _Path
+
+    from app.observability.errors import ErrorReporter, LocalErrorLog
+
+    with tempfile.TemporaryDirectory() as td:
+        rep = ErrorReporter(local_log=LocalErrorLog(path=_Path(td) / "errors.jsonl"))
+        rep.report(exc, {"path": "/x"})
+        blob = (_Path(td) / "errors.jsonl").read_text(encoding="utf-8")
+    assert _DEGRADE_LEAK not in blob
+    assert "sk-DEGRADE-LEAK" not in blob
+    # 降级语义仍在：DegradedRoutingError 是 GatewayError 子类、message 含降级说明（够调试、不夹明文）
+    assert isinstance(exc, GatewayError)
+    assert "strict_degrade" in str(exc) or "降" in str(exc)
+
+
+_REFB_LEAK = "https://u:sk-REFB-LEAK-0bada55deadbeef@host.internal/v1"
+
+
+def test_refallback_resolve_nonrouting_error_no_secret_chain():
+    """第三向量（codex 复审找到·结构性关闭验收 · GOAL §8）：fallback 解析 _refallback→resolve 抛
+    【非 RoutingError】异常时，绝不隐式 chain 上一轮携明文的 provider 异常——因 fallback 解析已移出
+    except 活跃上下文（sys.exc_info() 已复位）。异常原样冒出（不被静默吞），但 __context__ 干净。
+
+    变异（手验，见卡）：把 fallback 解析移回 except 块内 → 该非 RoutingError 会 chain 明文 exc → 本测必红。
+    """
+    import traceback as _tb
+
+    profiles = _profiles_two_strong()
+
+    class _ResolveBoomPolicy(ModelRoutingPolicy):
+        def resolve(self, req, *, unavailable_providers=None, exclude_signatures=None, builder_signature=None):
+            if exclude_signatures:                       # 仅 fallback 解析（_refallback 调）抛非 RoutingError
+                raise RuntimeError("policy internal boom")
+            return super().resolve(
+                req, unavailable_providers=unavailable_providers,
+                exclude_signatures=exclude_signatures, builder_signature=builder_signature,
+            )
+
+    ks = _seed_keystore(profiles)
+    pool = _build_pool(profiles, ks)
+    policy = _ResolveBoomPolicy(profiles, mode=RoutingMode.HYBRID_ADAPTIVE)
+
+    def factory(cred):
+        # 首选 provider 构造即携明文异常 → 进 except → 触发 fallback 解析（resolve 抛 RuntimeError）。
+        raise ValueError(f"connect base_url={_REFB_LEAK}")
+
+    gw = LLMGateway(policy=policy, credential_pool=pool, client_factory=factory,
+                    strict_degrade=True, scan_prompt_secrets=True)
+    with pytest.raises(RuntimeError) as ei:              # resolve 的非 RoutingError 原样冒出（不被静默吞）
+        gw.complete(_req(difficulty="hard"))
+    exc = ei.value
+    formatted = "".join(_tb.format_exception(exc))
+    assert _REFB_LEAK not in str(exc)
+    assert _REFB_LEAK not in formatted
+    assert "sk-REFB-LEAK" not in formatted
+    assert exc.__context__ is None                       # 关键：未挂上一轮 factory 明文异常
+    import tempfile
+    from pathlib import Path as _Path
+
+    from app.observability.errors import ErrorReporter, LocalErrorLog
+
+    with tempfile.TemporaryDirectory() as td:
+        rep = ErrorReporter(local_log=LocalErrorLog(path=_Path(td) / "errors.jsonl"))
+        rep.report(exc, {"path": "/x"})
+        blob = (_Path(td) / "errors.jsonl").read_text(encoding="utf-8")
+    assert _REFB_LEAK not in blob
+    assert "sk-REFB-LEAK" not in blob
+
+
 # ============ replay_state 如实记录 ============
 
 def test_replay_state_reflected_from_response():
