@@ -6,6 +6,10 @@
 ## <日期> · <标题>
 - 建/改了什么 + 命门  - 验收：<对抗测试 + 变异 + 全量数字>  - 下一步：<…> -->
 
+## 2026-06-29 · Wave 1 再落两门 C-S13（§13 信任·18 测）+ C-S17（§17 RDP·29 测）入 promote-gate-chain·main 761e92b4
+
+- **C-S13**：新建 `section13_trust_gate.py`（18 条对抗测试）·§13 信任发版检查（反谄媚/隐弱点/冷启动/mock 不诚实）接进 promote-gate-chain·复用 `trust_layer.py` 不重建·producer key `s13_trust_runjson_producers`·advisory 直到 producer 绿·批次集成 3524 passed；KNOWN_RUN_GAP：trust_layer.py 3 条单源硬化候选（label strip/casefold·blank-ref emptiness·cross-record expert-review 关联）留待后续 trust_layer 级修复·本 delegate 未 patch。**C-S17**：新建 `section17_rdp_gate.py`（29 条对抗测试）·§17 RDP promote 检查（拒绝无 manifest/artifact-hash/repro-command/DatasetVersion/IngestionSkill ref/unverified residual 的晋级）·复用 `delivery.validate_rdp` 不重建·producer key `s17_rdp_runjson_producers`·advisory 直到 producer 绿；codex MCP 不可用（refresh token 吊销）·agent 自审·无 fail-open + 无自证晋级发现。两线零禁止文件触碰·self-promote 不可能·producer 保持 RED（advisory-first·不假绿）；§9/§10/§13/§17 门检查全已建·注册进 gate_registry·接线进 ide/promote.py·全 advisory-first。  - 验收：后端全量 3553 passed / 13 skipped / 0 failed；validate PASS；main 761e92b4 已 push origin/main（local == remote 核实）。  - 下一步：§9/§10/§13/§17 PRODUCER 卡（faithfully 写记录入 manifest + 接线测试变绿 → 门自动翻转强执行）·§16 工程标准门检查·LLM-Gateway 接线 C-S7（§7/§8·中心串行 main.py 两步）·codex auth 刷新。
+
 ## 2026-06-29 · SA-3 收口 promote-gate-chain 接进 ide/promote.py（gate_registry 单一注册点·§9/§10 检查 advisory-first·producer 绿自动强执行）·main 10a63dc
 
 - `ide/promote.py` 接线 `ensure_default_chain().evaluate(manifest)`·verdict 进 run.json·仅 `result.rejected` 时拒绝；`gate_registry.py` 单一注册点（未来新检查加一行·promote.py 不动）；所有 producer 当前 RED → advisory-only（backward-compat·零 producer 假绿）；9 条对抗测试 + 变异三态（注释掉接线块 → 6 条变红）；evaluate 异常 fail-open（run.json 记录 `available: False`·非静默·刻意）；codex 确认非阻断-当-红 + producer 绿真正强执行。  - 验收：后端全量 3506 passed / 13 skipped / 0 failed；validate PASS；main 10a63dc 已 push origin/main（local == remote 核实）。  - 下一步：§9/§10 PRODUCER 卡（faithfully 写 section9/section10 记录进 manifest + 接线测试变绿 → 门自动翻转强执行）·LLM-Gateway 接线 C-S7（§7/§8·中心串行 main.py 两步）·可选 C-S13/C-S16/C-S17 gate_registry 各一行。
