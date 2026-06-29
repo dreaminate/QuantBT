@@ -37,6 +37,17 @@ def _present(value: str | None) -> bool:
     return bool(str(value or "").strip())
 
 
+def _any_present(values: Any) -> bool:
+    """True iff the collection holds at least one present element (delegates to _present).
+
+    Anti-gaming: a non-empty collection of empty/whitespace strings (e.g.
+    evidence_refs=[''] / ['  ']) must NOT count as supplied refs. Single source of
+    "present" stays _present(); this only vectorizes it over a ref collection.
+    """
+
+    return any(_present(value) for value in _tuple(values))
+
+
 def _json_value(value: Any) -> Any:
     if isinstance(value, Enum):
         return value.value
@@ -383,8 +394,8 @@ class TrustReleaseApprovalRecord:
 
 def validate_trust_claim(claim: TrustClaimRecord) -> TrustLayerDecision:
     violations: list[TrustLayerViolation] = []
-    label = _value(claim.claim_label)
-    if label in STRONG_CLAIMS and not claim.evidence_refs:
+    label = _value(claim.claim_label).strip().casefold()
+    if label in STRONG_CLAIMS and not _any_present(claim.evidence_refs):
         violations.append(
             TrustLayerViolation(
                 "strong_claim_without_evidence",
@@ -514,7 +525,7 @@ def validate_external_expert_review(record: ExternalExpertReviewRecord) -> Trust
                 ref=record.review_ref,
             )
         )
-    if not record.evidence_refs:
+    if not _any_present(record.evidence_refs):
         violations.append(
             TrustLayerViolation(
                 "external_expert_review_evidence_missing",
@@ -532,7 +543,7 @@ def validate_external_expert_review(record: ExternalExpertReviewRecord) -> Trust
                 ref=record.review_ref,
             )
         )
-    if verdict in {"vetoed", "needs_revision"} and not record.veto_reason_refs:
+    if verdict in {"vetoed", "needs_revision"} and not _any_present(record.veto_reason_refs):
         violations.append(
             TrustLayerViolation(
                 "external_expert_review_veto_reason_missing",
@@ -582,7 +593,7 @@ def validate_external_reviewer_identity(record: ExternalReviewerIdentityRecord) 
                 ref=record.identity_ref,
             )
         )
-    if not record.evidence_refs:
+    if not _any_present(record.evidence_refs):
         violations.append(
             TrustLayerViolation(
                 "external_reviewer_identity_evidence_missing",
@@ -759,7 +770,7 @@ def validate_user_autonomy(record: UserAutonomyRecord) -> TrustLayerDecision:
                     ref=record.choice_ref,
                 )
             )
-    if not record.tradeoff_refs or not record.alternative_path_refs:
+    if not _any_present(record.tradeoff_refs) or not _any_present(record.alternative_path_refs):
         violations.append(
             TrustLayerViolation(
                 "user_autonomy_options_missing",
@@ -768,7 +779,7 @@ def validate_user_autonomy(record: UserAutonomyRecord) -> TrustLayerDecision:
                 ref=record.choice_ref,
             )
         )
-    if record.system_blocked_after_user_acceptance and not record.redline_refs:
+    if record.system_blocked_after_user_acceptance and not _any_present(record.redline_refs):
         violations.append(
             TrustLayerViolation(
                 "non_redline_user_acceptance_blocked",
@@ -851,7 +862,7 @@ def validate_trust_release_check(record: TrustReleaseCheckRecord) -> TrustLayerD
             )
         )
     for field_name, refs in (("evidence_refs", record.evidence_refs), ("validation_result_refs", record.validation_result_refs)):
-        if not refs:
+        if not _any_present(refs):
             violations.append(
                 TrustLayerViolation(
                     "trust_release_check_required_ref_missing",
@@ -906,7 +917,7 @@ def validate_trust_pressure_run(record: TrustPressureRunRecord) -> TrustLayerDec
         ("evidence_refs", record.evidence_refs),
         ("validation_result_refs", record.validation_result_refs),
     ):
-        if not refs:
+        if not _any_present(refs):
             violations.append(
                 TrustLayerViolation(
                     "trust_pressure_run_required_refs_missing",
@@ -995,7 +1006,7 @@ def validate_trust_release_approval(record: TrustReleaseApprovalRecord) -> Trust
                 ref=record.approval_ref,
             )
         )
-    if not record.evidence_refs:
+    if not _any_present(record.evidence_refs):
         violations.append(
             TrustLayerViolation(
                 "trust_release_approval_evidence_missing",
@@ -1022,7 +1033,7 @@ def validate_trust_release_approval(record: TrustReleaseApprovalRecord) -> Trust
                 ref=record.approval_ref,
             )
         )
-    if verdict in {"blocked", "needs_revision"} and not record.residual_blocker_refs:
+    if verdict in {"blocked", "needs_revision"} and not _any_present(record.residual_blocker_refs):
         violations.append(
             TrustLayerViolation(
                 "trust_release_approval_blocker_missing",
@@ -1415,6 +1426,47 @@ def validate_trust_layer(
         violations.extend(validate_trust_pressure_run(run).violations)
     for approval in release_approvals:
         violations.extend(validate_trust_release_approval(approval).violations)
+
+    # Cross-record resolution (anti-gaming): a release approval's linkage refs must
+    # resolve to a real, co-submitted record in the SAME batch. The per-record
+    # validators above check each record in isolation, so an orphaned ref (pointing
+    # at a record that was never submitted) would otherwise slip an approval through.
+    # This mirrors the linkage record_trust_release_approval() enforces at construction.
+    # Refs that are blank/missing are left to the per-record required-field check above;
+    # here we only flag refs that are present yet dangle (resolve to nothing).
+    review_refs = {_value(r.review_ref) for r in expert_reviews if _present(r.review_ref)}
+    pressure_run_refs = {_value(r.runner_ref) for r in pressure_runs if _present(r.runner_ref)}
+    release_gate_refs = {_value(g.release_ref) for g in release_gates if _present(g.release_ref)}
+    for approval in release_approvals:
+        for field_name, ref_value, known_refs, code in (
+            (
+                "expert_review_ref",
+                approval.expert_review_ref,
+                review_refs,
+                "trust_release_approval_expert_review_unresolved",
+            ),
+            (
+                "pressure_run_ref",
+                approval.pressure_run_ref,
+                pressure_run_refs,
+                "trust_release_approval_pressure_run_unresolved",
+            ),
+            (
+                "release_gate_ref",
+                approval.release_gate_ref,
+                release_gate_refs,
+                "trust_release_approval_release_gate_unresolved",
+            ),
+        ):
+            if _present(ref_value) and _value(ref_value) not in known_refs:
+                violations.append(
+                    TrustLayerViolation(
+                        code,
+                        "trust release approval refs must resolve to a co-submitted trust record in the same batch",
+                        field=field_name,
+                        ref=approval.approval_ref,
+                    )
+                )
     return TrustLayerDecision(accepted=not violations, violations=tuple(violations))
 
 

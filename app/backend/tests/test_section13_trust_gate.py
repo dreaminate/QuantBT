@@ -49,6 +49,18 @@ from app.release_gate.section13_trust_gate import (  # noqa: E402
     section13_trust_check,
 )
 
+# C-S13-HARDEN：直接对 trust_layer canonical validator 做对抗——本卡修补全在 trust_layer.py。
+from app.research_os.trust_layer import (  # noqa: E402
+    ExternalExpertReviewRecord,
+    TrustClaimRecord,
+    TrustReleaseApprovalRecord,
+    TrustReleaseGateRecord,
+    TrustPressureRunRecord,
+    validate_external_expert_review,
+    validate_trust_claim,
+    validate_trust_layer,
+)
+
 
 # ════════════════════════════════════════════════════════════════════════════
 # manifest 构造器（faithful §13 producer 契约·中心后续据此填）
@@ -413,3 +425,221 @@ def test_module_cold_importable():
     assert proc.returncode == 0, (
         f"§13 信任门模块应冷导入成功:\nSTDOUT={proc.stdout}\nSTDERR={proc.stderr}"
     )
+
+
+# ════════════════════════════════════════════════════════════════════════════
+# ⑥ C-S13-HARDEN：堵 3 个 gaming 漏洞（证据 producer 转绿前加固）· 对抗（种坏必抓 + 非常量门）
+#
+# 修补全在 app/research_os/trust_layer.py（canonical validator·本卡只许碰它 + 本测试）：
+#   ① 标签未规范化 → validate_trust_claim 比对 STRONG_CLAIMS 前 strip()+casefold()
+#      （堵尾空格 'evidence_sufficient ' / 大小写 'Evidence_Sufficient' 逃逸强标签门）
+#   ② 空白 ref 元素未检测 → _any_present() 逐项查（堵 evidence_refs=[''] / ['  '] 逃逸"需证据"门）
+#   ③ 跨记录校验缺失 → validate_trust_layer 聚合层解析 approval 的 expert_review_ref /
+#      pressure_run_ref / release_gate_ref 必须 resolve 到同批真记录（堵 orphaned ref 绕过）
+#   另：冷启动边界 N<=1 已涵盖 N=0/负数（核验非新漏洞·此处加锁防回归）。
+#
+# ★ mutation 三态（已手验·见任务报告）——把对应修补回退则下列对抗测试转 RED、还原转 GREEN：
+#   ① `_value(claim.claim_label).strip().casefold()` → 回退 `_value(claim.claim_label)`
+#      ⇒ test_harden_label_* 转 RED。
+#   ② validate_external_expert_review 内 `_any_present(record.evidence_refs)` → 回退 `record.evidence_refs`
+#      ⇒ test_harden_blank_evidence_ref_in_expert_review_now_caught 转 RED。
+#   ③ 注释掉 validate_trust_layer 末尾 cross-record 解析块
+#      ⇒ test_harden_aggregator_rejects_orphan_approval_refs 转 RED。
+# ════════════════════════════════════════════════════════════════════════════
+def _hardq_codes(decision) -> set[str]:
+    return {v.code for v in decision.violations}
+
+
+def _hardq_claim(label, *, evidence_refs=(), cold_start_n=None, pressure_context="") -> TrustClaimRecord:
+    return TrustClaimRecord(
+        claim_ref="c::harden",
+        claim_label=label,
+        evidence_refs=evidence_refs,
+        weakness_refs=(),
+        weakness_visible_by_default=True,
+        cold_start_n=cold_start_n,
+        pressure_context=pressure_context,
+    )
+
+
+def _hardq_review(**over) -> ExternalExpertReviewRecord:
+    data = {
+        "review_ref": "expert_review:harden:v1",
+        "release_ref": "release:harden:v1",
+        "reviewer_ref": "expert:independent_reviewer",
+        "reviewer_independence_ref": "independence:expert:001",
+        "artifact_ref": "rdp_package:harden:v1",
+        "review_protocol_ref": "protocol:review:v1",
+        "verdict": "approved",
+        "source_hash": "sha256:review",
+        "evidence_refs": ("evidence:review",),
+        "signed_attestation_ref": "attestation:review:001",
+    }
+    data.update(over)
+    return ExternalExpertReviewRecord(**data)
+
+
+def _hardq_approval(**over) -> TrustReleaseApprovalRecord:
+    data = {
+        "approval_ref": "trust_release_approval:harden:v1",
+        "release_ref": "release:harden:v1",
+        "release_gate_ref": "release:harden:v1",
+        "pressure_run_ref": "trust_pressure_run:harden:v1",
+        "expert_review_ref": "expert_review:harden:v1",
+        "artifact_ref": "rdp_package:harden:v1",
+        "approval_protocol_ref": "protocol:approval:v1",
+        "verdict": "approved",
+        "source_hash": "sha256:approval",
+        "evidence_refs": ("evidence:approval",),
+        "signed_approval_ref": "attestation:approval:001",
+    }
+    data.update(over)
+    return TrustReleaseApprovalRecord(**data)
+
+
+def _hardq_gate(**over) -> TrustReleaseGateRecord:
+    data = {
+        "release_ref": "release:harden:v1",
+        "anti_flattery_pressure_test_ref": "trust_test:anti_flattery",
+        "multi_turn_pressure_test_ref": "trust_test:multi_turn",
+        "expert_veto_ref": "expert_veto:001",
+        "weakness_collapse_check_ref": "weakness_check:001",
+        "mock_honesty_check_ref": "mock_check:001",
+        "cold_start_honesty_check_ref": "cold_start_check:001",
+    }
+    data.update(over)
+    return TrustReleaseGateRecord(**data)
+
+
+def _hardq_pressure_run(**over) -> TrustPressureRunRecord:
+    data = {
+        "runner_ref": "trust_pressure_run:harden:v1",
+        "release_ref": "release:harden:v1",
+        "runner_mode": "local_deterministic",
+        "source_hash": "sha256:pressure-run",
+        "release_gate_ref": "release:harden:v1",
+        "check_refs": ("ck:1", "ck:2", "ck:3", "ck:4", "ck:5", "ck:6"),
+        "scenario_refs": ("sc:1", "sc:2", "sc:3", "sc:4", "sc:5", "sc:6"),
+        "evidence_refs": ("evidence:pressure-run",),
+        "validation_result_refs": ("pytest:pressure-run",),
+    }
+    data.update(over)
+    return TrustPressureRunRecord(**data)
+
+
+# ──── 漏洞①：标签规范化（堵大小写/空格逃逸强标签门）────
+def test_harden_label_casing_evades_strong_claim_gate_now_caught():
+    """坏：'Evidence_Sufficient'（大小写变体）+ 无证据 —— 规范化前逃逸 strong-claim 门。"""
+
+    bad = validate_trust_claim(_hardq_claim("Evidence_Sufficient"))
+    assert bad.accepted is False
+    assert "strong_claim_without_evidence" in _hardq_codes(bad)
+
+
+def test_harden_label_trailing_space_evades_strong_claim_gate_now_caught():
+    """坏：'evidence_sufficient '（尾空格）+ 无证据 —— 规范化前逃逸 strong-claim 门。"""
+
+    bad = validate_trust_claim(_hardq_claim("evidence_sufficient "))
+    assert bad.accepted is False
+    assert "strong_claim_without_evidence" in _hardq_codes(bad)
+
+
+def test_harden_label_normalization_is_not_constant_gate():
+    """非常量门：规范化后的强标签——给足证据→过；弱标签不受影响；wishful 门也随规范化重新生效。"""
+
+    assert validate_trust_claim(
+        _hardq_claim("Evidence_Sufficient", evidence_refs=("e::1",))
+    ).accepted is True
+    assert validate_trust_claim(_hardq_claim("candidate_context")).accepted is True
+    syco = validate_trust_claim(
+        _hardq_claim("PROOF_BACKED", evidence_refs=("e::1",), pressure_context="user is wishful")
+    )
+    assert "wishful_pressure_strong_conclusion" in _hardq_codes(syco)
+
+
+# ──── 漏洞②：空白 ref 元素检测（堵 evidence_refs=[''] / ['  '] 逃逸需证据门）────
+def test_harden_blank_evidence_ref_in_claim_now_caught():
+    """坏：强标签 evidence_refs=('',) —— 非空 tuple 含空串，旧 `not refs` 漏判。"""
+
+    bad = validate_trust_claim(_hardq_claim("evidence_sufficient", evidence_refs=("",)))
+    assert bad.accepted is False
+    assert "strong_claim_without_evidence" in _hardq_codes(bad)
+
+
+def test_harden_blank_evidence_ref_in_expert_review_now_caught():
+    """坏：expert review evidence_refs=('  ',)（纯空白）—— recon 命名的 L517 漏洞。"""
+
+    bad = validate_external_expert_review(_hardq_review(evidence_refs=("  ",)))
+    assert bad.accepted is False
+    assert "external_expert_review_evidence_missing" in _hardq_codes(bad)
+
+
+def test_harden_blank_ref_detection_is_not_constant_gate():
+    """非常量门：同字段填真 ref → 缺证据违例消失（证明非常量拒绝）。"""
+
+    ok_claim = validate_trust_claim(_hardq_claim("evidence_sufficient", evidence_refs=("e::real",)))
+    assert "strong_claim_without_evidence" not in _hardq_codes(ok_claim)
+    ok_review = validate_external_expert_review(_hardq_review(evidence_refs=("e::real",)))
+    assert "external_expert_review_evidence_missing" not in _hardq_codes(ok_review)
+
+
+# ──── 漏洞③：聚合层跨记录解析（堵 orphaned ref 绕过）────
+def test_harden_aggregator_rejects_orphan_approval_refs():
+    """坏：approval 三个 linkage ref 都"形式存在"但同批无对应记录 → orphaned ref 全被抓。"""
+
+    decision = validate_trust_layer(release_approvals=(_hardq_approval(),))
+    codes = _hardq_codes(decision)
+    assert decision.accepted is False
+    assert "trust_release_approval_expert_review_unresolved" in codes
+    assert "trust_release_approval_pressure_run_unresolved" in codes
+    assert "trust_release_approval_release_gate_unresolved" in codes
+
+
+def test_harden_aggregator_resolves_cosubmitted_refs_non_constant():
+    """非常量门：同一 approval 同批补齐 expert_review/pressure_run/release_gate → 三 unresolved 全消失·整批过。"""
+
+    decision = validate_trust_layer(
+        release_approvals=(_hardq_approval(),),
+        expert_reviews=(_hardq_review(),),
+        pressure_runs=(_hardq_pressure_run(),),
+        release_gates=(_hardq_gate(),),
+    )
+    codes = _hardq_codes(decision)
+    assert "trust_release_approval_expert_review_unresolved" not in codes
+    assert "trust_release_approval_pressure_run_unresolved" not in codes
+    assert "trust_release_approval_release_gate_unresolved" not in codes
+    assert decision.accepted is True
+
+
+def test_harden_aggregator_isolates_expert_review_orphan():
+    """隔离：补齐 gate + pressure_run，仅 expert_review_ref 指向未提交的 review → 只 expert_review_unresolved 触发。"""
+
+    appr = _hardq_approval(expert_review_ref="expert_review:ghost")
+    decision = validate_trust_layer(
+        release_approvals=(appr,),
+        expert_reviews=(_hardq_review(),),  # review_ref=expert_review:harden:v1 ≠ ghost
+        pressure_runs=(_hardq_pressure_run(),),
+        release_gates=(_hardq_gate(),),
+    )
+    codes = _hardq_codes(decision)
+    assert "trust_release_approval_expert_review_unresolved" in codes
+    assert "trust_release_approval_pressure_run_unresolved" not in codes
+    assert "trust_release_approval_release_gate_unresolved" not in codes
+
+
+# ──── 冷启动边界加锁（核验 N<=1 覆盖 N=0/负数·非漏洞·防回归）────
+def test_harden_cold_start_zero_and_negative_caught_boundary_lock():
+    """N<=1 必须涵盖 N=0 与负数：强标签 + 证据 + 冷启动 N∈{0,-1,-100} → 必拒。"""
+
+    for n in (0, -1, -100):
+        d = validate_trust_claim(_hardq_claim("evidence_sufficient", evidence_refs=("e",), cold_start_n=n))
+        assert d.accepted is False, f"cold_start_n={n} 必须被判定为非统计证据"
+        assert "cold_start_packaged_as_statistical_evidence" in _hardq_codes(d)
+
+
+def test_harden_cold_start_two_passes_boundary_non_constant():
+    """非常量边界：N=2（>1）+ 强标签 + 证据 → 不触发冷启动门（上沿放行·证明非常量）。"""
+
+    d = validate_trust_claim(_hardq_claim("evidence_sufficient", evidence_refs=("e",), cold_start_n=2))
+    assert "cold_start_packaged_as_statistical_evidence" not in _hardq_codes(d)
+    assert d.accepted is True
