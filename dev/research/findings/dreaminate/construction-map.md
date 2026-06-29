@@ -2,6 +2,8 @@
 
 > 三方独立思考并集（中心 Claude ‖ deep-opus ‖ codex gpt-5.5·xhigh）+ 4 条代码核验子探针，**中心已接收为项目 codemap**。覆盖 §0-§17 真·闭合全路径（≠ 仅当前收敛）。本节是【全量导航】，实时依据永远是卡原文 + 代码 + dev/state；与下方 2026-06-26 版互补不冲突。
 > **诚实边界**：本地代码核验 proof（非 CI / 非线上 / 非用户验收）。下列 4 条方法学决策为**中心转达·驱动本图**（我未独立核到用户原话；如用户更正则刷新本图）。
+>
+> **▶ Wave 1 producer 收口波 land 进度（2026-06-29·全 advisory-first）**：§13-HARDEN（`trust_layer` 堵 3 gaming 漏洞·闭合 trust_layer 硬化 KNOWN_RUN_GAP）+ §16-GATE（新建 `section16_engineering_standards_gate`·注册 `gate_registry` 共 6 门·advisory）+ §17 **C-S17-RUNJSON-PRODUCERS**（`promote_assembler.assemble_promote_sections` 组装 API·§9/§10/§17 真血统→section 记录·接进 `ide/promote.py`·honest-absent 不误拒）均 land。**C-S15-PICKLE-DEFAULT-ENFORCE 核验为早已做**（提交 1a099191+73bfc4e1·子进程默认 `enforce=True`·下方 line「今 enforce=False」已陈旧）。**★ 标绿激活 §9/§10/§17 enforce 待用户拍板**（破 advisory-first 默认契约 + IDE 路径 honest-absent 激活意义有限 + 真记录源缺口）。详见 `dev/state/dreaminate/state.md` 顶部块。
 
 ### ★ 4 条已锁方法学决策（中心转达·已 bake 进对应卡）
 1. **enforce 切换时机 = 逐门绿灯即自动 enforce**：每个门的「证据 producer 接线测试」转绿那刻自动从 advisory 翻 enforce；转绿前只 advisory + 记录；**绝不误拒诚实 run**。→ 定义 SA-2、解锁第三波。
@@ -95,7 +97,7 @@
 - **C-S14-MATERIALIZER**（§14）：真平台覆盖 materializer·从真运行时 ref 持久化 manifest。依赖：C-S0-ENTRYRUNS。CENTER-SERIAL。
 
 **§15 模型治理**
-- **C-S15-PICKLE-DEFAULT-ENFORCE**（§15）：producer-run+hash binding 接齐后把子进程 `TrustPolicy.enforce` 默认翻 True（外来 pickle 默认 block·`training/runner.py:28-45` 记残余：今子进程默认 enforce=False）。可证伪：子进程默认 profile 加载外来 pickle → block。领地：`training/lib.py` + `training/runner.py`。依赖：artifact_trust producer（已止血）。PARALLEL-SAFE。
+- **C-S15-PICKLE-DEFAULT-ENFORCE**（§15）：producer-run+hash binding 接齐后把子进程 `TrustPolicy.enforce` 默认翻 True（外来 pickle 默认 block）。**✅ 已做**（核验：提交 1a099191+73bfc4e1·子进程默认 `enforce=True`·`tests/test_artifact_trust_subprocess_enforce.py` 锁测 6 passed + 变异 2 failed·原「今 enforce=False」已陈旧）。可证伪：子进程默认 profile 加载外来 pickle → block。领地：`training/lib.py` + `training/runner.py`。依赖：artifact_trust producer（已止血）。PARALLEL-SAFE。
 - **C-S15-RECERT-PRODUCER**（§15）：recert 触发 producer 接真 drift/schema 事件（今 records-only·手动）。可证伪：模型 dataset schema 变 → 下次 run 前要求 recert。领地：`research_os/model_governance.py` + monitor + drift hook。PARALLEL-SAFE。
 - **C-S15-SERVING**（§15·已锁决策 3·**真活·非桩**）：真模型 serving —— 安全加载（safetensors/weights_only·外来 pickle 默认 block）+ producer-run+hash binding + sandboxed load/inspect + ModelServingInvocationRecord 落审 + ModelRoutingPolicy/权限门。可证伪：serving 加载外来 pickle/缺 passport 的模型 → 拒；serving 调用缺 invocation record → 拒。领地：`research_os/model_governance.py` + `training/lib.py`（safe load）+ 新 serving 端点 + `main.py`。依赖：C-S15-PICKLE-DEFAULT-ENFORCE。CENTER-SERIAL。
 
