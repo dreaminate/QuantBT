@@ -663,6 +663,439 @@ def _hit(doc: AssetRAGDocument, score: float) -> AssetRAGHit:
     )
 
 
+# ---------------------------------------------------------------------------
+# Autosync producer helpers (GOAL §5 · C-S5-RAG-AUTOSYNC)
+#
+# These build the correct ``AssetRAGDocument`` projection from a factor / model
+# / signal / strategy registry object so the registry write paths can index
+# assets into the Research Asset RAG without hand-rolling document construction
+# at every call site. main.py wires them at the registry write points
+# (CENTER-SERIAL); the helpers themselves are pure and PARALLEL-SAFE — they do
+# not touch the global index, only return a document for the caller to ``add``.
+#
+# Invariants kept (GOAL §5 / RULES.project safety):
+# - every produced doc carries source_id / version / permission / applicability
+#   (AssetRAGDocument.__post_init__ also stamps timestamp);
+# - the projection tag is pinned per asset type (FactorRAG / ModelRAG /
+#   SignalRAG / StrategyRAG); a wrong mapping is a correctness bug and is what
+#   the autosync adversarial test sentinels;
+# - the default permission is owner-scoped (allowed_users=(owner,)); retrieval
+#   isolation can never silently widen, and an empty owner is rejected so a
+#   document can never become world-readable by accident;
+# - raw model artifact bytes and raw strategy source code are NOT copied into
+#   the body — only refs/hashes — mirroring the QRO contracts that deliberately
+#   keep those as hashes;
+# - applicability marks every doc as candidate context, never a system verdict;
+# - plaintext credentials are rejected by AssetRAGDocument.__post_init__.
+# ---------------------------------------------------------------------------
+
+REGISTRY_AUTOSYNC_DESKS: dict[RAGProjection, str] = {
+    RAGProjection.FACTOR: "factor",
+    RAGProjection.MODEL: "model",
+    RAGProjection.SIGNAL: "signal",
+    RAGProjection.STRATEGY: "strategy",
+}
+
+_CANDIDATE_CONTEXT = "candidate_context"
+
+
+def _coerce_str(value: Any) -> str:
+    if value is None:
+        return ""
+    if isinstance(value, Enum):
+        return str(value.value)
+    return str(value)
+
+
+def _resolve_owner(obj: Any, owner: str | None, owner_attrs: tuple[str, ...]) -> str:
+    """Owner used for permission scope; empty owner is a permission hole -> reject."""
+    if owner is not None and str(owner).strip():
+        return str(owner).strip()
+    for attr in owner_attrs:
+        candidate = _coerce_str(getattr(obj, attr, "")).strip()
+        if candidate:
+            return candidate
+    raise AssetRAGError("registry RAG autosync requires a non-empty owner for permission scope")
+
+
+def _registry_permission(
+    *,
+    owner: str,
+    desk: str,
+    asset_ref: str,
+    permission: RAGPermission | None,
+    permission_tags: tuple[str, ...],
+) -> RAGPermission:
+    if permission is not None:
+        return permission
+    return RAGPermission(
+        allowed_users=(owner,),
+        allowed_desks=(desk,),
+        allowed_assets=(asset_ref,),
+        permission_tags=permission_tags,
+    )
+
+
+def _build_registry_document(
+    *,
+    projection: RAGProjection,
+    source_id: str,
+    version: str,
+    asset_ref: str,
+    title: str,
+    body: str,
+    applicability: str,
+    source_kind: str,
+    owner: str,
+    desk: str,
+    permission: RAGPermission | None,
+    permission_tags: tuple[str, ...],
+    metadata: dict[str, Any],
+    evidence_label: str,
+    methodology_path: str | None,
+) -> AssetRAGDocument:
+    return AssetRAGDocument(
+        source_id=source_id,
+        version=version,
+        title=title,
+        body=body,
+        projection=projection,
+        asset_ref=asset_ref,
+        permission=_registry_permission(
+            owner=owner,
+            desk=desk,
+            asset_ref=asset_ref,
+            permission=permission,
+            permission_tags=permission_tags,
+        ),
+        applicability=applicability,
+        source_kind=source_kind,
+        metadata=metadata,
+        evidence_label=evidence_label,
+        methodology_path=methodology_path,
+    )
+
+
+def build_factor_rag_document(
+    factor: Any,
+    *,
+    owner: str | None = None,
+    version: str | None = None,
+    asset_ref: str | None = None,
+    desk: str | None = None,
+    permission: RAGPermission | None = None,
+    permission_tags: tuple[str, ...] = (),
+    evidence_label: str = _CANDIDATE_CONTEXT,
+    extra_metadata: dict[str, Any] | None = None,
+) -> AssetRAGDocument:
+    """FactorRAG projection from a factor registry object (e.g. factor_factory.registry.Factor).
+
+    Reads (duck-typed) factor_id, version, formula, params, lifecycle_state,
+    author, description. ``owner`` defaults to ``factor.author``. The formula is
+    the searchable factor definition (GOAL §5 资产定义); params are stored as
+    key names + a params_hash, never raw values (mirrors the factor QRO).
+    """
+    factor_id = _coerce_str(getattr(factor, "factor_id", "")).strip()
+    if not factor_id:
+        raise AssetRAGError("factor RAG autosync requires factor_id")
+    resolved_version = _coerce_str(
+        version if version is not None else getattr(factor, "version", "")
+    ).strip()
+    if not resolved_version:
+        raise AssetRAGError("factor RAG autosync requires a version")
+    formula = _coerce_str(getattr(factor, "formula", ""))
+    description = _coerce_str(getattr(factor, "description", ""))
+    lifecycle_state = _coerce_str(getattr(factor, "lifecycle_state", ""))
+    params = getattr(factor, "params", {})
+    params = params if isinstance(params, dict) else {}
+    param_keys = sorted(str(k) for k in params)
+    resolved_owner = _resolve_owner(factor, owner, ("author",))
+    resolved_desk = desk or REGISTRY_AUTOSYNC_DESKS[RAGProjection.FACTOR]
+    resolved_asset_ref = _coerce_str(asset_ref).strip() or f"factor:{factor_id}"
+    body_bits = [f"Factor {factor_id} v{resolved_version}."]
+    if formula:
+        body_bits.append(f"Formula: {formula}.")
+    if lifecycle_state:
+        body_bits.append(f"Lifecycle: {lifecycle_state}.")
+    if param_keys:
+        body_bits.append("Params: " + ", ".join(param_keys) + ".")
+    if description:
+        body_bits.append(description)
+    metadata: dict[str, Any] = {
+        "factor_id": factor_id,
+        "version": resolved_version,
+        "lifecycle_state": lifecycle_state,
+        "formula_hash": content_hash({"formula": formula}),
+        "params_hash": content_hash({"params": params}),
+        "param_keys": param_keys,
+        "author": _coerce_str(getattr(factor, "author", "")),
+        "created_at_utc": _coerce_str(getattr(factor, "created_at_utc", "")),
+        "registry_source": "factor_registry",
+    }
+    if extra_metadata:
+        metadata.update(extra_metadata)
+    return _build_registry_document(
+        projection=RAGProjection.FACTOR,
+        source_id=f"factor:{factor_id}:v{resolved_version}",
+        version=resolved_version,
+        asset_ref=resolved_asset_ref,
+        title=f"Factor {factor_id} v{resolved_version}",
+        body=" ".join(body_bits).strip(),
+        applicability="candidate factor definition; registration record, not alpha validation or a system verdict",
+        source_kind="FactorRegistryEntry",
+        owner=resolved_owner,
+        desk=resolved_desk,
+        permission=permission,
+        permission_tags=permission_tags,
+        metadata=metadata,
+        evidence_label=evidence_label,
+        methodology_path=None,
+    )
+
+
+def build_signal_rag_document(
+    contract: Any,
+    *,
+    owner: str | None = None,
+    version: str | None = None,
+    asset_ref: str | None = None,
+    desk: str | None = None,
+    permission: RAGPermission | None = None,
+    permission_tags: tuple[str, ...] = (),
+    evidence_label: str = _CANDIDATE_CONTEXT,
+    extra_metadata: dict[str, Any] | None = None,
+) -> AssetRAGDocument:
+    """SignalRAG projection from a signal contract object (factor_factory.signal_contract.SignalContract).
+
+    Reads (duck-typed) signal_id, signal_ref, name, source_lib, model_ref,
+    output_kind, horizon, leakage, author, description. The signal contract is
+    content-addressed, so ``version`` defaults to its signal_id identity. The
+    model body is referenced by model_ref only — it is never copied in.
+    """
+    signal_id = _coerce_str(getattr(contract, "signal_id", "")).strip()
+    if not signal_id:
+        raise AssetRAGError("signal RAG autosync requires signal_id")
+    signal_ref = _coerce_str(getattr(contract, "signal_ref", "")).strip() or f"sig::{signal_id}"
+    name = _coerce_str(getattr(contract, "name", ""))
+    source_lib = _coerce_str(getattr(contract, "source_lib", ""))
+    model_ref = _coerce_str(getattr(contract, "model_ref", ""))
+    output_kind = _coerce_str(getattr(contract, "output_kind", ""))
+    horizon = _coerce_str(getattr(contract, "horizon", ""))
+    description = _coerce_str(getattr(contract, "description", ""))
+    leakage = getattr(contract, "leakage", None)
+    leakage_dict = leakage.to_dict() if hasattr(leakage, "to_dict") else {}
+    leakage_declared = bool(
+        leakage_dict.get("oof") and leakage_dict.get("purge") and leakage_dict.get("embargo")
+    )
+    resolved_version = _coerce_str(
+        version if version is not None else getattr(contract, "version", "")
+    ).strip() or signal_id
+    resolved_owner = _resolve_owner(contract, owner, ("author",))
+    resolved_desk = desk or REGISTRY_AUTOSYNC_DESKS[RAGProjection.SIGNAL]
+    resolved_asset_ref = _coerce_str(asset_ref).strip() or signal_ref
+    body_bits = [f"Signal contract {name or signal_id} [{source_lib or 'unspecified'}]."]
+    if output_kind:
+        body_bits.append(f"Output kind: {output_kind}.")
+    if horizon:
+        body_bits.append(f"Horizon: {horizon}.")
+    if model_ref:
+        body_bits.append(f"Model ref: {model_ref}.")
+    if leakage_dict:
+        body_bits.append(f"Leakage declared (oof/purge/embargo): {leakage_declared}.")
+    if description:
+        body_bits.append(description)
+    metadata: dict[str, Any] = {
+        "signal_id": signal_id,
+        "signal_ref": signal_ref,
+        "source_lib": source_lib,
+        "model_ref": model_ref,
+        "model_ref_hash": content_hash({"model_ref": model_ref}),
+        "output_kind": output_kind,
+        "horizon": horizon,
+        "leakage": leakage_dict,
+        "leakage_declared": leakage_declared,
+        "author": _coerce_str(getattr(contract, "author", "")),
+        "registry_source": "signal_contract_registry",
+    }
+    if extra_metadata:
+        metadata.update(extra_metadata)
+    return _build_registry_document(
+        projection=RAGProjection.SIGNAL,
+        source_id=signal_ref,
+        version=resolved_version,
+        asset_ref=resolved_asset_ref,
+        title=f"Signal contract {name or signal_id}",
+        body=" ".join(body_bits).strip(),
+        applicability="candidate signal output contract; declares output kind only, not alpha proof or a system verdict",
+        source_kind="SignalContract",
+        owner=resolved_owner,
+        desk=resolved_desk,
+        permission=permission,
+        permission_tags=permission_tags,
+        metadata=metadata,
+        evidence_label=evidence_label,
+        methodology_path=None,
+    )
+
+
+def build_model_rag_document(
+    passport: Any,
+    *,
+    owner: str | None = None,
+    version: str | None = None,
+    asset_ref: str | None = None,
+    desk: str | None = None,
+    permission: RAGPermission | None = None,
+    permission_tags: tuple[str, ...] = (),
+    evidence_label: str = _CANDIDATE_CONTEXT,
+    extra_metadata: dict[str, Any] | None = None,
+) -> AssetRAGDocument:
+    """ModelRAG projection from a model governance passport (research_os.model_governance.ModelGovernancePassport).
+
+    Reads (duck-typed) model_version_ref, passport_id, model_risk_tier,
+    materiality, intended_use, prohibited_use, dataset_refs, feature_refs,
+    label_refs, training_code_hash, validation_dossier_ref, target_runtime. The
+    passport carries no owner field, so ``owner`` (the recording actor) MUST be
+    supplied by the caller. Only refs/hashes are indexed — no artifact bytes.
+    ``version`` defaults to the content-addressed passport_id.
+    """
+    model_version_ref = _coerce_str(getattr(passport, "model_version_ref", "")).strip()
+    if not model_version_ref:
+        raise AssetRAGError("model RAG autosync requires model_version_ref")
+    passport_id = _coerce_str(getattr(passport, "passport_id", "")).strip()
+    risk_tier = _coerce_str(getattr(passport, "model_risk_tier", ""))
+    materiality = _coerce_str(getattr(passport, "materiality", ""))
+    intended_use = _tuple(getattr(passport, "intended_use", ()))
+    prohibited_use = _tuple(getattr(passport, "prohibited_use", ()))
+    dataset_refs = _tuple(getattr(passport, "dataset_refs", ()))
+    feature_refs = _tuple(getattr(passport, "feature_refs", ()))
+    label_refs = _tuple(getattr(passport, "label_refs", ()))
+    training_code_hash = _coerce_str(getattr(passport, "training_code_hash", ""))
+    validation_dossier_ref = _coerce_str(getattr(passport, "validation_dossier_ref", ""))
+    target_runtime = _coerce_str(getattr(passport, "target_runtime", ""))
+    resolved_version = _coerce_str(version).strip() or passport_id or model_version_ref
+    resolved_owner = _resolve_owner(passport, owner, ("owner",))
+    resolved_desk = desk or REGISTRY_AUTOSYNC_DESKS[RAGProjection.MODEL]
+    resolved_asset_ref = _coerce_str(asset_ref).strip() or model_version_ref
+    body_bits = [f"Model governance passport for {model_version_ref}."]
+    if risk_tier:
+        body_bits.append(f"Risk tier: {risk_tier}.")
+    if materiality:
+        body_bits.append(f"Materiality: {materiality}.")
+    if intended_use:
+        body_bits.append("Intended use: " + "; ".join(intended_use) + ".")
+    if prohibited_use:
+        body_bits.append("Prohibited use: " + "; ".join(prohibited_use) + ".")
+    if dataset_refs:
+        body_bits.append("Datasets: " + ", ".join(dataset_refs) + ".")
+    metadata: dict[str, Any] = {
+        "model_version_ref": model_version_ref,
+        "passport_id": passport_id,
+        "model_risk_tier": risk_tier,
+        "materiality": materiality,
+        "intended_use": list(intended_use),
+        "prohibited_use": list(prohibited_use),
+        "dataset_refs": list(dataset_refs),
+        "feature_refs": list(feature_refs),
+        "label_refs": list(label_refs),
+        "training_code_hash": training_code_hash,
+        "validation_dossier_ref": validation_dossier_ref,
+        "target_runtime": target_runtime,
+        "registry_source": "model_governance_registry",
+    }
+    if extra_metadata:
+        metadata.update(extra_metadata)
+    return _build_registry_document(
+        projection=RAGProjection.MODEL,
+        source_id=model_version_ref,
+        version=resolved_version,
+        asset_ref=resolved_asset_ref,
+        title=f"Model passport {model_version_ref}",
+        body=" ".join(body_bits).strip(),
+        applicability="candidate model governance passport; registration record, not validation sign-off or a system verdict",
+        source_kind="ModelGovernancePassport",
+        owner=resolved_owner,
+        desk=resolved_desk,
+        permission=permission,
+        permission_tags=permission_tags,
+        metadata=metadata,
+        evidence_label=evidence_label,
+        methodology_path=None,
+    )
+
+
+def build_strategy_rag_document(
+    strategy: Any,
+    *,
+    owner: str | None = None,
+    version: str | None = None,
+    asset_ref: str | None = None,
+    desk: str | None = None,
+    permission: RAGPermission | None = None,
+    permission_tags: tuple[str, ...] = (),
+    evidence_label: str = _CANDIDATE_CONTEXT,
+    extra_metadata: dict[str, Any] | None = None,
+) -> AssetRAGDocument:
+    """StrategyRAG projection from an IDE strategy draft (ide.service.StrategyFile).
+
+    Reads (duck-typed) strategy_id, owner_username, name, asset_class,
+    description, code, updated_at_utc, market_data_use_validation_refs. ``owner``
+    defaults to ``strategy.owner_username``. Raw strategy source code is NEVER
+    copied into the body — only a code_hash in metadata — mirroring the
+    StrategyBook QRO. The human description/rationale IS indexed (GOAL §5).
+    ``version`` defaults to updated_at_utc, then the code_hash.
+    """
+    strategy_id = _coerce_str(getattr(strategy, "strategy_id", "")).strip()
+    if not strategy_id:
+        raise AssetRAGError("strategy RAG autosync requires strategy_id")
+    name = _coerce_str(getattr(strategy, "name", ""))
+    asset_class = _coerce_str(getattr(strategy, "asset_class", ""))
+    description = _coerce_str(getattr(strategy, "description", ""))
+    code = _coerce_str(getattr(strategy, "code", ""))
+    updated_at = _coerce_str(getattr(strategy, "updated_at_utc", ""))
+    code_hash = content_hash({"code": code})
+    resolved_version = _coerce_str(
+        version if version is not None else getattr(strategy, "version", "")
+    ).strip() or updated_at or code_hash
+    resolved_owner = _resolve_owner(strategy, owner, ("owner_username", "owner", "author"))
+    resolved_desk = desk or REGISTRY_AUTOSYNC_DESKS[RAGProjection.STRATEGY]
+    resolved_asset_ref = _coerce_str(asset_ref).strip() or f"strategy:{strategy_id}"
+    body_bits = [f"Strategy {name or strategy_id} ({asset_class or 'unspecified asset class'})."]
+    if description:
+        body_bits.append(description)
+    metadata: dict[str, Any] = {
+        "strategy_id": strategy_id,
+        "asset_class": asset_class,
+        "code_hash": code_hash,
+        "description_hash": content_hash({"description": description}),
+        "owner_username": _coerce_str(getattr(strategy, "owner_username", "")),
+        "updated_at_utc": updated_at,
+        "market_data_use_validation_refs": list(
+            _tuple(getattr(strategy, "market_data_use_validation_refs", ()))
+        ),
+        "registry_source": "ide_strategy_registry",
+    }
+    if extra_metadata:
+        metadata.update(extra_metadata)
+    return _build_registry_document(
+        projection=RAGProjection.STRATEGY,
+        source_id=f"strategy:{strategy_id}",
+        version=resolved_version,
+        asset_ref=resolved_asset_ref,
+        title=f"Strategy {name or strategy_id}",
+        body=" ".join(body_bits).strip(),
+        applicability="candidate strategy draft; saved registration record, not backtest evidence or a system verdict",
+        source_kind="StrategyBookDraft",
+        owner=resolved_owner,
+        desk=resolved_desk,
+        permission=permission,
+        permission_tags=permission_tags,
+        metadata=metadata,
+        evidence_label=evidence_label,
+        methodology_path=None,
+    )
+
+
 __all__ = [
     "AgentRAGUsage",
     "AssetRAGDocument",
@@ -675,4 +1108,9 @@ __all__ = [
     "RAGQueryContext",
     "PersistentResearchAssetRAGIndex",
     "ResearchAssetRAGIndex",
+    "REGISTRY_AUTOSYNC_DESKS",
+    "build_factor_rag_document",
+    "build_model_rag_document",
+    "build_signal_rag_document",
+    "build_strategy_rag_document",
 ]
