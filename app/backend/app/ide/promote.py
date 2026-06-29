@@ -168,6 +168,24 @@ def promote_ide_run(
             "error": f"release 自检未运行: {type(exc).__name__}",
         }
 
+    # —— §9/§10/§17 producer 接线（C-S17-RUNJSON-PRODUCERS·中心串行第二步）——
+    # 从真血统组装 §9/§10/§17 节门的 producer 契约进 manifest：有该类真记录→序列化进对应 section key·
+    # 无→honest-absent 不发 key（门 ok=True·不误拒「只是没那类资产」的诚实 run）。组装器只忠实序列化·
+    # 零判定·不洗白（防假绿灯）。IDE 沙箱 run 无真 RDP/§9/§10 typed 记录源（来自研究管线·非 IDE）→ 此处
+    # 多为 honest-absent；接缝为未来带真记录的 promote 路径留。防御式：组装异常不得破坏 promote 主流程。
+    try:
+        from ..release_gate.promote_assembler import assemble_promote_sections
+
+        manifest = assemble_promote_sections(manifest).apply_to(manifest)
+    except Exception as exc:  # noqa: BLE001 — 组装 advisory·不得破坏 promote 主流程
+        manifest["section_assembly"] = {"available": False, "error": f"{type(exc).__name__}"}
+
+    # producer 标绿（激活 §9/§10/§17 enforce）**刻意不在此默认开启**：SA-3 advisory-first 是已 land 的
+    # 向后兼容承诺（producer 红→不阻断）。§17 producer 接线测试已绿（机制实证 honest-absent 不误拒 + 坏 run
+    # 真拒），但「翻 enforce-by-default」会破 advisory-first 默认契约 + 当前 IDE 路径无真 RDP/§9/§10 记录源
+    # （honest-absent·激活意义有限）→ 标绿激活留作显式下一步（待真记录源接入 + 用户拍板）。调用方仍可显式
+    # 传已绿 producer_status ledger 触发该门 enforce（机制就绪·见 tests/test_runjson_producers.py）。
+
     # —— SA-3 promote 门链（中心串行·advisory-first·construction-map §4.D）——
     # 把已落地的 §9 边界 + §10 成本/控制面 check 经 default_chain 在**真 promote 路径**上跑一次，裁决
     # 落进 run.json 的 `promote_gate_chain`。producer 全红（无 producer 标绿·诚实默认 producer_status=

@@ -41,14 +41,14 @@ advisory 翻 enforce（LOCKED 决策 1）。check 连 mode 字段都没有 → *
 ═══ 委托边界（诚实限界·非本门 fail-open·canonical trust_layer 加固候选已上报中心）═══
 本门**严格只与 trust_layer.validate_trust_layer 同强**——它判过的本门判过，它放过的本门放过。codex 对抗
 复审发现 canonical 判定层有三处 gaming 缺口，**均属 trust_layer.py 单一源加固范畴**（本门遵「reuse·不擅改
-trust_layer」只忠实委托·绝不在网关层重写判定 = 防 §1 单一源漂移），已作为发现上报中心：
-  ① `validate_trust_claim` 用**不去空白/不归一大小写**的 `claim_label` 比 STRONG_CLAIMS —— `'evidence_sufficient '`
-     / `'Evidence_Sufficient'` 这类变体会逃出反谄媚 / 强标签无证据 / 冷启动三门（真实 producer 出 enum 小写值
-     ⇒ 真路径无此 dodge·属对手手搓 manifest 的稳健性缺口）。
-  ② 各 validator 的 ref-list 空判用 `not refs` —— `evidence_refs=[""]` 这类空白占位 ref 被当「有证据」（应逐项
-     去空白判存在·参 section10 `_has_cost`）。
-  ③ `validate_trust_layer` 逐条独立校验 —— 不交叉核对 approval.expert_review_ref ↔ 被引 expert_review.verdict
-     （该跨记录一致性在 `record_trust_release_approval` builder 内·聚合器不覆盖）。
+trust_layer」只忠实委托·绝不在网关层重写判定 = 防 §1 单一源漂移）。**以下三处此前的 gaming 缺口已由
+§13-HARDEN（trust_layer.py·producer 转绿前加固·只收紧不放松）修复**：
+  ① `validate_trust_claim` 此前用**不去空白/不归一大小写**的 `claim_label` 比 STRONG_CLAIMS —— `'evidence_sufficient '`
+     / `'Evidence_Sufficient'` 变体曾可逃出反谄媚 / 强标签无证据 / 冷启动三门。**已修**：label 比对前 strip()+casefold()。
+  ② 各 validator 的 ref-list 空判此前用 `not refs` —— `evidence_refs=[""]` 这类空白占位曾被当「有证据」。
+     **已修**：新增 `_any_present` 逐项去空白判存在（委托 `_present` 单一源·参 section10 `_has_cost`）。
+  ③ `validate_trust_layer` 此前逐条独立校验·不交叉核对 approval 的 linkage ref。**已修**：聚合层新增 cross-record
+     解析——approval 的 expert_review_ref / pressure_run_ref / release_gate_ref 必须 resolve 到同批真记录·orphan 拒。
 
 ═══ 冷导入安全 ═══
 顶层只 import 同包 `promote_gate_chain`（cold-safe·已证）与 `research_os.trust_layer`（经 `python -c`

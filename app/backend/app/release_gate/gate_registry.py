@@ -31,6 +31,9 @@ from .section10_methodology_gate import (
     register_section10_cost_gate,
 )
 from .section13_trust_gate import register_section13_trust_gate
+from .section16_engineering_standards_gate import (
+    register_section16_engineering_standards_gate,
+)
 from .section17_rdp_gate import register_section17_rdp_gate
 
 # 一道节门的注册器：吃一个门链·把自己的具名 check + enforce 意图注册进去（不返回值）。
@@ -38,14 +41,15 @@ GateRegistrar = Callable[[PromoteGateChain], None]
 
 # ════════════════════════════════════════════════════════════════════════════
 # 单一注册清单（**加新门 = 这里加一行**·绝不改 promote.py·这就是 SA-3 的承诺）
-# 已落地：§9 边界 · §10 成本 · §10 控制面 · §13 信任 · §17 RDP。未来 §16 工程标准 落 register_* 后
-# 在本元组追加一行即可——promote.py 一字不动。
+# 已落地：§9 边界 · §10 成本 · §10 控制面 · §13 信任 · §16 工程标准 · §17 RDP。
+# 加新门 = 本元组追加一行即可——promote.py 一字不动。
 # ════════════════════════════════════════════════════════════════════════════
 _GATE_REGISTRARS: tuple[GateRegistrar, ...] = (
     register_section9_boundary_gate,
     register_section10_cost_gate,
     register_section10_controlplane_gate,
     register_section13_trust_gate,
+    register_section16_engineering_standards_gate,
     register_section17_rdp_gate,
 )
 
