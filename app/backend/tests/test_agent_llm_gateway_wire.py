@@ -99,6 +99,21 @@ def test_gateway_never_routes_to_dev_local_profile() -> None:
     assert providers == {"anthropic"}
 
 
+def test_gateway_backed_client_rejects_dev_local_gateway() -> None:
+    """防御纵深（种坏门必抓）：即便上游手搓一个含 dev_local profile 的 gateway 再 wrap，
+    GatewayBackedLLMClient 构造即拒（绝不让 agent 经它静默落 mock）。"""
+    from app.llm import LLMCredentialPool, LLMGateway, LLMModelProfile, ModelRoutingPolicy, SecretRef
+
+    pool = LLMCredentialPool(None)
+    pool.register("dev_local", SecretRef(keystore_name="", provider="dev_local", auth_kind="none"))
+    policy = ModelRoutingPolicy(
+        [LLMModelProfile(provider="dev_local", model="dev_local", capability_tier="light", pool_id="dev_local")]
+    )
+    gw = LLMGateway(policy=policy, credential_pool=pool)
+    with pytest.raises(NoLLMConfigured):
+        GatewayBackedLLMClient(gw)
+
+
 # ============ ② agent.chat → 封印 LLMCallRecord（provider/model/auth_ref/replay_state）============
 
 def test_gateway_backed_chat_produces_sealed_admissible_record() -> None:

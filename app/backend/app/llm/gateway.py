@@ -625,6 +625,13 @@ class GatewayBackedLLMClient(LLMClient):
         replay_mode: str = "live",
         record_sink: Callable[[LLMCallRecord], None] | None = None,
     ) -> None:
+        # deny-by-default 硬门（GOAL §8 no-silent-mock）：拒绝绑定含 dev_local routing profile 的 gateway——
+        # 即便上游手搓了一个 dev_local gateway 再 wrap，agent 调用也绝不静默落 mock（防御纵深）。
+        if any(p.provider == "dev_local" for p in gateway._policy.profiles):
+            raise NoLLMConfigured(
+                "GatewayBackedLLMClient 拒绝绑定含 dev_local routing profile 的 gateway——"
+                "agent 调用绝不静默落 mock（GOAL §8 no-silent-mock）。"
+            )
         self._gateway = gateway
         self._role = role
         self._difficulty = difficulty
@@ -655,6 +662,11 @@ class GatewayBackedLLMClient(LLMClient):
             replay_mode=self._replay_mode,
         )
         result = self._gateway.complete(request)  # 路由+物化+secret门+组账+封印 全在此（§7）
+        # 落账边界再核一次：被路由到 dev_local mock 的账绝不回给 agent（防 policy 运行期被改写）。
+        if result.record.provider == "dev_local":
+            raise NoLLMConfigured(
+                "agent LLM 调用被路由到 dev_local mock —— deny-by-default 拒绝（GOAL §8 no-silent-mock）"
+            )
         self.last_result = result
         if self._record_sink is not None:
             self._record_sink(result.record)
