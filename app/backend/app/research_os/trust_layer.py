@@ -6,7 +6,7 @@ import base64
 import json
 import re
 from collections.abc import Sequence
-from dataclasses import asdict, dataclass, is_dataclass
+from dataclasses import asdict, dataclass, fields, is_dataclass
 from enum import Enum
 from pathlib import Path
 from typing import Any
@@ -1685,6 +1685,15 @@ _SECTION13_TRUST_FAMILY_TYPES: tuple[tuple[str, type], ...] = (
 )
 
 
+def _bool_field_names(expected_type: type) -> tuple[str, ...]:
+    """该 canonical record 声明为 `bool` 的字段名（命门 bool：no-silent-mock / 弱点可见 / waiver 可见 …）。
+
+    `from __future__ import annotations` 下 `f.type` 是字符串 `"bool"`；兼容未 stringize 时的 `bool` 类型。
+    """
+
+    return tuple(f.name for f in fields(expected_type) if f.type in ("bool", bool))
+
+
 def _serialize_trust_family(
     records: Any, expected_type: type, manifest_key: str
 ) -> list[dict[str, Any]]:
@@ -1692,12 +1701,26 @@ def _serialize_trust_family(
 
     复用 `_json_value`（canonical 序列化器·与 `_canonical_bytes` 哈希同源）逐字段无损落 dict —— asdict 出全
     字段（含 `silent_mock_fallback_used` / `weakness_visible_by_default` / `user_waiver_ref` 等命门字段），一个
-    不漏、不改值。喂非 `expected_type` 对象 → raise `TypeError`（不静默吞坏输入·不产占位 → 占位经 from_dict
-    默认值可能假装合规 = 假绿灯）。**★ mutation 锚点**：把下方 `serialized = _json_value(rec)` 改成丢某命门
-    字段（如 `silent_mock_fallback_used`）→ producer 洗白该违例 → 对抗测试转 RED（见 test_s13_trust_producer
-    文件头 mutation 三态）。
+    不漏、不改值。**★ mutation 锚点**：把下方 `serialized = _json_value(rec)` 改成丢某命门字段（如
+    `silent_mock_fallback_used`）→ producer 洗白该违例 → 对抗测试转 RED（见 test_s13_trust_producer 文件头
+    mutation 三态）。
+
+    fail-closed 入参（codex 对抗复审堵 2 个洞·不静默吞坏输入）：
+      - `records is None` → raise：None 不当 honest-absent。honest-absent 须由显式空序列 `()` 表达；None 多是
+        上游 bug / 被污染输入，静默当空会把整族信任记录抹成「未声明」、悄悄擦掉本应在场的 m门 证据。
+      - declared-bool 命门字段非严格 `bool`（如 `silent_mock_fallback_used="false"`）→ raise：canonical
+        validator 判这些字段用**原值真值**（`if record.x:`），而 §13 节门 `*_from_dict` 几处用 `_bool_value`
+        归一（`_bool_value("false") → False`）—— 二者对非 bool 值分叉，会让 `"false"` 这类**真值为真**的
+        silent-mock 旗经序列化往返被门归一成 False、**洗白 no-silent-mock 命门**。producer 在源头 fail-closed
+        拒坏 record（绝不 emit 一个命门 bool 非 bool 的记录去赌门怎么归一）。
     """
 
+    if records is None:
+        raise TypeError(
+            f"build_section13_trust_record: {manifest_key} 为 None —— honest-absent 须用空序列 () 显式表达，"
+            "None 视为坏输入 fail-closed（不静默把整族信任记录擦成『未声明』·防上游 bug 悄悄抹掉 m门 证据）"
+        )
+    bool_fields = _bool_field_names(expected_type)
     out: list[dict[str, Any]] = []
     for rec in _tuple(records):
         if not isinstance(rec, expected_type):
@@ -1705,6 +1728,15 @@ def _serialize_trust_family(
                 f"build_section13_trust_record: {manifest_key} 须为 {expected_type.__name__}，"
                 f"得到 {type(rec).__name__}（fail-closed·不静默吞坏输入·不伪造 section13_trust 记录）"
             )
+        for bf in bool_fields:
+            val = getattr(rec, bf)
+            if not isinstance(val, bool):
+                raise TypeError(
+                    f"build_section13_trust_record: {manifest_key}.{bf} 须为 bool，得到 "
+                    f"{type(val).__name__}（值={val!r}）—— 命门 bool 字段非严格 bool 会令 §13 节门 _bool_value "
+                    "归一与 canonical validator 原值真值判定分叉（如 silent_mock_fallback_used='false' 被门归一 "
+                    "False 洗白 no-silent-mock）·fail-closed 拒坏 record（不静默吞·不让 m门 经序列化往返被洗白）"
+                )
         serialized = _json_value(rec)  # ★ mutation 锚点（丢命门字段 → 对抗测试 RED）
         if not isinstance(serialized, dict):  # 防御：record 非 dataclass（理应被上方类型挡住）
             raise TypeError(

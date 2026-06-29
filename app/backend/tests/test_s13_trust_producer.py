@@ -467,3 +467,68 @@ def test_failclosed_does_not_whitewash_bad_record_into_clean():
     record = build_section13_trust_record(claims=(_sycophantic_claim(),))
     cr = section13_trust_check({SECTION13_TRUST_MANIFEST_KEY: record})
     assert cr.ok is False, "producer 绝不能把坏 record 序列化成『门看着合规』"
+
+
+# ════════════════════════════════════════════════════════════════════════════
+# fail-closed 加固（codex 对抗复审堵 2 个洞·命门经序列化往返不被洗白 / None 不静默当空）
+# ════════════════════════════════════════════════════════════════════════════
+def test_failclosed_none_family_rejected_not_silent_absent():
+    """codex 洞①：族传 None → TypeError（honest-absent 须用 ()·None 当空会悄悄抹掉整族 m门 证据）。"""
+
+    for kw in (
+        "claims", "independence_disclosures", "expert_reviews", "user_choices",
+        "release_gates", "release_checks", "pressure_runs", "release_approvals",
+    ):
+        with pytest.raises(TypeError):
+            build_section13_trust_record(**{kw: None})
+
+
+def test_failclosed_nonbool_silent_mock_closes_wash():
+    """★ codex 洞②（no-silent-mock 命门）：silent_mock_fallback_used 非严格 bool（如 'false'）→ TypeError。
+
+    'false' 字符串原值真值为真（canonical validator 据此判 silent-mock 违例），但 §13 节门 _bool_value('false')
+    → False 会洗白该违例。producer 在源头 fail-closed 拒这种坏 record → 洗白向量根本到不了门（expert_reviews /
+    pressure_runs / release_approvals 三族 silent_mock 经 _bool_value 归一·正是被洗白的族）。
+    """
+
+    bad_review = ExternalExpertReviewRecord(
+        review_ref="r", release_ref="rel", reviewer_ref="x", reviewer_independence_ref="i",
+        artifact_ref="a", review_protocol_ref="p", verdict="approved", source_hash="h",
+        evidence_refs=("e",), silent_mock_fallback_used="false",  # type: ignore[arg-type]
+    )
+    bad_run = TrustPressureRunRecord(
+        runner_ref="rr", release_ref="rel", runner_mode="local_deterministic", source_hash="h",
+        release_gate_ref="rel", check_refs=("c",), scenario_refs=("s",), evidence_refs=("e",),
+        validation_result_refs=("v",), silent_mock_fallback_used="false",  # type: ignore[arg-type]
+    )
+    bad_appr = TrustReleaseApprovalRecord(
+        approval_ref="ap", release_ref="rel", release_gate_ref="rel", pressure_run_ref="rr",
+        expert_review_ref="r", artifact_ref="a", approval_protocol_ref="p", verdict="approved",
+        source_hash="h", evidence_refs=("e",), silent_mock_fallback_used="false",  # type: ignore[arg-type]
+    )
+    for kw, bad in (
+        ("expert_reviews", bad_review),
+        ("pressure_runs", bad_run),
+        ("release_approvals", bad_appr),
+    ):
+        with pytest.raises(TypeError):
+            build_section13_trust_record(**{kw: (bad,)})
+
+
+def test_failclosed_nonbool_weakness_visible_rejected():
+    """codex 洞②同源（弱点可见命门 bool）：weakness_visible_by_default 非严格 bool → TypeError。"""
+
+    bad_claim = TrustClaimRecord(
+        claim_ref="c", claim_label=TrustClaimLabel.UNVERIFIED_RESULT, evidence_refs=(),
+        weakness_refs=("w",), weakness_visible_by_default="false",  # type: ignore[arg-type]
+    )
+    with pytest.raises(TypeError):
+        build_section13_trust_record(claims=(bad_claim,))
+
+
+def test_strict_bool_guard_allows_real_bools_non_constant():
+    """非常量门：真 bool（True/False）照常通过（guard 只拒非 bool·不误伤合规 record）。"""
+
+    rec = build_section13_trust_record(release_checks=(_mock_dishonest_check(),))  # silent_mock=True
+    assert rec["release_checks"][0]["silent_mock_fallback_used"] is True
+    assert build_section13_trust_record(claims=(_clean_claim(),))["trust_claims"]  # weakness bools 真 bool
