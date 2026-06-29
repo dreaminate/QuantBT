@@ -10,19 +10,33 @@ from .codegen import GraphCodegenError, graph_to_code, spec_to_code
 from .emit import EMIT_MARKER, format_emit, parse_emit
 from .lib import emit, load_model, pick_device, predict_with
 from .runner import RunnerResult, run_code
+from .schema_drift import (
+    DataSchemaRecertificationRequired,
+    DatasetSchema,
+    SchemaDiff,
+    compute_dataset_schema,
+    diff_schemas,
+    schema_change_event_ref,
+    schema_fingerprint,
+)
 from .service import TrainingRequest, TrainingService
 from .store import TrainingJob, TrainingJobStore
 
 __all__ = [
     "EMIT_MARKER",
+    "DataSchemaRecertificationRequired",
+    "DatasetSchema",
     "GraphCodegenError",
     "RunnerResult",
+    "SchemaDiff",
     "TrainingJob",
     "TrainingJobStore",
     "TrainingRequest",
     "TrainingService",
     "backtest_job",
     "backtest_trained_model",
+    "compute_dataset_schema",
+    "diff_schemas",
     "emit",
     "format_emit",
     "graph_to_code",
@@ -31,6 +45,8 @@ __all__ = [
     "pick_device",
     "predict_with",
     "run_code",
+    "schema_change_event_ref",
+    "schema_fingerprint",
     "scores_to_weights",
     "spec_to_code",
 ]

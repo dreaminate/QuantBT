@@ -3,8 +3,11 @@ from __future__ import annotations
 import hashlib
 import json
 import pickle
+from datetime import UTC, datetime, timedelta
 from types import SimpleNamespace
 
+import numpy as np
+import pandas as pd
 import pytest
 from fastapi.testclient import TestClient
 
@@ -31,6 +34,7 @@ from app.research_os import (
     model_passport_from_dict,
     validate_model_promotion,
 )
+from app.training import TrainingRequest, TrainingService, schema_drift
 
 
 class _ConstantPredictor:
@@ -1141,3 +1145,270 @@ def test_model_promotion_approval_records_model_qro_without_reason_payload(tmp_p
     assert "dsr" not in compiled_text
     assert "pbo" not in compiled_text
     assert model_registry.list_versions("momentum")[0].stage == "staging"
+
+
+# ───────────────── C-S15 producer：dataset schema drift → DATA_SCHEMA_CHANGE 重认证 ─────────────────
+#
+# 训练台是 GOAL §15「data schema change」重认证触发器的 producer。下列测试覆盖：
+#   ① schema fingerprint 比对（schema_drift 纯单测：指纹确定性 + dtype 敏感 + diff + change_event_ref 绑定）
+#   ② 自动事件发射（schema 变 → 训练后 record_passport 带 DATA_SCHEMA_CHANGE change_event）
+#   ③ pre-run recert 门（_train_ml/_run_code 前 fail-closed 阻断未清重认证义务的 schema 变更）
+# 变异三态：schema 变无 recert → block（对抗，删门必红）；schema 未变 → 放行；recert 已清 → 放行。
+
+
+def _schema_map(*features: str, label_dtype: str = "float64", **dtypes: str) -> dict[str, str]:
+    base = {f: dtypes.get(f, "float64") for f in features}
+    base["label"] = label_dtype
+    return base
+
+
+def test_schema_fingerprint_is_deterministic_and_dtype_sensitive():
+    a = schema_drift.compute_dataset_schema(_schema_map("f1", "f2"), ["f1", "f2"], "label")
+    a_again = schema_drift.compute_dataset_schema(_schema_map("f1", "f2"), ["f1", "f2"], "label")
+    assert a.fingerprint == a_again.fingerprint  # 同 schema → 同指纹（值无关、确定）
+
+    added = schema_drift.compute_dataset_schema(_schema_map("f1", "f2", "f3"), ["f1", "f2", "f3"], "label")
+    assert a.fingerprint != added.fingerprint  # 加列 → 变
+
+    retyped = schema_drift.compute_dataset_schema(
+        _schema_map("f1", "f2", f2="int64"), ["f1", "f2"], "label"
+    )
+    assert a.fingerprint != retyped.fingerprint  # 同名改 dtype → 变（dtype 敏感，不可绕过）
+
+    reordered = schema_drift.compute_dataset_schema(_schema_map("f1", "f2"), ["f2", "f1"], "label")
+    assert a.fingerprint != reordered.fingerprint  # 特征顺序变 → 变（保守 fail-closed）
+
+    label_changed = schema_drift.compute_dataset_schema(
+        _schema_map("f1", "f2", label_dtype="int64"), ["f1", "f2"], "label"
+    )
+    assert a.fingerprint != label_changed.fingerprint  # label dtype 变 → 变
+
+
+def test_schema_diff_reports_add_remove_retype_label_and_reorder():
+    prev = schema_drift.compute_dataset_schema(_schema_map("f1", "f2"), ["f1", "f2"], "label")
+    nxt = schema_drift.compute_dataset_schema(
+        _schema_map("f1", "f3", f1="int64"), ["f1", "f3"], "label"
+    )
+    diff = schema_drift.diff_schemas(prev, nxt)
+    assert diff.changed
+    assert diff.added == ("f3",)
+    assert diff.removed == ("f2",)
+    assert diff.retyped == (("f1", "float64", "int64"),)
+
+    unchanged = schema_drift.diff_schemas(prev, prev)
+    assert not unchanged.changed
+    assert unchanged.describe() == "no_structural_change"
+
+    reordered = schema_drift.diff_schemas(
+        prev, schema_drift.compute_dataset_schema(_schema_map("f1", "f2"), ["f2", "f1"], "label")
+    )
+    assert reordered.reordered and not reordered.added and not reordered.removed
+
+
+def test_schema_change_event_ref_binds_model_and_both_fingerprints():
+    ref = schema_drift.schema_change_event_ref("model_type_card:m", "fp_a", "fp_b")
+    assert ref == schema_drift.schema_change_event_ref("model_type_card:m", "fp_a", "fp_b")  # 确定
+    # 换模型 / 换任一端指纹 → 不同 ref（一条重认证不能被挪用到别的模型或别的 schema 迁移）
+    assert ref != schema_drift.schema_change_event_ref("model_type_card:other", "fp_a", "fp_b")
+    assert ref != schema_drift.schema_change_event_ref("model_type_card:m", "fp_x", "fp_b")
+    assert ref != schema_drift.schema_change_event_ref("model_type_card:m", "fp_a", "fp_y")
+
+
+# ---- 训练台端到端（ridge：sklearn 进程内，快、torch 无关）----
+
+_SCHEMA_MODEL = "ridge"
+_SCHEMA_MODEL_CARD_REF = f"model_type_card:{_SCHEMA_MODEL}"
+
+
+def _schema_panel(features, *, n: int = 240, seed: int = 0) -> pd.DataFrame:
+    rng = np.random.default_rng(seed)
+    base = datetime(2024, 1, 1, tzinfo=UTC)
+    data: dict[str, object] = {"ts": [base + timedelta(days=i) for i in range(n)]}
+    for f in features:
+        data[f] = rng.normal(size=n)
+    data["label"] = rng.normal(size=n)
+    return pd.DataFrame(data)
+
+
+def _schema_request(features) -> TrainingRequest:
+    return TrainingRequest(
+        name="schema-drift",
+        model=_SCHEMA_MODEL,
+        task="regression",
+        feature_cols=list(features),
+        label_col="label",
+        n_splits=4,
+    )
+
+
+def _schema_service(tmp_path):
+    registry = PersistentModelGovernanceRegistry(tmp_path / "model_governance.jsonl")
+    svc = TrainingService(root=tmp_path / "training_runs", model_governance_registry=registry)
+    return svc, registry
+
+
+def _expected_change_event_ref(prev_fp: str, features) -> str:
+    now_fp = schema_drift.compute_dataset_schema(_schema_panel(features), features, "label").fingerprint
+    return now_fp, schema_drift.schema_change_event_ref(_SCHEMA_MODEL_CARD_REF, prev_fp, now_fp)
+
+
+def test_first_governed_training_run_records_schema_fingerprint(tmp_path):
+    """① schema fingerprint 真被算出并钉进 passport（producer 落账）。"""
+    svc, registry = _schema_service(tmp_path)
+    job = svc.train_now(_schema_request(["f1", "f2"]), _schema_panel(["f1", "f2"]))
+    assert job.status == "succeeded", job.error
+    passport = registry.passports()[0]
+    expected = schema_drift.compute_dataset_schema(
+        _schema_panel(["f1", "f2"]), ["f1", "f2"], "label"
+    ).fingerprint
+    assert passport.dataset_schema_fingerprint == expected
+    assert registry.change_events(passport.passport_id) == ()  # 首跑无 schema 变更事件
+
+
+def test_training_pre_run_gate_blocks_data_schema_change_without_recert(tmp_path):
+    """③ 变异三态·态一（对抗·种坏必抓）：同模型新 run schema 变、无 recert → 训练开跑前 fail-closed 阻断。
+
+    删除 _execute 里 `recert_plan = self._evaluate_data_schema_recertification(...)` 这行（pre-run 门）
+    后本测试必变红：① job2 会变 succeeded（不再失败）② registry 多出第二份 passport
+    ③ result.json 会被写出（训练真跑了）。还原即恢复绿。
+    """
+    svc, registry = _schema_service(tmp_path)
+
+    job1 = svc.train_now(_schema_request(["f1", "f2"]), _schema_panel(["f1", "f2"]))
+    assert job1.status == "succeeded", job1.error
+    assert len(registry.passports()) == 1
+
+    # run 2：同模型，加列 f3 → schema 指纹变、无 DATA_SCHEMA_CHANGE 重认证记录 → 必须 fail-closed
+    job2 = svc.train_now(_schema_request(["f1", "f2", "f3"]), _schema_panel(["f1", "f2", "f3"]))
+    assert job2.status == "failed"
+    assert job2.error.startswith("DataSchemaRecertificationRequired"), job2.error
+    assert "DATA_SCHEMA_CHANGE" in job2.error or "data_schema_change" in job2.error
+    # 训练在门前被挡：result.json 未写出、未登记第二份 passport / 第二个版本
+    job2_dir = svc._jobs.job_dir(job2.job_id)
+    assert not (job2_dir / "result.json").exists()
+    assert len(registry.passports()) == 1
+    assert len(svc._models.list_versions(_SCHEMA_MODEL)) == 1
+
+
+def test_training_passes_when_data_schema_unchanged(tmp_path):
+    """变异三态·态二：schema 未变（同特征/同 dtype、数据值不同）→ 正常放行、无重认证事件。"""
+    svc, registry = _schema_service(tmp_path)
+    job1 = svc.train_now(_schema_request(["f1", "f2"]), _schema_panel(["f1", "f2"], seed=1))
+    assert job1.status == "succeeded", job1.error
+    job2 = svc.train_now(_schema_request(["f1", "f2"]), _schema_panel(["f1", "f2"], seed=2))
+    assert job2.status == "succeeded", job2.error
+
+    passports = registry.passports()
+    assert len(passports) == 2
+    assert passports[0].dataset_schema_fingerprint == passports[1].dataset_schema_fingerprint
+    assert registry.change_events(passports[1].passport_id) == ()  # 无 schema 变更 → 无事件
+
+
+def test_training_passes_after_data_schema_recertification(tmp_path):
+    """变异三态·态三 + ②自动事件发射：schema 变后补一条 accepted DATA_SCHEMA_CHANGE 重认证 →
+    下一 run 放行、训练后 passport 带 DATA_SCHEMA_CHANGE change_event + 绑定清账记录。"""
+    svc, registry = _schema_service(tmp_path)
+    job1 = svc.train_now(_schema_request(["f1", "f2"]), _schema_panel(["f1", "f2"]))
+    assert job1.status == "succeeded", job1.error
+    p1 = registry.passports()[0]
+
+    now_fp, change_event_ref = _expected_change_event_ref(p1.dataset_schema_fingerprint, ["f1", "f2", "f3"])
+    recert = registry.record_recertification_record(
+        ModelRecertificationRecord(
+            model_version_ref=p1.model_version_ref,
+            model_passport_ref=p1.passport_id,
+            trigger=RecertificationTrigger.DATA_SCHEMA_CHANGE,
+            change_event_ref=change_event_ref,
+            evidence_refs=("validation_dossier:recert:schema:v2",),
+            decision="accepted",
+            recorded_by="reviewer",
+        )
+    )
+
+    job2 = svc.train_now(_schema_request(["f1", "f2", "f3"]), _schema_panel(["f1", "f2", "f3"]))
+    assert job2.status == "succeeded", job2.error
+
+    passports = registry.passports()
+    assert len(passports) == 2
+    p2 = passports[1]
+    assert p2.dataset_schema_fingerprint == now_fp
+    # ② DATA_SCHEMA_CHANGE change_event 真被发射并登记在 P2 上
+    assert registry.change_events(p2.passport_id) == (RecertificationTrigger.DATA_SCHEMA_CHANGE.value,)
+    # 清账记录被绑回 passport（record_passport §15 门据此放行）
+    assert recert.recertification_record_id in p2.recertification_records
+
+
+def test_training_gate_not_cleared_by_mismatched_change_event_ref(tmp_path):
+    """对抗·防绕过：重认证记录的 change_event_ref 对不上本次 schema 迁移 → 门不认、仍 fail-closed。"""
+    svc, registry = _schema_service(tmp_path)
+    job1 = svc.train_now(_schema_request(["f1", "f2"]), _schema_panel(["f1", "f2"]))
+    assert job1.status == "succeeded", job1.error
+    p1 = registry.passports()[0]
+
+    # 一条 trigger 对、decision 对，但 change_event_ref 指向别的迁移 → 不能清本次的账
+    registry.record_recertification_record(
+        ModelRecertificationRecord(
+            model_version_ref=p1.model_version_ref,
+            model_passport_ref=p1.passport_id,
+            trigger=RecertificationTrigger.DATA_SCHEMA_CHANGE,
+            change_event_ref="data_schema_change:unrelated-transition",
+            evidence_refs=("validation_dossier:recert:wrong",),
+            decision="accepted",
+            recorded_by="reviewer",
+        )
+    )
+
+    job2 = svc.train_now(_schema_request(["f1", "f2", "f3"]), _schema_panel(["f1", "f2", "f3"]))
+    assert job2.status == "failed"
+    assert job2.error.startswith("DataSchemaRecertificationRequired"), job2.error
+    assert len(registry.passports()) == 1
+
+
+def test_training_gate_not_cleared_by_rejected_recertification(tmp_path):
+    """对抗·防绕过：change_event_ref 对上，但 decision=rejected（未清账）→ 门仍 fail-closed。"""
+    svc, registry = _schema_service(tmp_path)
+    job1 = svc.train_now(_schema_request(["f1", "f2"]), _schema_panel(["f1", "f2"]))
+    assert job1.status == "succeeded", job1.error
+    p1 = registry.passports()[0]
+
+    _now_fp, change_event_ref = _expected_change_event_ref(p1.dataset_schema_fingerprint, ["f1", "f2", "f3"])
+    registry.record_recertification_record(
+        ModelRecertificationRecord(
+            model_version_ref=p1.model_version_ref,
+            model_passport_ref=p1.passport_id,
+            trigger=RecertificationTrigger.DATA_SCHEMA_CHANGE,
+            change_event_ref=change_event_ref,
+            evidence_refs=("validation_dossier:recert:rejected",),
+            decision="rejected",
+            recorded_by="reviewer",
+        )
+    )
+
+    job2 = svc.train_now(_schema_request(["f1", "f2", "f3"]), _schema_panel(["f1", "f2", "f3"]))
+    assert job2.status == "failed"
+    assert job2.error.startswith("DataSchemaRecertificationRequired"), job2.error
+    assert len(registry.passports()) == 1
+
+
+def test_training_gate_baseline_ignores_fingerprintless_passport(tmp_path):
+    """对抗·防 fail-open：在 producer 基线之后塞一份【无 schema 指纹】的 passport（如手动 REST 登记）
+    不能把基线抹掉——下一 run schema 变仍以最近【带指纹】的 passport 为基线、照常 fail-closed。"""
+    svc, registry = _schema_service(tmp_path)
+    job1 = svc.train_now(_schema_request(["f1", "f2"]), _schema_panel(["f1", "f2"]))
+    assert job1.status == "succeeded", job1.error
+    assert registry.passports()[0].dataset_schema_fingerprint
+
+    # 同模型卡、但无 dataset_schema_fingerprint 的 passport 成为「最新」一份
+    registry.record_passport(
+        _passport(
+            model_version_ref="model_version:ridge:manual",
+            model_type_card_ref=_SCHEMA_MODEL_CARD_REF,
+            training_run_ref="training_run:manual",
+        )
+    )
+    assert registry.passports()[-1].dataset_schema_fingerprint == ""
+
+    # run 2 加列 f3 → 基线仍是 P1（带指纹），无 recert → 仍阻断
+    job2 = svc.train_now(_schema_request(["f1", "f2", "f3"]), _schema_panel(["f1", "f2", "f3"]))
+    assert job2.status == "failed"
+    assert job2.error.startswith("DataSchemaRecertificationRequired"), job2.error
