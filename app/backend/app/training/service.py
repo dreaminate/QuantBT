@@ -42,6 +42,12 @@ from .artifact_inspection import inspect_artifact_in_subprocess
 from .codegen import load_pit_panel, spec_to_code
 from .lib import predict_with
 from .runner import run_code
+from .schema_drift import (
+    DataSchemaRecertificationRequired,
+    compute_dataset_schema,
+    describe_name_diff,
+    schema_change_event_ref,
+)
 from .store import TrainingJob, TrainingJobStore, _gen_id
 
 # C-MODELGOV-1·③ 生产激活:组合已训练模型(input_models)消费侧的【信任门 enforce 默认开关】。
@@ -134,6 +140,25 @@ class TrainingRequest:
 
     def to_dict(self) -> dict[str, Any]:
         return asdict(self)
+
+
+# A DATA_SCHEMA_CHANGE recertification clears the obligation only when a human review
+# accepted it or explicitly waived it (the user-waived methodology path). "rejected"
+# (or any other value) leaves the obligation open → training stays blocked.
+_ACCEPTED_RECERT_DECISIONS = frozenset({"accepted", "waived"})
+
+
+@dataclass(frozen=True)
+class _SchemaRecertPlan:
+    """Outcome of the pre-run §15 DATA_SCHEMA_CHANGE gate, threaded into passport
+    recording. ``change_events`` is non-empty only when this run's dataset schema
+    changed *and* a recertification cleared it; ``recertification_record_refs`` then
+    binds the clearing record(s) onto the passport so ``record_passport`` accepts the
+    change event (defense-in-depth with the pre-run gate)."""
+
+    schema_fingerprint: str
+    change_events: tuple[RecertificationTrigger, ...]
+    recertification_record_refs: tuple[str, ...]
 
 
 class TrainingService:
@@ -303,6 +328,19 @@ class TrainingService:
                 if request is not None and request.train_fraction is not None:
                     panel = _slice_front_dates(panel, request.ts_col, request.train_fraction)
 
+                # C-S15 producer · DATA_SCHEMA_CHANGE pre-run 重认证门（fail-closed，_train_ml/_run_code 前）：
+                # 训练台是 §15「data schema change」触发器的 producer。本 run 训练数据集（模型实际消费的
+                # feature/label 列 + dtype）的 schema 指纹，与「同模型」上一份已登记 passport 的指纹不一致时，
+                # 必须先有一条 accepted/waived 的 DATA_SCHEMA_CHANGE 重认证记录清账，否则在任何训练开跑前
+                # 抛 DataSchemaRecertificationRequired 阻断——绝不放「未重认证的 schema 变更」进训练。
+                # panel 已过 input_models 注入 + train_fraction 切片，指纹反映真实送训 schema。
+                # 返回的 plan 在训练后登记 passport 时透传（绑定指纹 + change_events + 清账记录引用）。
+                recert_plan = (
+                    self._evaluate_data_schema_recertification(request, panel)
+                    if request is not None
+                    else None
+                )
+
                 result = self._resolve_result(request, code, panel, job_dir)
 
                 (job_dir / "result.json").write_text(
@@ -332,6 +370,7 @@ class TrainingService:
                         metrics=metrics,
                         run_id=run_id,
                         spec_dump=spec_dump,
+                        recert_plan=recert_plan,
                     )
                     job.model_version = version_record.version
                     job.model_passport_ref = version_record.model_passport_ref
@@ -443,6 +482,7 @@ class TrainingService:
         metrics: dict[str, float],
         run_id: str,
         spec_dump: dict[str, Any],
+        recert_plan: _SchemaRecertPlan | None = None,
     ):
         artifact_path = Path(str(result["artifact_path"]))
         artifact_hash = _sha256_file(artifact_path)
@@ -485,6 +525,16 @@ class TrainingService:
         )
         passport_ref: str | None = None
         if self._model_governance is not None:
+            # C-S15 producer: bind this run's dataset-schema fingerprint into the
+            # passport, and — when the pre-run gate detected a cleared schema change —
+            # emit the DATA_SCHEMA_CHANGE change event + the clearing recert record(s)
+            # so record_passport's §15 recertification gate accepts it (and rejects it
+            # if somehow unresolved: defense-in-depth behind the pre-run gate).
+            schema_fingerprint = recert_plan.schema_fingerprint if recert_plan is not None else ""
+            change_events = recert_plan.change_events if recert_plan is not None else ()
+            recertification_records = (
+                recert_plan.recertification_record_refs if recert_plan is not None else ()
+            )
             passport = ModelGovernancePassport(
                 model_version_ref=model_version_ref,
                 model_type_card_ref=f"model_type_card:{request.model}",
@@ -519,10 +569,14 @@ class TrainingService:
                 foundation_model_dependency_refs=("none",),
                 monitoring_requirements=("performance degradation monitor",),
                 recertification_triggers=tuple(RecertificationTrigger),
+                recertification_records=recertification_records,
+                dataset_schema_fingerprint=schema_fingerprint,
                 validation_dossier_ref=validation_dossier_ref,
                 challenger_result="not required for medium risk training artifact",
             )
-            recorded_passport = self._model_governance.record_passport(passport)
+            recorded_passport = self._model_governance.record_passport(
+                passport, change_events=change_events
+            )
             passport_ref = recorded_passport.passport_id
             self._model_governance.record_artifact_inspection(
                 ModelArtifactInspectionRecord(
@@ -548,6 +602,115 @@ class TrainingService:
             validation_dossier_ref=validation_dossier_ref,
             note=job.name,
         )
+
+    # ---------------- C-S15 producer：DATA_SCHEMA_CHANGE 重认证门 ----------------
+
+    def _evaluate_data_schema_recertification(
+        self, request: TrainingRequest, panel: pd.DataFrame
+    ) -> _SchemaRecertPlan:
+        """Pre-run §15 DATA_SCHEMA_CHANGE gate (producer side).
+
+        Fingerprints this run's training-dataset schema (model-consumed feature +
+        label columns + dtypes) and compares it against the most recent recorded
+        passport for the *same* model (keyed by ``model_type_card_ref``). When the
+        schema changed and no accepted/waived DATA_SCHEMA_CHANGE recertification
+        clears the exact transition, raises ``DataSchemaRecertificationRequired``
+        (fail-closed) *before any training runs*. Otherwise returns the fingerprint
+        plus the change event + clearing record refs to bind into the passport
+        recorded after training.
+
+        Reuse, not re-judge: whether a change event is satisfied (declared trigger +
+        recertification record) stays owned by ``model_governance``; this only
+        *detects* the change and *requires* the governed record.
+        """
+        governance = self._model_governance
+        if governance is None:
+            # No governance registry → no passport recorded, no obligation to track.
+            return _SchemaRecertPlan("", (), ())
+
+        now_schema = compute_dataset_schema(panel, request.feature_cols, request.label_col)
+        now_fp = now_schema.fingerprint
+
+        model_card_ref = f"model_type_card:{request.model}"
+        # Baseline = the latest passport for this model that actually CARRIES a schema
+        # fingerprint. Skipping fingerprint-less passports closes a fail-open: a
+        # passport recorded without a fingerprint (e.g. via the manual REST passport
+        # API) must not be able to erase the producer-recorded baseline and let a
+        # changed schema train unchecked. A model with no fingerprinted passport yet
+        # has no prior schema to police → its baseline is set by this run (no
+        # obligation on a baseline that does not exist).
+        prior = self._schema_baseline_passport(model_card_ref)
+        prev_fp = str(getattr(prior, "dataset_schema_fingerprint", "") or "") if prior is not None else ""
+        if not prev_fp or prev_fp == now_fp:
+            # No fingerprinted baseline for this model, or schema unchanged →放行（无义务）。
+            return _SchemaRecertPlan(now_fp, (), ())
+
+        change_event_ref = schema_change_event_ref(model_card_ref, prev_fp, now_fp)
+        resolving = self._resolving_schema_recertifications(model_card_ref, change_event_ref)
+        if not resolving:
+            diff = describe_name_diff(
+                prior.feature_refs,
+                prior.label_refs,
+                request.feature_cols,
+                (request.label_col,),
+            )
+            raise DataSchemaRecertificationRequired(
+                model_ref=model_card_ref,
+                change_event_ref=change_event_ref,
+                prev_fingerprint=prev_fp,
+                new_fingerprint=now_fp,
+                diff=diff,
+            )
+        return _SchemaRecertPlan(
+            now_fp,
+            (RecertificationTrigger.DATA_SCHEMA_CHANGE,),
+            tuple(record.recertification_record_id for record in resolving),
+        )
+
+    def _schema_baseline_passport(self, model_card_ref: str) -> Any | None:
+        """Latest passport for a model that carries a non-empty schema fingerprint
+        (``passports()`` keeps insertion order, so the last match is the most recent),
+        or None when no fingerprinted passport exists yet. A fingerprint-less passport
+        is skipped so it cannot reset the producer baseline (fail-closed)."""
+        baseline = None
+        for passport in self._model_governance.passports():
+            if getattr(passport, "model_type_card_ref", None) != model_card_ref:
+                continue
+            if not str(getattr(passport, "dataset_schema_fingerprint", "") or ""):
+                continue
+            baseline = passport
+        return baseline
+
+    def _resolving_schema_recertifications(
+        self, model_card_ref: str, change_event_ref: str
+    ) -> list[Any]:
+        """Accepted/waived DATA_SCHEMA_CHANGE recert records that clear exactly this
+        transition. Three independent bindings must all hold so an unrelated or
+        cross-model record cannot satisfy the gate:
+          (1) trigger is DATA_SCHEMA_CHANGE,
+          (2) change_event_ref matches (model identity + both fingerprints are hashed
+              into it), and the model-card binding below re-checks model identity,
+          (3) decision is accepted or waived,
+          (4) the record is filed against a passport of THIS model card.
+        """
+        governance = self._model_governance
+        resolving: list[Any] = []
+        for record in governance.recertification_records():
+            trigger = str(getattr(record.trigger, "value", record.trigger))
+            if trigger != RecertificationTrigger.DATA_SCHEMA_CHANGE.value:
+                continue
+            if getattr(record, "change_event_ref", "") != change_event_ref:
+                continue
+            if getattr(record, "decision", "") not in _ACCEPTED_RECERT_DECISIONS:
+                continue
+            try:
+                bound = governance.passport(record.model_passport_ref)
+            except KeyError:
+                continue
+            if getattr(bound, "model_type_card_ref", None) != model_card_ref:
+                continue
+            resolving.append(record)
+        return resolving
 
     def _run_code(self, code: str, panel: pd.DataFrame, job_dir: Path) -> dict[str, Any]:
         panel_path = job_dir / "panel.parquet"

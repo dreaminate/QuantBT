@@ -186,6 +186,13 @@ class ModelGovernancePassport:
     validation_dossier_ref: str | None = None
     challenger_result: str | None = None
     recertification_records: tuple[str, ...] = ()
+    # GOAL §15 DATA_SCHEMA_CHANGE producer (C-S15): fingerprint of the training
+    # dataset schema (model-consumed feature/label columns + dtypes) this passport
+    # was produced from. Additive/optional — does not enter ``passport_id`` (id
+    # stays stable) and defaults empty for passports recorded before this field
+    # existed. The training service stores it and compares the next run's
+    # fingerprint against it to detect a data schema change requiring recert.
+    dataset_schema_fingerprint: str = ""
     target_runtime: RuntimeStatus | str = RuntimeStatus.OFFLINE
     passport_id: str = ""
 
@@ -399,6 +406,7 @@ def model_passport_from_dict(raw: dict[str, Any]) -> ModelGovernancePassport:
         validation_dossier_ref=raw.get("validation_dossier_ref"),
         challenger_result=raw.get("challenger_result"),
         recertification_records=_tuple(raw.get("recertification_records")),
+        dataset_schema_fingerprint=str(raw.get("dataset_schema_fingerprint") or ""),
         target_runtime=raw.get("target_runtime") or RuntimeStatus.OFFLINE.value,
         passport_id=str(raw.get("passport_id") or ""),
     )
