@@ -5,6 +5,7 @@ from __future__ import annotations
 import base64
 import json
 import re
+from collections.abc import Sequence
 from dataclasses import asdict, dataclass, is_dataclass
 from enum import Enum
 from pathlib import Path
@@ -1632,6 +1633,127 @@ def trust_release_approval_record_from_dict(data: dict[str, Any]) -> TrustReleas
     )
 
 
+# ════════════════════════════════════════════════════════════════════════════
+# §13 信任结构 → promote manifest section record（producer · NC-S13-TRUST-PRODUCER）
+# ────────────────────────────────────────────────────────────────────────────
+# 缺口（construction-map NC-S13-TRUST-PRODUCER）：信任判定层今 advisory-only —— promote 真路径从未把真信任
+# 记录如实组装进 manifest，故 `release_gate.section13_trust_gate` 恒见「未声明」→ 证据 producer
+# `s13_trust_runjson_producers` 无真对象、无从诚实转绿（门停 advisory）。本段补 producer 侧：从**真信任记录**
+# （typed 对象·下方 canonical record 类型）如实序列化成 §13 节门的 producer 契约 dict —— 让节门有真对象可判
+# （合规 run 过、谄媚强结论 / 弱点折叠 / mock 不诚实 / 冷启动冒充统计证据 run 拒）。
+#
+# 复用不重造（RULES §1 单一源）：**只序列化·零判定**。信任判定（反谄媚 / 弱点折叠 / mock 诚实 / 冷启动 /
+# 专家否决 / 跨记录解析）全留给 `section13_trust_gate.section13_trust_check → validate_trust_layer`，本段绝不
+# 重写 / 预判 / 过滤 / 洗白任何一条信任门。序列化器复用 `_json_value`（= `_canonical_bytes` 哈希同源·
+# dataclass→asdict→enum→value→tuple→list），与各 `*_from_dict` 读的 key 天然往返对齐（asdict 出全字段·一个
+# 不漏 → from_dict 逐字段读回）。
+#
+# 诚实红线（= GOAL §13「不得伪造 proof-backed / evidence sufficient / production-ready·不得隐藏 user waiver·
+# 不得让 secret / no-silent-mock 被 waiver 绕过」对准本 producer 自己）：
+#   - **缺即真缺（honest-absent）**：某族无真记录 → **不发该 family key**；全族皆空 → 返回 `{}`（中心
+#     `assemble_promote_sections._take` 据 `if payload` honest-absent·不发 section13_trust 节）。节门对「未声明」
+#     honest-bound（不声明≠违例·ok=True），故不误拒「只是没声明信任结构」的诚实 run。**绝不**发空壳 / 占位
+#     记录让门误判合规（= 假绿灯·撞 RULES.project「未验证≠已验证」）。
+#   - **faithful 序列化（无损·零洗白）**：坏记录（谄媚强标签 / 弱点默认隐藏 / `silent_mock_fallback_used=True` /
+#     冷启动 N≤1 / `user_waiver_ref` 在而 `waiver_weakness_visible_by_default=False`）**如实序列化** → 节门
+#     round-trip 回 record 据真值拒。**绝不**丢字段 / 改值：丢 `silent_mock_fallback_used` 就是洗白 mock 不诚实
+#     （削弱 no-silent-mock 命门）；改 `waiver_weakness_visible_by_default` 就是藏 user waiver。asdict 出全字段
+#     正是为「一个命门字段都漏不掉」。
+#   - **fail-closed 入参**：某族喂非该族 canonical 类型的对象 → raise `TypeError`（不静默吞坏输入·不产占位 dict
+#     蒙混 —— 占位 dict 经 from_dict 默认值可能假装合规 = 假绿灯）。
+#
+# 中心串接（CENTER-SERIAL·非本卡·本卡 PARALLEL-SAFE 只建孤立 builder·绝不碰 promote_assembler）：中心在
+# `promote_assembler.assemble_promote_sections` 经
+#   `_take(SECTION13_TRUST_MANIFEST_KEY, build_section13_trust_record(...), undeclared_gap)`
+# 把本 record 并进 manifest（key 从 `section13_trust_gate.SECTION13_TRUST_MANIFEST_KEY` 单一源 import），再走
+# 门链 `evaluate`。
+# ════════════════════════════════════════════════════════════════════════════
+
+# family manifest key ↔ canonical record 类型（与 `section13_trust_gate._FAMILIES` 的
+# `(manifest_key, validate_trust_layer kwarg)` 一一对齐）。单一源是 gate 的 `_FAMILIES`；本模块（trust_layer·
+# 低层 domain）**不** import release_gate（防层级倒挂 / 冷导入环），故 family key 在此复述、由
+# `tests/test_s13_trust_producer.py` 的跨模块契约绑定测试钉死防漂 —— gate 改任一 family key → 绑定测试立刻 RED。
+_SECTION13_TRUST_FAMILY_TYPES: tuple[tuple[str, type], ...] = (
+    ("trust_claims", TrustClaimRecord),
+    ("independence_disclosures", FunctionalIndependenceDisclosure),
+    ("expert_reviews", ExternalExpertReviewRecord),
+    ("user_choices", UserAutonomyRecord),
+    ("release_gates", TrustReleaseGateRecord),
+    ("release_checks", TrustReleaseCheckRecord),
+    ("pressure_runs", TrustPressureRunRecord),
+    ("release_approvals", TrustReleaseApprovalRecord),
+)
+
+
+def _serialize_trust_family(
+    records: Any, expected_type: type, manifest_key: str
+) -> list[dict[str, Any]]:
+    """一族信任 typed 记录 → faithful dict list（fail-closed 类型校验·零判定·零洗白）。
+
+    复用 `_json_value`（canonical 序列化器·与 `_canonical_bytes` 哈希同源）逐字段无损落 dict —— asdict 出全
+    字段（含 `silent_mock_fallback_used` / `weakness_visible_by_default` / `user_waiver_ref` 等命门字段），一个
+    不漏、不改值。喂非 `expected_type` 对象 → raise `TypeError`（不静默吞坏输入·不产占位 → 占位经 from_dict
+    默认值可能假装合规 = 假绿灯）。**★ mutation 锚点**：把下方 `serialized = _json_value(rec)` 改成丢某命门
+    字段（如 `silent_mock_fallback_used`）→ producer 洗白该违例 → 对抗测试转 RED（见 test_s13_trust_producer
+    文件头 mutation 三态）。
+    """
+
+    out: list[dict[str, Any]] = []
+    for rec in _tuple(records):
+        if not isinstance(rec, expected_type):
+            raise TypeError(
+                f"build_section13_trust_record: {manifest_key} 须为 {expected_type.__name__}，"
+                f"得到 {type(rec).__name__}（fail-closed·不静默吞坏输入·不伪造 section13_trust 记录）"
+            )
+        serialized = _json_value(rec)  # ★ mutation 锚点（丢命门字段 → 对抗测试 RED）
+        if not isinstance(serialized, dict):  # 防御：record 非 dataclass（理应被上方类型挡住）
+            raise TypeError(
+                f"build_section13_trust_record: {manifest_key} 记录序列化非 dict（fail-closed）"
+            )
+        out.append(serialized)
+    return out
+
+
+def build_section13_trust_record(
+    *,
+    claims: Sequence[TrustClaimRecord] = (),
+    independence_disclosures: Sequence[FunctionalIndependenceDisclosure] = (),
+    expert_reviews: Sequence[ExternalExpertReviewRecord] = (),
+    user_choices: Sequence[UserAutonomyRecord] = (),
+    release_gates: Sequence[TrustReleaseGateRecord] = (),
+    release_checks: Sequence[TrustReleaseCheckRecord] = (),
+    pressure_runs: Sequence[TrustPressureRunRecord] = (),
+    release_approvals: Sequence[TrustReleaseApprovalRecord] = (),
+) -> dict[str, Any]:
+    """真信任 typed 记录 → `section13_trust` manifest section dict（producer·honest-absent·零判定）。
+
+    入参 = `validate_trust_layer` 的 8 族 typed 记录（trust_layer canonical 类型·不另造）。每族非空 → faithful
+    序列化进对应 family key（= `section13_trust_gate._FAMILIES` 的 manifest_key）；某族空 → 不发其 key；全族皆空
+    → 返回 `{}`（honest-absent·中心据此不发 section13_trust 节·门不误拒未声明 run）。
+
+    **只序列化·零判定**：信任判定（谄媚 / 弱点折叠 / mock 诚实 / 冷启动 / 专家否决 / 跨记录解析）全在
+    `section13_trust_gate.section13_trust_check → validate_trust_layer`，本函数绝不重写 / 预判 / 洗白。坏记录如实
+    序列化 → 门据真值拒（这正是 producer 转绿后门翻 enforce 能拒坏 run、又不误伤诚实 run 的前提）。
+    """
+
+    families: dict[str, Any] = {
+        "trust_claims": claims,
+        "independence_disclosures": independence_disclosures,
+        "expert_reviews": expert_reviews,
+        "user_choices": user_choices,
+        "release_gates": release_gates,
+        "release_checks": release_checks,
+        "pressure_runs": pressure_runs,
+        "release_approvals": release_approvals,
+    }
+    section: dict[str, Any] = {}
+    for manifest_key, expected_type in _SECTION13_TRUST_FAMILY_TYPES:
+        serialized = _serialize_trust_family(families[manifest_key], expected_type, manifest_key)
+        if serialized:
+            section[manifest_key] = serialized
+    return section
+
+
 class PersistentTrustDisclosureRegistry:
     """Append-only JSONL store for trust claims and disclosure records."""
 
@@ -2223,6 +2345,7 @@ __all__ = [
     "TrustReleaseCheckRecord",
     "TrustReleaseGateRecord",
     "UserAutonomyRecord",
+    "build_section13_trust_record",
     "external_expert_review_signature_payload",
     "external_expert_review_from_dict",
     "external_expert_signature_from_dict",
