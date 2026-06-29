@@ -4,6 +4,8 @@
 > **诚实边界**：本地代码核验 proof（非 CI / 非线上 / 非用户验收）。下列 4 条方法学决策为**中心转达·驱动本图**（我未独立核到用户原话；如用户更正则刷新本图）。
 >
 > **▶ Wave 1 producer 收口波 land 进度（2026-06-29·全 advisory-first）**：§13-HARDEN（`trust_layer` 堵 3 gaming 漏洞·闭合 trust_layer 硬化 KNOWN_RUN_GAP）+ §16-GATE（新建 `section16_engineering_standards_gate`·注册 `gate_registry` 共 6 门·advisory）+ §17 **C-S17-RUNJSON-PRODUCERS**（`promote_assembler.assemble_promote_sections` 组装 API·§9/§10/§17 真血统→section 记录·接进 `ide/promote.py`·honest-absent 不误拒）均 land。**C-S15-PICKLE-DEFAULT-ENFORCE 核验为早已做**（提交 1a099191+73bfc4e1·子进程默认 `enforce=True`·下方 line「今 enforce=False」已陈旧）。**★ 标绿激活 §9/§10/§17 enforce 待用户拍板**（破 advisory-first 默认契约 + IDE 路径 honest-absent 激活意义有限 + 真记录源缺口）。详见 `dev/state/dreaminate/state.md` 顶部块。
+>
+> **▶ Wave 2 就绪节并行波 land 进度（2026-06-29·用户定向「并行推进其它就绪节」）**：**C-S5-RAG-AUTOSYNC**（§5·`asset_rag.py` 4 个 `build_*_rag_document` helper + `main.py` 4 处 autosync hook·权限 owner-scoped 空 owner raise·向后兼容纯加法）+ **C-S15-RECERT-PRODUCER**（§15·新建 `training/schema_drift.py` 消费列 fingerprint + pre-run fail-closed 门·schema 变→block until recert）均 land·全量 3640 passed/0 failed。**C-S3-LIFECYCLE 库核验为已做**（asset_lifecycle.py + factor_factory/lifecycle.py + register_guard.py）·剩 `main.py` 端点强制（`create_factor` 加 `validate_governed_asset` 硬门·**enforce 性质·留下一波 advisory-first 评估**）。新增 KNOWN_RUN_GAP：C-S5 catch-up sync（scheduler 卡）+ C-S15 `monitor/production.py` schema hook（语义不匹配·建议独立 serving 期监控卡）。详见 `state.md` 顶部块。
 
 ### ★ 4 条已锁方法学决策（中心转达·已 bake 进对应卡）
 1. **enforce 切换时机 = 逐门绿灯即自动 enforce**：每个门的「证据 producer 接线测试」转绿那刻自动从 advisory 翻 enforce；转绿前只 advisory + 记录；**绝不误拒诚实 run**。→ 定义 SA-2、解锁第三波。
