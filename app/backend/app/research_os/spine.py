@@ -17,9 +17,15 @@ from dataclasses import asdict, dataclass, field, is_dataclass
 from datetime import UTC, datetime
 from enum import Enum
 from pathlib import Path
-from typing import Any
+from typing import Any, Mapping, Sequence
 
 from ..lineage.ids import content_hash
+from ..lineage.spine import (
+    ConsistencyCheck as SpineConsistencyCheck,
+    MathematicalArtifact as SpineMathematicalArtifact,
+    MethodologyChoiceRecord as SpineMethodologyChoiceRecord,
+    TheoryImplementationBinding as SpineTheoryImplementationBinding,
+)
 from .canvas_layout import CanvasLayoutRecord, validate_canvas_layout_record
 from .desk_projection import CanvasMutationRecord
 
@@ -1666,6 +1672,161 @@ class PromotionGuard:
         return GuardDecision(accepted=not violations, violations=tuple(violations))
 
 
+# ════════════════════════════════════════════════════════════════════════════
+# NC-S6-MATHCHAIN-PRODUCER · §6 数学贯穿链 promote-manifest record builder（孤立·PARALLEL-SAFE）
+# ════════════════════════════════════════════════════════════════════════════
+# 缺口（codemap v2 头号结论）：§6 数学链门 `section6_mathchain_gate.section6_mathchain_check` 委托
+# `lineage.spine_gate.evaluate_promotion`（8-clause Π）判「声称按理论实现、要升级到强标签的产物·数学链
+# 过没过」，但真 promote 路径**从未把真 run 的 typed 数学链记录（MathematicalArtifact /
+# TheoryImplementationBinding / ConsistencyCheck / MethodologyChoiceRecord）如实序列化进 manifest** →
+# 门恒见「未声明」→ 其证据 producer `s6_mathchain_runjson_producers` 无真对象可证 → 永停 advisory（出厂
+# 红·守 LOCKED 决策「转绿前只 advisory + 记录·绝不误拒诚实 run」）。本段补这块 producer：从真 theory-backed
+# run 的 **canonical lineage.spine typed 对象** 如实序列化成 section6_mathchain_gate 的 producer 契约 dict
+# （`{"promotion_claims": [...]}`·key 对齐其 `_adapt_*` 读的 lineage 字段名）——让门有真对象可判（合规 run
+# 过、坏 run 拒），转绿后门才从 advisory 翻 enforce。
+#
+# 诚实红线（= GOAL §0「no silent mock / no template false success」+ RULES.project「未验证≠已验证」对准
+# 本 builder 自己）：
+#   - **只忠实序列化·零判定重造（单一源）**：本 builder 只把 typed 对象转 JSON-safe dict；「数学链完整否 /
+#     标签强度够否 / 实现是否漂移」全留给 section6_mathchain_gate → spine_gate.evaluate_promotion 的 8 子句。
+#     坏 claim（强标签缺 ConsistencyCheck / 缺 binding / proof 没证）**如实序列化** → 门据真值拒，**绝不**
+#     在此预判 / 补默认 / 过滤 / 洗白（洗白=假绿灯）。
+#   - **缺即真缺·绝不补占位（no whitewash）**：claim 缺 ConsistencyCheck → 序列化就缺（绝不 fabricate 一条
+#     pass 的假 check）；缺 binding → 缺；artifact.statement 空 → 空（不填假证）。门据此诚实拒强晋级。
+#   - **honest-absent**：无 claim → 返回 `None`（中心 `_take` 不发该 section key·门 honest-bound·未声明≠
+#     违例·不误拒「只是没 theory 声明」的诚实 run）。
+#   - **fail-closed 入参**：claim 携错 flavor / 错类型对象（非 lineage.spine canonical 类型）→ raise
+#     `Section6RecordError`（不静默吞坏输入·不产「能骗过门」的 dict）。
+#   - **faithful 往返**：builder 序列化 lineage 对象 → dict → 门 `_adapt_*` 复原 lineage 对象 →
+#     evaluate_promotion，无损往返（test 钉死门裁定 == 直算 evaluate_promotion·复用不重造）。
+#
+# 复用不重造：序列化复用本模块既有 `_stable_for_hash`（enum→value / dataclass→dict / tuple→list·已用于
+# `_chain_event_row` 落 JSONL）。消费的 typed 对象复用 lineage.spine canonical 类型（aliased Spine*·与本
+# 模块同名的 research_os flavor 区分·**不另造**第三套数学链类型）。判定复用 spine_gate（经门）·零判定。
+
+
+class Section6RecordError(ValueError):
+    """fail-closed：§6 promotion claim 携错类型对象（非 lineage.spine canonical 数学链类型）。
+
+    拒绝把错 flavor / 错类型对象序列化进 §6 producer 契约——坏输入绝不静默吞成「能骗过门的 dict」
+    （守 RULES.project「未验证≠已验证」·不产假绿灯素材）。
+    """
+
+
+@dataclass(frozen=True)
+class Section6PromotionClaim:
+    """一条 §6 数学链升级 claim 的 producer 输入（复用 lineage.spine canonical typed 对象·不另造）。
+
+    承载一次 theory-backed 晋级意图的 canonical 数学链对象（= `evaluate_promotion` 直接裁定的那套记录）：
+    `artifact`（MathematicalArtifact·含 statement/derivation/proof_status）+ `binding`
+    （TheoryImplementationBinding）+ `consistency_checks`（ConsistencyCheck 序列）+ 可选 `choice`
+    （MethodologyChoiceRecord 放权）/ `data_contract`（PIT 时间语义）/ `current_code_hash`（staleness 复核）/
+    `asset_ref`（违例定位）。builder 只忠实序列化这些对象——**完整性 / 强度判定全留给 §6 门 →
+    spine_gate.evaluate_promotion**（单一源）；缺证据保持缺（无 whitewash），门据真值诚实拒。
+    """
+
+    requested_label: str
+    artifact: "SpineMathematicalArtifact | None" = None
+    binding: "SpineTheoryImplementationBinding | None" = None
+    consistency_checks: "Sequence[SpineConsistencyCheck]" = ()
+    choice: "SpineMethodologyChoiceRecord | None" = None
+    data_contract: "Mapping[str, Any] | None" = None
+    current_code_hash: str | None = None
+    asset_ref: str = ""
+
+    def __post_init__(self) -> None:
+        object.__setattr__(self, "consistency_checks", tuple(self.consistency_checks))
+        _require_text(self.requested_label, "requested_label")
+
+
+def _section6_check_typed(claim: Any) -> None:
+    """fail-closed 类型守卫：claim 每个数学链子对象必须是 lineage.spine canonical 类型（错则拒序列化）。
+
+    防错 flavor（research_os.spine 同名类型 / 任意 dict / 半成品）混进 §6 producer 契约——坏输入在序列化
+    前就拒，绝不产「能骗过门」的 dict。**只校验类型·绝不判过没过**（过没过整体是门的事）。
+    """
+
+    if not isinstance(claim, Section6PromotionClaim):
+        raise Section6RecordError(
+            f"§6 promotion claim 须为 Section6PromotionClaim，得到 {type(claim).__name__}（fail-closed）"
+        )
+    if claim.artifact is not None and not isinstance(claim.artifact, SpineMathematicalArtifact):
+        raise Section6RecordError(
+            "§6 claim.artifact 须为 lineage.spine.MathematicalArtifact，"
+            f"得到 {type(claim.artifact).__name__}（fail-closed·拒错 flavor）"
+        )
+    if claim.binding is not None and not isinstance(claim.binding, SpineTheoryImplementationBinding):
+        raise Section6RecordError(
+            "§6 claim.binding 须为 lineage.spine.TheoryImplementationBinding，"
+            f"得到 {type(claim.binding).__name__}（fail-closed·拒错 flavor）"
+        )
+    for c in claim.consistency_checks:
+        if not isinstance(c, SpineConsistencyCheck):
+            raise Section6RecordError(
+                "§6 claim.consistency_checks[*] 须为 lineage.spine.ConsistencyCheck，"
+                f"得到 {type(c).__name__}（fail-closed·拒错 flavor）"
+            )
+    if claim.choice is not None and not isinstance(claim.choice, SpineMethodologyChoiceRecord):
+        raise Section6RecordError(
+            "§6 claim.choice 须为 lineage.spine.MethodologyChoiceRecord，"
+            f"得到 {type(claim.choice).__name__}（fail-closed·拒错 flavor）"
+        )
+
+
+def _section6_claim_to_dict(claim: Section6PromotionClaim) -> dict[str, Any]:
+    """一条 §6 claim → producer 契约 dict（key 对齐 section6_mathchain_gate `_adapt_*` 读的 lineage 字段名）。
+
+    **只序列化·零判定·缺即缺**：子对象在场 → `_stable_for_hash` 无损转 dict（坏值如实保留·门据真值判）；
+    缺省 → 不发该 key（缺 binding / 缺 check 如实暴露·门据 binding-exists / consistency-present 拒·非 whitewash）。
+
+    ★ mutation 锚点（见 tests/test_s6_mathchain_producer.py 头）：把下面 `consistency_checks` 序列化弱化成
+      「不发 consistency_checks key」（漏 consistency）→ 合规 run 的真 check 消失 → 门 consistency-present
+      误拒合规 → `test_compliant_run_builds_record_gate_enforces_ok` 转 RED；反向把空 checks 补一条假 pass
+      （whitewash）→ 坏 run 被洗白过门 → `test_bad_run_missing_consistency_check_enforces_reject` 转 RED →
+      还原 → GREEN。证明 builder 忠实搬运 ConsistencyCheck（漏报 / 洗白都被对抗测试抓）。
+    """
+
+    out: dict[str, Any] = {"requested_label": str(claim.requested_label)}
+    if claim.asset_ref:
+        out["asset_ref"] = str(claim.asset_ref)
+    if claim.artifact is not None:
+        out["artifact"] = _stable_for_hash(claim.artifact)
+    if claim.binding is not None:
+        out["binding"] = _stable_for_hash(claim.binding)
+    if claim.consistency_checks:
+        out["consistency_checks"] = [_stable_for_hash(c) for c in claim.consistency_checks]
+    if claim.choice is not None:
+        out["choice"] = _stable_for_hash(claim.choice)
+    if claim.data_contract is not None:
+        out["data_contract"] = {str(k): _stable_for_hash(v) for k, v in claim.data_contract.items()}
+    if claim.current_code_hash is not None:
+        out["current_code_hash"] = str(claim.current_code_hash)
+    return out
+
+
+def build_section6_mathchain_record(
+    claims: "Sequence[Section6PromotionClaim]",
+) -> dict[str, Any] | None:
+    """从真 theory-backed run 的 canonical 数学链对象组装 §6 门 producer 契约 record（honest-absent）。
+
+    返回 `{"promotion_claims": [<每条 claim 的 dict>, ...]}`（key 对齐 section6_mathchain_gate 的
+    `SECTION6_MATHCHAIN_MANIFEST_KEY` 契约）；honest-absent（无 claim）时返回 `None`（无 theory 声明 →
+    中心 `_take` 不发该 section·门 honest-bound·未声明≠违例·不误拒诚实 run）。
+
+    **只忠实序列化·零判定重造**：数学链「完整否 / 强度够否 / 实现漂移否」全委托 section6_mathchain_gate →
+    spine_gate.evaluate_promotion 的 8 子句（单一源）。坏 claim 如实序列化 → 门据真值拒；缺 ConsistencyCheck
+    保持缺 → 门 consistency-present 拒（**绝不** fabricate 假 check 洗白·守 GOAL §0 no-silent-mock）。
+    fail-closed：claim 携错 flavor / 错类型对象 → raise `Section6RecordError`（不静默吞坏输入·不产骗门 dict）。
+    """
+
+    typed = list(claims or ())
+    if not typed:
+        return None  # honest-absent：无 theory 声明 → 整节不发（门未声明≠违例·绝不误拒诚实 run）
+    for claim in typed:
+        _section6_check_typed(claim)  # fail-closed：错 flavor / 错类型在序列化前就拒
+    return {"promotion_claims": [_section6_claim_to_dict(c) for c in typed]}
+
+
 __all__ = [
     "ActorSource",
     "CanvasParameterValueRecord",
@@ -1699,8 +1860,11 @@ __all__ = [
     "ResearchGraphStore",
     "ResponsibilityDisclosureRecord",
     "RuntimeStatus",
+    "Section6PromotionClaim",
+    "Section6RecordError",
     "TheoryImplementationBinding",
     "TheoryStatus",
+    "build_section6_mathchain_record",
     "mathematical_spine_chain_from_dict",
     "validate_mathematical_spine_chain",
 ]
