@@ -425,8 +425,8 @@ class LLMGateway:
             }))
             try:
                 # client 工厂构造也纳入 sanitized 块（C-S7 Gap1 · GOAL §8）：provider/custom 构造
-                # 异常（如 base_url 夹 user:pass@host 的明文）一律被本 except 收敛成 type-name，
-                # 绝不让携明文的原始异常漏出 _invoke_with_fallback 之外。
+                # 异常（如 base_url 夹 user:pass@host 的明文）也被收敛成 type-name，绝不让携明文的
+                # 原始异常漏出 _invoke_with_fallback 之外。
                 client = self._client_factory(cred)
                 resp = client.chat(
                     request.messages,
@@ -435,23 +435,28 @@ class LLMGateway:
                     temperature=request.temperature,
                 )
             except Exception as exc:  # noqa: BLE001  —— 外部操作 = provider 构造 + 调用；失败即 fallback。
-                kind = type(exc).__name__
-                self._mark_fail(profile.provider, kind)
-                excluded.add(profile.signature)
-                fallback_chain.append(f"{profile.provider}/{profile.model}:{kind}")
-                nxt, ok = self._refallback(req, excluded, builder_signature, events)
-                fallback_used = True
-                if not ok or nxt is None:
-                    # from None：切断异常链——原始 provider 异常的 str()/traceback 可能夹明文
-                    # secret（经上游 ERROR_REPORTER.report → traceback.format_exception 落
-                    # errors.jsonl 即泄）。GatewayError 自带 message 里 chain 仅含 provider/model/
-                    # type-name（够定位、不回显 str(exc) 的配置细节/secret）。GOAL §8 红线。
-                    raise GatewayError(f"全部 provider 调用失败（chain={fallback_chain}）") from None
-                current = nxt
-                continue  # strict_degrade 于 while 顶单点 enforce（已脱离 exc 活跃上下文 → 不 chain 明文）
+                # 在活跃异常上下文里【只】取 type-name 这一无密信息，随即跳出 except——后续 fallback
+                # 解析（_refallback→resolve，可能抛非 RoutingError）与终态 raise 全在 except 之外执行，
+                # 任何异常都不会隐式 chain 原始 provider 异常（其 str()/traceback 可能夹明文 → 经
+                # ERROR_REPORTER 落 errors.jsonl）。GOAL §8 红线·结构性断掉 __context__ 泄漏整类。
+                failure_kind = type(exc).__name__
+            else:
+                self._mark_ok(profile.provider)
+                return resp, current, cred, fallback_used, fallback_chain
 
-            self._mark_ok(profile.provider)
-            return resp, current, cred, fallback_used, fallback_chain
+            # —— 出 except：exc 活跃上下文已结束（sys.exc_info() 复位）。fallback 簿记/解析/终态 raise
+            #    在此执行，均不可能再隐式 chain 原始 provider 异常。——
+            self._mark_fail(profile.provider, failure_kind)
+            excluded.add(profile.signature)
+            fallback_chain.append(f"{profile.provider}/{profile.model}:{failure_kind}")
+            nxt, ok = self._refallback(req, excluded, builder_signature, events)
+            fallback_used = True
+            if not ok or nxt is None:
+                # 终态 message 内 chain 仅含 provider/model/type-name（够定位、不回显 str(exc) 配置
+                # 细节/secret）。from None 再保险切链（此处本已无活跃 context）。GOAL §8 红线。
+                raise GatewayError(f"全部 provider 调用失败（chain={fallback_chain}）") from None
+            current = nxt
+            continue  # strict_degrade 于 while 顶单点 enforce
 
     def _refallback(
         self,

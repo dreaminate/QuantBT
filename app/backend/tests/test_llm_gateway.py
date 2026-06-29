@@ -597,6 +597,60 @@ def test_strict_degrade_fallback_does_not_chain_provider_secret():
     assert "strict_degrade" in str(exc) or "降" in str(exc)
 
 
+_REFB_LEAK = "https://u:sk-REFB-LEAK-0bada55deadbeef@host.internal/v1"
+
+
+def test_refallback_resolve_nonrouting_error_no_secret_chain():
+    """第三向量（codex 复审找到·结构性关闭验收 · GOAL §8）：fallback 解析 _refallback→resolve 抛
+    【非 RoutingError】异常时，绝不隐式 chain 上一轮携明文的 provider 异常——因 fallback 解析已移出
+    except 活跃上下文（sys.exc_info() 已复位）。异常原样冒出（不被静默吞），但 __context__ 干净。
+
+    变异（手验，见卡）：把 fallback 解析移回 except 块内 → 该非 RoutingError 会 chain 明文 exc → 本测必红。
+    """
+    import traceback as _tb
+
+    profiles = _profiles_two_strong()
+
+    class _ResolveBoomPolicy(ModelRoutingPolicy):
+        def resolve(self, req, *, unavailable_providers=None, exclude_signatures=None, builder_signature=None):
+            if exclude_signatures:                       # 仅 fallback 解析（_refallback 调）抛非 RoutingError
+                raise RuntimeError("policy internal boom")
+            return super().resolve(
+                req, unavailable_providers=unavailable_providers,
+                exclude_signatures=exclude_signatures, builder_signature=builder_signature,
+            )
+
+    ks = _seed_keystore(profiles)
+    pool = _build_pool(profiles, ks)
+    policy = _ResolveBoomPolicy(profiles, mode=RoutingMode.HYBRID_ADAPTIVE)
+
+    def factory(cred):
+        # 首选 provider 构造即携明文异常 → 进 except → 触发 fallback 解析（resolve 抛 RuntimeError）。
+        raise ValueError(f"connect base_url={_REFB_LEAK}")
+
+    gw = LLMGateway(policy=policy, credential_pool=pool, client_factory=factory,
+                    strict_degrade=True, scan_prompt_secrets=True)
+    with pytest.raises(RuntimeError) as ei:              # resolve 的非 RoutingError 原样冒出（不被静默吞）
+        gw.complete(_req(difficulty="hard"))
+    exc = ei.value
+    formatted = "".join(_tb.format_exception(exc))
+    assert _REFB_LEAK not in str(exc)
+    assert _REFB_LEAK not in formatted
+    assert "sk-REFB-LEAK" not in formatted
+    assert exc.__context__ is None                       # 关键：未挂上一轮 factory 明文异常
+    import tempfile
+    from pathlib import Path as _Path
+
+    from app.observability.errors import ErrorReporter, LocalErrorLog
+
+    with tempfile.TemporaryDirectory() as td:
+        rep = ErrorReporter(local_log=LocalErrorLog(path=_Path(td) / "errors.jsonl"))
+        rep.report(exc, {"path": "/x"})
+        blob = (_Path(td) / "errors.jsonl").read_text(encoding="utf-8")
+    assert _REFB_LEAK not in blob
+    assert "sk-REFB-LEAK" not in blob
+
+
 # ============ replay_state 如实记录 ============
 
 def test_replay_state_reflected_from_response():
