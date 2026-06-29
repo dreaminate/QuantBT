@@ -2,7 +2,8 @@
 
 from __future__ import annotations
 
-from dataclasses import dataclass
+from collections.abc import Sequence
+from dataclasses import asdict, dataclass
 from typing import Any
 
 
@@ -391,6 +392,128 @@ def validate_engineering_standards(
     return EngineeringStandardDecision(accepted=not violations, violations=tuple(violations))
 
 
+# ════════════════════════════════════════════════════════════════════════════
+# NC-S16-ENGSTD-PRODUCER · §16 工程标准 manifest record builder（孤立·扩展不替换·只忠实序列化·零判定）
+# ────────────────────────────────────────────────────────────────────────────
+# 缺口（construction-map NC-S16-ENGSTD-PRODUCER）：§16 门 `section16_engineering_standards_gate.check` 已建，
+# 但 promote 真路径从未把真工程证据如实写进 manifest 的 `section16_engineering_standards` 结构，故门恒见
+# 「未声明」、producer（`s16_engineering_standards_runjson_producers`）无真对象可证、无从诚实转绿。本段补这块：
+# 从 6 族 typed 工程证据（本模块既有 record 类型·复用不另造）**忠实序列化**成门 check 读的 manifest record。
+#
+# 与门侧 `_adapt_*` 的关系（faithful round-trip 的根）：各族 record 的字段名 **即** 门 `_adapt_*` 读的 key
+# （同模块同口径），故 `asdict(record)` 产出的 dict 字段与门期望逐一对应——producer 序列化 → 门 adapter 还原
+# → canonical validator 裁定，三段忠实往返。本 builder **绝不**重写任何工程标准判定，连违例码都不碰。
+#
+# 诚实红线（= GOAL §16「no silent mock / no template false success / 未追踪数据不得发版」对准 producer 自己）：
+#   - **零判定·只序列化**：逐字段照搬 typed record 进 dict，过没过全留门 check →
+#     `validate_engineering_standards` / `classify_performance_baseline`（单一源）。
+#   - **不洗白·缺诚实空**：record 的 None/空字段原样序列化 → 门据真值 surface 违例 / KNOWN_RUN_GAP。绝不补
+#     label / 造 observed 时间 / 填假 checksum（洗白=假绿灯·撞 RULES.project「未验证≠已验证」）。
+#   - **honest-absent**：某族无 record → 不发该族 key；6 族全空 → 返回 `{}`（中心 `_take` 据此标缺·门
+#     honest-bound：未声明≠违例·非「整本已查清」·查清由 producer 绿灯门负责）。
+#   - **性能族强制用 3 态诚实量 `PerformanceBaselineMeasurement`**（带 `measured` 旗）而非
+#     `PerformanceBaselineRecord`：只有 3 态量能表达「未实测」(measured=False)，从根上杜绝把没做的测量洗成达标。
+#   - **fail-closed 入参**：喂错族类型对象 → raise TypeError（不静默吞坏输入·不产错位 manifest 记录）。
+# ════════════════════════════════════════════════════════════════════════════
+
+# 6 族 → (族内 manifest key, 期望 record 类型)。族内 key 即门 check 的 `_RECORD_FAMILIES` + `_PERFORMANCE_KEY`
+# 契约（producer↔gate round-trip·由 wiring 测试钉防漂）。性能族强制 `PerformanceBaselineMeasurement`（3 态）。
+_SECTION16_RECORD_FAMILIES: tuple[tuple[str, type], ...] = (
+    ("mock_records", MockHonestyRecord),
+    ("data_updates", DataUpdateStandardRecord),
+    ("llm_calls", LLMReplayStandardRecord),
+    ("theory_claims", TheoryImplementationStandardRecord),
+    ("fatal_records", FatalRuntimeStandardRecord),
+    ("performance_records", PerformanceBaselineMeasurement),
+)
+
+
+def _to_json_safe(value: Any) -> Any:
+    """JSON 结构归一（tuple→list·dict→dict·标量原样·递归）—— manifest 是 run.json·须 JSON-safe。
+
+    **无损·绝不改任何字段值**：坏值 / None 原样保留，让门据真值判（不洗白）。
+    """
+
+    if isinstance(value, dict):
+        return {str(k): _to_json_safe(v) for k, v in value.items()}
+    if isinstance(value, (list, tuple)):
+        return [_to_json_safe(v) for v in value]
+    return value
+
+
+def _engineering_record_to_manifest_dict(record: Any) -> dict[str, Any]:
+    """单条 §16 工程证据 typed record → manifest dict（faithful·逐字段照搬·零判定零洗白）。
+
+    `dataclasses.asdict` 全字段展开（不漏字段·结构上无从挑字段藏），再 `_to_json_safe` 归一 tuple→list。
+    None/空字段原样保留 → 门 check 据真值 surface 违例 / KNOWN_RUN_GAP。本函数无任何「补默认 / 填占位 /
+    造时间」分支 → producer 不洗白的硬保证。
+
+    ★ producer mutation 三态锚点（见 test 文件头）：把本函数改成洗白（如
+      `{k: (v if v is not None else "__filled__") for k, v in asdict(record).items()}`）→ 缺 ref 的坏 record
+      （mock 缺 label / data 缺 version / llm 缺 provider / 强理论缺 binding）被洗成合规·门误绿 → 对抗测试转
+      RED；性能 measured=False(gap) / 致命旗 / perf 超标 这类 bool/数值判定与 None-洗白正交 → 仍 GREEN → 还原 → 全 GREEN。
+    """
+
+    return _to_json_safe(asdict(record))
+
+
+def _serialize_section16_family(
+    records: Sequence[Any], expected: type, family: str
+) -> list[dict[str, Any]]:
+    """一族 typed record → list[dict]·fail-closed 校验每项类型（不静默吞坏输入·不产错位记录）。
+
+    喂错族类型（把 MockHonestyRecord 塞进 data_updates·或把 `PerformanceBaselineRecord` 塞进
+    performance_records 而非 3 态 `PerformanceBaselineMeasurement`）→ raise TypeError（fail-closed）。
+    """
+
+    out: list[dict[str, Any]] = []
+    for rec in records or ():
+        if not isinstance(rec, expected):
+            raise TypeError(
+                f"section16 producer: {family} 须为 {expected.__name__}，"
+                f"得到 {type(rec).__name__}（fail-closed·不静默吞坏输入·不产错位 manifest 记录）"
+            )
+        out.append(_engineering_record_to_manifest_dict(rec))
+    return out
+
+
+def build_section16_engineering_standards_record(
+    *,
+    mock_records: Sequence[MockHonestyRecord] = (),
+    data_updates: Sequence[DataUpdateStandardRecord] = (),
+    llm_calls: Sequence[LLMReplayStandardRecord] = (),
+    theory_claims: Sequence[TheoryImplementationStandardRecord] = (),
+    fatal_records: Sequence[FatalRuntimeStandardRecord] = (),
+    performance_records: Sequence[PerformanceBaselineMeasurement] = (),
+) -> dict[str, list[dict[str, Any]]]:
+    """6 族 typed 工程证据 → §16 门 check 读的 `section16_engineering_standards` manifest record（payload）。
+
+    [契约] 返回值 = manifest 里 `section16_engineering_standards` key 的 **payload**（6 族 dict），**不含**外层
+    key——key 名是 `section16_engineering_standards_gate.SECTION16_ENGINEERING_STANDARDS_MANIFEST_KEY` 单一源，
+    由中心 `promote_assembler.assemble_promote_sections` 经 `_take` 套上。本 builder 在更低层（research_os），
+    刻意**不**引该常量（防 gate→engineering_standards 反向循环导入）。族内 key 即门 check 的
+    `_RECORD_FAMILIES` + `_PERFORMANCE_KEY` 契约（producer↔gate round-trip·由 wiring 测试钉防漂）。
+
+    [行为] 每族：有 record → 序列化进 payload；无 record → 不发该族 key；6 族全空 → 返回 `{}`（honest-absent）。
+    判定全委托门 check → canonical（本 builder 零判定·见上方段头诚实红线）。
+    """
+
+    bound: dict[str, Sequence[Any]] = {
+        "mock_records": mock_records,
+        "data_updates": data_updates,
+        "llm_calls": llm_calls,
+        "theory_claims": theory_claims,
+        "fatal_records": fatal_records,
+        "performance_records": performance_records,
+    }
+    section: dict[str, list[dict[str, Any]]] = {}
+    for family, expected in _SECTION16_RECORD_FAMILIES:
+        serialized = _serialize_section16_family(bound[family], expected, family)
+        if serialized:  # honest-absent：空族不发 key（中心 _take 据 payload 真伪标缺·绝不发空壳让门误判）
+            section[family] = serialized
+    return section
+
+
 __all__ = [
     "DataUpdateStandardRecord",
     "EngineeringStandardDecision",
@@ -405,6 +528,7 @@ __all__ = [
     "PerformanceBaselineRecord",
     "PerformanceBaselineVerdict",
     "TheoryImplementationStandardRecord",
+    "build_section16_engineering_standards_record",
     "classify_performance_baseline",
     "validate_data_update_standard",
     "validate_engineering_standards",
