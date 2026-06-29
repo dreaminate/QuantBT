@@ -131,6 +131,10 @@ from .lineage.ids import content_hash
 from .research_os import (
     ActorSource,
     AssetRAGDocument,
+    build_factor_rag_document,
+    build_model_rag_document,
+    build_signal_rag_document,
+    build_strategy_rag_document,
     AssetRAGError,
     CanvasLayoutRecord,
     CanvasMutationRecord,
@@ -1035,6 +1039,24 @@ def _field_universe_for_prompt(market: str | None = None) -> dict[str, dict]:
     return out
 
 _main_logger = logging.getLogger(__name__)
+
+
+def _autosync_asset_rag(builder, obj, *, owner: str | None = None) -> None:
+    """C-S5 autosync：registry 写资产时投影进 Research Asset RAG（best-effort）。
+
+    失败只 warn 不阻断 registry 写主流程（RAG 是辅助检索索引·非关键路径·向后兼容）；
+    不静默吞——异常落 _main_logger.warning。owner=None 时由 builder 读对象字段（factor/signal
+    读 author·strategy 读 owner_username）；model passport 无 owner 字段·须显式传。
+    """
+
+    try:
+        RESEARCH_ASSET_RAG_INDEX.add(builder(obj, owner=owner))
+    except Exception as exc:  # noqa: BLE001 — autosync advisory·不破坏 registry 写正确性
+        _main_logger.warning(
+            "research asset RAG autosync failed (%s): %s",
+            getattr(builder, "__name__", "builder"),
+            exc,
+        )
 
 # v0.8.4 · Glossary 词条仓库（启动时从 docs/glossary/ 加载，加载失败不阻断启动）
 # main.py 在 app/backend/app/main.py → 仓库根是 parents[3]
@@ -5482,6 +5504,7 @@ def create_factor(payload: dict = Body(...), user=Depends(require_user_dependenc
         actor=str(getattr(user, "username", None) or getattr(user, "user_id", None) or "system"),
         overwrite=overwrite,
     )
+    _autosync_asset_rag(build_factor_rag_document, factor)  # C-S5 autosync（owner=None→读 factor.author）
     # GOAL §9 advisory（只记录不强制）：把 canonical validate_factor_library_entry 裁决挂到产物上。
     # 本端点是表达式注册路径：kind 固定 expression、ref=formula，故此处实际触发的是「因子数学产物缺
     # theory/run_config 绑定 → 拒」子准则；mathematical_refs / theory_binding_ref / run_config_binding_ref
@@ -5838,6 +5861,7 @@ def register_signal_contract(
         ) from exc
     actor = str(getattr(user, "username", None) or getattr(user, "user_id", None) or "system")
     graph_refs = _record_signal_contract_qro(contract, actor=actor)
+    _autosync_asset_rag(build_signal_rag_document, contract)  # C-S5 autosync（owner=None→读 contract.author）
     return {"registered": True, **contract.to_dict(), **graph_refs}
 
 
@@ -15647,6 +15671,7 @@ def research_os_model_governance_record_passport(
         )
     except (TypeError, ValueError) as exc:
         raise HTTPException(status_code=422, detail=str(exc)) from exc
+    _autosync_asset_rag(build_model_rag_document, recorded, owner=user.username)  # C-S5 autosync（passport 无 owner·须传）
     return {
         "passport_id": recorded.passport_id,
         "model_version_ref": recorded.model_version_ref,
@@ -20835,6 +20860,7 @@ def ide_save_strategy(payload: dict = Body(...), user=Depends(require_user_depen
         actor=user.username,
         market_data_use_validation_refs=market_data_use_validation_refs,
     )
+    _autosync_asset_rag(build_strategy_rag_document, s)  # C-S5 autosync（owner=None→读 s.owner_username）
     out = strategy_to_dict(s)
     out["market_data_use_validation_refs"] = list(market_data_use_validation_refs)
     out.update(graph_refs)
