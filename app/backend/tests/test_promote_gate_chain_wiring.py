@@ -60,6 +60,9 @@ from app.release_gate.section10_methodology_gate import (  # noqa: E402
 from app.release_gate.section13_trust_gate import (  # noqa: E402
     SECTION13_TRUST_GATE_NAME,
 )
+from app.release_gate.section17_rdp_gate import (  # noqa: E402
+    SECTION17_RDP_GATE_NAME,
+)
 
 # —— 经 canonical 测试证明的违例 fixture（与 test_section9/10 同源·此处只搬运不重造）——
 _S9_VIOLATION = {
@@ -77,6 +80,7 @@ _ALL_GATE_NAMES = {
     SECTION10_COST_GATE_NAME,
     SECTION10_CONTROLPLANE_GATE_NAME,
     SECTION13_TRUST_GATE_NAME,  # §13 信任发版门经 gate_registry 落地接进 promote 路径（C-S13-RELEASE-ENFORCE）
+    SECTION17_RDP_GATE_NAME,  # §17 RDP 发版门经 gate_registry 落地接进 promote 路径（C-S17-RDP-PROMOTE-ENFORCE）
 }
 
 
