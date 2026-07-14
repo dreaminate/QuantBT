@@ -574,6 +574,11 @@ def research_quality_report(
     _check("bars_no_duplicates", dup_b == 0, f"duplicates={dup_b}")
     nulls_b = sum(bars.get_column(c).null_count() for c in CANONICAL_COLUMNS)
     _check("bars_no_nulls", nulls_b == 0, f"nulls={nulls_b}")
+    nonfinite_b = sum(
+        bars.select((~pl.col(c).is_finite()).sum()).item()
+        for c in ("open", "high", "low", "close", "volume")
+    )
+    _check("bars_all_finite", nonfinite_b == 0, f"non_finite={nonfinite_b}")
     weekend = bars.select((pl.col("ts").dt.date().dt.weekday() > 5).sum()).item()
     _check("bars_no_weekend", weekend == 0, f"weekend_rows={weekend}")
     bad_ohlc = bars.select(
@@ -633,7 +638,14 @@ def research_quality_report(
         f"max(q,1/q)>{hfq_hard_ratio}={gross}; diagnostic|r|>{HFQ_DIAGNOSTIC_BAND}="
         f"{diagnostic}(真实无涨跌幅事件会计入,供复核非判罚)",
     )
-    # 【factor-价格补偿不变量】(codex 三轮对抗后收敛的单一规则):
+    # 【威胁模型 scope 声明(四轮跨厂商对抗后成文)】本质量门承诺的是「无意损坏」
+    # 检测:管线错误/日期错位/删失/vendor 数据错误/NaN 注入。它【不承诺】对抗性
+    # 防篡改——canonical floor 案例(codex 轮7构造):在真实无涨跌幅暴跌日
+    # (如 002411 20230619 -78.95%,fq=1 纯价格事件)反向伪造 ×4.75 后缀 factor,
+    # 单源自洽、与价格精确耦合,本层数学上不可分辨。对抗性完整性由上层承担:
+    # 签名链(registry/manifest)+staging 确定性重拉比对+跨源事件表对账+
+    # factor vintage(known_at)落盘(后续卡)。
+    # 【factor-价格补偿不变量】(检测「无意」错置的单一规则):
     # 合法除权/缩股日 fq≠1,但 raw 价格反向精确补偿 → hfq r 落常带;
     # 「|fq-1|>0.30 且 |r|>0.30」同现 = factor 剧变无价格补偿 = 错置/损坏。
     # 一条规则吸收:单日错置(两腿各自命中)/首尾删失(单腿直接命中)/非紧邻双尖峰

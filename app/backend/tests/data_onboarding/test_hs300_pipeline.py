@@ -612,7 +612,9 @@ def test_codex_r6_float_endpoint_and_gapped_spikes_caught():
             .alias("adj_factor")
         )
         report = _rq(bars, mutated, suspensions)
-        assert not report["checks"]["hfq_no_uncompensated_factor_spikes"]["ok"], factor_seq
+        check = report["checks"]["hfq_no_uncompensated_factor_spikes"]
+        assert not check["ok"], factor_seq
+        assert "=2" in check["detail"], check["detail"]  # 两腿各自命中,计数钉死
 
 
 def test_legitimate_large_split_with_price_compensation_not_flagged():
@@ -639,4 +641,58 @@ def test_legitimate_large_split_with_price_compensation_not_flagged():
         .alias("low"),
     )
     report = _rq(compensated, big_split, suspensions)
+    assert report["checks"]["hfq_no_uncompensated_factor_spikes"]["ok"]
+
+
+def test_codex_r7_nan_volume_caught():
+    # 轮7真 fail-open:NaN 注入(非 null)此前只有 preflight 有 finite 门,
+    # 研究门缺失——补 bars_all_finite 后必炸。
+    import polars as pl
+
+    bars, factors, suspensions = _research_frames()
+    poisoned = bars.with_columns(
+        pl.when((pl.col("symbol") == "000001.SZ") & (pl.col("ts") == bars["ts"][1]))
+        .then(float("nan"))
+        .otherwise(pl.col("volume"))
+        .alias("volume")
+    )
+    report = _rq(poisoned, factors, suspensions)
+    assert not report["checks"]["bars_all_finite"]["ok"]
+
+
+def test_threat_model_floor_price_coupled_suffix_forgery_documented_miss():
+    # 威胁模型 floor 成文(codex 轮7 canonical 构造,非缺陷否认):
+    # 真实暴跌日(fq=1 纯价格事件)上反向伪造后缀 factor 使 q≈1——单源自洽、
+    # 与价格精确耦合,质量门层数学上不可分辨(它与真实公司行动的唯一区别在
+    # 源头事实,不在数据形状)。对抗性完整性归签名链/重拉比对/跨源/vintage。
+    import polars as pl
+
+    bars, factors, suspensions = _research_frames()
+    ts_crash = bars["ts"][2]
+    crashed = bars.with_columns(
+        pl.when((pl.col("symbol") == "000001.SZ") & (pl.col("ts") >= ts_crash))
+        .then(pl.col("close") * 0.21)
+        .otherwise(pl.col("close"))
+        .alias("close"),
+        pl.when((pl.col("symbol") == "000001.SZ") & (pl.col("ts") >= ts_crash))
+        .then(pl.col("low") * 0.19)
+        .otherwise(pl.col("low"))
+        .alias("low"),
+        pl.when((pl.col("symbol") == "000001.SZ") & (pl.col("ts") >= ts_crash))
+        .then(pl.col("open") * 0.22)
+        .otherwise(pl.col("open"))
+        .alias("open"),
+        pl.when((pl.col("symbol") == "000001.SZ") & (pl.col("ts") >= ts_crash))
+        .then(pl.col("high") * 0.23)
+        .otherwise(pl.col("high"))
+        .alias("high"),
+    )
+    forged = factors.with_columns(
+        pl.when((pl.col("symbol") == "000001.SZ") & (pl.col("ts") >= ts_crash))
+        .then(pl.col("adj_factor") / 0.21)
+        .otherwise(pl.col("adj_factor"))
+        .alias("adj_factor")
+    )
+    report = _rq(crashed, forged, suspensions)
+    # 如实滑过(floor)——若未来翻转,说明接入了跨源/vintage 门,更新本档案。
     assert report["checks"]["hfq_no_uncompensated_factor_spikes"]["ok"]
