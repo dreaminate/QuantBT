@@ -11,7 +11,15 @@
   - `3a82b8e6` docs: 两份 docx 入仓(与 migration 分开)
   - work/(Atlas 试验产物)经 `.git/info/exclude` 本地排除,不入仓;**后续切片不引用/不延续 Atlas 范式**
 - **工作模式钉死(harness 隔离守卫)**:bg session 的 Write/Edit 只能落 worktree;git 操作(add/commit/merge/push)可在主 checkout 跑。每切片模式 = `EnterWorktree` 开分支 → 编辑 + 过门 → 分支 commit → 主 checkout `git merge` 进 main → push。分类器已拒「写 .claude/settings.json 关守卫」,不再尝试。
-- **下一步第一个动作**:切片① Tushare 真实 10 年 HS300 数据管线——先 WebFetch tushare.pro 文档(2000 积分档接口权限 + 每分钟限频),设计限流 + 指数退避 + 本地缓存/增量拉取;链条:拉取脚本 → DatasetVersion → immutable manifest → 签名 provenance receipt → 签名 universe snapshot → dual-model 独立审查 → 性能 harness KNOWN_RUN_GAP 真数据转绿。token 从本机 keyring 读,绝不入代码/日志/commit。
+- **切片① 已开工(卡 39d08df8,P0/§11,已派我名下 review_status=1,卡内有完整接线点/对抗测试/验收)**。侦察四路完成 + 三个事实开口已实测关闭:
+  ① **token**:secrets.yaml 窄读单键迁入 macOS 钥匙串(service=quantbt,name=tushare,fetch 正常,值零回显;Inference: 未拍板默认可翻案)。管线一律 `SecureKeystore.open(prefer="keyring").fetch("tushare")`。
+  ② **universe 码**:index_weight `000300.SH` 实测两端月份各返回 300 行/权重和≈100——与 harness `_HS300_UNIVERSE_REF` 一致,不需 399300.SZ 兜底;快照落**月末交易日**。
+  ③ **覆盖率门不可满足性已被真数据证明**:2026-06-30 成分 300 只中 61 只 list_date 晚于窗口 80% 线(最差 0.056)。修门方案:coverage 分母改「max(窗口起点,list_date) 起交易日」,list_date 逐只绑进签名 universe snapshot(防谎报晚上市洗白),门阈值保守,配对抗测试(早上市但缺 bar 必仍抓/list_date 不在签名快照必拒)+ codex 独立评审。
+- **窗口定型**:2016-06-01..2026-06-30(实测 2446 交易日≥2400,跨 3681 天≥3650,coverage_end=月末快照日)。
+- **harness 转绿最小清单(侦察 B 逐字段拿到)**:A 真 panel parquet(ts,symbol,OHLCV;精确 300 只) B DatasetRegistry.register(require_provenance,≥5 distinct GE tests,metadata 契约) C immutable manifest D 签名 receipt(`quantbt.hs300_perf_provenance.v2`,HMAC-SHA256) E 签名 universe snapshot(`hs300_perf_universe.v1`) F key≥32B 经 env G **pin authority root(perf_harness.py:429,唯一代码改动;dual-model 审查证据落账后才动)**。fixture `hs300_proof_fixture`(test:48-182)= real-path 逐字段模板。
+- **抓取策略(侦察 D 文档实证)**:回填 ts_code 轴 2 码/次并联;日更 trade_date 轴;限速 200 次/分保守 + msg 子串退避(「每分钟最多访问」睡窗口/「每天最多」停次日/「没有权限」不重试);复权只存 raw+adj_factor(hfq=close×factor;qfq 锚点漂移禁缓存);停牌无 bar=官方 missingness 语义;stock_basic 需 fields 显式 delist_date + list_status='D' 补拉退市股。
+- **仓内复用(侦察 C)**:tushare==1.4.24 已依赖;TushareConnector(daily/adj_factor/index_daily);DatasetRegistry(data_quality.py:206);examples/run_a_share_real_demo.py=CLI 模板;复权唯一改动点=factor_factory/panel_source.py(本卡不动,读侧另卡);数据侧通用链 content-addressed 不签名,签名只在 harness 契约层+LLM call records(HMAC)。
+- **进行中**:duet 双脑(deep-opus ‖ codex gpt-5.6-sol ultra)设计评审在跑,回来后三方并集裁决→实现。**下一步第一个动作**:duet 并集裁决 → 写 fetch CLI(scripts/)+修覆盖率门(带对抗测试)→ 真实拉数。
 
 ## 活跃上下文
 - **data/audit 基线四项(2026-07-14 实测)**:61 files / 20,339 lines / 26,209,663 bytes——与交接基线三项**精确一致**;交接 manifest SHA `7348e826…d9c9e9` 配方不可复现(state/旧 workflow 均未记配方,data/audit 内亦无该哈希之文件)。本轮起 canonical 配方钉死:`cd data/audit && find . -type f | LC_ALL=C sort | xargs shasum -a 256 | shasum -a 256` → `1c1788b0bbe2`(前 12 位)。数据未变判定依据 = 三项原始计数精确吻合。
