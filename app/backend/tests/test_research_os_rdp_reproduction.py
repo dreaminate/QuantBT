@@ -400,10 +400,18 @@ def test_section17_formal_promotion_requires_exact_current_receipt(tmp_path) -> 
     manifest = _manifest()
     source_hash = content_hash({"result": "exact"})
     store = _store(tmp_path)
-    # 用测试内取鲜的 now:receipt 有效期=now+5min,而 staleness 对真实时钟评估。
-    # 模块级 NOW 在收集期冻结,慢环境(CI 全量 17min)跑到本测试时窗口已过期
-    # ——CI run5 实证的时间脆弱性,与门语义无关。
+    # 全链统一测试内取鲜的时钟:模块级 NOW(与 _loader 默认参数)在收集期冻结,
+    # 慢环境(CI 全量 ~19min)跑到本测试时 5/10min 窗口已过期,而本测试走的
+    # section17_rdp_check 内部用真实时钟评估——receipt 与 loader snapshot
+    # 必须同用 fresh 时钟(CI run5/run6 两轮实证的时间脆弱性,门语义零改动)。
     fresh_now = dt.datetime.now(dt.UTC).replace(microsecond=0)
+    store = _store(
+        tmp_path,
+        _loader(
+            verified_at=fresh_now,
+            valid_until=fresh_now + dt.timedelta(minutes=10),
+        ),
+    )
     receipt = store.record_current(
         owner_user_id=OWNER,
         manifest=manifest,
