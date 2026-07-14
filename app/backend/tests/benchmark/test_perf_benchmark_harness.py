@@ -877,13 +877,18 @@ def _build_hs300_variant_chain(tmp_path, base_fixture, frame, list_dates):
     }
 
 
-def _late_listed_variant_inputs(hs300_proof_fixture):
+def _late_listed_variant_inputs(hs300_proof_fixture, listed_index=600):
+    # listed_index=600 is deliberately discriminating: expected since-listing
+    # days = 2400-600 = 1800, which PASSES the since-listing denominator at
+    # full coverage but would FAIL the pre-amendment full-window denominator
+    # (1800 < ceil(2400*0.80) = 1920) — reverting the denominator kills the
+    # green test below.
     import polars as pl
 
     frame = pl.read_parquet(hs300_proof_fixture["data_path"])
     trading_dates = sorted(frame.get_column("ts").dt.date().unique().to_list())
     target = hs300_proof_fixture["symbols"][0]
-    listed = trading_dates[300]
+    listed = trading_dates[listed_index]
     list_dates = {
         **hs300_proof_fixture["universe_payload"]["constituent_list_dates"],
         target: listed.isoformat(),
@@ -955,7 +960,7 @@ def test_late_listed_constituent_first_bar_lag_is_rejected(
     _, late_frame, trading_dates, target, listed, list_dates = (
         _late_listed_variant_inputs(hs300_proof_fixture)
     )
-    lag_cutoff = trading_dates[315]
+    lag_cutoff = trading_dates[615]
     lagged = late_frame.filter(
         (pl.col("symbol") != target) | (pl.col("ts").dt.date() >= lag_cutoff)
     )
@@ -967,6 +972,151 @@ def test_late_listed_constituent_first_bar_lag_is_rejected(
     assert measurement.measured is False
     assert "first bar lags its signed listing date" in measurement.unavailable_reason
     assert classify_performance_baseline(measurement).status == PERF_KNOWN_RUN_GAP
+
+
+def test_hs300_universe_v2_fields_with_v1_schema_string_are_rejected(
+    hs300_proof_fixture,
+    tmp_path,
+    monkeypatch,
+):
+    # Seeded bad (split from the missing-fields case per adversarial review):
+    # a payload carrying the full v2 field set but claiming the v1 schema
+    # string must die on the schema binding check, not slip through.
+    _pin_hs300_root(monkeypatch, hs300_proof_fixture)
+    universe_payload = {
+        **hs300_proof_fixture["universe_payload"],
+        "schema_version": "quantbt.hs300_perf_universe.v1",
+    }
+    receipt_path, universe_path = _resign_universe_variant(
+        hs300_proof_fixture, tmp_path, universe_payload
+    )
+    measurement = _measure_hs300_fixture(
+        hs300_proof_fixture,
+        provenance_receipt_path=receipt_path,
+        universe_snapshot_path=universe_path,
+    )
+    assert measurement.measured is False
+    assert "not bound to the pinned authority root" in measurement.unavailable_reason
+    assert classify_performance_baseline(measurement).status == PERF_KNOWN_RUN_GAP
+
+
+def test_late_listed_first_bar_at_lag_boundary_is_green(
+    hs300_proof_fixture,
+    tmp_path,
+    monkeypatch,
+):
+    # Boundary pin: "within the first 10 eligible panel dates" means eligible
+    # index <= 9. First bar exactly on index listed+9 must be measurable.
+    import polars as pl
+
+    _, late_frame, trading_dates, target, _, list_dates = (
+        _late_listed_variant_inputs(hs300_proof_fixture)
+    )
+    boundary = trading_dates[609]
+    trimmed = late_frame.filter(
+        (pl.col("symbol") != target) | (pl.col("ts").dt.date() >= boundary)
+    )
+    variant = _build_hs300_variant_chain(
+        tmp_path, hs300_proof_fixture, trimmed, list_dates
+    )
+    _pin_hs300_root(monkeypatch, variant)
+    measurement = _measure_hs300_fixture(variant)
+    assert measurement.measured is True
+
+
+def test_late_listed_first_bar_one_past_lag_boundary_is_rejected(
+    hs300_proof_fixture,
+    tmp_path,
+    monkeypatch,
+):
+    # Boundary pin: eligible index 10 (one past the allowance) must fail.
+    import polars as pl
+
+    _, late_frame, trading_dates, target, _, list_dates = (
+        _late_listed_variant_inputs(hs300_proof_fixture)
+    )
+    past_boundary = trading_dates[610]
+    trimmed = late_frame.filter(
+        (pl.col("symbol") != target) | (pl.col("ts").dt.date() >= past_boundary)
+    )
+    variant = _build_hs300_variant_chain(
+        tmp_path, hs300_proof_fixture, trimmed, list_dates
+    )
+    _pin_hs300_root(monkeypatch, variant)
+    measurement = _measure_hs300_fixture(variant)
+    assert measurement.measured is False
+    assert "first bar lags its signed listing date" in measurement.unavailable_reason
+
+
+def _coverage_boundary_frame(hs300_proof_fixture, drop_count):
+    # Late-listed target (index 600, expected 1800, threshold ceil(1800*0.8)
+    # = 1440): drop `drop_count` non-leading days so present = 1800-drop_count.
+    import polars as pl
+
+    _, late_frame, trading_dates, target, _, list_dates = (
+        _late_listed_variant_inputs(hs300_proof_fixture)
+    )
+    dropped = set(trading_dates[700 : 700 + drop_count])
+    trimmed = late_frame.filter(
+        (pl.col("symbol") != target) | (~pl.col("ts").dt.date().is_in(list(dropped)))
+    )
+    return trimmed, list_dates
+
+
+def test_since_listing_coverage_exactly_at_threshold_is_green(
+    hs300_proof_fixture,
+    tmp_path,
+    monkeypatch,
+):
+    trimmed, list_dates = _coverage_boundary_frame(hs300_proof_fixture, 360)
+    variant = _build_hs300_variant_chain(
+        tmp_path, hs300_proof_fixture, trimmed, list_dates
+    )
+    _pin_hs300_root(monkeypatch, variant)
+    measurement = _measure_hs300_fixture(variant)
+    assert measurement.measured is True
+
+
+def test_since_listing_coverage_one_day_below_threshold_is_rejected(
+    hs300_proof_fixture,
+    tmp_path,
+    monkeypatch,
+):
+    trimmed, list_dates = _coverage_boundary_frame(hs300_proof_fixture, 361)
+    variant = _build_hs300_variant_chain(
+        tmp_path, hs300_proof_fixture, trimmed, list_dates
+    )
+    _pin_hs300_root(monkeypatch, variant)
+    measurement = _measure_hs300_fixture(variant)
+    assert measurement.measured is False
+    assert "lack 80% daily coverage" in measurement.unavailable_reason
+
+
+def test_early_listed_low_full_window_coverage_still_rejected(
+    hs300_proof_fixture,
+    tmp_path,
+    monkeypatch,
+):
+    # Equivalence regression: for constituents listed before the panel start
+    # the amendment must behave exactly like the old full-window rule —
+    # 79% of the full window stays rejected.
+    import polars as pl
+
+    frame = pl.read_parquet(hs300_proof_fixture["data_path"])
+    trading_dates = sorted(frame.get_column("ts").dt.date().unique().to_list())
+    target = hs300_proof_fixture["symbols"][0]
+    dropped = set(trading_dates[700 : 700 + 504])  # present 1896 < ceil(2400*0.8)=1920
+    trimmed = frame.filter(
+        (pl.col("symbol") != target) | (~pl.col("ts").dt.date().is_in(list(dropped)))
+    )
+    list_dates = hs300_proof_fixture["universe_payload"]["constituent_list_dates"]
+    variant = _build_hs300_variant_chain(
+        tmp_path, hs300_proof_fixture, trimmed, list_dates
+    )
+    _pin_hs300_root(monkeypatch, variant)
+    measurement = _measure_hs300_fixture(variant)
+    assert measurement.measured is False
+    assert "lack 80% daily coverage" in measurement.unavailable_reason
 
 
 def test_pinned_authority_rejects_an_attacker_key_even_with_matching_receipts(

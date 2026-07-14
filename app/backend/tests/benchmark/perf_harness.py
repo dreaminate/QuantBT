@@ -100,6 +100,16 @@ _HS300_MIN_CALENDAR_SPAN_DAYS = 3650
 # by genuine data. Listing dates are part of the signed universe snapshot
 # (schema v2) so the denominator carries the same authority binding as the
 # membership itself.
+#
+# The 0.80 floor is a PURE COUNT contract — no maximum-contiguous-gap rule
+# is imposed. Contiguous multi-month holes are genuine A-share suspension
+# structure (measured 2026-07: a current constituent's longest real
+# suspension spans 311 consecutive open days), so any gap rule tight enough
+# to add teeth would reject genuine data. Suspension semantics belong to the
+# dataset's missingness model, and fabricated listing-date claims are the
+# signing operator's responsibility — bounded by the cross-vendor
+# re-derivation of membership and listing dates required before an
+# authority root may be pinned below.
 _HS300_MIN_SYMBOL_COVERAGE_RATIO = 0.80
 # A constituent listed after the panel start must produce its first bar
 # within this many panel trading days of its signed listing date; measured
