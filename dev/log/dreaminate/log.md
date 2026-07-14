@@ -6,6 +6,8 @@
 ## <日期> · <标题>
 - 建/改了什么 + 命门  - 验收：<对抗测试 + 变异 + 全量数字>  - 下一步：<…> -->
 
+## 2026-07-14-1151 loop 首轮启动切片:脏工作区收口 land main(4409738d migration + 3a82b8e6 docx);Atlas 试验产物 .git/info/exclude 本地排除不入仓不延续;audit 基线三项精确吻合,manifest 配方钉 canonical(1c1788b0bbe2)
+
 ## 2026-07-14-0926 OS 结构改造 v2 迁移落地(冻结层同步 MDO@81593ab)
 - state.md 58 条「上次刷新」堆叠拆出:最新一条进 frontier.md,其余走 git 历史;222KB 待后续蒸馏
 - 派生视图 10 个 git rm --cached(DEVMAP/9 个 _NAV/board);dev/.gitignore 接管

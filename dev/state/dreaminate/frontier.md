@@ -1,9 +1,27 @@
 <!-- 重生型:每个 loop/session 收尾整篇覆写,永远只有最新一份(历史在 git)。模板 state/_TEMPLATE.frontier.md -->
 # FRONTIER · dreaminate 前沿快照（重生型 · 每次整篇覆写）
 
-> 给下一个 session/loop 的续接现场。**覆写,不追加**。与 state.md 分工:state = gap 表;frontier = 战役现场。
-> 迁移说明(2026-07-14):本文件由 OS 结构改造 v2 迁移生成,内容 = 原 state.md 顶部最新一条「上次刷新」块;
-> 更早的 57 条堆叠块已移出(在 git 历史里,git log dev/state/dreaminate/state.md 可查)。下轮起按模板三节覆写。
+> 给下一个 session/loop 的续接现场。**覆写,不追加**——旧快照不保留(要历史看 git log 本文件)。
+> 与 `state.md` 分工:state = 对照 GOAL 的 gap 表(慢变);frontier = 正在进行的战役现场(每 loop 全刷)。
 
-## 现在打到哪了（原最新刷新块,原样搬入）
-> 上次刷新：2026-06-29（**攒批三线整合 land（C-S11 单一源 + C-S6 §6 数学链门 + C-S7 Gap1 secret 向量全闭·火力全开 3 并行领地零交叠 merge 零冲突）·已 push origin/main（local == remote 核实）**。**C-S11 Commit1**（§11·flat 升 Pydantic 单一源）：`market_data_contract.InstrumentSpec` flat dataclass→Pydantic BaseModel（17 字段全保留·asset_class 保 str·frozen·to_dict exclude-None **零漂移**[content_hash 逐字节同 `5d1fd0e3`]·from_dict tolerant 旧 perpetual/cn_equity 读得回）·吸收 `instruments/spec.py` typed 富能力作 **Optional additive**（strike gt=0 等·validators-when-provided·**不强制 required**）+ 新 `research_os/asset_class.py`（AssetClass 单一源）+ spec_id @property（不入 to_dict·非 PK·保 instrument_ref 身份）·**删 orphan spec.py**·trim instruments/__init__·repoint 测试·**main.py 零改动**（codex 四类 hazard[序列化漂移/旧数据/身份 swap/单一源]全 no defect）。**C-S6 §6 数学链门**（§6/§8）：新建 `section6_mathchain_gate.py` 委托 `lineage.spine_gate.evaluate_promotion` 8 deny 子句（binding/consistency/fresh/proof-honest/pit-bound/claim-grounded·零重造·没用 PromotionGuard）·中心串接 `gate_registry` 共 **7 门** + `_ALL_GATE_NAMES`·advisory-first（producer `s6_mathchain_runjson_producers` RED·honest-absent 不误拒）·codex 修 2 malformed-input fail-open。**C-S7 Gap1**（§7/§8 安全收紧）：`gateway.py _invoke_with_fallback` **四条 secret→errors.jsonl 泄漏向量结构性全闭**（factory 进 try·终态 from None·strict_degrade enforce 移出 except·refallback 解析移出 except·except 块只剩 type-name 读取）·codex 两轮通读证实无残留·变异三态 MutA/B/C/D 各红。**C-S15-SERVING 核验为 already_done**（真 model serving 全建已接线：safe load + ModelServingInvocationRecord + predict 端点 + 测试·诚实负反馈·下次刷 codemap 标完成）。**验证**：后端全量 **3704 passed / 13 skipped / 0 failed / 522s**（3651+53）；validate_dev PASS；各线 codex 复核 + 中心串接 diff codex 通过；集成 commit `ad7b9d4e` + 本刷新 land main。**边界**：本地 proof + 已 push origin；非 CI·非线上·非用户验收。**★ 待用户裁（全 CENTER-SERIAL 碰 main.py·裁定后中心串行逐条）**：① C-S11 **Commit2 fork**（refs[已做] vs values-required enforce·token 保 str+normalize vs Literal-tighten[需持久化数据迁移]·single-class-validators vs subclass-union）② monitor-schema-hook（hook-only parallel-safe 但生产零触发 vs 完整 CENTER-SERIAL 碰 main.py）③ C-S7 Gap2 record_sink RDP 落账 wiring（_current_agent_llm 直接实例化 LLMGateway vs make_settings 升级）+ Gap3 Settings 治理深度 ④ C-S3 端点强制（enforce 立即 vs advisory-first + Factor.evidence_refs from_dict 向后兼容兜底）。**下一波**：上述裁定后中心串行逐条 + C-S6-RUNJSON-PRODUCERS（§6 producer 标绿）。）
+## 现在打到哪了
+- **/loop 15m 自主开发循环已启动**(cron job ce958a8c,session-only,7 天自动过期)。授权条款:功能级切片过四道门(最低验证全绿 + validate_dev PASS + autoplan 评审 + audit 基线无异常)自行进 main;纯 dev/ 改动以 validate_dev PASS + git diff --check 为门。
+- **首轮(2026-07-14)一次性启动切片 ✅ 完成**——main checkout 脏工作区收口,过门进 main 并 push(66d3b10f..3a82b8e6):
+  - `4409738d` chore(dev-os): 结构改造 v2 迁移整批(50 files;log.md 缩减 + archive/2026-06.md 同 commit,历史不丢)
+  - `3a82b8e6` docs: 两份 docx 入仓(与 migration 分开)
+  - work/(Atlas 试验产物)经 `.git/info/exclude` 本地排除,不入仓;**后续切片不引用/不延续 Atlas 范式**
+- **工作模式钉死(harness 隔离守卫)**:bg session 的 Write/Edit 只能落 worktree;git 操作(add/commit/merge/push)可在主 checkout 跑。每切片模式 = `EnterWorktree` 开分支 → 编辑 + 过门 → 分支 commit → 主 checkout `git merge` 进 main → push。分类器已拒「写 .claude/settings.json 关守卫」,不再尝试。
+- **下一步第一个动作**:切片① Tushare 真实 10 年 HS300 数据管线——先 WebFetch tushare.pro 文档(2000 积分档接口权限 + 每分钟限频),设计限流 + 指数退避 + 本地缓存/增量拉取;链条:拉取脚本 → DatasetVersion → immutable manifest → 签名 provenance receipt → 签名 universe snapshot → dual-model 独立审查 → 性能 harness KNOWN_RUN_GAP 真数据转绿。token 从本机 keyring 读,绝不入代码/日志/commit。
+
+## 活跃上下文
+- **data/audit 基线四项(2026-07-14 实测)**:61 files / 20,339 lines / 26,209,663 bytes——与交接基线三项**精确一致**;交接 manifest SHA `7348e826…d9c9e9` 配方不可复现(state/旧 workflow 均未记配方,data/audit 内亦无该哈希之文件)。本轮起 canonical 配方钉死:`cd data/audit && find . -type f | LC_ALL=C sort | xargs shasum -a 256 | shasum -a 256` → `1c1788b0bbe2`(前 12 位)。数据未变判定依据 = 三项原始计数精确吻合。
+- **测试基线(交接值,以实跑为准)**:后端 6261 passed / 前端 423 passed / 性能门禁 59 / 安全隐私 100 / validate_dev PASS。
+- validate_dev 两个已知 ⚠️(不挡门):state.md 222KB>32KB + 最长行 6765>2000——排期「蒸馏归档」切片处理。
+- 汇报六字段契约:Local checkout / Remote branch or PR / Local tests / CI(gh 未查前 Unqueried) / Production(Unqueried) / User acceptance(Unverified)。
+- 旧 codex workflow state(`~/.codex/workflows/quantbt-goal-honest-20260711/state.md`)只当历史参考,HEAD/测试数已过期。
+- 仍开的本地 gap 队列:前端单 bundle 拆分(2,557.79 kB/gzip 767.39 kB)、FastAPI on_event 迁移、state.md 蒸馏归档、GoalProofLedger snapshot cache LRU(P2)、90+ 历史 worktree/分支盘点(只列清单,删除等拍板)。
+
+## 待裁 / 卡点
+- 2026-06-29 frontier 曾列四项待裁(C-S11 Commit2 fork / monitor-schema-hook / C-S7 Gap2+Gap3 / C-S3 端点强制,全 CENTER-SERIAL 碰 main.py)——**但其后 20260711 codex workflow 波次(测试 3704→6261)可能已消化部分,列表未经当前代码核对,动手前先核实还有哪几项活着**(git log + 对应代码),别按过期清单行事。
+- 90+ 历史 worktree/分支:只列清单不删除,等用户拍板。
+- loop 期间待拍板项处理条款:可逆且不越红线 → 选推荐项直接做 + log 标「Inference: 未拍板默认,可翻案」;不可逆/动钱/OS 级/方法学门槛/GPL license → 登记 board/state 等拍板,随即切别的切片。
