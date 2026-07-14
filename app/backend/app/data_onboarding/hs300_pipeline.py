@@ -633,55 +633,25 @@ def research_quality_report(
         f"max(q,1/q)>{hfq_hard_ratio}={gross}; diagnostic|r|>{HFQ_DIAGNOSTIC_BAND}="
         f"{diagnostic}(真实无涨跌幅事件会计入,供复核非判罚)",
     )
-    # 回转判据用 factor 比率(fq)而非 hfq q:q_t·q_{t+1} 中被污染的中间 factor
-    # 会精确相消(codex 轮5实跑证伪),fq_t·fq_{t+1} 则与价格无关地钉死回转。
-    paired = (
-        hfq.with_columns(
-            pl.col("__hfq_ret").shift(-1).over("symbol").alias("__r_next"),
-            pl.col("__fq").shift(-1).over("symbol").alias("__fq_next"),
-        )
-        .drop_nulls("__r_next")
-        .select(
-            (
-                (pl.col("__hfq_ret").abs() > HFQ_DIAGNOSTIC_BAND)
-                & (pl.col("__r_next").abs() > HFQ_DIAGNOSTIC_BAND)
-                & (pl.col("__hfq_ret") * pl.col("__r_next") < 0)
-                & ((pl.col("__fq") * pl.col("__fq_next") - 1.0).abs()
-                   <= HFQ_PAIR_REVERT_TOL)
-            ).sum()
-        )
-        .item()
-    )
+    # 【factor-价格补偿不变量】(codex 三轮对抗后收敛的单一规则):
+    # 合法除权/缩股日 fq≠1,但 raw 价格反向精确补偿 → hfq r 落常带;
+    # 「|fq-1|>0.30 且 |r|>0.30」同现 = factor 剧变无价格补偿 = 错置/损坏。
+    # 一条规则吸收:单日错置(两腿各自命中)/首尾删失(单腿直接命中)/非紧邻双尖峰
+    # (各腿独立命中)/价格漂移洗白(腿仍命中)——无成对乘积,无浮点端点问题。
+    # 真实市场反例检查:无涨跌幅大事件(复牌/退市整理)是价格事件,fq=1 不命中;
+    # 大比例送转(fq 大)当日 r 被补偿落常带,不命中。
+    factor_spikes = hfq.select(
+        (
+            ((pl.col("__fq") - 1.0).abs() > HFQ_DIAGNOSTIC_BAND)
+            & (pl.col("__hfq_ret").abs() > HFQ_DIAGNOSTIC_BAND)
+        ).sum()
+    ).item()
     _check(
-        "hfq_no_paired_revert_spikes",
-        paired == 0,
-        f"opposite>{HFQ_DIAGNOSTIC_BAND}_factor_reverting_pairs={paired}"
-        "(错置签名:factor 比率次日精确回转;真实事件不回转)",
+        "hfq_no_uncompensated_factor_spikes",
+        factor_spikes == 0,
+        f"factor_move>{HFQ_DIAGNOSTIC_BAND}_with_hfq_move>{HFQ_DIAGNOSTIC_BAND}"
+        f"={factor_spikes}(合法公司行动被价格补偿,不会同现双剧变)",
     )
-    # 首尾删失盲区(codex 轮5):首/末腿只剩单边,成对判据够不着——
-    # 边界规则:每 symbol 的第一与最后一个 inter-bar 收益,|r|>0.30 且
-    # |fq-1|>0.30(factor 驱动的孤立尖峰)即违规;真实无涨跌幅事件 fq=1 不误杀。
-    boundary = (
-        hfq.with_columns(
-            pl.int_range(pl.len()).over("symbol").alias("__i"),
-            (pl.len() - 1).over("symbol").alias("__last"),
-        )
-        .filter((pl.col("__i") == 0) | (pl.col("__i") == pl.col("__last")))
-        .select(
-            (
-                (pl.col("__hfq_ret").abs() > HFQ_DIAGNOSTIC_BAND)
-                & ((pl.col("__fq") - 1.0).abs() > HFQ_DIAGNOSTIC_BAND)
-            ).sum()
-        )
-        .item()
-    )
-    _check(
-        "hfq_no_boundary_factor_spikes",
-        boundary == 0,
-        f"boundary_factor_driven_spikes={boundary}"
-        "(首/末腿 factor 驱动孤立尖峰=删失盲区错置)",
-    )
-
     # 探针 #7:bar 不得落在「有记录的全天停牌日」(伪 bar 种坏必炸;记录缺席≠未停牌)。
     # 全天判定:S 且 (timing 空 OR 退化窗 start==end)——供应商用 "09:30-09:30"
     # 编码全天停牌(codex 对照上交所公告实证 688005.SH 2026-01-16);

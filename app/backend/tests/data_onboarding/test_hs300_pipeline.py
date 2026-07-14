@@ -324,10 +324,11 @@ def _research_frames():
     for s in symbols:
         skip = {4} if s == "999999.SZ" else set()  # 999999 在 1/4 有记录停牌无 bar
         for d in days:
+            scale = 0.5 if d >= 5 else 1.0  # 1/5 除权:价格减半补偿 factor 翻倍(诚实基底)
             if d not in skip:
                 rows["symbol"].append(s); rows["ts"].append(_ts(d))
-                rows["open"].append(10.0); rows["high"].append(11.0)
-                rows["low"].append(9.5); rows["close"].append(10.5)
+                rows["open"].append(10.0 * scale); rows["high"].append(11.0 * scale)
+                rows["low"].append(9.5 * scale); rows["close"].append(10.5 * scale)
                 rows["volume"].append(1000.0)
             frows["symbol"].append(s); frows["ts"].append(_ts(d))
             frows["adj_factor"].append(2.0 if d >= 5 else 1.0)  # 1/5 除权跳变
@@ -476,28 +477,30 @@ def test_codex_counterexample_single_day_x4_pair_revert_caught():
         .alias("adj_factor")
     )
     report = _rq(bars, spiked, suspensions)
-    assert not report["checks"]["hfq_no_paired_revert_spikes"]["ok"]
+    assert not report["checks"]["hfq_no_uncompensated_factor_spikes"]["ok"]
 
 
-def test_detection_floor_sub_band_swap_documented_miss():
-    # 检测下限成文(非缺陷否认):相邻日 factor 值互换,双腿 ±20%/16.7% 在涨跌停带内
-    # ——本层设计上不可检(与真实行情不可分),真解药=factor vintage 落盘(后续卡)。
+def test_detection_floor_flat_region_in_band_fabrication_documented_miss():
+    # 检测下限成文(非缺陷否认,经三轮对抗收窄):平坦区无中生有的带内小幅假因子
+    # (如 3% 假分红,fq 与 r 双双 <0.30)——本层设计上不可检(与真实小分红不可分),
+    # 真解药=factor vintage(known_at)落盘做真 PIT 门(后续卡)。
+    # 注:靠近真实除权日的互换/错置会解耦补偿而被不变量抓住(见上方回归测试),
+    # 下限比最初声明的更窄。
     import polars as pl
 
     bars, factors, suspensions = _research_frames()
-    ts2, ts3 = factors["ts"][2], factors["ts"][3]
-    swapped = factors.with_columns(
-        pl.when((pl.col("symbol") == "000001.SZ") & (pl.col("ts") == ts2))
-        .then(1.2)
-        .when((pl.col("symbol") == "000001.SZ") & (pl.col("ts") == ts3))
-        .then(1.0)
+    ts1 = factors["ts"][1]  # 平坦区(远离 1/5 除权日)
+    fabricated = factors.with_columns(
+        pl.when((pl.col("symbol") == "000001.SZ") & (pl.col("ts") >= ts1)
+                & (pl.col("ts") < factors["ts"][3]))
+        .then(pl.col("adj_factor") * 1.03)
         .otherwise(pl.col("adj_factor"))
         .alias("adj_factor")
     )
-    report = _rq(bars, swapped, suspensions)
-    # 带内互换如实滑过(检测下限)——若未来该断言翻转,说明有了更强的门,更新本档案。
+    report = _rq(bars, fabricated, suspensions)
+    # 带内伪造如实滑过——若未来该断言翻转,说明有了更强的门,更新本档案。
     assert report["checks"]["hfq_continuity_symmetric_ratio"]["ok"]
-    assert report["checks"]["hfq_no_paired_revert_spikes"]["ok"]
+    assert report["checks"]["hfq_no_uncompensated_factor_spikes"]["ok"]
 
 
 def test_codex_counterexample_degenerate_timing_full_day_caught():
@@ -555,7 +558,7 @@ def test_codex_r5_price_drift_cannot_launder_pair_revert():
         .alias("high"),
     )
     report = _rq(drifted, spiked, suspensions)
-    assert not report["checks"]["hfq_no_paired_revert_spikes"]["ok"]
+    assert not report["checks"]["hfq_no_uncompensated_factor_spikes"]["ok"]
 
 
 def test_codex_r5_boundary_censoring_caught():
@@ -571,7 +574,7 @@ def test_codex_r5_boundary_censoring_caught():
             .alias("adj_factor")
         )
         report = _rq(bars, mutated, suspensions)
-        assert not report["checks"]["hfq_no_boundary_factor_spikes"]["ok"], target_ts
+        assert not report["checks"]["hfq_no_uncompensated_factor_spikes"]["ok"], target_ts
 
 
 def test_codex_r5_spaced_degenerate_window_caught():
@@ -587,3 +590,53 @@ def test_codex_r5_spaced_degenerate_window_caught():
     merged = pl.concat([suspensions, spaced])
     report = _rq(bars, factors, merged)
     assert not report["checks"]["no_bars_on_recorded_suspension_days"]["ok"]
+
+
+def test_codex_r6_float_endpoint_and_gapped_spikes_caught():
+    # 轮6两反例:①端点 1.05 浮点溢出旧容差;②[4,3.9,1] 隔腿双尖峰逃逸旧紧邻判据
+    # ——单一不变量规则下两者的尖峰腿各自命中,必炸。
+    import polars as pl
+
+    bars, factors, suspensions = _research_frames()
+    for factor_seq in ([1.0, 4.0, 1.05, 1.05, 1.05], [1.0, 4.0, 3.9, 1.0, 1.0]):
+        mutated = factors.with_columns(
+            pl.when(pl.col("symbol") == "000001.SZ")
+            .then(
+                pl.col("ts").replace_strict(
+                    dict(zip(factors.filter(pl.col("symbol") == "000001.SZ")["ts"],
+                             factor_seq)),
+                    default=None, return_dtype=pl.Float64,
+                )
+            )
+            .otherwise(pl.col("adj_factor"))
+            .alias("adj_factor")
+        )
+        report = _rq(bars, mutated, suspensions)
+        assert not report["checks"]["hfq_no_uncompensated_factor_spikes"]["ok"], factor_seq
+
+
+def test_legitimate_large_split_with_price_compensation_not_flagged():
+    # 反向不误杀:10送10(fq=0.5 方向按 hfq 定义取 2.0)且 raw 价格反向补偿
+    # → r 落常带 → 不变量规则不命中。
+    import polars as pl
+
+    bars, factors, suspensions = _research_frames()
+    ts_event = factors["ts"][2]
+    big_split = factors.with_columns(
+        pl.when((pl.col("symbol") == "000002.SZ") & (pl.col("ts") >= ts_event))
+        .then(pl.col("adj_factor") * 2.0)
+        .otherwise(pl.col("adj_factor"))
+        .alias("adj_factor")
+    )
+    compensated = bars.with_columns(
+        pl.when((pl.col("symbol") == "000002.SZ") & (pl.col("ts") >= ts_event))
+        .then(pl.col("close") * 0.5)
+        .otherwise(pl.col("close"))
+        .alias("close"),
+        pl.when((pl.col("symbol") == "000002.SZ") & (pl.col("ts") >= ts_event))
+        .then(pl.col("low") * 0.5)
+        .otherwise(pl.col("low"))
+        .alias("low"),
+    )
+    report = _rq(compensated, big_split, suspensions)
+    assert report["checks"]["hfq_no_uncompensated_factor_spikes"]["ok"]
