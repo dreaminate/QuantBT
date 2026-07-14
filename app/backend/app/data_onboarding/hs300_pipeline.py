@@ -422,7 +422,8 @@ def build_chain(
 
 __all__ = [
     "CANONICAL_COLUMNS",
-    "HFQ_HARD_BAND",
+    "HFQ_HARD_RATIO",
+    "HFQ_PAIR_REVERT_TOL",
     "HFQ_DIAGNOSTIC_BAND",
     "assemble_research_tables",
     "build_research_asset",
@@ -456,8 +457,19 @@ __all__ = [
 #   >0.30 事件计数作诊断细节供复核。检测下限如实声明:3.5 倍以下的内部 factor
 #   损坏本层不抓(涨跌停带内无法与真实行情区分),归跨源对账(后续工作)。
 
-HFQ_HARD_BAND = 3.5
+# 门形态(codex 增量审 REJECT 后修订):
+# - |r|>band 是单边门(r 恒 >-1,factor 下崩抓不到)→ 换对称比率 max(q,1/q)>5.5。
+#   band 按双向真实极值定:上行 q=4.06(盐湖股份 20210810 恢复上市 +306%),
+#   下行 1/q=4.75(必康 20230619 退市整理 -78.9%)——band 必须同时高于两向;
+#   ÷10 崩坏(1/q=10)与 ×6 错置(q=6)仍必炸;
+# - 单日错置产生「+X 后 -X 回转」双尖峰,单腿可 <4.5 → 成对回转检测:连续反号
+#   |r|>0.30 且 q_t·q_{t+1}∈[0.95,1.05](真实数据零此模式,>0.30 事件互不相邻);
+# - 检测下限(如实):腾挪于涨跌停带内(双腿<0.30)的错置、及整列常数缩放
+#   (对收益语义中性,hfq 比值相消)本层不可检——真解药=factor vintage(known_at)
+#   落盘做真 PIT 门,归后续卡。
+HFQ_HARD_RATIO = 5.5
 HFQ_DIAGNOSTIC_BAND = 0.30
+HFQ_PAIR_REVERT_TOL = 0.05
 
 
 def load_union_members(staging_dir: str | Path) -> list[str]:
@@ -534,8 +546,8 @@ def assemble_research_tables(
                 .dt.replace_time_zone("UTC").alias("ts"),
             )
             .select(["symbol", "ts", "suspend_timing", "suspend_type"])
-            .unique(subset=["symbol", "ts", "suspend_type"], keep="first",
-                    maintain_order=True)
+            .unique(subset=["symbol", "ts", "suspend_timing", "suspend_type"],
+                    keep="first", maintain_order=True)
             .sort(["symbol", "ts"])
             .rechunk()
         )
@@ -550,7 +562,7 @@ def research_quality_report(
     suspensions: pl.DataFrame,
     *,
     current_members: set[str] | None = None,
-    hfq_hard_band: float = HFQ_HARD_BAND,
+    hfq_hard_ratio: float = HFQ_HARD_RATIO,
 ) -> dict[str, Any]:
     """研究面质量门(诊断态跑全项)。含探针 #6(因子同日覆盖)与 #7(停牌伪 bar)。"""
     checks: dict[str, dict[str, Any]] = {}
@@ -560,6 +572,8 @@ def research_quality_report(
 
     dup_b = bars.height - bars.select(pl.struct(["symbol", "ts"]).n_unique()).item()
     _check("bars_no_duplicates", dup_b == 0, f"duplicates={dup_b}")
+    nulls_b = sum(bars.get_column(c).null_count() for c in CANONICAL_COLUMNS)
+    _check("bars_no_nulls", nulls_b == 0, f"nulls={nulls_b}")
     weekend = bars.select((pl.col("ts").dt.date().dt.weekday() > 5).sum()).item()
     _check("bars_no_weekend", weekend == 0, f"weekend_rows={weekend}")
     bad_ohlc = bars.select(
@@ -572,11 +586,13 @@ def research_quality_report(
     ).item()
     _check("bars_ohlcv_invariants", bad_ohlc == 0, f"violating_rows={bad_ohlc}")
 
-    # 探针 #6:每根 bar 必有同日因子(look-ahead/错位种坏必炸)
+    # 探针 #6(诚实定名:bar 日因子完备性——日期前移/缺失类错位必炸。
+    # 这不是一般性 PIT 门:落盘 factor 无逐行 known_at/vintage,带内值级错置
+    # 不可检;真 PIT 门=vintage 落盘后另卡)
     joined = bars.join(factors, on=["symbol", "ts"], how="left")
     missing_factor = joined.get_column("adj_factor").null_count()
     _check(
-        "factor_same_day_coverage",
+        "factor_bar_day_completeness",
         missing_factor == 0,
         f"bars_without_same_day_factor={missing_factor}",
     )
@@ -591,25 +607,63 @@ def research_quality_report(
                     pl.col("close").shift(1).over("symbol")
                     * pl.col("adj_factor").shift(1).over("symbol")
                 )
-                - 1.0
-            ).alias("__hfq_ret")
+            ).alias("__q")
         )
-        .drop_nulls("__hfq_ret")
+        .drop_nulls("__q")
+        .with_columns((pl.col("__q") - 1.0).alias("__hfq_ret"))
     )
-    gross = hfq.select((pl.col("__hfq_ret").abs() > hfq_hard_band).sum()).item()
+    gross = hfq.select(
+        (
+            (pl.col("__q") <= 0)
+            | (pl.max_horizontal(pl.col("__q"), 1.0 / pl.col("__q")) > hfq_hard_ratio)
+        ).sum()
+    ).item()
     diagnostic = hfq.select(
         (pl.col("__hfq_ret").abs() > HFQ_DIAGNOSTIC_BAND).sum()
     ).item()
     _check(
-        "hfq_continuity_no_gross_spikes",
+        "hfq_continuity_symmetric_ratio",
         gross == 0,
-        f"abs_hfq_ret>{hfq_hard_band}={gross}; diagnostic>{HFQ_DIAGNOSTIC_BAND}="
+        f"max(q,1/q)>{hfq_hard_ratio}={gross}; diagnostic|r|>{HFQ_DIAGNOSTIC_BAND}="
         f"{diagnostic}(真实无涨跌幅事件会计入,供复核非判罚)",
     )
+    paired = (
+        hfq.with_columns(
+            pl.col("__hfq_ret").shift(-1).over("symbol").alias("__r_next"),
+            pl.col("__q").shift(-1).over("symbol").alias("__q_next"),
+        )
+        .drop_nulls("__r_next")
+        .select(
+            (
+                (pl.col("__hfq_ret").abs() > HFQ_DIAGNOSTIC_BAND)
+                & (pl.col("__r_next").abs() > HFQ_DIAGNOSTIC_BAND)
+                & (pl.col("__hfq_ret") * pl.col("__r_next") < 0)
+                & ((pl.col("__q") * pl.col("__q_next") - 1.0).abs()
+                   <= HFQ_PAIR_REVERT_TOL)
+            ).sum()
+        )
+        .item()
+    )
+    _check(
+        "hfq_no_paired_revert_spikes",
+        paired == 0,
+        f"opposite>{HFQ_DIAGNOSTIC_BAND}_reverting_pairs={paired}"
+        "(错置签名:尖峰次日精确回转;真实市场事件不回转)",
+    )
 
-    # 探针 #7:bar 不得落在「有记录的全天停牌日」(伪 bar 种坏必炸;记录缺席≠未停牌)
+    # 探针 #7:bar 不得落在「有记录的全天停牌日」(伪 bar 种坏必炸;记录缺席≠未停牌)。
+    # 全天判定:S 且 (timing 空 OR 退化窗 start==end)——供应商用 "09:30-09:30"
+    # 编码全天停牌(codex 对照上交所公告实证 688005.SH 2026-01-16);
+    # 真日内半停(start<end)当天有 bar 属正常,不误杀。
     full_day_suspensions = suspensions.filter(
-        (pl.col("suspend_type") == "S") & pl.col("suspend_timing").is_null()
+        (pl.col("suspend_type") == "S")
+        & (
+            pl.col("suspend_timing").is_null()
+            | (
+                pl.col("suspend_timing").str.split("-").list.get(0)
+                == pl.col("suspend_timing").str.split("-").list.get(-1)
+            )
+        )
     ).select(["symbol", "ts"])
     conflicts = bars.join(full_day_suspensions, on=["symbol", "ts"], how="inner").height
     _check(

@@ -3,7 +3,8 @@
 from .hs300_pipeline import (
     CANONICAL_COLUMNS,
     HFQ_DIAGNOSTIC_BAND,
-    HFQ_HARD_BAND,
+    HFQ_HARD_RATIO,
+    HFQ_PAIR_REVERT_TOL,
     assemble_panel,
     assemble_research_tables,
     build_chain,
@@ -32,7 +33,8 @@ from .hs300_provenance import (
 __all__ = [
     "CANONICAL_COLUMNS",
     "HFQ_DIAGNOSTIC_BAND",
-    "HFQ_HARD_BAND",
+    "HFQ_HARD_RATIO",
+    "HFQ_PAIR_REVERT_TOL",
     "assemble_panel",
     "assemble_research_tables",
     "build_chain",

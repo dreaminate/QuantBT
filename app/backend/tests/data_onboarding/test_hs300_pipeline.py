@@ -363,12 +363,11 @@ def test_probe6_factor_lookahead_shift_is_caught():
     shifted = factors.with_columns((pl.col("ts") + pl.duration(days=1)).alias("ts"))
     report = research_quality_report(bars, shifted, suspensions)
     assert not report["ok"]
-    assert not report["checks"]["factor_same_day_coverage"]["ok"]
+    assert not report["checks"]["factor_bar_day_completeness"]["ok"]
 
 
 def test_probe6b_gross_factor_corruption_caught_real_events_tolerated():
-    # 种坏(#6b·按真实语义重定):某日 factor 被错置 ×6(十倍级错位)→ bar 日 hfq
-    # 连续性硬门(3.5)必炸;真实无涨跌幅事件量级(+3.06 盐湖复牌)与缩股不误杀。
+    # 种坏(#6b):某日 factor ×6 → 对称比率门(4.5)必炸;合法缩股不误杀。
     import polars as pl
 
     from app.data_onboarding import research_quality_report
@@ -381,7 +380,7 @@ def test_probe6b_gross_factor_corruption_caught_real_events_tolerated():
         .alias("adj_factor")
     )
     report_bad = research_quality_report(bars, corrupted, suspensions)
-    assert not report_bad["checks"]["hfq_continuity_no_gross_spikes"]["ok"]
+    assert not report_bad["checks"]["hfq_continuity_symmetric_ratio"]["ok"]
     # 合法缩股(factor 永久 ÷2,伴随 raw 价 ×2 → hfq 连续):不误杀
     legit = factors.with_columns(
         pl.when((pl.col("symbol") == "000002.SZ") & (pl.col("ts") >= factors["ts"][2]))
@@ -400,7 +399,7 @@ def test_probe6b_gross_factor_corruption_caught_real_events_tolerated():
         .alias("high"),
     )
     report_ok = research_quality_report(legit_bars, legit, suspensions)
-    assert report_ok["checks"]["hfq_continuity_no_gross_spikes"]["ok"]
+    assert report_ok["checks"]["hfq_continuity_symmetric_ratio"]["ok"]
 
 
 def test_probe7_fake_bar_on_recorded_suspension_caught():
@@ -423,7 +422,8 @@ def test_probe7_fake_bar_on_recorded_suspension_caught():
 
 
 def test_probe7_half_day_suspension_does_not_conflict():
-    # 边界:suspend_timing 非空(半日停牌)当天有 bar 属正常,不误杀。
+    # 边界:真日内窗(start<end,如 "09:31-10:00")当天有 bar 属正常,不误杀。
+    # (无 "-" 或退化窗的 timing 保守当全天=fail-closed,见 degenerate 反例测试。)
     import polars as pl
     from datetime import datetime, UTC
 
@@ -432,8 +432,99 @@ def test_probe7_half_day_suspension_does_not_conflict():
     bars, factors, suspensions = _research_frames()
     half_day = pl.DataFrame(
         {"symbol": ["000001.SZ"], "ts": [datetime(2024, 1, 3, tzinfo=UTC)],
-         "suspend_timing": ["上午"], "suspend_type": ["S"]}
+         "suspend_timing": ["09:31-10:00"], "suspend_type": ["S"]}
     )
     merged = pl.concat([suspensions, half_day])
     report = research_quality_report(bars, factors, merged)
     assert report["checks"]["no_bars_on_recorded_suspension_days"]["ok"]
+
+
+# ── codex 增量审 REJECT 反例逐一钉死(修复回归) ───────────────────────────────
+
+def _rq(bars, factors, suspensions, **kw):
+    from app.data_onboarding import research_quality_report
+
+    return research_quality_report(bars, factors, suspensions, **kw)
+
+
+def test_codex_counterexample_downward_collapse_caught():
+    # 反例1:factor 永久 ÷10(单边门抓不到 r=-0.9)→ 对称比率门 1/q=10>4.5 必炸。
+    import polars as pl
+
+    bars, factors, suspensions = _research_frames()
+    collapsed = factors.with_columns(
+        pl.when((pl.col("symbol") == "000001.SZ") & (pl.col("ts") >= factors["ts"][2]))
+        .then(pl.col("adj_factor") * 0.1)
+        .otherwise(pl.col("adj_factor"))
+        .alias("adj_factor")
+    )
+    report = _rq(bars, collapsed, suspensions)
+    assert not report["checks"]["hfq_continuity_symmetric_ratio"]["ok"]
+
+
+def test_codex_counterexample_single_day_x4_pair_revert_caught():
+    # 反例2:平坦区单日 factor ×4(+3.0/-0.75 双尖峰,单腿均过 4.5 对称门)
+    # → 成对回转检测必炸。注:若腐蚀日紧邻真实除权日,乘积≠1 会逃逸——
+    # 属已声明检测下限(与真实事件混叠不可分),测试点取平坦区 ts[1]。
+    import polars as pl
+
+    bars, factors, suspensions = _research_frames()
+    spiked = factors.with_columns(
+        pl.when((pl.col("symbol") == "000001.SZ") & (pl.col("ts") == factors["ts"][1]))
+        .then(pl.col("adj_factor") * 4.0)
+        .otherwise(pl.col("adj_factor"))
+        .alias("adj_factor")
+    )
+    report = _rq(bars, spiked, suspensions)
+    assert not report["checks"]["hfq_no_paired_revert_spikes"]["ok"]
+
+
+def test_detection_floor_sub_band_swap_documented_miss():
+    # 检测下限成文(非缺陷否认):相邻日 factor 值互换,双腿 ±20%/16.7% 在涨跌停带内
+    # ——本层设计上不可检(与真实行情不可分),真解药=factor vintage 落盘(后续卡)。
+    import polars as pl
+
+    bars, factors, suspensions = _research_frames()
+    ts2, ts3 = factors["ts"][2], factors["ts"][3]
+    swapped = factors.with_columns(
+        pl.when((pl.col("symbol") == "000001.SZ") & (pl.col("ts") == ts2))
+        .then(1.2)
+        .when((pl.col("symbol") == "000001.SZ") & (pl.col("ts") == ts3))
+        .then(1.0)
+        .otherwise(pl.col("adj_factor"))
+        .alias("adj_factor")
+    )
+    report = _rq(bars, swapped, suspensions)
+    # 带内互换如实滑过(检测下限)——若未来该断言翻转,说明有了更强的门,更新本档案。
+    assert report["checks"]["hfq_continuity_symmetric_ratio"]["ok"]
+    assert report["checks"]["hfq_no_paired_revert_spikes"]["ok"]
+
+
+def test_codex_counterexample_degenerate_timing_full_day_caught():
+    # 反例3:供应商用 "09:30-09:30" 退化窗编码全天停牌——伪 bar 必炸(不再当半日放行)。
+    import polars as pl
+    from datetime import datetime, UTC
+
+    bars, factors, suspensions = _research_frames()
+    degenerate = pl.DataFrame(
+        {"symbol": ["000001.SZ"], "ts": [datetime(2024, 1, 3, tzinfo=UTC)],
+         "suspend_timing": ["09:30-09:30"], "suspend_type": ["S"]}
+    )
+    merged = pl.concat([suspensions, degenerate])
+    report = _rq(bars, factors, merged)  # 000001.SZ 在 1/3 有 bar → 冲突
+    assert not report["checks"]["no_bars_on_recorded_suspension_days"]["ok"]
+
+
+def test_codex_counterexample_null_close_caught():
+    # 反例4:中段 close=None 此前 fail-open(比较式 null 被 sum 吞)→ 新增七列 null 门必炸。
+    import polars as pl
+
+    bars, factors, suspensions = _research_frames()
+    holed = bars.with_columns(
+        pl.when((pl.col("symbol") == "000001.SZ") & (pl.col("ts") == bars["ts"][2]))
+        .then(None)
+        .otherwise(pl.col("close"))
+        .alias("close")
+    )
+    report = _rq(holed, factors, suspensions)
+    assert not report["checks"]["bars_no_nulls"]["ok"]
