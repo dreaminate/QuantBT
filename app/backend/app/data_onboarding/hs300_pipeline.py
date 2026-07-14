@@ -598,6 +598,8 @@ def research_quality_report(
     )
     nonpos = factors.select((pl.col("adj_factor") <= 0).sum()).item()
     _check("factor_positive", nonpos == 0, f"non_positive={nonpos}")
+    # __q 与 __fq 必须在同一完整帧上计算再 drop_nulls——先 drop 再算 fq 会让
+    # 每 symbol 首条返回腿的 fq=null,检测链在关键腿失明(codex 轮5暴露的根因)。
     hfq = (
         joined.sort(["symbol", "ts"])
         .with_columns(
@@ -607,9 +609,13 @@ def research_quality_report(
                     pl.col("close").shift(1).over("symbol")
                     * pl.col("adj_factor").shift(1).over("symbol")
                 )
-            ).alias("__q")
+            ).alias("__q"),
+            (
+                pl.col("adj_factor")
+                / pl.col("adj_factor").shift(1).over("symbol")
+            ).alias("__fq"),
         )
-        .drop_nulls("__q")
+        .drop_nulls(["__q", "__fq"])
         .with_columns((pl.col("__q") - 1.0).alias("__hfq_ret"))
     )
     gross = hfq.select(
@@ -627,10 +633,12 @@ def research_quality_report(
         f"max(q,1/q)>{hfq_hard_ratio}={gross}; diagnostic|r|>{HFQ_DIAGNOSTIC_BAND}="
         f"{diagnostic}(真实无涨跌幅事件会计入,供复核非判罚)",
     )
+    # 回转判据用 factor 比率(fq)而非 hfq q:q_t·q_{t+1} 中被污染的中间 factor
+    # 会精确相消(codex 轮5实跑证伪),fq_t·fq_{t+1} 则与价格无关地钉死回转。
     paired = (
         hfq.with_columns(
             pl.col("__hfq_ret").shift(-1).over("symbol").alias("__r_next"),
-            pl.col("__q").shift(-1).over("symbol").alias("__q_next"),
+            pl.col("__fq").shift(-1).over("symbol").alias("__fq_next"),
         )
         .drop_nulls("__r_next")
         .select(
@@ -638,7 +646,7 @@ def research_quality_report(
                 (pl.col("__hfq_ret").abs() > HFQ_DIAGNOSTIC_BAND)
                 & (pl.col("__r_next").abs() > HFQ_DIAGNOSTIC_BAND)
                 & (pl.col("__hfq_ret") * pl.col("__r_next") < 0)
-                & ((pl.col("__q") * pl.col("__q_next") - 1.0).abs()
+                & ((pl.col("__fq") * pl.col("__fq_next") - 1.0).abs()
                    <= HFQ_PAIR_REVERT_TOL)
             ).sum()
         )
@@ -647,8 +655,31 @@ def research_quality_report(
     _check(
         "hfq_no_paired_revert_spikes",
         paired == 0,
-        f"opposite>{HFQ_DIAGNOSTIC_BAND}_reverting_pairs={paired}"
-        "(错置签名:尖峰次日精确回转;真实市场事件不回转)",
+        f"opposite>{HFQ_DIAGNOSTIC_BAND}_factor_reverting_pairs={paired}"
+        "(错置签名:factor 比率次日精确回转;真实事件不回转)",
+    )
+    # 首尾删失盲区(codex 轮5):首/末腿只剩单边,成对判据够不着——
+    # 边界规则:每 symbol 的第一与最后一个 inter-bar 收益,|r|>0.30 且
+    # |fq-1|>0.30(factor 驱动的孤立尖峰)即违规;真实无涨跌幅事件 fq=1 不误杀。
+    boundary = (
+        hfq.with_columns(
+            pl.int_range(pl.len()).over("symbol").alias("__i"),
+            (pl.len() - 1).over("symbol").alias("__last"),
+        )
+        .filter((pl.col("__i") == 0) | (pl.col("__i") == pl.col("__last")))
+        .select(
+            (
+                (pl.col("__hfq_ret").abs() > HFQ_DIAGNOSTIC_BAND)
+                & ((pl.col("__fq") - 1.0).abs() > HFQ_DIAGNOSTIC_BAND)
+            ).sum()
+        )
+        .item()
+    )
+    _check(
+        "hfq_no_boundary_factor_spikes",
+        boundary == 0,
+        f"boundary_factor_driven_spikes={boundary}"
+        "(首/末腿 factor 驱动孤立尖峰=删失盲区错置)",
     )
 
     # 探针 #7:bar 不得落在「有记录的全天停牌日」(伪 bar 种坏必炸;记录缺席≠未停牌)。
@@ -660,8 +691,10 @@ def research_quality_report(
         & (
             pl.col("suspend_timing").is_null()
             | (
-                pl.col("suspend_timing").str.split("-").list.get(0)
-                == pl.col("suspend_timing").str.split("-").list.get(-1)
+                pl.col("suspend_timing").str.replace_all(" ", "")
+                .str.split("-").list.get(0)
+                == pl.col("suspend_timing").str.replace_all(" ", "")
+                .str.split("-").list.get(-1)
             )
         )
     ).select(["symbol", "ts"])

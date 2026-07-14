@@ -528,3 +528,62 @@ def test_codex_counterexample_null_close_caught():
     )
     report = _rq(holed, factors, suspensions)
     assert not report["checks"]["bars_no_nulls"]["ok"]
+
+
+# ── codex 轮5 REJECT 三反例钉死 ────────────────────────────────────────────────
+
+def test_codex_r5_price_drift_cannot_launder_pair_revert():
+    # 反例5-1:factor [1,4,1] + 两日原始价累涨 6%——旧判据 q·q'(=价格收益)被
+    # 6% 顶出容差而放行;新判据 fq·fq'=4×0.25=1 与价格无关,必炸。
+    import polars as pl
+
+    bars, factors, suspensions = _research_frames()
+    spiked = factors.with_columns(
+        pl.when((pl.col("symbol") == "000001.SZ") & (pl.col("ts") == factors["ts"][1]))
+        .then(pl.col("adj_factor") * 4.0)
+        .otherwise(pl.col("adj_factor"))
+        .alias("adj_factor")
+    )
+    drifted = bars.with_columns(
+        pl.when((pl.col("symbol") == "000001.SZ") & (pl.col("ts") >= bars["ts"][2]))
+        .then(pl.col("close") * 1.06)
+        .otherwise(pl.col("close"))
+        .alias("close"),
+        pl.when((pl.col("symbol") == "000001.SZ") & (pl.col("ts") >= bars["ts"][2]))
+        .then(pl.col("high") * 1.06)
+        .otherwise(pl.col("high"))
+        .alias("high"),
+    )
+    report = _rq(drifted, spiked, suspensions)
+    assert not report["checks"]["hfq_no_paired_revert_spikes"]["ok"]
+
+
+def test_codex_r5_boundary_censoring_caught():
+    # 反例5-2:仅首日或末日 factor ×4——单腿删失,成对判据够不着 → 边界规则必炸。
+    import polars as pl
+
+    bars, factors, suspensions = _research_frames()
+    for target_ts in (factors["ts"][0], factors["ts"][4]):
+        mutated = factors.with_columns(
+            pl.when((pl.col("symbol") == "000001.SZ") & (pl.col("ts") == target_ts))
+            .then(pl.col("adj_factor") * 4.0)
+            .otherwise(pl.col("adj_factor"))
+            .alias("adj_factor")
+        )
+        report = _rq(bars, mutated, suspensions)
+        assert not report["checks"]["hfq_no_boundary_factor_spikes"]["ok"], target_ts
+
+
+def test_codex_r5_spaced_degenerate_window_caught():
+    # 反例5-3:'09:30 - 09:30'(带空格退化窗)——去空格后判全天,伪 bar 必炸。
+    import polars as pl
+    from datetime import datetime, UTC
+
+    bars, factors, suspensions = _research_frames()
+    spaced = pl.DataFrame(
+        {"symbol": ["000001.SZ"], "ts": [datetime(2024, 1, 3, tzinfo=UTC)],
+         "suspend_timing": ["09:30 - 09:30"], "suspend_type": ["S"]}
+    )
+    merged = pl.concat([suspensions, spaced])
+    report = _rq(bars, factors, merged)
+    assert not report["checks"]["no_bars_on_recorded_suspension_days"]["ok"]
