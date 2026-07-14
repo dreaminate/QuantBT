@@ -69,7 +69,7 @@ def _tool_call(name: str, args: dict) -> dict:
 
 # ── 1. agent 白名单守门：生产注册集不含高危工具 ──────────────────────────────
 def test_agent_registers_no_high_risk_tools():
-    names = set(_agent_runtime()._tools.keys())
+    names = set(_agent_runtime(resolve_llm=False)._tools.keys())
     assert names, "agent 未注册任何工具，疑似 _agent_runtime 失效（防空集假绿）"
     offenders = {n for n in names if any(m in n.lower() for m in _HIGH_RISK_MARKERS)}
     assert not offenders, f"agent 注册了高危工具（动钱/晋级/回测永不可注册）：{offenders}"
@@ -77,7 +77,7 @@ def test_agent_registers_no_high_risk_tools():
 
 def test_high_risk_tool_guard_probe():
     """探针（变异）：误注册一个 place_order handler → 守门必抓（证明 #1 非 no-op）。"""
-    rt = _agent_runtime()
+    rt = _agent_runtime(resolve_llm=False)
     rt.register_tool("execution.place_order", lambda _n, _a: {})
     offenders = {n for n in rt._tools if any(m in n.lower() for m in _HIGH_RISK_MARKERS)}
     assert "execution.place_order" in offenders
@@ -86,7 +86,7 @@ def test_high_risk_tool_guard_probe():
 # ── 2. dispatch 不执行未注册的高危工具 ──────────────────────────────────────
 def test_unregistered_high_risk_toolcall_returns_error_not_dispatched():
     """LLM 吐 place_order tool_call，但生产工具集未注册 → 返回「未注册工具」，绝不执行。"""
-    prod_tools = dict(_agent_runtime()._tools)  # 复制生产工具集，隔离翻译门单测 dispatch
+    prod_tools = dict(_agent_runtime(resolve_llm=False)._tools)  # 复制生产工具集，隔离翻译门单测 dispatch
     rt = AgentRuntime(
         _ScriptedLLM([
             LLMResponse(content="下单", tool_calls=[

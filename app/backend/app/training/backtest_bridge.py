@@ -91,6 +91,8 @@ def backtest_trained_model(
     long_short: bool = False,
     periods_per_year: int = 252,
     oos_fraction: float | None = None,
+    as_of_known: str | None = None,
+    use_context: str = "backtest",
 ) -> dict[str, Any]:
     """用已训练模型在 panel 上跑回测。
 
@@ -101,6 +103,23 @@ def backtest_trained_model(
     ``oos_fraction``：取最后这一比例的**日期**做样本外回测（0<frac<=1）。例如 0.3 =
     只回测末尾 30% 的交易日。None = 全段。注意：是否真"样本外"取决于训练是否见过这些日期。
     """
+    confirmatory = use_context == "confirmatory_validation"
+    if confirmatory or as_of_known is not None:
+        import tempfile
+
+        from .codegen import load_pit_panel
+
+        with tempfile.TemporaryDirectory(prefix="quantbt_backtest_pit_") as td:
+            pit_path = Path(td) / "panel.parquet"
+            panel.to_parquet(pit_path)
+            panel = load_pit_panel(
+                str(pit_path),
+                as_of_known=as_of_known,
+                confirmatory=confirmatory,
+                ts_col=ts_col,
+                symbol_col=symbol_col,
+            )
+
     missing = [c for c in (ts_col, symbol_col, price_col) if c not in panel.columns]
     if missing:
         raise ValueError(f"回测面板缺列: {missing}（需要 ts/symbol/price）")

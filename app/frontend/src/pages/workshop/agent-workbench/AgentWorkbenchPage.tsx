@@ -68,7 +68,7 @@ import { TrustDisclosurePanel } from "./TrustDisclosurePanel";
  *  ⑤ handoff 文案止于模拟盘、不导向直接实盘（D-PERM）→ HandoffCard。
  */
 
-const MODEL = "sonnet-4.5";
+const MODEL = "runtime LLM";
 const BRANCH = "strat/weekly-cn";
 const CTX_USED = 18;
 
@@ -132,6 +132,8 @@ export function AgentWorkbenchPage() {
   // 真回测 run_id：从 LIVE 流 backtest.run 的 tool_end result 里读取（business_tools 产真 run_id）。
   // 存在 → 裁决卡走 LiveRunVerdictCard 三个真实端点；缺 → 回退 mock + MockBadge（诚实，不假绿灯）。
   const [liveRunId, setLiveRunId] = useState<string | null>(null);
+  // durable workflow id：保留 done 回传的 owner-scoped 工作流身份，供 24-event history 补读/审计定位。
+  const [liveWorkflowId, setLiveWorkflowId] = useState<string | null>(null);
   const liveAbort = useRef<(() => void) | null>(null);
   // §M5：是否已为「当前这次进入 live」自动起过首条 prompt（一次性守卫）。
   // 仅在进 live 时为 false → 自动铺 AGENT_FIRST_PROMPT 一次；进 demo 时复位（演示会清空 live 对话，
@@ -343,6 +345,7 @@ export function AgentWorkbenchPage() {
       liveAbort.current?.();
       setLiveErr(null);
       setLiveRunId(null); // 新流重置：旧 run_id 不串到本次（回测产真前裁决卡走 mock）。
+      setLiveWorkflowId(null);
       setBlocks([]);
       setReached([]);
       setActiveMs(null);
@@ -380,9 +383,11 @@ export function AgentWorkbenchPage() {
           setReached(Array.from(reachedSet));
           setActiveMs(key);
         },
-        onDone: () => {
+        onDone: (_final, _succeeded, workflowId) => {
+          setLiveWorkflowId(workflowId ?? null);
           liveAbort.current = null;
         },
+        onHistoryError: (msg) => setLiveErr(msg),
         onError: (msg) => {
           setLiveErr(msg);
           liveAbort.current = null;
@@ -565,6 +570,15 @@ export function AgentWorkbenchPage() {
             </span>
           ) : (
             <MockBadge />
+          )}
+          {liveMode && liveWorkflowId && (
+            <span
+              data-live-workflow-id
+              title={liveWorkflowId}
+              style={{ fontSize: 10, color: "var(--desk-text-faint)" }}
+            >
+              workflow · {liveWorkflowId}
+            </span>
           )}
           {/* 「↻ 重放」仅在演示模式有意义（重铺 mock 剧本）；真实流隐藏（由消息推进）。 */}
           {demoMode && (

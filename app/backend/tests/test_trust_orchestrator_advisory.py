@@ -207,7 +207,11 @@ def test_existing_dispatch_unaffected_by_trust_advisory(tmp_path):
     orchestrator 行为』。"""
     shared = _ReadAssetThenFinal()
     gw = _gateway(factory=lambda c: shared)
-    orch = AgentOrchestrator(gateway=gw)
+    orch = AgentOrchestrator(
+        gateway=gw,
+        owner_user_id="owner-trust-advisory",
+        workflow_id="workflow-trust-dispatch",
+    )
     plan = _ready_plan(orch, [("t1", "factor_engineer")], {"t1": []})
     ex = make_executor(tmp_path)
     res = orch.dispatch(plan, executor=ex, tool_handlers={"factor_engineer": {"read_asset": _stub_tool}})

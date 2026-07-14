@@ -36,6 +36,9 @@ import pytest  # noqa: E402
 from app.training import TrainingRequest, TrainingService, artifact_trust  # noqa: E402
 
 
+_OWNER_USER_ID = "test-owner"
+
+
 @pytest.fixture(autouse=True)
 def _reset_global_trust():
     """复位【主进程】进程级默认策略——本卡的 configure 只发生在【子进程】（隔离·随进程消亡），
@@ -94,7 +97,12 @@ def test_subprocess_default_policy_is_enforced(tmp_path: Path):
     enforce=False / store=None → 本断言红。这是「子进程不 configure → 漏过」的直接探针（MUT 锚）。
     """
     svc = TrainingService(root=tmp_path / "tr", timeout=300)  # enforce 默认 ON
-    job = svc.train_now_code("probe-default-policy", _probe_default_policy_code(), _panel())
+    job = svc.train_now_code(
+        "probe-default-policy",
+        _probe_default_policy_code(),
+        _panel(),
+        owner_user_id=_OWNER_USER_ID,
+    )
     assert job.status == "succeeded", job.error
     assert job.metrics["enforce"] == 1.0, "子进程进程级默认策略未 enforce（残余① 未兑现 → 外来 pickle 漏过）"
     assert job.metrics["has_store"] == 1.0, "子进程默认策略未绑 store（enforce 无登记面可查 → 退化）"
@@ -103,7 +111,12 @@ def test_subprocess_default_policy_is_enforced(tmp_path: Path):
 def test_subprocess_default_policy_inherits_optout(tmp_path: Path):
     """trust_enforce=False → 子进程默认策略 enforce=False（继承主进程 opt-out·W1 单点可逆开关）。"""
     svc = TrainingService(root=tmp_path / "tr", timeout=300, trust_enforce=False)
-    job = svc.train_now_code("probe-optout", _probe_default_policy_code(), _panel())
+    job = svc.train_now_code(
+        "probe-optout",
+        _probe_default_policy_code(),
+        _panel(),
+        owner_user_id=_OWNER_USER_ID,
+    )
     assert job.status == "succeeded", job.error
     assert job.metrics["enforce"] == 0.0, "opt-out 未透传到子进程（trust_enforce=False 应继承回退）"
 
@@ -121,7 +134,12 @@ def test_subprocess_freecode_external_pkl_refused(tmp_path: Path):
     ext = tmp_path / "external_model.pkl"  # 非本系统 producer 产出 → full-sha256 从不命中登记
     with ext.open("wb") as fh:
         pickle.dump(LinearRegression().fit(np.zeros((4, 2)), np.zeros(4)), fh)
-    job = svc.train_now_code("evil-subprocess", _predict_with_code(str(ext)), _panel())
+    job = svc.train_now_code(
+        "evil-subprocess",
+        _predict_with_code(str(ext)),
+        _panel(),
+        owner_user_id=_OWNER_USER_ID,
+    )
     assert job.status == "failed", "外来未登记 artifact 在 enforce 子进程内未被拒（残余① 漏洞）"
     assert "ArtifactTrust" in (job.error or ""), job.error  # 子进程 ArtifactTrustError 经 stderr 冒泡
 
@@ -139,7 +157,12 @@ def test_subprocess_freecode_external_loads_when_optout(tmp_path: Path):
     ext = tmp_path / "external_model.pkl"
     with ext.open("wb") as fh:
         pickle.dump(LinearRegression().fit(np.zeros((4, 2)), np.arange(4.0)), fh)
-    job = svc.train_now_code("optout-subprocess", _predict_with_code(str(ext)), _panel())
+    job = svc.train_now_code(
+        "optout-subprocess",
+        _predict_with_code(str(ext)),
+        _panel(),
+        owner_user_id=_OWNER_USER_ID,
+    )
     assert job.status == "succeeded", job.error  # opt-out：外来经止血 blocklist 加载（不查登记·向后兼容）
     assert job.metrics["n"] == 120.0  # 2 syms × 60 days
 
@@ -152,10 +175,19 @@ def test_subprocess_freecode_loads_registered_artifact(tmp_path: Path):
     主进程 producer 写入的【同一】登记账（跨进程一致）。
     """
     svc = TrainingService(root=tmp_path / "tr", timeout=300)  # enforce 默认 ON
-    a = svc.train_now(_req("A", model="xgboost", hyperparams={"n_estimators": 30}), _panel())
+    a = svc.train_now(
+        _req("A", model="xgboost", hyperparams={"n_estimators": 30}),
+        _panel(),
+        owner_user_id=_OWNER_USER_ID,
+    )
     assert a.status == "succeeded", a.error
     artifact = str(Path(a.artifact_dir) / "model.pkl")
-    job = svc.train_now_code("compose-in-subprocess", _predict_with_code(artifact), _panel())
+    job = svc.train_now_code(
+        "compose-in-subprocess",
+        _predict_with_code(artifact),
+        _panel(),
+        owner_user_id=_OWNER_USER_ID,
+    )
     assert job.status == "succeeded", job.error  # 已登记自产 artifact 子进程 enforce 下放行（无误伤）
     assert job.metrics["n"] == 120.0
 
@@ -166,7 +198,11 @@ def test_subprocess_store_same_source_as_main(tmp_path: Path):
     主进程 producer 登记的 artifact，子进程内 is_trusted 立即可见（跨进程登记可见·验收#3）。
     """
     svc = TrainingService(root=tmp_path / "tr", timeout=300)
-    a = svc.train_now(_req("A", model="xgboost", hyperparams={"n_estimators": 30}), _panel())
+    a = svc.train_now(
+        _req("A", model="xgboost", hyperparams={"n_estimators": 30}),
+        _panel(),
+        owner_user_id=_OWNER_USER_ID,
+    )
     assert a.status == "succeeded", a.error
     artifact = str(Path(a.artifact_dir) / "model.pkl")
     # 主进程侧确认已登记（producer 落盘即 register）
@@ -179,6 +215,11 @@ def test_subprocess_store_same_source_as_main(tmp_path: Path):
         f"trusted = store_under(os.environ['QUANTBT_TRUST_ROOT']).is_trusted({artifact!r})\n"
         "emit({'oos_metrics': {'trusted': 1.0 if trusted else 0.0}, 'artifact_path': None})\n"
     )
-    job = svc.train_now_code("same-source-probe", code, _panel())
+    job = svc.train_now_code(
+        "same-source-probe",
+        code,
+        _panel(),
+        owner_user_id=_OWNER_USER_ID,
+    )
     assert job.status == "succeeded", job.error
     assert job.metrics["trusted"] == 1.0, "子进程信任账与主进程不同源（跨进程登记不可见 → 误伤自产）"

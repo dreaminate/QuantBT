@@ -10,6 +10,7 @@
 from __future__ import annotations
 
 import inspect
+import json
 from pathlib import Path
 from types import SimpleNamespace
 
@@ -25,12 +26,19 @@ from app.ide.strategy_graph import (
     validate_graph,
 )
 from app.lineage import content_hash
+from app.lineage.ids import canonical_json
 from app.research_os import (
     MarketDataUseValidationRecord,
     PersistentCompilerIRStore,
     PersistentGoalEntrypointCoverageRegistry,
     ResearchGraphStore,
 )
+from app.research_os.entrypoint_evidence import PersistentEntrypointEvidenceRegistry
+from app.research_os.goal_proof_ledger import GoalProofLedger
+from app.research_os.goal_validation_receipts import (
+    PersistentGoalValidationReceiptRegistry,
+)
+from app.research_os.ref_resolution import build_real_ref_resolver
 
 
 # ──────────────────────────────────────────────────────────────────────
@@ -213,13 +221,49 @@ def http(tmp_path, monkeypatch):
 
     isolated = IDEService(tmp_path / "ide_http.db", run_root=tmp_path / "runs_http")
     monkeypatch.setattr(main, "IDE_SERVICE", isolated)
-    monkeypatch.setattr(main, "RESEARCH_GRAPH_STORE", ResearchGraphStore())
-    monkeypatch.setattr(main, "COMPILER_IR_STORE", PersistentCompilerIRStore(tmp_path / "compiler_ir.jsonl"))
-    monkeypatch.setattr(
-        main,
-        "GOAL_ENTRYPOINT_COVERAGE_REGISTRY",
-        PersistentGoalEntrypointCoverageRegistry(tmp_path / "goal_entrypoint_coverage.jsonl"),
+    graph = ResearchGraphStore()
+    proof_ledger = GoalProofLedger(tmp_path / "goal_proof_ledger")
+    compiler = PersistentCompilerIRStore(
+        tmp_path / "compiler_ir.jsonl",
+        proof_ledger=proof_ledger,
+        legacy_read_only=True,
     )
+    validations = PersistentGoalValidationReceiptRegistry(
+        tmp_path / "goal_validation_receipts.jsonl",
+        proof_ledger=proof_ledger,
+        legacy_read_only=True,
+    )
+    evidence = PersistentEntrypointEvidenceRegistry(
+        tmp_path / "entrypoint_evidence.jsonl",
+        research_graph_store=graph,
+        compiler_store=compiler,
+        validation_receipt_registry=validations,
+        proof_ledger=proof_ledger,
+        legacy_read_only=True,
+    )
+    coverage = PersistentGoalEntrypointCoverageRegistry(
+        tmp_path / "goal_entrypoint_coverage.jsonl",
+        proof_ledger=proof_ledger,
+        legacy_read_only=True,
+    )
+    coverage.set_ref_resolver(
+        build_real_ref_resolver(
+            research_graph_store=graph,
+            lifecycle_registry=main.ASSET_LIFECYCLE_REGISTRY,
+            governance_registry=main.MODEL_GOVERNANCE_REGISTRY,
+            rag_index=main.RESEARCH_ASSET_RAG_INDEX,
+            spine_chain_registry=main.MATHEMATICAL_SPINE_CHAIN_REGISTRY,
+            compiler_store=compiler,
+            document_store=main.DOCUMENT_INTELLIGENCE_STORE,
+            goal_validation_receipt_registry=validations,
+            platform_source_evidence_registry=evidence,
+        )
+    )
+    monkeypatch.setattr(main, "RESEARCH_GRAPH_STORE", graph)
+    monkeypatch.setattr(main, "COMPILER_IR_STORE", compiler)
+    monkeypatch.setattr(main, "GOAL_VALIDATION_RECEIPT_REGISTRY", validations)
+    monkeypatch.setattr(main, "ENTRYPOINT_EVIDENCE_REGISTRY", evidence)
+    monkeypatch.setattr(main, "GOAL_ENTRYPOINT_COVERAGE_REGISTRY", coverage)
     monkeypatch.setattr(main, "MARKET_DATA_REGISTRY", _MarketDataUseRegistry([_market_data_use_validation()]))
     main.app.dependency_overrides[require_user_dependency] = lambda: SimpleNamespace(
         user_id="tester", username="tester",
@@ -234,10 +278,18 @@ class _MarketDataUseRegistry:
     def __init__(self, records: list[MarketDataUseValidationRecord] | None = None) -> None:
         self._records = {record.validation_ref: record for record in records or []}
 
-    def use_validation(self, validation_ref: str) -> MarketDataUseValidationRecord:
+    def use_validation(
+        self,
+        validation_ref: str,
+        *,
+        owner_user_id: str,
+    ) -> MarketDataUseValidationRecord:
         if validation_ref not in self._records:
             raise KeyError(validation_ref)
-        return self._records[validation_ref]
+        record = self._records[validation_ref]
+        if record.recorded_by != owner_user_id:
+            raise KeyError(validation_ref)
+        return record
 
 
 def _market_data_use_validation(**overrides) -> MarketDataUseValidationRecord:
@@ -297,7 +349,6 @@ def test_http_save_strategy_records_strategybook_qro_without_source_leakage(http
     assert body["compiler_pass_ref"].startswith("compiler_pass:")
     assert body["entrypoint_coverage_ref"].startswith("goal_entrypoint_coverage:")
     assert body["market_data_use_validation_refs"] == ["market_data_use:ide_save:accepted"]
-
     audit = client.get("/api/research-os/graph/commands", params={"limit": 10})
     assert audit.status_code == 200, audit.text
     audit_body = audit.json()
@@ -477,6 +528,10 @@ def test_http_run_strategy_records_backtestrun_qro_without_log_or_result_leakage
     assert body["compiler_pass_ref"].startswith("compiler_pass:")
     assert body["entrypoint_coverage_ref"].startswith("goal_entrypoint_coverage:")
     assert body["market_data_use_validation_refs"] == ["market_data_use:ide_save:accepted"]
+    frozen_manifest = json.loads(
+        (svc.run_root / body["run_id"] / "run.json").read_text(encoding="utf-8")
+    )
+    assert frozen_manifest["source"]["owner_user_id"] == "tester"
 
     audit = client.get("/api/research-os/graph/commands", params={"limit": 10})
     assert audit.status_code == 200, audit.text
@@ -651,12 +706,18 @@ def test_http_run_strategy_rejects_violation_market_data_use_validation_before_s
     assert svc.list_runs("tester") == []
 
 
-def test_http_promote_ide_run_records_backtestrun_qro_without_artifact_leakage(http, tmp_path, monkeypatch):
+def test_http_formal_promote_requires_rdp_before_artifact_or_qro_mutation(
+    http,
+    tmp_path,
+    monkeypatch,
+):
     from app import main
 
     real_promote = main.promote_ide_run
+    captured_kwargs = {}
 
     def _promote_tmp(**kwargs):
+        captured_kwargs.update(kwargs)
         kwargs["run_root"] = tmp_path / "promoted_runs"
         return real_promote(**kwargs)
 
@@ -683,57 +744,278 @@ def test_http_promote_ide_run_records_backtestrun_qro_without_artifact_leakage(h
         market_data_use_validation_refs=["market_data_use:ide_save:accepted"],
     )
     ide_run = svc.run_strategy("tester", "promo_qro")
+    svc.save_strategy(
+        "tester",
+        "promo_qro",
+        "quantbt.emit_result({'equity_curve': [{'t': 'draft-drift', 'equity': 9}]})",
+        asset_class="crypto_perp",
+        market_data_use_validation_refs=["market_data_use:ide_save:accepted"],
+    )
+    before = len(main.RESEARCH_GRAPH_STORE.commands())
 
     res = client.post(f"/api/ide/runs/{ide_run.run_id}/promote", json={"record_name": f"record {secret}"})
 
-    assert res.status_code == 200, res.text
-    body = res.json()
-    assert body["run_id"].startswith("ide_tester_")
-    assert body["qro_id"].startswith("qro_")
-    assert body["research_graph_command_id"].startswith("rgcmd_")
-    assert body["compiler_ir_ref"].startswith("compiler_ir:")
-    assert body["compiler_pass_ref"].startswith("compiler_pass:")
-    assert body["entrypoint_coverage_ref"].startswith("goal_entrypoint_coverage:")
-    assert body["market_data_use_validation_refs"] == ["market_data_use:ide_save:accepted"]
-    assert (tmp_path / "promoted_runs" / body["run_id"] / "run.json").exists()
-
-    audit = client.get("/api/research-os/graph/commands", params={"limit": 10})
-    assert audit.status_code == 200, audit.text
-    audit_body = audit.json()
-    qros = [
-        command["payload"]["qro"]
-        for command in audit_body["commands"]
-        if command["payload"].get("qro", {}).get("qro_id") == body["qro_id"]
+    assert res.status_code == 400, res.text
+    assert "formal IDE promotion requires rdp_package_id" in res.text
+    assert captured_kwargs["require_reproduction_receipt"] is True
+    assert captured_kwargs["strategy_code"] == code
+    assert captured_kwargs["strategy_name"] == "promo_qro"
+    assert captured_kwargs["execution_blocks"] == [
+        {
+            "block_id": f"ide_sandbox:{ide_run.run_id}",
+            "mode": "mock",
+            "result_grade": "exploratory",
+            "mock_marked": True,
+            "note": (
+                "Server-derived IDE sandbox execution; non-live and not "
+                "paper, testnet, mainnet, or production execution."
+            ),
+        }
     ]
-    assert qros
-    qro = qros[0]
-    assert qro["qro_type"] == "BacktestRun"
-    assert qro["input_contract"]["entry_source"] == "ide"
-    assert qro["input_contract"]["source_run_id"] == ide_run.run_id
-    assert qro["input_contract"]["strategy_name"] == "promo_qro"
-    assert qro["input_contract"]["market_data_use_validation_refs"] == ["market_data_use:ide_save:accepted"]
-    assert qro["output_contract"]["promoted_run_id"] == body["run_id"]
-    assert qro["output_contract"]["source_run_id"] == ide_run.run_id
-    assert qro["output_contract"]["status"] == "completed"
-    assert qro["output_contract"]["metric_count"] > 0
-    assert qro["output_contract"]["market_data_use_validation_refs"] == ["market_data_use:ide_save:accepted"]
-    assert qro["status_axes"]["evidence"] == "exploratory"
-    assert "equity_curve" not in qro["output_contract_keys"]
-    assert "trades" not in qro["output_contract_keys"]
-    assert "gate_verdict" not in qro["output_contract_keys"]
-    assert secret not in str(audit_body)
-    assert "BUY" not in str(audit_body)
-    assert "record " not in str(audit_body)
-    assert len(main.RESEARCH_GRAPH_STORE.commands()) == 1
-    ir = main.COMPILER_IR_STORE.ir(body["compiler_ir_ref"])
-    compiler_pass = main.COMPILER_IR_STORE.compiler_pass(body["compiler_pass_ref"])
-    coverage = main.GOAL_ENTRYPOINT_COVERAGE_REGISTRY.coverage(body["entrypoint_coverage_ref"])
-    assert ir.source_qro_refs == (body["qro_id"],)
-    assert ir.graph_command_refs == (body["research_graph_command_id"],)
-    assert compiler_pass.entry_source == "ide"
-    assert coverage.entrypoint_ref == "ide:run.promote"
-    assert secret not in str(ir) + str(compiler_pass) + str(coverage)
-    assert "BUY" not in str(ir) + str(compiler_pass) + str(coverage)
+    assert (
+        captured_kwargs["reproduction_receipt_store"]
+        is main.RDP_REPRODUCTION_RECEIPT_STORE
+    )
+    assert len(main.RESEARCH_GRAPH_STORE.commands()) == before
+    assert not (tmp_path / "promoted_runs").exists()
+    assert secret not in str(main.RESEARCH_GRAPH_STORE.commands())
+
+
+def test_http_promote_qro_binds_frozen_source_after_mutable_draft_drift(
+    http, monkeypatch
+):
+    from app import main
+
+    client, svc = http
+    frozen_code = _promotable_ide_code("frozen_qro")
+    svc.save_strategy(
+        "tester",
+        "frozen_qro",
+        frozen_code,
+        asset_class="crypto_perp",
+        market_data_use_validation_refs=["market_data_use:ide_save:accepted"],
+    )
+    ide_run = svc.run_strategy("tester", "frozen_qro")
+    frozen_manifest = json.loads(
+        (svc.run_root / ide_run.run_id / "run.json").read_text(encoding="utf-8")
+    )
+    svc.save_strategy(
+        "tester",
+        "frozen_qro",
+        _promotable_ide_code("mutable_draft"),
+        asset_class="equity_cn",
+        market_data_use_validation_refs=["market_data_use:ide_save:accepted"],
+    )
+    captured_kwargs = {}
+
+    def _promote_stub(**kwargs):
+        captured_kwargs.update(kwargs)
+        pending = SimpleNamespace(
+            run_id="promoted_frozen_qro",
+            run_dir=Path("/unused/promoted_frozen_qro"),
+            metrics={},
+            gate_verdict=None,
+            promotion_receipt_ref="ide_promotion_receipt:frozen",
+            requested_label="exploratory",
+        )
+        kwargs["promotion_precommit_hook"](pending)
+        return pending
+
+    monkeypatch.setattr(main, "promote_ide_run", _promote_stub)
+    before = len(main.RESEARCH_GRAPH_STORE.commands())
+
+    res = client.post(f"/api/ide/runs/{ide_run.run_id}/promote", json={})
+
+    assert res.status_code == 200, res.text
+    assert captured_kwargs["strategy_code"] == frozen_code
+    command = main.RESEARCH_GRAPH_STORE.commands()[before]
+    qro = command.payload["qro"]
+    source = frozen_manifest["source"]
+    assert qro.input_contract["asset_class"] == source["strategy_asset_class"]
+    assert qro.input_contract["code_hash"] == content_hash(frozen_code)
+    assert (
+        qro.input_contract["strategy_content_hash"]
+        == source["strategy_content_hash"]
+    )
+    assert qro.input_contract["asset_class"] != "equity_cn"
+    assert qro.input_contract["requested_label"] == "exploratory"
+    assert qro.output_contract["requested_label"] == "exploratory"
+    assert qro.output_contract["status"] == "hidden_candidate_pending_receipt"
+    assert (
+        qro.output_contract["promotion_receipt_commit_state"]
+        == "precommit_reference"
+    )
+    assert qro.evidence_status.value == "exploratory"
+    assert qro.governance_status.value == "unreviewed"
+    assert qro.mock_profile == "ide_sandbox"
+    audit_qro = main._qro_audit_summary(qro)
+    assert audit_qro["input_contract"]["requested_label"] == "exploratory"
+    assert audit_qro["output_contract"]["requested_label"] == "exploratory"
+    assert (
+        audit_qro["output_contract"]["promotion_receipt_commit_state"]
+        == "precommit_reference"
+    )
+
+
+@pytest.mark.parametrize(
+    "tamper",
+    (
+        lambda manifest: manifest.__setitem__("strategy_id", "strategy_foreign"),
+        lambda manifest: manifest["source"].__setitem__(
+            "owner_username", "foreign-user"
+        ),
+    ),
+    ids=("strategy_id", "nested_owner_username"),
+)
+def test_http_promote_rejects_canonical_but_identity_tampered_source_snapshot(
+    http, monkeypatch, tamper
+):
+    from app import main
+
+    client, svc = http
+    svc.save_strategy(
+        "tester",
+        "tampered_source_identity",
+        _promotable_ide_code("tampered_source_identity"),
+        asset_class="crypto_perp",
+        market_data_use_validation_refs=["market_data_use:ide_save:accepted"],
+    )
+    ide_run = svc.run_strategy("tester", "tampered_source_identity")
+    manifest_path = svc.run_root / ide_run.run_id / "run.json"
+    manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
+    tamper(manifest)
+    manifest_path.write_bytes((canonical_json(manifest) + "\n").encode("utf-8"))
+
+    monkeypatch.setattr(
+        main,
+        "promote_ide_run",
+        lambda **_kwargs: pytest.fail("tampered source reached promotion"),
+    )
+    res = client.post(f"/api/ide/runs/{ide_run.run_id}/promote", json={})
+
+    assert res.status_code == 400
+    assert "IDE source run manifest binding is invalid" in res.text
+
+
+def test_http_promote_qro_failure_quarantines_published_run(
+    http, tmp_path, monkeypatch
+):
+    from app import main
+
+    client, svc = http
+    svc.save_strategy(
+        "tester",
+        "qro_failure_quarantine",
+        _promotable_ide_code("qro_failure_quarantine"),
+        asset_class="crypto_perp",
+        market_data_use_validation_refs=["market_data_use:ide_save:accepted"],
+    )
+    ide_run = svc.run_strategy("tester", "qro_failure_quarantine")
+    promoted_root = tmp_path / "promoted_qro_failure"
+    final_dir = promoted_root / "formal_run"
+
+    def _published_stub(**kwargs):
+        final_dir.mkdir(parents=True)
+        (final_dir / "run.json").write_text("{}", encoding="utf-8")
+        pending = SimpleNamespace(
+            run_id="formal_run",
+            run_dir=final_dir,
+            metrics={},
+            gate_verdict=None,
+            promotion_receipt_ref="ide_promotion_receipt:orphan",
+            requested_label="exploratory",
+        )
+        try:
+            kwargs["promotion_precommit_hook"](pending)
+        except RuntimeError as exc:
+            from app.ide.promote import quarantine_promoted_run
+
+            quarantine_promoted_run(
+                pending,
+                phase="receipt_failed",
+                expected_run_root=promoted_root,
+            )
+            kwargs["promotion_precommit_compensator"](pending, {})
+            raise main.PromoteCommitError(
+                "durable promotion verification failed: RuntimeError"
+            ) from exc
+        return pending
+
+    monkeypatch.setattr(main, "promote_ide_run", _published_stub)
+    monkeypatch.setattr(
+        main,
+        "_compile_entrypoint_qro",
+        lambda **_kwargs: (_ for _ in ()).throw(RuntimeError("injected QRO failure")),
+    )
+
+    res = client.post(f"/api/ide/runs/{ide_run.run_id}/promote", json={})
+
+    assert res.status_code == 500
+    assert "durable promotion verification failed: RuntimeError" in res.text
+    assert not final_dir.exists()
+    quarantined = list((promoted_root / ".staging").glob("formal_run.receipt_failed.*"))
+    assert len(quarantined) == 1
+    assert (quarantined[0] / "run.json").is_file()
+    commands = main.RESEARCH_GRAPH_STORE.commands()
+    assert [command.command_type for command in commands] == [
+        "upsert_qro",
+        "tombstone_qro",
+    ]
+    failed_qro = commands[0].payload["qro"]
+    [tombstone] = main.RESEARCH_GRAPH_STORE.qro_tombstones()
+    assert tombstone.qro_id == failed_qro.qro_id
+    with pytest.raises(KeyError):
+        main.RESEARCH_GRAPH_STORE.qro(failed_qro.qro_id)
+    assert (
+        main.RESEARCH_GRAPH_STORE.qro(
+            failed_qro.qro_id,
+            include_tombstoned=True,
+        )
+        == failed_qro
+    )
+
+
+def test_lifecycle_promotion_ref_requires_current_receipt(monkeypatch):
+    from app import main
+
+    receipt = SimpleNamespace(
+        source_ide_run_id="source-run",
+        promoted_run_id="promoted-run",
+        rdp_package_id="rdp-package",
+        requested_label="exploratory",
+    )
+    calls = []
+
+    class Registry:
+        def receipt(self, ref, *, owner_user_id):
+            assert ref == "ide_promotion_receipt:stale"
+            assert owner_user_id == "owner-a"
+            return receipt
+
+        def validate_current(self, ref, **kwargs):
+            calls.append((ref, kwargs))
+            return SimpleNamespace(accepted=False)
+
+    monkeypatch.setattr(main, "PROMOTION_RECEIPT_REGISTRY", Registry())
+
+    assert (
+        main._lifecycle_transition_ref_validator(
+            "owner-a", "promotion", "ide_promotion_receipt:stale"
+        )
+        is False
+    )
+    assert calls == [
+        (
+            "ide_promotion_receipt:stale",
+            {
+                "owner_user_id": "owner-a",
+                "source_ide_run_id": "source-run",
+                "promoted_run_id": "promoted-run",
+                "rdp_package_id": "rdp-package",
+                "requested_label": "exploratory",
+            },
+        )
+    ]
 
 
 def test_http_promote_requires_market_data_use_validation_before_promoting(http, tmp_path, monkeypatch):
@@ -900,7 +1182,7 @@ def test_http_ide_ai_complete_records_llm_call_qro_without_prompt_context_or_out
         def chat(self, _messages):  # noqa: ANN001
             return SimpleNamespace(content="print('SHOULD_NOT_ENTER_IDE_AI_QRO')")
 
-    monkeypatch.setattr(main, "_current_agent_llm", lambda run_id=None: _FakeLLM())
+    monkeypatch.setattr(main, "_current_agent_llm", lambda run_id=None, **_kwargs: _FakeLLM())
     client, _ = http
     prompt_secret = "PROMPT_SHOULD_NOT_ENTER_IDE_AI_QRO"
     context_secret = "CONTEXT_SHOULD_NOT_ENTER_IDE_AI_QRO"
@@ -979,7 +1261,7 @@ def test_http_ide_ai_complete_requires_market_data_use_validation_before_llm(htt
             called["llm"] = True
             return SimpleNamespace(content="print('should not run')")
 
-    monkeypatch.setattr(main, "_current_agent_llm", lambda run_id=None: _FakeLLM())
+    monkeypatch.setattr(main, "_current_agent_llm", lambda run_id=None, **_kwargs: _FakeLLM())
     client, _ = http
     before = len(main.RESEARCH_GRAPH_STORE.commands())
 
@@ -1014,7 +1296,7 @@ def test_http_ide_ai_complete_rejects_violation_market_data_use_validation_befor
             called["llm"] = True
             return SimpleNamespace(content="print('should not run')")
 
-    monkeypatch.setattr(main, "_current_agent_llm", lambda run_id=None: _FakeLLM())
+    monkeypatch.setattr(main, "_current_agent_llm", lambda run_id=None, **_kwargs: _FakeLLM())
     client, _ = http
     before = len(main.RESEARCH_GRAPH_STORE.commands())
 

@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+import json
+from dataclasses import replace
 from types import SimpleNamespace
 
 import pytest
@@ -7,11 +9,20 @@ from fastapi.testclient import TestClient
 
 from app import main
 from app.auth import require_user_dependency
+from app.research_os import (
+    ActorSource,
+    EntrySource,
+    QRORecord,
+    QROType,
+    ResearchGraphCommand,
+    ResearchGraphStore,
+)
 from app.research_os.methodology_validation import (
     LiveMonitoringAlertRecord,
     MethodologyChoiceCoverageRecord,
     PersistentMethodologyCalculatorRegistry,
     PersistentMethodologyRuntimeDrillRegistry,
+    PersistentValidationMethodologyRegistry,
     PersistentValidationDepthRegistry,
     RuntimeDrillRecord,
     ValidationDepthRecord,
@@ -106,13 +117,31 @@ def _payload(record) -> dict:
     return record.__dict__.copy()
 
 
+def _owner_binding() -> dict[str, str]:
+    return {
+        "owner_user_id": "u1",
+        "recorded_by": "u1",
+        "source_run_ref": "ide_run:001",
+        "backtest_run_ref": "qro_backtest_001",
+    }
+
+
 def _client_with_depth_store(tmp_path, monkeypatch):
     store = PersistentValidationDepthRegistry(tmp_path / "methodology_validation_depth.jsonl")
+    methodology_store = PersistentValidationMethodologyRegistry(
+        tmp_path / "methodology_validation_records.jsonl"
+    )
     calculator_store = PersistentMethodologyCalculatorRegistry(tmp_path / "methodology_calculators.jsonl")
     runtime_drill_store = PersistentMethodologyRuntimeDrillRegistry(tmp_path / "methodology_runtime_drills.jsonl")
     monkeypatch.setattr(main, "VALIDATION_DEPTH_REGISTRY", store)
+    monkeypatch.setattr(main, "VALIDATION_METHODOLOGY_REGISTRY", methodology_store)
     monkeypatch.setattr(main, "METHODOLOGY_CALCULATOR_REGISTRY", calculator_store)
     monkeypatch.setattr(main, "METHODOLOGY_RUNTIME_DRILL_REGISTRY", runtime_drill_store)
+    monkeypatch.setattr(
+        main,
+        "_methodology_evidence_binding",
+        lambda payload, *, owner_user_id: ("ide_run:001", "qro_backtest_001"),  # noqa: ARG005
+    )
     main.app.dependency_overrides[require_user_dependency] = lambda: SimpleNamespace(
         username="u1",
         user_id="u1",
@@ -277,11 +306,52 @@ def test_complete_methodology_contract_accepts_strong_validated_candidate():
 def test_persistent_validation_depth_registry_replays_record(tmp_path):
     path = tmp_path / "methodology_validation_depth.jsonl"
     store = PersistentValidationDepthRegistry(path)
-    store.record_depth(_depth())
+    store.record_depth(_depth(), **_owner_binding())
 
     reloaded = PersistentValidationDepthRegistry(path)
-    assert reloaded.depth("validation_depth:001").walk_forward_ref == "walk_forward:001"
-    assert reloaded.depths()[0].fault_injection_refs == ("fault:provider-timeout",)
+    assert reloaded.depth(
+        "validation_depth:001", owner_user_id="u1"
+    ).walk_forward_ref == "walk_forward:001"
+    assert reloaded.depths(owner_user_id="u1")[0].fault_injection_refs == (
+        "fault:provider-timeout",
+    )
+
+
+def test_owner_methodology_and_depth_registries_isolate_replay_and_quarantine_legacy(tmp_path):
+    methodology_path = tmp_path / "methodologies.jsonl"
+    methodology_path.write_text(
+        json.dumps({"schema_version": 1, "validation_methodology": {}}) + "\n"
+    )
+    methodologies = PersistentValidationMethodologyRegistry(methodology_path)
+    depths = PersistentValidationDepthRegistry(tmp_path / "depths.jsonl")
+    assert methodologies.legacy_quarantined_count == 1
+
+    methodology = _validation()
+    persisted = methodologies.record_methodology(methodology, **_owner_binding())
+    before = methodology_path.read_bytes()
+    assert methodologies.methodology(
+        methodology.validation_ref,
+        owner_user_id="u1",
+    ) == persisted
+    with pytest.raises(KeyError):
+        methodologies.methodology(methodology.validation_ref, owner_user_id="u2")
+    assert methodologies.record_methodology(methodology, **_owner_binding()) == persisted
+    assert methodology_path.read_bytes() == before
+
+    with pytest.raises(ValueError, match="identity collision"):
+        methodologies.record_methodology(
+            replace(methodology, sample_size=241),
+            **_owner_binding(),
+        )
+    assert methodology_path.read_bytes() == before
+
+    depths.record_depth(_depth(), **_owner_binding())
+    assert depths.depth_binding(
+        "validation_depth:001",
+        owner_user_id="u1",
+    ).source_run_ref == "ide_run:001"
+    with pytest.raises(KeyError):
+        depths.depth("validation_depth:001", owner_user_id="u2")
 
 
 def test_methodology_calculators_return_refs_hashes_and_summaries_without_raw_series():
@@ -332,7 +402,8 @@ def test_methodology_calculator_registry_replays_all_calculator_records(tmp_path
             fold_metric_values=(1.0, 2.0),
             evidence_refs=("evidence:cpcv",),
             validation_result_refs=("pytest:cpcv",),
-        )
+        ),
+        **_owner_binding(),
     )
     conformal = store.record_conformal(
         calculate_conformal(
@@ -341,7 +412,8 @@ def test_methodology_calculator_registry_replays_all_calculator_records(tmp_path
             alpha=0.2,
             evidence_refs=("evidence:conformal",),
             validation_result_refs=("pytest:conformal",),
-        )
+        ),
+        **_owner_binding(),
     )
     tca = store.record_tca(
         calculate_tca(
@@ -351,13 +423,16 @@ def test_methodology_calculator_registry_replays_all_calculator_records(tmp_path
             cost_model_refs=("cost:basic",),
             evidence_refs=("evidence:tca",),
             validation_result_refs=("pytest:tca",),
-        )
+        ),
+        **_owner_binding(),
     )
 
     reloaded = PersistentMethodologyCalculatorRegistry(path)
-    assert reloaded.cpcv(cpcv.cpcv_ref).sample_count == 2
-    assert reloaded.conformal(conformal.conformal_ref).calibration_count == 5
-    assert reloaded.tca(tca.tca_ref).net_mean_bps == pytest.approx(5.0)
+    assert reloaded.cpcv(cpcv.cpcv_ref, owner_user_id="u1").sample_count == 2
+    assert reloaded.conformal(
+        conformal.conformal_ref, owner_user_id="u1"
+    ).calibration_count == 5
+    assert reloaded.tca(tca.tca_ref, owner_user_id="u1").net_mean_bps == pytest.approx(5.0)
 
 
 def test_runtime_drill_producer_returns_refs_hashes_and_replays_without_raw_logs(tmp_path):
@@ -381,11 +456,15 @@ def test_runtime_drill_producer_returns_refs_hashes_and_replays_without_raw_logs
 
     path = tmp_path / "methodology_runtime_drills.jsonl"
     store = PersistentMethodologyRuntimeDrillRegistry(path)
-    store.record_runtime_drill(record)
+    store.record_runtime_drill(record, **_owner_binding())
 
     reloaded = PersistentMethodologyRuntimeDrillRegistry(path)
-    assert reloaded.runtime_drill(record.runtime_drill_ref).fault_scenario == "venue_timeout"
-    serialized = str(reloaded.runtime_drill(record.runtime_drill_ref).__dict__)
+    assert reloaded.runtime_drill(
+        record.runtime_drill_ref, owner_user_id="u1"
+    ).fault_scenario == "venue_timeout"
+    serialized = str(
+        reloaded.runtime_drill(record.runtime_drill_ref, owner_user_id="u1").__dict__
+    )
     assert "raw_log" not in serialized
     assert "traceback" not in serialized
 
@@ -398,7 +477,10 @@ def test_runtime_drill_rejects_unsafe_modes_guard_mismatch_and_silent_mock(tmp_p
 
     store = PersistentMethodologyRuntimeDrillRegistry(tmp_path / "methodology_runtime_drills.jsonl")
     with pytest.raises(ValueError, match="runtime_drill_silent_mock_fallback"):
-        store.record_runtime_drill(_runtime_drill(silent_mock_fallback_used=True))
+        store.record_runtime_drill(
+            _runtime_drill(silent_mock_fallback_used=True),
+            **_owner_binding(),
+        )
 
     assert not store.path.exists()
 
@@ -407,7 +489,10 @@ def test_persistent_validation_depth_registry_rejects_invalid_without_writing(tm
     store = PersistentValidationDepthRegistry(tmp_path / "methodology_validation_depth.jsonl")
 
     with pytest.raises(ValueError, match="validation_depth_required_ref_missing"):
-        store.record_depth(_depth(evidence_refs=(), validation_result_refs=()))
+        store.record_depth(
+            _depth(evidence_refs=(), validation_result_refs=()),
+            **_owner_binding(),
+        )
 
     assert not store.path.exists()
 
@@ -453,6 +538,132 @@ def test_methodology_validation_depth_api_rejects_silent_mock_without_persisting
         main.app.dependency_overrides.pop(require_user_dependency, None)
 
 
+def test_methodology_api_binds_authenticated_owner_and_exact_backtest_qro(tmp_path, monkeypatch):
+    graph = ResearchGraphStore()
+    qro = QRORecord(
+        qro_type=QROType.BACKTEST_RUN,
+        owner="alice-id",
+        actor=ActorSource.USER_MANUAL,
+        input_contract={"entry_source": "ide"},
+        output_contract={"run_id": "run-10", "status": "ok"},
+        market="crypto_perp",
+        universe="BTCUSDT",
+        horizon="1d",
+        frequency="1d",
+        lineage=("ide", "strategy.run", "run-10"),
+        implementation_hash="code:run-10",
+        assumptions=("test",),
+        known_limits=("offline",),
+        failure_modes=("stale",),
+        validation_plan=("bind methodology",),
+    )
+    graph.apply(
+        ResearchGraphCommand(
+            source=EntrySource.IDE,
+            command_type="upsert_qro",
+            actor_source=ActorSource.USER_MANUAL,
+            actor="alice-id",
+            payload={"qro": qro},
+        )
+    )
+    methodologies = PersistentValidationMethodologyRegistry(tmp_path / "methodologies.jsonl")
+    depths = PersistentValidationDepthRegistry(tmp_path / "depths.jsonl")
+    monkeypatch.setattr(main, "RESEARCH_GRAPH_STORE", graph)
+    monkeypatch.setattr(main, "VALIDATION_METHODOLOGY_REGISTRY", methodologies)
+    monkeypatch.setattr(main, "VALIDATION_DEPTH_REGISTRY", depths)
+    main.app.dependency_overrides[require_user_dependency] = lambda: SimpleNamespace(
+        username="alice",
+        user_id="alice-id",
+    )
+    try:
+        client = TestClient(main.app)
+        binding = {
+            "source_run_ref": "ide_run:run-10",
+            "backtest_run_ref": qro.qro_id,
+            "owner_user_id": "victim-id",
+        }
+        methodology = replace(
+            _validation(),
+            claim_label="exploratory",
+            target_environment="offline",
+            methodology_choice_ref="choice:run-10",
+            responsibility_boundary_ref="responsibility:run-10",
+        )
+        response = client.post(
+            "/api/research-os/methodology/validation_methodology_records",
+            json={**binding, "validation_methodology": _payload(methodology)},
+        )
+        assert response.status_code == 200, response.text
+        depth = replace(
+            _depth(),
+            claim_ref=methodology.validation_ref,
+            claim_label="exploratory",
+            target_environment="offline",
+            methodology_choice_ref="choice:run-10",
+            responsibility_boundary_ref="responsibility:run-10",
+        )
+        response = client.post(
+            "/api/research-os/methodology/validation_depth_records",
+            json={**binding, "validation_depth": _payload(depth)},
+        )
+        assert response.status_code == 200, response.text
+        assert methodologies.methodology(
+            methodology.validation_ref,
+            owner_user_id="alice-id",
+        ) == methodology
+        assert depths.depth(depth.depth_ref, owner_user_id="alice-id") == depth
+        with pytest.raises(KeyError):
+            methodologies.methodology(
+                methodology.validation_ref,
+                owner_user_id="victim-id",
+            )
+    finally:
+        main.app.dependency_overrides.pop(require_user_dependency, None)
+
+
+def test_methodology_binding_accepts_formally_promoted_backtest_source_run(monkeypatch):
+    graph = ResearchGraphStore()
+    promoted_qro = QRORecord(
+        qro_type=QROType.BACKTEST_RUN,
+        owner="alice-id",
+        actor=ActorSource.USER_MANUAL,
+        input_contract={"entry_source": "ide", "source_run_id": "run-promoted"},
+        output_contract={
+            "source_run_id": "run-promoted",
+            "promoted_run_id": "formal-run-001",
+            "status": "completed",
+        },
+        market="crypto_perp",
+        universe="BTCUSDT",
+        horizon="ide_promote",
+        frequency="ide_promote",
+        lineage=("ide", "portfolio.promote", "run-promoted"),
+        implementation_hash="code:run-promoted",
+        assumptions=("test",),
+        known_limits=("offline",),
+        failure_modes=("stale",),
+        validation_plan=("bind promoted methodology",),
+    )
+    graph.apply(
+        ResearchGraphCommand(
+            source=EntrySource.IDE,
+            command_type="upsert_qro",
+            actor_source=ActorSource.USER_MANUAL,
+            actor="alice-id",
+            payload={"qro": promoted_qro},
+        )
+    )
+    monkeypatch.setattr(main, "RESEARCH_GRAPH_STORE", graph)
+
+    assert main._methodology_evidence_binding(
+        {
+            "source_run_ref": "ide_run:run-promoted",
+            "backtest_run_ref": promoted_qro.qro_id,
+        },
+        owner_user_id="alice-id",
+    ) == ("ide_run:run-promoted", promoted_qro.qro_id)
+
+
 def test_methodology_runtime_drill_api_records_summary_and_rejects_unsafe_mode(tmp_path, monkeypatch):
     client, _store, _calculator_store, runtime_drill_store = _client_with_depth_store(tmp_path, monkeypatch)
     try:
@@ -495,7 +706,7 @@ def test_methodology_runtime_drill_api_records_summary_and_rejects_unsafe_mode(t
         )
         assert rejected.status_code == 422
         assert "runtime_drill_unsafe_mode" in rejected.json()["detail"]
-        assert len(runtime_drill_store.runtime_drills()) == 1
+        assert len(runtime_drill_store.runtime_drills(owner_user_id="u1")) == 1
 
         summary = client.get("/api/research-os/methodology/summary")
         assert summary.status_code == 200
@@ -564,7 +775,7 @@ def test_methodology_calculator_api_records_summary_and_rejects_mock(tmp_path, m
         )
         assert rejected.status_code == 422
         assert "methodology_calculator_silent_mock_fallback" in rejected.json()["detail"]
-        assert len(calculator_store.cpcv_records()) == 1
+        assert len(calculator_store.cpcv_records(owner_user_id="u1")) == 1
 
         summary = client.get("/api/research-os/methodology/summary")
         assert summary.status_code == 200

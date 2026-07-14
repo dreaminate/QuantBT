@@ -9,6 +9,14 @@ import pytest
 
 from app.ide.ai_context import build_ai_context
 from app.ide.promote import PromoteError, promote_ide_run
+from app.llm.call_record import (
+    CallRecordKind,
+    LLMCallRecord,
+    ReplayState,
+    make_call_id,
+    seal_record,
+)
+from app.llm.call_record_store import LLMCallRecordStore
 
 
 # ============================================================
@@ -24,6 +32,81 @@ def _curve(n: int, start: float = 1.0, daily: float = 0.001) -> list[dict]:
             eq *= 1 + daily
         out.append({"t": f"2026-01-{i + 1:02d}", "equity": round(eq, 6), "net_return": daily if i > 0 else 0.0, "benchmark_return": daily * 0.5})
     return out
+
+
+def _attribution_rows() -> list[dict]:
+    return [
+        {
+            "period": "2026-01",
+            "component": "market",
+            "portfolio_weight": "0.6",
+            "benchmark_weight": "0.5",
+            "portfolio_return": "0.10",
+            "benchmark_return": "0.08",
+            "benchmark_total_return": "0.07",
+            "allocation_effect": "0.001",
+            "selection_effect": "0.010",
+            "interaction_effect": "0.002",
+            "cost_effect": "0.001",
+            "net_contribution": "0.012",
+        }
+    ]
+
+
+def _append_store_invocation(
+    store: LLMCallRecordStore,
+    *,
+    owner_user_id: str,
+    workflow_id: str,
+    invocation_id: str,
+) -> tuple[LLMCallRecord, LLMCallRecord]:
+    common = dict(
+        provider="anthropic",
+        model="claude-x",
+        auth_ref="secretref://anthropic/llm_anthropic",
+        replay_state=ReplayState.LIVE.value,
+        owner_user_id=owner_user_id,
+        workflow_id=workflow_id,
+        invocation_id=invocation_id,
+        attempt_no=1,
+        routing_policy_ref="routing:ide-promote:test",
+        routing_policy_state="configured_ref",
+        prompt_digest="0123456789abcdef",
+        prompt_hash="0123456789abcdef",
+        tool_schema_hash="1111111111111111",
+        response_digest="fedcba9876543210",
+        response_ref="llm_response:fedcba9876543210",
+        started_at="2026-07-12T00:00:00+00:00",
+        finished_at="2026-07-12T00:00:01+00:00",
+        latency_ms=1000.0,
+        cost={
+            "status": "unavailable", "currency": "USD", "amount": None,
+            "source": "none", "reason": "provider_cost_not_reported",
+        },
+    )
+    rows: list[LLMCallRecord] = []
+    for kind in (CallRecordKind.ATTEMPT.value, CallRecordKind.TERMINAL.value):
+        row = LLMCallRecord(
+            **common,
+            record_kind=kind,
+            call_id=make_call_id(
+                prompt_digest="",
+                provider="",
+                model="",
+                role="",
+                session_id="",
+                seq=1,
+                owner_user_id=owner_user_id,
+                workflow_id=workflow_id,
+                invocation_id=invocation_id,
+                record_kind=kind,
+                attempt_no=1,
+            ),
+        )
+        row.seal = seal_record(row, store.seal_secret)
+        store.append(row)
+        rows.append(row)
+    return rows[0], rows[1]
 
 
 def test_promote_basic(tmp_path: Path):
@@ -49,6 +132,125 @@ def test_promote_basic(tmp_path: Path):
     assert manifest["source"]["kind"] == "ide_sandbox"
     assert manifest["metrics"]["total_return"] > 0
     assert manifest["metrics"]["sharpe"] != 0
+    assert not (promoted.run_dir / "attribution.csv").exists()
+
+
+def test_promote_persists_only_reconciled_canonical_attribution(tmp_path: Path):
+    promoted = promote_ide_run(
+        ide_run_id="ide-attribution",
+        owner_username="alice",
+        strategy_name="attributed",
+        strategy_code="quantbt.emit_result({})",
+        result={
+            "equity_curve": _curve(10),
+            "attribution": _attribution_rows(),
+        },
+        run_root=tmp_path / "runs",
+    )
+
+    artifact = promoted.run_dir / "attribution.csv"
+    assert artifact.exists()
+    assert artifact.read_text(encoding="utf-8").splitlines()[1].startswith(
+        "2026-01,market,"
+    )
+
+
+def test_promote_rejects_false_attribution_without_partial_run(tmp_path: Path):
+    rows = _attribution_rows()
+    rows[0]["selection_effect"] = "0.999"
+    run_root = tmp_path / "runs"
+
+    with pytest.raises(PromoteError, match="selection_effect does not reconcile"):
+        promote_ide_run(
+            ide_run_id="ide-bad-attribution",
+            owner_username="alice",
+            strategy_name="bad-attribution",
+            strategy_code="",
+            result={"equity_curve": _curve(10), "attribution": rows},
+            run_root=run_root,
+        )
+
+    assert not run_root.exists()
+
+
+def test_promote_resolves_owner_scoped_llm_records(tmp_path: Path):
+    store = LLMCallRecordStore(tmp_path / "audit" / "llm_call_records.jsonl")
+    expected = _append_store_invocation(
+        store,
+        owner_user_id="owner-alice",
+        workflow_id="ide_run:ide-audit",
+        invocation_id="invocation-alice",
+    )
+
+    promoted = promote_ide_run(
+        ide_run_id="ide-audit",
+        owner_username="alice",
+        owner_user_id="owner-alice",
+        strategy_name="llm-audited",
+        strategy_code="quantbt.emit_result({})",
+        result={"equity_curve": _curve(10)},
+        run_root=tmp_path / "runs",
+        llm_call_record_store=store,
+    )
+
+    manifest = json.loads((promoted.run_dir / "run.json").read_text(encoding="utf-8"))
+    assert manifest["source"]["owner_user_id"] == "owner-alice"
+    assert manifest["llm_call_record_refs"] == [row.call_id for row in expected]
+    assert manifest["release_verdict"]["gate_evaluation_ok"] is True
+
+
+def test_promote_llm_records_are_owner_isolated(tmp_path: Path):
+    store = LLMCallRecordStore(tmp_path / "audit" / "llm_call_records.jsonl")
+    _append_store_invocation(
+        store,
+        owner_user_id="owner-alice",
+        workflow_id="ide_run:ide-audit",
+        invocation_id="invocation-alice",
+    )
+
+    promoted = promote_ide_run(
+        ide_run_id="ide-audit",
+        owner_username="bob",
+        owner_user_id="owner-bob",
+        strategy_name="isolated",
+        strategy_code="",
+        result={"equity_curve": _curve(10)},
+        run_root=tmp_path / "runs",
+        llm_call_record_store=store,
+    )
+
+    manifest = json.loads((promoted.run_dir / "run.json").read_text(encoding="utf-8"))
+    assert "llm_call_record_refs" not in manifest
+
+
+def test_promote_llm_store_requires_owner_and_does_not_swallow_read_errors(tmp_path: Path):
+    store = LLMCallRecordStore(tmp_path / "audit" / "llm_call_records.jsonl")
+    with pytest.raises(PromoteError, match="stable owner_user_id"):
+        promote_ide_run(
+            ide_run_id="ide-audit",
+            owner_username="alice",
+            strategy_name="missing-owner",
+            strategy_code="",
+            result={"equity_curve": _curve(10)},
+            run_root=tmp_path / "runs",
+            llm_call_record_store=store,
+        )
+
+    class BrokenOwnerScopedStore:
+        def llm_records_for(self, asset_ref, *, owner_user_id):
+            raise RuntimeError("owner-scoped read failed")
+
+    with pytest.raises(RuntimeError, match="owner-scoped read failed"):
+        promote_ide_run(
+            ide_run_id="ide-audit",
+            owner_username="alice",
+            owner_user_id="owner-alice",
+            strategy_name="broken-store",
+            strategy_code="",
+            result={"equity_curve": _curve(10)},
+            run_root=tmp_path / "runs",
+            llm_call_record_store=BrokenOwnerScopedStore(),
+        )
 
 
 def test_promote_rejects_missing_curve(tmp_path: Path):

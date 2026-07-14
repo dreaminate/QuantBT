@@ -6,18 +6,53 @@ import { type PaperBoardData } from "../pages/workshop/paper/types";
 
 /**
  * 模拟盘速览卡（PaperBoard.dc.html）——可嵌进策略台/首页/跟单页的复用 widget。
- * metrics + 净值缩略 + 持仓 top N + 风险门 4 格。mock-driven，挂 MockBadge 诚实标注。
+ * metrics + 净值缩略 + 持仓 top N + 风险门 4 格。mock/backend 来源由 props 判别，禁止 backend 缺值时静默补 mock。
  * 风险门「会话外不可改」：纯展示、无任何编辑控件（只读硬墙的证据）。
  */
-export function PaperBoardCard({
-  board,
-  mock = true,
-}: {
-  board?: Partial<PaperBoardData>;
-  /** 数据是否为 mock（默认 true，挂角标）。接入真实后端后由调用方传 false。 */
-  mock?: boolean;
-}) {
-  const data: PaperBoardData = { ...defaultBoardData(), ...board };
+type PaperBoardCardProps =
+  | { source?: "mock"; board?: Partial<PaperBoardData> }
+  | { source: "backend"; board: PaperBoardData };
+
+export function PaperBoardCard(props: PaperBoardCardProps) {
+  const isMock = props.source !== "backend";
+  if (props.source === "backend" && !props.board) {
+    return (
+      <div data-testid="paper-board-unavailable" style={{ color: "var(--desk-warning)" }}>
+        后端 board 数据不可用；未回落 MOCK。
+      </div>
+    );
+  }
+  if (
+    props.source === "backend"
+    && (!props.board.runtimeEvidence || !props.board.riskEvidence)
+  ) {
+    return (
+      <div
+        data-testid="paper-board-unavailable"
+        style={{ color: "var(--desk-warning)" }}
+      >
+        后端 board 缺运行或风险证据；未渲染收益、净值与全绿状态，也未回落 MOCK。
+      </div>
+    );
+  }
+  const data: PaperBoardData = props.source === "backend"
+    ? props.board
+    : { ...defaultBoardData(), ...props.board };
+  const runtimeEvidence = data.runtimeEvidence;
+  const runtimeRunning = runtimeEvidence?.status === "running";
+  const runtimeTone = runtimeRunning ? "var(--desk-success)" : "var(--desk-warning)";
+  const runtimeLabel = runtimeEvidence?.label?.trim()
+    || (isMock ? "运行中" : "运行状态证据不可用");
+  const riskEvidence = data.riskEvidence;
+  const riskGreen = riskEvidence?.chainIntact === true && riskEvidence.violationCount === 0;
+  const riskTone = riskGreen ? "var(--desk-success)" : "var(--desk-warning)";
+  const riskLabel = riskEvidence === undefined
+    ? (isMock ? "全绿 · 0 违规" : "风险证据不可用")
+    : riskEvidence.chainIntact !== true
+      ? "风险链未验证"
+      : riskEvidence.violationCount === null
+        ? "违规数不可用"
+        : `${riskEvidence.violationCount} 违规`;
   const W = 600;
   const H = 110;
   const PAD = 6;
@@ -62,21 +97,21 @@ export function PaperBoardCard({
           borderBottom: "1px solid var(--desk-border)",
         }}
       >
-        <StatusDot color="var(--desk-success)" pulse size={8} />
+        <StatusDot color={runtimeTone} pulse={runtimeRunning} size={8} />
         <span style={{ fontWeight: 600 }}>模拟盘 · {data.strategy}</span>
         <span
           style={{
             marginLeft: "auto",
             fontSize: 11,
-            color: "var(--desk-success)",
-            border: "1px solid var(--desk-success)",
+            color: runtimeTone,
+            border: `1px solid ${runtimeTone}`,
             padding: "3px 10px",
             borderRadius: "var(--desk-radius-pill)",
           }}
         >
-          运行中 · 第 {data.days} 周
+          {runtimeLabel} · 第 {data.days} 周
         </span>
-        {mock && <MockBadge />}
+        {isMock && <MockBadge />}
       </div>
 
       {/* live metrics */}
@@ -168,8 +203,11 @@ export function PaperBoardCard({
           <span style={{ color: "var(--desk-text-soft)", fontWeight: 600, fontSize: 12.5 }}>
             风险门 · 会话外不可改
           </span>
-          <span style={{ marginLeft: "auto", fontSize: 11, color: "var(--desk-success)" }}>
-            全绿 · 0 违规
+          <span
+            data-testid="paper-board-risk-evidence"
+            style={{ marginLeft: "auto", fontSize: 11, color: riskTone }}
+          >
+            {riskLabel}
           </span>
         </div>
         <div style={{ display: "flex", flexWrap: "wrap", gap: 7 }}>

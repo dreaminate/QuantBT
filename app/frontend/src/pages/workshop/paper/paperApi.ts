@@ -29,6 +29,8 @@ export interface PaperRunListItem {
   promoted?: boolean;
   bars_fed?: number;
   simulated_source?: string | null;
+  provider_kind?: string;
+  degrade_reason?: string | null;
 }
 export interface PaperStatusResp {
   run_id: string;
@@ -43,8 +45,12 @@ export interface PaperStatusResp {
   last_mtm_at_utc: string | null;
   last_error: string | null;
   config: { interval_seconds: number };
-  /** 数据来源标注：非空=回放捆绑样本（模拟，非实盘 key）；null/缺=空壳。 */
+  /** 精确数据源；可能是 testnet 实时 bar、捆绑样本回放、确定性合成或空壳。 */
   simulated_source?: string | null;
+  /** provider 档位；testnet 才是晋级允许的数据档。 */
+  provider_kind?: string;
+  /** 请求 testnet 却降级到 replay 时的原因；非空即不可晋级。 */
+  degrade_reason?: string | null;
 }
 export interface PaperPositionResp {
   symbol: string;
@@ -74,6 +80,135 @@ export interface PaperPromotionResp {
   eligible: boolean;
   promoted: boolean;
   gate_id: string | null;
+  simulated_source?: string | null;
+  provider_kind?: string;
+  degrade_reason?: string | null;
+}
+export interface PaperPromotionGateResp {
+  gate_id: string;
+  run_id: string;
+  creator: string;
+  verification_target_ref: string;
+  eligible: boolean;
+  decision: "pending" | "approved" | "superseded";
+  approver: string | null;
+  endorsement_ref: string | null;
+  endorsement_evidence_sha256: string | null;
+  reviewer_grant_id: string | null;
+  reviewer_grant_record_sha256: string | null;
+  reviewer_authority_ref: string | null;
+}
+
+function asObject(value: unknown): Record<string, unknown> | null {
+  return value !== null && typeof value === "object" && !Array.isArray(value)
+    ? value as Record<string, unknown>
+    : null;
+}
+
+function nonEmptyString(value: unknown): value is string {
+  return typeof value === "string" && value.trim().length > 0;
+}
+
+function fullSha256Ref(value: unknown, prefix: string): value is string {
+  return nonEmptyString(value)
+    && new RegExp(`^${prefix}:sha256:[0-9a-f]{64}$`).test(value);
+}
+
+function requirePromotionGate(
+  value: unknown,
+  expectedGateId: string,
+  expectedRunId: string,
+  expectedDecision: "pending" | "approved",
+): PaperPromotionGateResp {
+  const body = asObject(value);
+  if (
+    !body
+    || body.gate_id !== expectedGateId
+    || body.run_id !== expectedRunId
+    || body.decision !== expectedDecision
+    || !nonEmptyString(body.creator)
+    || !fullSha256Ref(body.verification_target_ref, "paper_promotion_target")
+    || typeof body.eligible !== "boolean"
+  ) {
+    throw new Error("晋级响应缺字段或与当前 run/gate 不匹配：未晋级。");
+  }
+  if (
+    expectedDecision === "approved"
+    && (
+      body.eligible !== true
+      || !nonEmptyString(body.approver)
+      || !nonEmptyString(body.endorsement_ref)
+      || !fullSha256Ref(body.endorsement_evidence_sha256, "paper_promotion_endorsement")
+      || !fullSha256Ref(body.reviewer_grant_id, "paper_reviewer_grant")
+      || !fullSha256Ref(body.reviewer_grant_record_sha256, "paper_reviewer_grant_record")
+      || !fullSha256Ref(body.reviewer_authority_ref, "paper_verifier_authority")
+    )
+  ) {
+    throw new Error("晋级批准响应缺少审批、背书或 reviewer grant 证据：未晋级。");
+  }
+  return body as unknown as PaperPromotionGateResp;
+}
+
+export function assertApprovedPromotionGate(
+  value: unknown,
+  expectedGateId: string,
+  expectedRunId: string,
+): PaperPromotionGateResp {
+  return requirePromotionGate(value, expectedGateId, expectedRunId, "approved");
+}
+
+export function assertPaperPromotionStatus(
+  value: unknown,
+  expectedRunId: string,
+): PaperPromotionResp {
+  const body = asObject(value);
+  const checks = Array.isArray(body?.checks) ? body.checks : [];
+  const validChecks = checks.length >= 5 && checks.every((item) => {
+    const check = asObject(item);
+    return Boolean(
+      check
+      && typeof check.key === "string"
+      && typeof check.label === "string"
+      && typeof check.value === "string"
+      && typeof check.passed === "boolean"
+    );
+  });
+  const uniqueKeys = new Set(
+    checks.map((item) => String(asObject(item)?.key ?? "")),
+  );
+  const requiredKeys = new Set(["days", "excess", "zero_violation", "decay", "data_source"]);
+  const exactRequiredKeys = uniqueKeys.size === requiredKeys.size
+    && [...requiredKeys].every((key) => uniqueKeys.has(key));
+  const derivedEligible = validChecks && checks.every(
+    (item) => asObject(item)?.passed === true,
+  );
+  if (
+    !body
+    || body.run_id !== expectedRunId
+    || !validChecks
+    || uniqueKeys.size !== checks.length
+    || !exactRequiredKeys
+    || typeof body.eligible !== "boolean"
+    || body.eligible !== derivedEligible
+    || typeof body.promoted !== "boolean"
+    || !(body.gate_id === null || nonEmptyString(body.gate_id))
+    || (body.promoted === true && !nonEmptyString(body.gate_id))
+  ) {
+    throw new Error("晋级状态响应缺字段或自相矛盾：不采用 promoted 绿态。");
+  }
+  return body as unknown as PaperPromotionResp;
+}
+
+async function responseError(response: Response): Promise<Error> {
+  let detail = `HTTP ${response.status}`;
+  try {
+    const body = await response.json();
+    if (typeof body?.detail === "string") detail = body.detail;
+    else if (typeof body?.detail?.reason === "string") detail = body.detail.reason;
+  } catch {
+    // Keep the status-only error for a non-JSON response.
+  }
+  return new Error(detail);
 }
 
 async function getJson<T>(url: string): Promise<T> {
@@ -91,24 +226,35 @@ export const paperApi = {
   fills: (id: string) => getJson<{ fills: PaperFillResp[] }>(`/api/paper/runs/${id}/fills`),
   equityLog: (id: string) =>
     getJson<{ equity_log: { total_equity: number }[] }>(`/api/paper/runs/${id}/equity_log`),
-  promotion: (id: string) => getJson<PaperPromotionResp>(`/api/paper/runs/${id}/promotion`),
+  promotion: async (id: string): Promise<PaperPromotionResp> => {
+    const response = await authFetch(`/api/paper/runs/${id}/promotion`);
+    if (!response.ok) throw await responseError(response);
+    return assertPaperPromotionStatus(await response.json(), id);
+  },
   riskGate: (id: string) => getJson<Record<string, unknown>>(`/api/paper/runs/${id}/risk_gate`),
-  openPromotionGate: async (id: string): Promise<{ gate_id: string }> => {
+  openPromotionGate: async (id: string): Promise<PaperPromotionGateResp> => {
     const r = await authFetch(`/api/paper/runs/${id}/promotion/open`, {
       method: "POST",
       body: JSON.stringify({}),
     });
-    if (!r.ok) throw new Error(`HTTP ${r.status}`);
-    return (await r.json()) as { gate_id: string };
+    if (!r.ok) throw await responseError(r);
+    const body: unknown = await r.json();
+    const obj = asObject(body);
+    const gateId = typeof obj?.gate_id === "string" ? obj.gate_id : "";
+    return requirePromotionGate(body, gateId, id, "pending");
   },
   approvePromotion: async (
     gateId: string,
-    body: { approver: string; endorsement_ref: string; reason: string },
-  ): Promise<Response> =>
-    authFetch(`/api/paper/promotion/${gateId}/approve`, {
+    runId: string,
+    body: { endorsement_ref: string; reason: string },
+  ): Promise<PaperPromotionGateResp> => {
+    const response = await authFetch(`/api/paper/promotion/${gateId}/approve`, {
       method: "POST",
       body: JSON.stringify(body),
-    }),
+    });
+    if (!response.ok) throw await responseError(response);
+    return assertApprovedPromotionGate(await response.json(), gateId, runId);
+  },
   /** 过裁决候选 → 注册成模拟台可跑 run（喂模拟 bars 产净值；A股恒 paper、不绕审批）。 */
   registerRun: async (body: {
     run_id: string;

@@ -138,6 +138,7 @@ def execute_canvas_asset_mutation(
     store: ResearchGraphStore,
     record: CanvasMutationRecord,
     *,
+    owner_user_id: str,
     tool_record_refs: tuple[str, ...] = (),
 ) -> CanvasAssetMutationResult:
     decision = validate_canvas_mutation(record)
@@ -148,6 +149,9 @@ def execute_canvas_asset_mutation(
         current = store.qro(record.target_ref)
     except KeyError as exc:
         raise ResearchGraphError(f"canvas asset mutation target QRO not found: {record.target_ref}") from exc
+    owner = str(owner_user_id or "").strip()
+    if not owner or str(record.actor or "") != owner or str(current.owner or "") != owner:
+        raise ResearchGraphError("canvas asset mutation target belongs to a different owner")
     if _qro_type(current) != str(record.target_asset_type):
         raise ResearchGraphError(
             f"canvas asset mutation target_asset_type mismatch: expected {_qro_type(current)}, got {record.target_asset_type}"

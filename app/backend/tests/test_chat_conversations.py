@@ -2,11 +2,13 @@
 
 from __future__ import annotations
 
+import json
 from pathlib import Path
 from types import SimpleNamespace
 
 import pytest
 from fastapi.testclient import TestClient
+from conftest import build_test_agent_gateway
 
 from app.agent.conversations import ChatError, ChatService, VALID_MARKET_MODES
 from app.agent.llm_client import LLMResponse
@@ -16,11 +18,71 @@ from app.main import app
 from app.research_os import (
     AssetRAGDocument,
     PersistentCompilerIRStore,
+    PersistentEntrypointEvidenceRegistry,
     PersistentGoalEntrypointCoverageRegistry,
+    PersistentGoalValidationReceiptRegistry,
     PersistentResearchAssetRAGIndex,
     RAGPermission,
     ResearchGraphStore,
 )
+from app.research_os.goal_proof_ledger import GoalProofLedger
+from app.research_os.ref_resolution import build_real_ref_resolver
+
+
+def _patch_goal_proof_stores(main, tmp_path: Path, monkeypatch, *, graph=None) -> None:  # noqa: ANN001
+    graph = graph if graph is not None else ResearchGraphStore()
+    proof_ledger = GoalProofLedger(tmp_path / "goal_proof_ledger")
+    compiler = PersistentCompilerIRStore(
+        tmp_path / "compiler_ir.jsonl",
+        proof_ledger=proof_ledger,
+        legacy_read_only=True,
+    )
+    validations = PersistentGoalValidationReceiptRegistry(
+        tmp_path / "goal_validation_receipts.jsonl",
+        proof_ledger=proof_ledger,
+        legacy_read_only=True,
+    )
+    evidence = PersistentEntrypointEvidenceRegistry(
+        tmp_path / "entrypoint_evidence.jsonl",
+        research_graph_store=graph,
+        compiler_store=compiler,
+        validation_receipt_registry=validations,
+        proof_ledger=proof_ledger,
+        legacy_read_only=True,
+    )
+    coverage = PersistentGoalEntrypointCoverageRegistry(
+        tmp_path / "goal_entrypoint_coverage.jsonl",
+        proof_ledger=proof_ledger,
+        legacy_read_only=True,
+    )
+    coverage.set_ref_resolver(
+        build_real_ref_resolver(
+            research_graph_store=graph,
+            lifecycle_registry=None,
+            governance_registry=None,
+            rag_index=None,
+            spine_chain_registry=None,
+            compiler_store=compiler,
+            goal_validation_receipt_registry=validations,
+            platform_source_evidence_registry=evidence,
+        )
+    )
+    monkeypatch.setattr(main, "RESEARCH_GRAPH_STORE", graph)
+    monkeypatch.setattr(main, "COMPILER_IR_STORE", compiler)
+    monkeypatch.setattr(main, "GOAL_VALIDATION_RECEIPT_REGISTRY", validations)
+    monkeypatch.setattr(main, "ENTRYPOINT_EVIDENCE_REGISTRY", evidence)
+    monkeypatch.setattr(main, "GOAL_ENTRYPOINT_COVERAGE_REGISTRY", coverage)
+
+
+def _patch_route_gateway(main, monkeypatch, client) -> None:  # noqa: ANN001
+    monkeypatch.setattr(
+        main,
+        "_current_agent_gateway",
+        lambda run_id=None: build_test_agent_gateway(
+            client,
+            seal_secret=main.LLM_CALL_RECORD_STORE.seal_secret,
+        ),
+    )
 
 
 @pytest.fixture
@@ -56,25 +118,25 @@ def test_list_threads_filters_by_user(svc: ChatService):
 
 def test_update_state_validation(svc: ChatService):
     t = svc.start_thread(user_id="u1")
-    svc.update_state(t.thread_id, "RETRIEVE_CONTEXT")
-    assert svc.get_thread(t.thread_id).state == "RETRIEVE_CONTEXT"
+    svc.update_state(t.thread_id, "RETRIEVE_CONTEXT", owner_user_id="u1")
+    assert svc.get_thread(t.thread_id, owner_user_id="u1").state == "RETRIEVE_CONTEXT"
     with pytest.raises(ChatError):
-        svc.update_state(t.thread_id, "BOGUS_STATE")
+        svc.update_state(t.thread_id, "BOGUS_STATE", owner_user_id="u1")
 
 
 def test_add_message_basic(svc: ChatService):
     t = svc.start_thread(user_id="u1")
-    m = svc.add_message(t.thread_id, "user", "hi")
+    m = svc.add_message(t.thread_id, "user", "hi", owner_user_id="u1")
     assert m.role == "user"
     assert m.content == "hi"
-    msgs = svc.list_messages(t.thread_id)
+    msgs = svc.list_messages(t.thread_id, owner_user_id="u1")
     assert len(msgs) == 1
 
 
 def test_add_message_rejects_invalid_role(svc: ChatService):
     t = svc.start_thread(user_id="u1")
     with pytest.raises(ChatError):
-        svc.add_message(t.thread_id, "evil_role", "x")
+        svc.add_message(t.thread_id, "evil_role", "x", owner_user_id="u1")
 
 
 def test_add_message_updates_thread_timestamp(svc: ChatService):
@@ -82,17 +144,22 @@ def test_add_message_updates_thread_timestamp(svc: ChatService):
     orig = t.updated_at_utc
     import time as _t
     _t.sleep(1.01)
-    svc.add_message(t.thread_id, "user", "hi")
-    t2 = svc.get_thread(t.thread_id)
+    svc.add_message(t.thread_id, "user", "hi", owner_user_id="u1")
+    t2 = svc.get_thread(t.thread_id, owner_user_id="u1")
     assert t2.updated_at_utc >= orig
 
 
 def test_compress_history(svc: ChatService):
     t = svc.start_thread(user_id="u1")
     for i in range(10):
-        svc.add_message(t.thread_id, "user", f"msg {i}")
-        svc.add_message(t.thread_id, "assistant", f"reply {i}")
-    h = svc.compress_history(t.thread_id, max_messages=4, max_chars=400)
+        svc.add_message(t.thread_id, "user", f"msg {i}", owner_user_id="u1")
+        svc.add_message(t.thread_id, "assistant", f"reply {i}", owner_user_id="u1")
+    h = svc.compress_history(
+        t.thread_id,
+        owner_user_id="u1",
+        max_messages=4,
+        max_chars=400,
+    )
     # 4 条且 ≤400 字
     assert len(h) <= 400
     # newest 几条应该在里面
@@ -101,10 +168,59 @@ def test_compress_history(svc: ChatService):
 
 def test_update_active_context(svc: ChatService):
     t = svc.start_thread(user_id="u1")
-    svc.update_active_context(t.thread_id, active_run_id="r1", active_strategy_id="s1")
-    t2 = svc.get_thread(t.thread_id)
+    svc.update_active_context(
+        t.thread_id,
+        owner_user_id="u1",
+        active_run_id="r1",
+        active_strategy_id="s1",
+    )
+    t2 = svc.get_thread(t.thread_id, owner_user_id="u1")
     assert t2.active_run_id == "r1"
     assert t2.active_strategy_id == "s1"
+
+
+def test_thread_owner_isolation_survives_reopen(tmp_path: Path):
+    db_path = tmp_path / "chat-owner.db"
+    service = ChatService(db_path)
+    thread = service.start_thread(user_id="owner-a")
+    service.add_message(
+        thread.thread_id,
+        "user",
+        "owner-only",
+        owner_user_id="owner-a",
+    )
+
+    for operation in (
+        lambda: service.get_thread(thread.thread_id, owner_user_id="owner-b"),
+        lambda: service.list_messages(thread.thread_id, owner_user_id="owner-b"),
+        lambda: service.add_message(
+            thread.thread_id,
+            "assistant",
+            "foreign-write",
+            owner_user_id="owner-b",
+        ),
+        lambda: service.update_state(
+            thread.thread_id,
+            "FOLLOW_UP_UPDATE",
+            owner_user_id="owner-b",
+        ),
+        lambda: service.update_active_context(
+            thread.thread_id,
+            owner_user_id="owner-b",
+            active_run_id="foreign-run",
+        ),
+    ):
+        with pytest.raises(ChatError, match="^thread not found$"):
+            operation()
+
+    reopened = ChatService(db_path)
+    with pytest.raises(ChatError, match="^thread not found$"):
+        reopened.get_thread(thread.thread_id, owner_user_id="owner-b")
+    owned = reopened.get_thread(thread.thread_id, owner_user_id="owner-a")
+    messages = reopened.list_messages(thread.thread_id, owner_user_id="owner-a")
+    assert owned.state == "ENTER_THREAD"
+    assert owned.active_run_id is None
+    assert [message.content for message in messages] == ["owner-only"]
 
 
 # ============================================================
@@ -174,18 +290,20 @@ def test_format_rag_context_with_hits():
 
 
 @pytest.fixture
-def client(tmp_path: Path, monkeypatch) -> TestClient:  # noqa: ANN001
+def client(tmp_path: Path, monkeypatch):  # noqa: ANN001
     import app.main as main
 
     monkeypatch.setattr(main, "CHAT_SERVICE", ChatService(tmp_path / "api_chat.db"))
-    monkeypatch.setattr(main, "RESEARCH_GRAPH_STORE", ResearchGraphStore())
-    monkeypatch.setattr(main, "COMPILER_IR_STORE", PersistentCompilerIRStore(tmp_path / "compiler_ir.jsonl"))
-    monkeypatch.setattr(
-        main,
-        "GOAL_ENTRYPOINT_COVERAGE_REGISTRY",
-        PersistentGoalEntrypointCoverageRegistry(tmp_path / "goal_entrypoint_coverage.jsonl"),
+    _patch_goal_proof_stores(main, tmp_path, monkeypatch)
+    _patch_route_gateway(main, monkeypatch, _Mode2CapturingLLM())
+    main.app.dependency_overrides[main.require_user_dependency] = lambda: SimpleNamespace(
+        username="u1",
+        user_id="u1",
     )
-    return TestClient(app)
+    try:
+        yield TestClient(app)
+    finally:
+        main.app.dependency_overrides.pop(main.require_user_dependency, None)
 
 
 class _Mode2CapturingLLM:
@@ -208,6 +326,10 @@ class _Mode2StreamingLLM:
     def stream_chat(self, messages, *, model=None, temperature=0.2):  # noqa: ANN001, ARG002
         self.messages = list(messages)
         yield "streamed legacy answer"
+
+    def chat(self, messages, *, tools=None, model=None, temperature=0.2):  # noqa: ANN001, ARG002
+        self.messages = list(messages)
+        return LLMResponse(content="streamed legacy answer")
 
 
 def _legacy_rag_doc(**overrides) -> AssetRAGDocument:
@@ -250,6 +372,96 @@ def test_api_chat_get_thread_404(client: TestClient):
     assert r.status_code == 404
 
 
+def test_api_chat_foreign_owner_cannot_read_write_or_stream(client: TestClient):
+    import app.main as main
+
+    created = client.post(
+        "/api/agent/chat/start",
+        json={"market_mode": "ashare_research"},
+    )
+    assert created.status_code == 200
+    thread_id = created.json()["thread_id"]
+
+    main.app.dependency_overrides[main.require_user_dependency] = lambda: SimpleNamespace(
+        username="u2",
+        user_id="u2",
+    )
+    assert client.get(f"/api/agent/chat/{thread_id}").status_code == 404
+    assert client.post(
+        f"/api/agent/chat/{thread_id}/message",
+        json={"content": "foreign write"},
+    ).status_code == 404
+    assert client.get(
+        f"/api/agent/chat/{thread_id}/stream",
+        params={"q": "foreign stream"},
+    ).status_code == 404
+    assert client.get("/api/agent/chat/threads").json() == []
+
+    main.app.dependency_overrides[main.require_user_dependency] = lambda: SimpleNamespace(
+        username="u1",
+        user_id="u1",
+    )
+    owner_view = client.get(f"/api/agent/chat/{thread_id}")
+    assert owner_view.status_code == 200
+    assert owner_view.json()["messages"] == []
+
+
+def test_api_chat_run_binding_rejects_path_escape_and_foreign_or_ownerless_run(
+    client: TestClient,
+    tmp_path: Path,
+    monkeypatch,
+):
+    from app import run_detail_core
+
+    run_root = tmp_path / "runs"
+    run_root.mkdir()
+    monkeypatch.setattr(run_detail_core, "RUN_ROOT", run_root)
+
+    def write_run(run_id: str, **manifest_overrides) -> Path:
+        path = run_root / run_id
+        path.mkdir()
+        manifest = {
+            "run_id": run_id,
+            "status": "completed",
+            "metrics": {"sharpe": 1.23},
+            **manifest_overrides,
+        }
+        (path / "run.json").write_text(json.dumps(manifest), encoding="utf-8")
+        return path
+
+    write_run("owner-a-run", owner_user_id="u1")
+    write_run("owner-b-run", owner_user_id="u2")
+    write_run("ownerless-run")
+    outside = tmp_path / "outside"
+    outside.mkdir()
+    (outside / "run.json").write_text(
+        json.dumps({"run_id": "outside", "metrics": {"sharpe": 9.99}}),
+        encoding="utf-8",
+    )
+
+    for active_run_id in (
+        str(outside),
+        "../outside",
+        "owner-b-run",
+        "ownerless-run",
+    ):
+        response = client.post(
+            "/api/agent/chat/start",
+            json={"active_run_id": active_run_id},
+        )
+        assert response.status_code == 404
+        assert response.json()["detail"] == "run not found"
+
+    accepted = client.post(
+        "/api/agent/chat/start",
+        json={"active_run_id": "owner-a-run"},
+    )
+    assert accepted.status_code == 200, accepted.text
+    assert accepted.json()["active_run_id"] == "owner-a-run"
+    threads = client.get("/api/agent/chat/threads").json()
+    assert [thread["active_run_id"] for thread in threads] == ["owner-a-run"]
+
+
 def test_api_send_message_devLocal_round_trip(client: TestClient):
     """完整 round-trip: start → send message → 拿到 assistant 回复（DevLocal LLM fallback）。"""
     r1 = client.post("/api/agent/chat/start", json={"market_mode": "ashare_research"})
@@ -259,14 +471,16 @@ def test_api_send_message_devLocal_round_trip(client: TestClient):
     assistant = r2.json()
     assert assistant["role"] == "assistant"
     assert len(assistant["content"]) > 0
-    # 应该 RAG 命中 sharpe_ratio
-    assert any(h["slug"] == "sharpe_ratio" for h in (assistant["metadata"].get("rag_hits") or []))
+    metadata = assistant["metadata"]
+    assert metadata["rag_hits"] == []
+    assert metadata["legacy_rag_not_injected"] is True
+    assert metadata["legacy_rag_disclosure"]["reason"] == "missing_required_provenance_and_strict_usage"
 
 
-def test_api_send_message_records_chat_and_agent_shell_goal_coverage(client: TestClient, monkeypatch):
+def test_api_send_message_records_chat_goal_coverage(client: TestClient, monkeypatch):
     import app.main as main
 
-    monkeypatch.setattr(main, "_current_agent_llm", lambda run_id=None: _Mode2CapturingLLM())
+    _patch_route_gateway(main, monkeypatch, _Mode2CapturingLLM())
     secret = "SECRET_SHOULD_NOT_ENTER_LEGACY_GOAL_COVERAGE"
     r1 = client.post("/api/agent/chat/start", json={"market_mode": "ashare_research"})
     tid = r1.json()["thread_id"]
@@ -274,12 +488,11 @@ def test_api_send_message_records_chat_and_agent_shell_goal_coverage(client: Tes
 
     assert r2.status_code == 200, r2.text
     metadata = r2.json()["metadata"]
-    assert len(metadata["compiler_ir_refs"]) == 2
-    assert len(metadata["compiler_pass_refs"]) == 2
-    assert len(metadata["entrypoint_coverage_refs"]) == 2
+    assert len(metadata["compiler_ir_refs"]) == 1
+    assert len(metadata["compiler_pass_refs"]) == 1
+    assert len(metadata["entrypoint_coverage_refs"]) == 1
     coverages = main.GOAL_ENTRYPOINT_COVERAGE_REGISTRY.records()
     assert {(record.entry_source, record.entrypoint_ref) for record in coverages} == {
-        ("agent_shell", "agent_shell:legacy_mode2.chat.message"),
         ("chat", "chat:legacy_mode2.chat.message"),
     }
     persisted = str(coverages)
@@ -295,19 +508,13 @@ def test_api_send_message_retrieves_research_asset_rag_when_visible_assets_suppl
     import app.main as main
 
     index = PersistentResearchAssetRAGIndex(tmp_path / "legacy_rag.jsonl")
-    index.add(_legacy_rag_doc())
+    index.add_for_owner(_legacy_rag_doc(), owner_user_id="u1")
     store = ResearchGraphStore()
     llm = _Mode2CapturingLLM()
     monkeypatch.setattr(main, "RESEARCH_ASSET_RAG_INDEX", index)
-    monkeypatch.setattr(main, "RESEARCH_GRAPH_STORE", store)
-    monkeypatch.setattr(main, "COMPILER_IR_STORE", PersistentCompilerIRStore(tmp_path / "compiler_ir.jsonl"))
-    monkeypatch.setattr(
-        main,
-        "GOAL_ENTRYPOINT_COVERAGE_REGISTRY",
-        PersistentGoalEntrypointCoverageRegistry(tmp_path / "goal_entrypoint_coverage.jsonl"),
-    )
-    monkeypatch.setattr(main, "_current_agent_llm", lambda run_id=None: llm)
-    main.app.dependency_overrides[main.current_user_dependency] = lambda: SimpleNamespace(username="u1", user_id="u1")
+    _patch_goal_proof_stores(main, tmp_path, monkeypatch, graph=store)
+    _patch_route_gateway(main, monkeypatch, llm)
+    main.app.dependency_overrides[main.require_user_dependency] = lambda: SimpleNamespace(username="u1", user_id="u1")
     client = TestClient(main.app)
     try:
         start = client.post("/api/agent/chat/start", json={"market_mode": "ashare_research"})
@@ -324,16 +531,32 @@ def test_api_send_message_retrieves_research_asset_rag_when_visible_assets_suppl
             },
         )
     finally:
-        main.app.dependency_overrides.pop(main.current_user_dependency, None)
+        main.app.dependency_overrides.pop(main.require_user_dependency, None)
 
     assert response.status_code == 200, response.text
     assistant = response.json()
     metadata = assistant["metadata"]
-    assert any(h["slug"] == "pbo" for h in metadata["rag_hits"])
-    assert metadata["research_asset_rag_hits"][0]["source_id"] == "doc:legacy-mode2"
-    assert metadata["research_asset_rag_hits"][0]["evidence_ref"] == "rag:doc:legacy-mode2@v1:qro:legacy-risk"
+    assert metadata["rag_hits"] == []
+    assert metadata["legacy_rag_not_injected"] is True
+    canonical_hit = metadata["research_asset_rag_hits"][0]
+    assert canonical_hit["source_id"] == "doc:legacy-mode2"
+    assert canonical_hit["evidence_ref"] == "rag:doc:legacy-mode2@v1:qro:legacy-risk"
+    for field in ("source_id", "version", "timestamp", "permission", "applicability"):
+        assert canonical_hit[field]
     assert metadata["research_asset_rag_usage_ids"]
-    assert index.agent_usage(source_id="doc:legacy-mode2", user_id="u1")
+    usages = [
+        index.strict_usage_for_owner(usage_id, owner_user_id="u1")
+        for usage_id in metadata["research_asset_rag_usage_ids"]
+    ]
+    assert all(
+        index.validate_current_usage(usage.usage_id, owner_user_id="u1").accepted
+        for usage in usages
+    )
+    assert any(
+        document.source_id == "doc:legacy-mode2"
+        for usage in usages
+        for document in usage.returned_documents
+    )
 
     prompt_text = "\n".join(message.content for message in llm.messages)
     assert "Research Asset RAG candidate context" in prompt_text
@@ -352,18 +575,12 @@ def test_api_send_message_does_not_auto_retrieve_research_asset_rag_without_visi
     import app.main as main
 
     index = PersistentResearchAssetRAGIndex(tmp_path / "legacy_rag.jsonl")
-    index.add(_legacy_rag_doc())
+    index.add_for_owner(_legacy_rag_doc(), owner_user_id="u1")
     llm = _Mode2CapturingLLM()
     monkeypatch.setattr(main, "RESEARCH_ASSET_RAG_INDEX", index)
-    monkeypatch.setattr(main, "RESEARCH_GRAPH_STORE", ResearchGraphStore())
-    monkeypatch.setattr(main, "COMPILER_IR_STORE", PersistentCompilerIRStore(tmp_path / "compiler_ir.jsonl"))
-    monkeypatch.setattr(
-        main,
-        "GOAL_ENTRYPOINT_COVERAGE_REGISTRY",
-        PersistentGoalEntrypointCoverageRegistry(tmp_path / "goal_entrypoint_coverage.jsonl"),
-    )
-    monkeypatch.setattr(main, "_current_agent_llm", lambda run_id=None: llm)
-    main.app.dependency_overrides[main.current_user_dependency] = lambda: SimpleNamespace(username="u1", user_id="u1")
+    _patch_goal_proof_stores(main, tmp_path, monkeypatch)
+    _patch_route_gateway(main, monkeypatch, llm)
+    main.app.dependency_overrides[main.require_user_dependency] = lambda: SimpleNamespace(username="u1", user_id="u1")
     client = TestClient(main.app)
     try:
         start = client.post("/api/agent/chat/start", json={"market_mode": "ashare_research"})
@@ -378,37 +595,106 @@ def test_api_send_message_does_not_auto_retrieve_research_asset_rag_without_visi
             },
         )
     finally:
-        main.app.dependency_overrides.pop(main.current_user_dependency, None)
+        main.app.dependency_overrides.pop(main.require_user_dependency, None)
 
     assert response.status_code == 200, response.text
     metadata = response.json()["metadata"]
+    assert metadata["rag_hits"] == []
+    assert metadata["legacy_rag_not_injected"] is True
     assert metadata["research_asset_rag_hits"] == []
     assert metadata["research_asset_rag_usage_ids"] == []
-    assert index.agent_usage(source_id="doc:legacy-mode2", user_id="u1") == []
+    assert index.strict_usage_records(owner_user_id="u1") == []
     prompt_text = "\n".join(message.content for message in llm.messages)
-    assert "Research Asset RAG candidate context" not in prompt_text
+    assert "These hits are permission-filtered candidate context" not in prompt_text
+    assert "covariance covariance shrinkage portfolio risk PBO legacy mode2" not in prompt_text
+
+
+def test_api_send_message_never_injects_unversioned_glossary_or_run_context(
+    client: TestClient,
+    monkeypatch,
+):
+    import app.main as main
+
+    llm = _Mode2CapturingLLM()
+    _patch_route_gateway(main, monkeypatch, llm)
+    start = client.post("/api/agent/chat/start", json={"market_mode": "ashare_research"})
+    thread_id = start.json()["thread_id"]
+    main.CHAT_SERVICE.update_active_context(
+        thread_id,
+        owner_user_id="u1",
+        active_run_id="owner-run-with-unversioned-summary",
+    )
+    monkeypatch.setattr(
+        main,
+        "_require_chat_run_access",
+        lambda run_id, user: run_id,
+    )
+    monkeypatch.setattr(
+        main,
+        "_chat_run_response_for_user",
+        lambda run_id, user: {
+            "metrics": {"sharpe": "RAW_LEGACY_RUN_CONTEXT_SECRET"},
+            "jq_overview_metrics": {},
+            "risk_summary": {},
+        },
+    )
+    legacy_hits = retrieve("PBO 0.7 这个策略可信吗", glossary=main.GLOSSARY)
+    assert legacy_hits
+
+    response = client.post(
+        f"/api/agent/chat/{thread_id}/message",
+        json={"content": "PBO 0.7 这个策略可信吗"},
+    )
+
+    assert response.status_code == 200, response.text
+    metadata = response.json()["metadata"]
+    prompt_text = "\n".join(message.content for message in llm.messages)
+    assert metadata["rag_hits"] == []
+    assert metadata["legacy_rag_not_injected"] is True
+    assert metadata["legacy_rag_disclosure"]["canonical_path"] == "research_asset_rag"
+    assert metadata["active_run_bound"] is True
+    assert metadata["had_run_context"] is False
+    assert "RAW_LEGACY_RUN_CONTEXT_SECRET" not in prompt_text
+    assert "RAW_LEGACY_RUN_CONTEXT_SECRET" not in str(metadata)
+    assert all(hit.snippet not in prompt_text for hit in legacy_hits)
 
 
 def test_api_chat_stream_retrieves_research_asset_rag_when_visible_assets_supplied(tmp_path, monkeypatch):
     import app.main as main
 
     index = PersistentResearchAssetRAGIndex(tmp_path / "legacy_stream_rag.jsonl")
-    index.add(_legacy_rag_doc(source_id="doc:legacy-mode2-stream"))
+    index.add_for_owner(
+        _legacy_rag_doc(source_id="doc:legacy-mode2-stream"),
+        owner_user_id="u1",
+    )
     llm = _Mode2StreamingLLM()
     monkeypatch.setattr(main, "RESEARCH_ASSET_RAG_INDEX", index)
-    monkeypatch.setattr(main, "RESEARCH_GRAPH_STORE", ResearchGraphStore())
-    monkeypatch.setattr(main, "COMPILER_IR_STORE", PersistentCompilerIRStore(tmp_path / "compiler_ir.jsonl"))
-    monkeypatch.setattr(
-        main,
-        "GOAL_ENTRYPOINT_COVERAGE_REGISTRY",
-        PersistentGoalEntrypointCoverageRegistry(tmp_path / "goal_entrypoint_coverage.jsonl"),
-    )
-    monkeypatch.setattr(main, "_current_agent_llm", lambda run_id=None: llm)
-    main.app.dependency_overrides[main.current_user_dependency] = lambda: SimpleNamespace(username="u1", user_id="u1")
+    _patch_goal_proof_stores(main, tmp_path, monkeypatch)
+    _patch_route_gateway(main, monkeypatch, llm)
+    main.app.dependency_overrides[main.require_user_dependency] = lambda: SimpleNamespace(username="u1", user_id="u1")
     client = TestClient(main.app)
     try:
         start = client.post("/api/agent/chat/start", json={"market_mode": "ashare_research"})
         tid = start.json()["thread_id"]
+        main.CHAT_SERVICE.update_active_context(
+            tid,
+            owner_user_id="u1",
+            active_run_id="owner-run-with-unversioned-stream-summary",
+        )
+        monkeypatch.setattr(
+            main,
+            "_require_chat_run_access",
+            lambda run_id, user: run_id,
+        )
+        monkeypatch.setattr(
+            main,
+            "_chat_run_response_for_user",
+            lambda run_id, user: {
+                "metrics": {"sharpe": "RAW_LEGACY_STREAM_RUN_CONTEXT_SECRET"},
+                "jq_overview_metrics": {},
+                "risk_summary": {},
+            },
+        )
         with client.stream(
             "GET",
             f"/api/agent/chat/{tid}/stream",
@@ -425,22 +711,36 @@ def test_api_chat_stream_retrieves_research_asset_rag_when_visible_assets_suppli
             raw = "".join(chunk for chunk in stream.iter_text())
         thread = client.get(f"/api/agent/chat/{tid}")
     finally:
-        main.app.dependency_overrides.pop(main.current_user_dependency, None)
+        main.app.dependency_overrides.pop(main.require_user_dependency, None)
 
     assert "event: rag" in raw
+    assert "legacy_rag_not_injected" in raw
     assert "event: research_rag" in raw
     assert "rag:doc:legacy-mode2-stream@v1:qro:legacy-risk" in raw
     assert "research_asset_rag_usage_ids" in raw
     assert "entrypoint_coverage_refs" in raw
-    assert index.agent_usage(source_id="doc:legacy-mode2-stream", user_id="u1")
+    usages = index.strict_usage_records(owner_user_id="u1")
+    assert all(
+        index.validate_current_usage(usage.usage_id, owner_user_id="u1").accepted
+        for usage in usages
+    )
+    assert any(
+        document.source_id == "doc:legacy-mode2-stream"
+        for usage in usages
+        for document in usage.returned_documents
+    )
     prompt_text = "\n".join(message.content for message in llm.messages)
     assert "Research Asset RAG candidate context" in prompt_text
     assert "covariance covariance shrinkage" in prompt_text
+    legacy_hits = retrieve("covariance shrinkage PBO risk", glossary=main.GLOSSARY)
+    assert all(hit.snippet not in prompt_text for hit in legacy_hits)
+    assert "RAW_LEGACY_STREAM_RUN_CONTEXT_SECRET" not in prompt_text
+    assert "RAW_LEGACY_STREAM_RUN_CONTEXT_SECRET" not in raw
 
     assistant_messages = [m for m in thread.json()["messages"] if m["role"] == "assistant"]
     metadata = assistant_messages[-1]["metadata"]
-    assert len(metadata["qro_ids"]) == 1
-    assert len(metadata["research_graph_command_ids"]) == 1
+    assert len(metadata["qro_ids"]) == 3
+    assert len(metadata["research_graph_command_ids"]) == 3
     assert len(metadata["compiler_ir_refs"]) == 1
     assert len(metadata["compiler_pass_refs"]) == 1
     assert len(metadata["entrypoint_coverage_refs"]) == 1
@@ -449,7 +749,12 @@ def test_api_chat_stream_retrieves_research_asset_rag_when_visible_assets_suppli
         ("chat", "chat:legacy_mode2.chat.stream")
     }
     assert metadata["research_asset_rag_hits"][0]["source_id"] == "doc:legacy-mode2-stream"
+    assert metadata["rag_hits"] == []
+    assert metadata["legacy_rag_not_injected"] is True
+    assert metadata["active_run_bound"] is True
+    assert metadata["had_run_context"] is False
     assert metadata["research_asset_rag_usage_ids"]
+    assert {usage.usage_id for usage in usages} == set(metadata["research_asset_rag_usage_ids"])
 
 
 def test_api_send_message_empty_content_400(client: TestClient):

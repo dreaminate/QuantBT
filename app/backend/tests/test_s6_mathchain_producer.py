@@ -94,7 +94,7 @@ def _binding(**overrides) -> TheoryImplementationBinding:
 
 
 def _check(**overrides) -> ConsistencyCheck:
-    base = dict(binding_id="b1", check_type="numerical", result="pass")
+    base = dict(binding_id=_binding().binding_id, check_type="numerical", result="pass")
     base.update(overrides)
     return ConsistencyCheck(**base)
 

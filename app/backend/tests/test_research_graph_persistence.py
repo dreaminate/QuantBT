@@ -26,18 +26,71 @@ from app.research_os import (
     ResearchGraphEdgeRecord,
     ResearchGraphError,
     RuntimeStatus,
+    make_canvas_layout_record,
 )
+from app.research_os.entrypoint_evidence import PersistentEntrypointEvidenceRegistry
+from app.research_os.goal_proof_ledger import GoalProofLedger
+from app.research_os.goal_validation_receipts import (
+    PersistentGoalValidationReceiptRegistry,
+)
+from app.research_os.ref_resolution import build_real_ref_resolver
+
+
+def _install_goal_proof_stores(main, tmp_path, monkeypatch, graph):  # noqa: ANN001
+    proof_ledger = GoalProofLedger(tmp_path / "goal_proof_ledger")
+    compiler = PersistentCompilerIRStore(
+        tmp_path / "compiler_ir.jsonl",
+        proof_ledger=proof_ledger,
+        legacy_read_only=True,
+    )
+    validations = PersistentGoalValidationReceiptRegistry(
+        tmp_path / "goal_validation_receipts.jsonl",
+        proof_ledger=proof_ledger,
+        legacy_read_only=True,
+    )
+    evidence = PersistentEntrypointEvidenceRegistry(
+        tmp_path / "entrypoint_evidence.jsonl",
+        research_graph_store=graph,
+        compiler_store=compiler,
+        validation_receipt_registry=validations,
+        proof_ledger=proof_ledger,
+        legacy_read_only=True,
+    )
+    coverage = PersistentGoalEntrypointCoverageRegistry(
+        tmp_path / "goal_entrypoint_coverage.jsonl",
+        proof_ledger=proof_ledger,
+        legacy_read_only=True,
+    )
+    coverage.set_ref_resolver(
+        build_real_ref_resolver(
+            research_graph_store=graph,
+            lifecycle_registry=main.ASSET_LIFECYCLE_REGISTRY,
+            governance_registry=main.MODEL_GOVERNANCE_REGISTRY,
+            rag_index=main.RESEARCH_ASSET_RAG_INDEX,
+            spine_chain_registry=main.MATHEMATICAL_SPINE_CHAIN_REGISTRY,
+            compiler_store=compiler,
+            document_store=main.DOCUMENT_INTELLIGENCE_STORE,
+            goal_validation_receipt_registry=validations,
+            platform_source_evidence_registry=evidence,
+        )
+    )
+    monkeypatch.setattr(main, "RESEARCH_GRAPH_STORE", graph)
+    monkeypatch.setattr(main, "COMPILER_IR_STORE", compiler)
+    monkeypatch.setattr(main, "GOAL_VALIDATION_RECEIPT_REGISTRY", validations)
+    monkeypatch.setattr(main, "ENTRYPOINT_EVIDENCE_REGISTRY", evidence)
+    monkeypatch.setattr(main, "GOAL_ENTRYPOINT_COVERAGE_REGISTRY", coverage)
+    return compiler, coverage
 
 
 @pytest.fixture(autouse=True)
 def _isolate_compiler_and_goal_coverage_stores(tmp_path, monkeypatch):  # noqa: ANN001
     from app import main
 
-    monkeypatch.setattr(main, "COMPILER_IR_STORE", PersistentCompilerIRStore(tmp_path / "compiler_ir.jsonl"))
-    monkeypatch.setattr(
+    _install_goal_proof_stores(
         main,
-        "GOAL_ENTRYPOINT_COVERAGE_REGISTRY",
-        PersistentGoalEntrypointCoverageRegistry(tmp_path / "goal_entrypoint_coverage.jsonl"),
+        tmp_path,
+        monkeypatch,
+        main.RESEARCH_GRAPH_STORE,
     )
 
 
@@ -207,10 +260,39 @@ def test_persistent_research_graph_store_replays_qro_commands(tmp_path):
     assert "hash_code" not in json.dumps(projection.to_audit_dict())
 
 
+def test_persistent_research_graph_store_preserves_nested_contract_shape_across_refresh(tmp_path):
+    path = tmp_path / "research_graph_commands.jsonl"
+    store = PersistentResearchGraphStore(path)
+    qro = _qro(
+        input_contract={
+            "symbols": ("BTCUSDT", "ETHUSDT"),
+            "nested": {"validation_refs": ("validation:one", "validation:two")},
+        },
+        output_contract={"signal_refs": ("signal:one",)},
+    )
+    command = _command(qro)
+
+    store.apply(command)
+    [before_refresh] = store.commands()
+    store.refresh()
+    [after_refresh] = store.commands()
+
+    assert qro.input_contract["symbols"] == ["BTCUSDT", "ETHUSDT"]
+    assert qro.input_contract["nested"]["validation_refs"] == [
+        "validation:one",
+        "validation:two",
+    ]
+    assert qro.output_contract["signal_refs"] == ["signal:one"]
+    assert after_refresh == before_refresh == command
+    assert store.qro(qro.qro_id) == qro
+
+
 def test_persistent_research_graph_store_replays_canvas_mutation_commands(tmp_path):
     path = tmp_path / "research_graph_commands.jsonl"
     store = PersistentResearchGraphStore(path)
-    mutation = _canvas_mutation()
+    qro = _qro()
+    store.apply(_command(qro))
+    mutation = _canvas_mutation(target_ref=qro.qro_id)
     command = ResearchGraphCommand(
         source=EntrySource.CANVAS,
         command_type="record_canvas_mutation",
@@ -223,12 +305,239 @@ def test_persistent_research_graph_store_replays_canvas_mutation_commands(tmp_pa
     command_id = store.apply(command)
 
     reloaded = PersistentResearchGraphStore(path)
-    assert [cmd.command_id for cmd in reloaded.commands()] == [command_id]
+    assert [cmd.command_id for cmd in reloaded.commands()] == [
+        store.commands()[0].command_id,
+        command_id,
+    ]
     [persisted] = reloaded.canvas_mutations()
     assert persisted.command_ref == "canvas_command:update_strategy:001"
     assert persisted.canonical_command_ref == "research_graph_command:rgcmd_strategy_update"
     assert persisted.audit_ref == "audit:canvas:001"
-    assert reloaded.projection_index() == []
+    [projection] = reloaded.projection_index()
+    assert projection.qro_id == qro.qro_id
+    assert projection.qro_version == 1
+
+
+def test_persistent_research_graph_store_rejects_direct_foreign_canvas_command_atomically(tmp_path):
+    path = tmp_path / "research_graph_commands.jsonl"
+    store = PersistentResearchGraphStore(path)
+    qro = _qro(owner="foreign_owner")
+    store.apply(
+        ResearchGraphCommand(
+            source=EntrySource.IDE,
+            command_type="upsert_qro",
+            actor_source=ActorSource.AGENT,
+            actor="agent_runtime",
+            payload={"qro": qro},
+            evidence_refs=("unit:foreign_owner_fixture",),
+        )
+    )
+    initial_command_ids = [command.command_id for command in store.commands()]
+    initial_bytes = path.read_bytes()
+    tombstone = _qro_tombstone(qro_id=qro.qro_id, actor="intruder_owner")
+
+    with pytest.raises(ResearchGraphError, match="different owner"):
+        store.apply(
+            ResearchGraphCommand(
+                source=EntrySource.CANVAS,
+                command_type="tombstone_qro",
+                actor_source=ActorSource.USER_MANUAL,
+                actor="intruder_owner",
+                payload={"qro_tombstone": tombstone},
+                evidence_refs=tombstone.evidence_refs,
+            )
+        )
+    with pytest.raises(ResearchGraphError, match="cannot transfer ownership"):
+        store.apply(
+            ResearchGraphCommand(
+                source=EntrySource.CANVAS,
+                command_type="upsert_qro",
+                actor_source=ActorSource.USER_MANUAL,
+                actor="intruder_owner",
+                payload={
+                    "qro": _qro(
+                        qro_id=qro.qro_id,
+                        owner="intruder_owner",
+                        implementation_hash="strategy:intruder_transfer",
+                    )
+                },
+                evidence_refs=("unit:foreign_owner_transfer",),
+            )
+        )
+
+    assert [command.command_id for command in store.commands()] == initial_command_ids
+    assert path.read_bytes() == initial_bytes
+    assert store.qro(qro.qro_id).version == qro.version
+    assert store.qro_tombstones() == []
+
+
+@pytest.mark.parametrize(
+    "command_type",
+    (
+        "upsert_qro",
+        "tombstone_qro",
+        "apply_graph_patch",
+        "set_canvas_parameter",
+        "record_canvas_mutation",
+        "record_canvas_layout",
+        "record_graph_edge",
+        "delete_graph_edge",
+    ),
+)
+def test_direct_canvas_command_owner_boundary_covers_every_graph_mutation_atomically(tmp_path, command_type):
+    path = tmp_path / "research_graph_commands.jsonl"
+    store = PersistentResearchGraphStore(path)
+    owner = "foreign_owner"
+    actor = "intruder_owner"
+    from_qro = _qro(owner=owner)
+    to_qro = _qro(qro_type=QROType.RISK_POLICY, owner=owner)
+    for qro in (from_qro, to_qro):
+        store.apply(
+            ResearchGraphCommand(
+                source=EntrySource.IDE,
+                command_type="upsert_qro",
+                actor_source=ActorSource.AGENT,
+                actor="fixture_agent",
+                payload={"qro": qro},
+                evidence_refs=("unit:canvas_owner_boundary_fixture",),
+            )
+        )
+
+    edge = _graph_edge(
+        from_qro_id=from_qro.qro_id,
+        to_qro_id=to_qro.qro_id,
+        actor=owner,
+    )
+    if command_type == "delete_graph_edge":
+        store.apply(
+            ResearchGraphCommand(
+                source=EntrySource.CANVAS,
+                command_type="record_graph_edge",
+                actor_source=ActorSource.USER_MANUAL,
+                actor=owner,
+                payload={"edge": edge},
+                evidence_refs=edge.evidence_refs,
+            )
+        )
+
+    records = {
+        "upsert_qro": (
+            "qro",
+            _qro(
+                qro_id=from_qro.qro_id,
+                owner=actor,
+                implementation_hash="strategy:intruder_transfer",
+            ),
+        ),
+        "tombstone_qro": (
+            "qro_tombstone",
+            _qro_tombstone(qro_id=from_qro.qro_id, actor=actor),
+        ),
+        "apply_graph_patch": (
+            "patch_application",
+            _graph_patch_application(target_qro_id=from_qro.qro_id, actor=actor),
+        ),
+        "set_canvas_parameter": (
+            "parameter_value",
+            _canvas_parameter_value(target_qro_id=from_qro.qro_id, actor=actor),
+        ),
+        "record_canvas_mutation": (
+            "mutation",
+            _canvas_mutation(target_ref=from_qro.qro_id, actor=actor),
+        ),
+        "record_canvas_layout": (
+            "layout",
+            make_canvas_layout_record(
+                qro_id=from_qro.qro_id,
+                qro_type="StrategyBook",
+                node_id=f"canvas_node:qro:{from_qro.qro_id}",
+                x=10,
+                y=20,
+                w=180,
+                source_desk="strategy",
+                actor_source="user_manual",
+                actor=actor,
+                mutation_command_ref="canvas_command:owner_boundary:layout",
+                canonical_command_ref="research_graph_command:owner_boundary:layout",
+                audit_ref="audit:owner_boundary:layout",
+                evidence_refs=("unit:canvas_owner_boundary",),
+            ),
+        ),
+        "record_graph_edge": (
+            "edge",
+            _graph_edge(
+                from_qro_id=from_qro.qro_id,
+                to_qro_id=to_qro.qro_id,
+                actor=actor,
+            ),
+        ),
+        "delete_graph_edge": (
+            "edge_deletion",
+            _graph_edge_deletion(edge_ref=edge.edge_ref, actor=actor),
+        ),
+    }
+    payload_key, record = records[command_type]
+    initial_commands = [command.command_id for command in store.commands()]
+    initial_bytes = path.read_bytes()
+
+    with pytest.raises(ResearchGraphError):
+        store.apply(
+            ResearchGraphCommand(
+                source=EntrySource.CANVAS,
+                command_type=command_type,
+                actor_source=ActorSource.USER_MANUAL,
+                actor=actor,
+                payload={payload_key: record},
+                evidence_refs=("unit:canvas_owner_boundary",),
+            )
+        )
+
+    assert [command.command_id for command in store.commands()] == initial_commands
+    assert path.read_bytes() == initial_bytes
+
+
+def test_direct_canvas_command_rejects_command_record_actor_mismatch(tmp_path):
+    path = tmp_path / "research_graph_commands.jsonl"
+    store = PersistentResearchGraphStore(path)
+    qro = _qro()
+    store.apply(_command(qro))
+    mutation = _canvas_mutation(target_ref=qro.qro_id, actor=qro.owner)
+    initial_bytes = path.read_bytes()
+
+    with pytest.raises(ResearchGraphError, match="does not match"):
+        store.apply(
+            ResearchGraphCommand(
+                source=EntrySource.CANVAS,
+                command_type="record_canvas_mutation",
+                actor_source=ActorSource.USER_MANUAL,
+                actor="different_actor",
+                payload={"mutation": mutation},
+                evidence_refs=mutation.evidence_refs,
+            )
+        )
+
+    assert [command.command_type for command in store.commands()] == ["upsert_qro"]
+    assert path.read_bytes() == initial_bytes
+
+
+def test_canvas_owner_boundary_does_not_change_non_canvas_command_contract(tmp_path):
+    store = PersistentResearchGraphStore(tmp_path / "research_graph_commands.jsonl")
+    qro = _qro()
+    store.apply(_command(qro))
+    tombstone = _qro_tombstone(qro_id=qro.qro_id, actor="recording_service")
+
+    store.apply(
+        ResearchGraphCommand(
+            source=EntrySource.API,
+            command_type="tombstone_qro",
+            actor_source=ActorSource.AGENT,
+            actor="different_service_actor",
+            payload={"qro_tombstone": tombstone},
+            evidence_refs=tombstone.evidence_refs,
+        )
+    )
+
+    assert [record.qro_id for record in store.qro_tombstones()] == [qro.qro_id]
 
 
 def test_persistent_research_graph_store_replays_graph_edge_commands(tmp_path):
@@ -523,7 +832,7 @@ def test_research_graph_edge_api_creates_qro_topology_and_projection_edge(tmp_pa
     store.apply(_command(from_qro))
     store.apply(_command(to_qro))
     monkeypatch.setattr(main, "RESEARCH_GRAPH_STORE", store)
-    main.app.dependency_overrides[require_user_dependency] = lambda: SimpleNamespace(username="canvas_user")
+    main.app.dependency_overrides[require_user_dependency] = lambda: SimpleNamespace(username="dreaminate", user_id="dreaminate")
     try:
         response = TestClient(main.app).post(
             "/api/research-os/graph/edges",
@@ -574,7 +883,7 @@ def test_research_graph_edge_api_creates_qro_topology_and_projection_edge(tmp_pa
     ]
     [edge] = store.graph_edges()
     assert edge.edge_ref == body["edge_ref"]
-    assert edge.actor == "canvas_user"
+    assert edge.actor == "dreaminate"
 
     canvas = TestClient(main.app).get("/api/research-os/graph/canvas_projection")
     assert canvas.status_code == 200
@@ -626,7 +935,7 @@ def test_research_graph_edge_deletion_api_tombstones_projection_edge(tmp_path, m
         )
     )
     monkeypatch.setattr(main, "RESEARCH_GRAPH_STORE", store)
-    main.app.dependency_overrides[require_user_dependency] = lambda: SimpleNamespace(username="canvas_user")
+    main.app.dependency_overrides[require_user_dependency] = lambda: SimpleNamespace(username="dreaminate", user_id="dreaminate")
     try:
         rejected = TestClient(main.app).post(
             "/api/research-os/graph/edge_deletions",
@@ -670,7 +979,7 @@ def test_research_graph_edge_deletion_api_tombstones_projection_edge(tmp_path, m
     assert deleted_edge.edge_ref == edge.edge_ref
     [deletion] = store.graph_edge_deletions()
     assert deletion.edge_ref == edge.edge_ref
-    assert deletion.actor == "canvas_user"
+    assert deletion.actor == "dreaminate"
     assert [command.command_type for command in store.commands()] == [
         "upsert_qro",
         "upsert_qro",
@@ -717,7 +1026,7 @@ def test_research_graph_qro_tombstone_api_removes_node_and_related_projection_ed
         )
     )
     monkeypatch.setattr(main, "RESEARCH_GRAPH_STORE", store)
-    main.app.dependency_overrides[require_user_dependency] = lambda: SimpleNamespace(username="canvas_user")
+    main.app.dependency_overrides[require_user_dependency] = lambda: SimpleNamespace(username="dreaminate", user_id="dreaminate")
     try:
         rejected = TestClient(main.app).post(
             "/api/research-os/graph/qro_tombstones",
@@ -761,7 +1070,7 @@ def test_research_graph_qro_tombstone_api_removes_node_and_related_projection_ed
     assert store.qro(from_qro.qro_id, include_tombstoned=True).qro_id == from_qro.qro_id
     [tombstone] = store.qro_tombstones()
     assert tombstone.qro_id == from_qro.qro_id
-    assert tombstone.actor == "canvas_user"
+    assert tombstone.actor == "dreaminate"
     assert store.graph_edges() == []
     [historical_edge] = store.graph_edges(include_deleted=True)
     assert historical_edge.edge_ref == edge.edge_ref
@@ -796,8 +1105,8 @@ def test_research_graph_patch_application_api_adds_patch_qro_and_projection_edge
         implementation_hash="strategy:source_hash",
     )
     store.apply(_command(qro))
-    monkeypatch.setattr(main, "RESEARCH_GRAPH_STORE", store)
-    main.app.dependency_overrides[require_user_dependency] = lambda: SimpleNamespace(username="canvas_user")
+    _install_goal_proof_stores(main, tmp_path, monkeypatch, store)
+    main.app.dependency_overrides[require_user_dependency] = lambda: SimpleNamespace(username="dreaminate", user_id="dreaminate")
     try:
         rejected = TestClient(main.app).post(
             "/api/research-os/graph/patch_applications",
@@ -843,7 +1152,7 @@ def test_research_graph_patch_application_api_adds_patch_qro_and_projection_edge
     assert body["target_qro_id"] == qro.qro_id
     assert body["patch_kind"] == "ghost"
     [patch] = store.graph_patch_applications()
-    assert patch.actor == "canvas_user"
+    assert patch.actor == "dreaminate"
     assert patch.patch_ref == "canvas_patch:ghost:strategy:qro1:pt_4f1a"
     [patch_projection] = store.projection_index(qro_type="GraphPatchApplication")
     assert patch_projection.qro_id == body["patch_qro_id"]
@@ -880,8 +1189,8 @@ def test_research_graph_canvas_parameter_value_api_saves_value_and_projects_ref_
         implementation_hash="strategy:source_hash",
     )
     store.apply(_command(qro))
-    monkeypatch.setattr(main, "RESEARCH_GRAPH_STORE", store)
-    main.app.dependency_overrides[require_user_dependency] = lambda: SimpleNamespace(username="canvas_user")
+    _install_goal_proof_stores(main, tmp_path, monkeypatch, store)
+    main.app.dependency_overrides[require_user_dependency] = lambda: SimpleNamespace(username="dreaminate", user_id="dreaminate")
     try:
         rejected = TestClient(main.app).post(
             "/api/research-os/graph/canvas_parameter_values",
@@ -928,7 +1237,7 @@ def test_research_graph_canvas_parameter_value_api_saves_value_and_projects_ref_
     assert body["qro_id"] == qro.qro_id
     assert body["qro_version"] == 2
     [parameter] = store.canvas_parameter_values()
-    assert parameter.actor == "canvas_user"
+    assert parameter.actor == "dreaminate"
     assert parameter.param_value == "45%/w"
     updated = store.qro(qro.qro_id)
     assert updated.output_contract["canvas_param_value_ref"] == body["parameter_ref"]
@@ -954,54 +1263,61 @@ def test_research_graph_canvas_mutation_api_records_canonical_command(tmp_path, 
 
     path = tmp_path / "research_graph_commands.jsonl"
     store = PersistentResearchGraphStore(path)
+    qro = _qro()
+    store.apply(_command(qro))
     monkeypatch.setattr(main, "RESEARCH_GRAPH_STORE", store)
-
-    response = TestClient(main.app).post(
-        "/api/research-os/graph/canvas_mutations",
-        json={
-            "command_ref": "canvas_command:update_strategy:001",
-            "source_desk": "strategy",
-            "actor_source": "user_manual",
-            "actor": "dreaminate",
-            "target_asset_type": "StrategyBook",
-            "target_ref": "strategy:demo",
-            "field_path": "legs.0.signal_ref",
-            "operation": "set_ref",
-            "canonical_command_ref": "research_graph_command:rgcmd_strategy_update",
-            "audit_ref": "audit:canvas:001",
-            "value_ref": "signal:trend:v1",
-            "value_hash": "hash_signal_trend_v1",
-            "evidence_refs": ["unit:canvas_mutation"],
-            "raw_value": "must not be accepted",
-        },
+    main.app.dependency_overrides[require_user_dependency] = lambda: SimpleNamespace(
+        username="dreaminate", user_id="dreaminate"
     )
-    assert response.status_code == 422
-    assert store.commands() == []
+    try:
+        response = TestClient(main.app).post(
+            "/api/research-os/graph/canvas_mutations",
+            json={
+                "command_ref": "canvas_command:update_strategy:001",
+                "source_desk": "strategy",
+                "actor_source": "user_manual",
+                "actor": "dreaminate",
+                "target_asset_type": "StrategyBook",
+                "target_ref": qro.qro_id,
+                "field_path": "legs.0.signal_ref",
+                "operation": "set_ref",
+                "canonical_command_ref": "research_graph_command:rgcmd_strategy_update",
+                "audit_ref": "audit:canvas:001",
+                "value_ref": "signal:trend:v1",
+                "value_hash": "hash_signal_trend_v1",
+                "evidence_refs": ["unit:canvas_mutation"],
+                "raw_value": "must not be accepted",
+            },
+        )
+        assert response.status_code == 422
+        assert [command.command_type for command in store.commands()] == ["upsert_qro"]
 
-    ok = TestClient(main.app).post(
-        "/api/research-os/graph/canvas_mutations",
-        json={
-            "command_ref": "canvas_command:update_strategy:001",
-            "source_desk": "strategy",
-            "actor_source": "user_manual",
-            "actor": "dreaminate",
-            "target_asset_type": "StrategyBook",
-            "target_ref": "strategy:demo",
-            "field_path": "legs.0.signal_ref",
-            "operation": "set_ref",
-            "canonical_command_ref": "research_graph_command:rgcmd_strategy_update",
-            "audit_ref": "audit:canvas:001",
-            "value_ref": "signal:trend:v1",
-            "value_hash": "hash_signal_trend_v1",
-            "evidence_refs": ["unit:canvas_mutation"],
-        },
-    )
+        ok = TestClient(main.app).post(
+            "/api/research-os/graph/canvas_mutations",
+            json={
+                "command_ref": "canvas_command:update_strategy:001",
+                "source_desk": "strategy",
+                "actor_source": "user_manual",
+                "actor": "dreaminate",
+                "target_asset_type": "StrategyBook",
+                "target_ref": qro.qro_id,
+                "field_path": "legs.0.signal_ref",
+                "operation": "set_ref",
+                "canonical_command_ref": "research_graph_command:rgcmd_strategy_update",
+                "audit_ref": "audit:canvas:001",
+                "value_ref": "signal:trend:v1",
+                "value_hash": "hash_signal_trend_v1",
+                "evidence_refs": ["unit:canvas_mutation"],
+            },
+        )
+    finally:
+        main.app.dependency_overrides.pop(require_user_dependency, None)
     assert ok.status_code == 200
     body = ok.json()
     assert body["accepted"] is True
     assert body["command_type"] == "record_canvas_mutation"
     assert body["research_graph_command_id"].startswith("rgcmd_")
-    [command] = store.commands()
+    command = store.commands()[-1]
     assert command.command_type == "record_canvas_mutation"
     [mutation] = store.canvas_mutations()
     assert mutation.value_ref == "signal:trend:v1"
@@ -1012,22 +1328,29 @@ def test_research_graph_canvas_mutation_api_rejects_uncanonical_or_cross_desk_wr
 
     path = tmp_path / "research_graph_commands.jsonl"
     store = PersistentResearchGraphStore(path)
+    qro = _qro(qro_type=QROType.FACTOR)
+    store.apply(_command(qro))
     monkeypatch.setattr(main, "RESEARCH_GRAPH_STORE", store)
-
-    response = TestClient(main.app).post(
-        "/api/research-os/graph/canvas_mutations",
-        json={
-            "command_ref": "canvas_command:bad_factor_write",
-            "source_desk": "strategy",
-            "actor_source": "agent",
-            "actor": "agent_runtime",
-            "target_asset_type": "Factor",
-            "target_ref": "factor:quality",
-            "field_path": "formula.expression",
-            "operation": "set_text_hash",
-            "value_hash": "hash_formula",
-        },
+    main.app.dependency_overrides[require_user_dependency] = lambda: SimpleNamespace(
+        username="dreaminate", user_id="dreaminate"
     )
+    try:
+        response = TestClient(main.app).post(
+            "/api/research-os/graph/canvas_mutations",
+            json={
+                "command_ref": "canvas_command:bad_factor_write",
+                "source_desk": "strategy",
+                "actor_source": "agent",
+                "actor": "agent_runtime",
+                "target_asset_type": "Factor",
+                "target_ref": qro.qro_id,
+                "field_path": "formula.expression",
+                "operation": "set_text_hash",
+                "value_hash": "hash_formula",
+            },
+        )
+    finally:
+        main.app.dependency_overrides.pop(require_user_dependency, None)
 
     assert response.status_code == 422
     detail = response.json()["detail"]
@@ -1037,7 +1360,191 @@ def test_research_graph_canvas_mutation_api_rejects_uncanonical_or_cross_desk_wr
         "canvas_mutation_missing_audit_ref",
         "strategy_desk_cannot_write_factor_formula",
     }
-    assert store.commands() == []
+    assert [command.command_type for command in store.commands()] == ["upsert_qro"]
+
+
+def test_research_graph_canvas_writes_reject_foreign_owner_atomically(tmp_path, monkeypatch):
+    from app import main
+
+    path = tmp_path / "research_graph_commands.jsonl"
+    store = PersistentResearchGraphStore(path)
+    from_qro = _qro(owner="foreign_owner")
+    to_qro = _qro(qro_type=QROType.RISK_POLICY, owner="foreign_owner")
+    edge = _graph_edge(
+        from_qro_id=from_qro.qro_id,
+        to_qro_id=to_qro.qro_id,
+        actor="foreign_owner",
+    )
+    for qro in (from_qro, to_qro):
+        store.apply(
+            ResearchGraphCommand(
+                source=EntrySource.IDE,
+                command_type="upsert_qro",
+                actor_source=ActorSource.USER_MANUAL,
+                actor="foreign_owner",
+                payload={"qro": qro},
+                evidence_refs=("unit:foreign_owner_fixture",),
+            )
+        )
+    store.apply(
+        ResearchGraphCommand(
+            source=EntrySource.CANVAS,
+            command_type="record_graph_edge",
+            actor_source=ActorSource.USER_MANUAL,
+            actor="foreign_owner",
+            payload={"edge": edge},
+            evidence_refs=edge.evidence_refs,
+        )
+    )
+    monkeypatch.setattr(main, "RESEARCH_GRAPH_STORE", store)
+    initial_command_ids = [command.command_id for command in store.commands()]
+    initial_versions = {
+        from_qro.qro_id: store.qro(from_qro.qro_id).version,
+        to_qro.qro_id: store.qro(to_qro.qro_id).version,
+    }
+    requests = (
+        (
+            "/api/research-os/graph/edges",
+            {
+                "command_ref": "canvas_command:foreign_edge:001",
+                "source_desk": "strategy",
+                "actor_source": "user_manual",
+                "from_qro_id": from_qro.qro_id,
+                "to_qro_id": to_qro.qro_id,
+                "relation_type": "canvas_connect",
+                "canonical_command_ref": "canonical:foreign_edge:001",
+                "audit_ref": "audit:foreign_edge:001",
+                "evidence_refs": ["unit:foreign_owner_rejection"],
+            },
+        ),
+        (
+            "/api/research-os/graph/edge_deletions",
+            {
+                "command_ref": "canvas_command:foreign_edge_delete:001",
+                "source_desk": "strategy",
+                "actor_source": "user_manual",
+                "edge_ref": edge.edge_ref,
+                "canonical_command_ref": "canonical:foreign_edge_delete:001",
+                "audit_ref": "audit:foreign_edge_delete:001",
+                "evidence_refs": ["unit:foreign_owner_rejection"],
+            },
+        ),
+        (
+            "/api/research-os/graph/qro_tombstones",
+            {
+                "command_ref": "canvas_command:foreign_tombstone:001",
+                "source_desk": "strategy",
+                "actor_source": "user_manual",
+                "qro_id": from_qro.qro_id,
+                "canonical_command_ref": "canonical:foreign_tombstone:001",
+                "audit_ref": "audit:foreign_tombstone:001",
+                "evidence_refs": ["unit:foreign_owner_rejection"],
+            },
+        ),
+        (
+            "/api/research-os/graph/patch_applications",
+            {
+                "command_ref": "canvas_command:foreign_patch:001",
+                "source_desk": "strategy",
+                "actor_source": "user_manual",
+                "target_qro_id": from_qro.qro_id,
+                "patch_kind": "ghost",
+                "patch_ref": "canvas_patch:ghost:foreign:001",
+                "patch_hash": "hash_foreign_patch_001",
+                "canonical_command_ref": "canonical:foreign_patch:001",
+                "audit_ref": "audit:foreign_patch:001",
+                "evidence_refs": ["unit:foreign_owner_rejection"],
+            },
+        ),
+        (
+            "/api/research-os/graph/canvas_parameter_values",
+            {
+                "command_ref": "canvas_command:foreign_parameter:001",
+                "source_desk": "strategy",
+                "actor_source": "user_manual",
+                "target_qro_id": from_qro.qro_id,
+                "target_asset_type": "StrategyBook",
+                "param_key": "turnover",
+                "param_value": "45%/w",
+                "canonical_command_ref": "canonical:foreign_parameter:001",
+                "audit_ref": "audit:foreign_parameter:001",
+                "evidence_refs": ["unit:foreign_owner_rejection"],
+            },
+        ),
+        (
+            "/api/research-os/graph/canvas_mutations",
+            {
+                "command_ref": "canvas_command:foreign_audit:001",
+                "source_desk": "strategy",
+                "actor_source": "user_manual",
+                "target_asset_type": "StrategyBook",
+                "target_ref": from_qro.qro_id,
+                "field_path": "legs.0.signal_ref",
+                "operation": "set_ref",
+                "canonical_command_ref": "canonical:foreign_audit:001",
+                "audit_ref": "audit:foreign_audit:001",
+                "value_ref": "signal:foreign:v1",
+                "value_hash": "hash_signal_foreign_v1",
+                "evidence_refs": ["unit:foreign_owner_rejection"],
+            },
+        ),
+        (
+            "/api/research-os/graph/canvas_layouts",
+            {
+                "command_ref": "canvas_command:foreign_layout:001",
+                "source_desk": "strategy",
+                "actor_source": "user_manual",
+                "target_asset_type": "StrategyBook",
+                "target_ref": from_qro.qro_id,
+                "node_id": f"canvas_node:qro:{from_qro.qro_id}",
+                "x": 100,
+                "y": 200,
+                "w": 184,
+                "canonical_command_ref": "canonical:foreign_layout:001",
+                "audit_ref": "audit:foreign_layout:001",
+                "evidence_refs": ["unit:foreign_owner_rejection"],
+            },
+        ),
+        (
+            "/api/research-os/graph/canvas_asset_mutations",
+            {
+                "command_ref": "canvas_command:foreign_asset:001",
+                "source_desk": "strategy",
+                "actor_source": "user_manual",
+                "target_asset_type": "StrategyBook",
+                "target_ref": from_qro.qro_id,
+                "field_path": "output_contract.canvas_param_ref",
+                "operation": "set_ref",
+                "canonical_command_ref": "canonical:foreign_asset:001",
+                "audit_ref": "audit:foreign_asset:001",
+                "value_ref": "canvas_param:foreign:001",
+                "value_hash": "hash_canvas_param_foreign_001",
+                "evidence_refs": ["unit:foreign_owner_rejection"],
+            },
+        ),
+    )
+    main.app.dependency_overrides[require_user_dependency] = lambda: SimpleNamespace(
+        username="foreign_owner", user_id="intruder_owner"
+    )
+    try:
+        client = TestClient(main.app)
+        for endpoint, payload in requests:
+            response = client.post(endpoint, json=payload)
+            assert response.status_code == 422, (endpoint, response.text)
+            assert "different owner" in str(response.json()["detail"]), endpoint
+            assert [command.command_id for command in store.commands()] == initial_command_ids, endpoint
+            assert store.qro(from_qro.qro_id).version == initial_versions[from_qro.qro_id], endpoint
+            assert store.qro(to_qro.qro_id).version == initial_versions[to_qro.qro_id], endpoint
+    finally:
+        main.app.dependency_overrides.pop(require_user_dependency, None)
+
+    assert [stored.edge_ref for stored in store.graph_edges()] == [edge.edge_ref]
+    assert store.graph_edge_deletions() == []
+    assert store.qro_tombstones() == []
+    assert store.graph_patch_applications() == []
+    assert store.canvas_parameter_values() == []
+    assert store.canvas_mutations() == []
+    assert store.canvas_layouts() == []
 
 
 def test_research_graph_canvas_asset_mutation_api_updates_qro_version(tmp_path, monkeypatch):
@@ -1047,8 +1554,8 @@ def test_research_graph_canvas_asset_mutation_api_updates_qro_version(tmp_path, 
     store = PersistentResearchGraphStore(path)
     qro = _qro(output_contract={"strategy_book_ref": "strategy:demo"})
     store.apply(_command(qro))
-    monkeypatch.setattr(main, "RESEARCH_GRAPH_STORE", store)
-    main.app.dependency_overrides[require_user_dependency] = lambda: SimpleNamespace(username="canvas_user")
+    _install_goal_proof_stores(main, tmp_path, monkeypatch, store)
+    main.app.dependency_overrides[require_user_dependency] = lambda: SimpleNamespace(username="dreaminate", user_id="dreaminate")
     try:
         rejected = TestClient(main.app).post(
             "/api/research-os/graph/canvas_asset_mutations",
@@ -1136,8 +1643,8 @@ def test_research_graph_canvas_asset_mutation_api_updates_layout_hash_without_re
     store = PersistentResearchGraphStore(path)
     qro = _qro(output_contract={"strategy_book_ref": "strategy:demo"})
     store.apply(_command(qro))
-    monkeypatch.setattr(main, "RESEARCH_GRAPH_STORE", store)
-    main.app.dependency_overrides[require_user_dependency] = lambda: SimpleNamespace(username="canvas_user")
+    _install_goal_proof_stores(main, tmp_path, monkeypatch, store)
+    main.app.dependency_overrides[require_user_dependency] = lambda: SimpleNamespace(username="dreaminate", user_id="dreaminate")
     try:
         response = TestClient(main.app).post(
             "/api/research-os/graph/canvas_asset_mutations",
@@ -1183,8 +1690,8 @@ def test_research_graph_canvas_asset_mutation_api_records_edge_relation_ref_with
     store = PersistentResearchGraphStore(path)
     qro = _qro(output_contract={"strategy_book_ref": "strategy:demo"})
     store.apply(_command(qro))
-    monkeypatch.setattr(main, "RESEARCH_GRAPH_STORE", store)
-    main.app.dependency_overrides[require_user_dependency] = lambda: SimpleNamespace(username="canvas_user")
+    _install_goal_proof_stores(main, tmp_path, monkeypatch, store)
+    main.app.dependency_overrides[require_user_dependency] = lambda: SimpleNamespace(username="dreaminate", user_id="dreaminate")
     try:
         response = TestClient(main.app).post(
             "/api/research-os/graph/canvas_asset_mutations",
@@ -1228,8 +1735,8 @@ def test_research_graph_canvas_asset_mutation_api_records_param_ref_without_raw_
     store = PersistentResearchGraphStore(path)
     qro = _qro(output_contract={"strategy_book_ref": "strategy:demo"})
     store.apply(_command(qro))
-    monkeypatch.setattr(main, "RESEARCH_GRAPH_STORE", store)
-    main.app.dependency_overrides[require_user_dependency] = lambda: SimpleNamespace(username="canvas_user")
+    _install_goal_proof_stores(main, tmp_path, monkeypatch, store)
+    main.app.dependency_overrides[require_user_dependency] = lambda: SimpleNamespace(username="dreaminate", user_id="dreaminate")
     try:
         response = TestClient(main.app).post(
             "/api/research-os/graph/canvas_asset_mutations",
@@ -1273,8 +1780,8 @@ def test_research_graph_canvas_asset_mutation_api_records_delete_ref_without_raw
     store = PersistentResearchGraphStore(path)
     qro = _qro(output_contract={"strategy_book_ref": "strategy:demo"})
     store.apply(_command(qro))
-    monkeypatch.setattr(main, "RESEARCH_GRAPH_STORE", store)
-    main.app.dependency_overrides[require_user_dependency] = lambda: SimpleNamespace(username="canvas_user")
+    _install_goal_proof_stores(main, tmp_path, monkeypatch, store)
+    main.app.dependency_overrides[require_user_dependency] = lambda: SimpleNamespace(username="dreaminate", user_id="dreaminate")
     try:
         response = TestClient(main.app).post(
             "/api/research-os/graph/canvas_asset_mutations",
@@ -1318,8 +1825,8 @@ def test_research_graph_canvas_asset_mutation_api_records_connect_ref_without_ra
     store = PersistentResearchGraphStore(path)
     qro = _qro(output_contract={"strategy_book_ref": "strategy:demo"})
     store.apply(_command(qro))
-    monkeypatch.setattr(main, "RESEARCH_GRAPH_STORE", store)
-    main.app.dependency_overrides[require_user_dependency] = lambda: SimpleNamespace(username="canvas_user")
+    _install_goal_proof_stores(main, tmp_path, monkeypatch, store)
+    main.app.dependency_overrides[require_user_dependency] = lambda: SimpleNamespace(username="dreaminate", user_id="dreaminate")
     try:
         response = TestClient(main.app).post(
             "/api/research-os/graph/canvas_asset_mutations",
@@ -1363,8 +1870,8 @@ def test_research_graph_canvas_asset_mutation_api_records_patch_intent_refs_with
     store = PersistentResearchGraphStore(path)
     qro = _qro(output_contract={"strategy_book_ref": "strategy:demo"})
     store.apply(_command(qro))
-    monkeypatch.setattr(main, "RESEARCH_GRAPH_STORE", store)
-    main.app.dependency_overrides[require_user_dependency] = lambda: SimpleNamespace(username="canvas_user")
+    _install_goal_proof_stores(main, tmp_path, monkeypatch, store)
+    main.app.dependency_overrides[require_user_dependency] = lambda: SimpleNamespace(username="dreaminate", user_id="dreaminate")
     try:
         client = TestClient(main.app)
         for expected_version, kind in [(2, "ghost"), (3, "auto")]:
@@ -1416,8 +1923,8 @@ def test_research_graph_canvas_layout_api_records_layout_and_replays_exact_proje
     store = PersistentResearchGraphStore(path)
     qro = _qro(output_contract={"strategy_book_ref": "strategy:demo"})
     store.apply(_command(qro))
-    monkeypatch.setattr(main, "RESEARCH_GRAPH_STORE", store)
-    main.app.dependency_overrides[require_user_dependency] = lambda: SimpleNamespace(username="canvas_user")
+    _install_goal_proof_stores(main, tmp_path, monkeypatch, store)
+    main.app.dependency_overrides[require_user_dependency] = lambda: SimpleNamespace(username="dreaminate", user_id="dreaminate")
     try:
         response = TestClient(main.app).post(
             "/api/research-os/graph/canvas_layouts",
@@ -1495,8 +2002,8 @@ def test_research_graph_canvas_layout_replays_after_store_reload(tmp_path, monke
     store = PersistentResearchGraphStore(path)
     qro = _qro(output_contract={"strategy_book_ref": "strategy:demo"})
     store.apply(_command(qro))
-    monkeypatch.setattr(main, "RESEARCH_GRAPH_STORE", store)
-    main.app.dependency_overrides[require_user_dependency] = lambda: SimpleNamespace(username="canvas_user")
+    _install_goal_proof_stores(main, tmp_path, monkeypatch, store)
+    main.app.dependency_overrides[require_user_dependency] = lambda: SimpleNamespace(username="dreaminate", user_id="dreaminate")
     try:
         response = TestClient(main.app).post(
             "/api/research-os/graph/canvas_layouts",
@@ -1571,7 +2078,7 @@ def test_research_graph_canvas_layout_api_rejects_live_qro_without_commands(tmp_
     qro = _qro(runtime_status=RuntimeStatus.LIVE, output_contract={"strategy_book_ref": "strategy:live"})
     store.apply(_command(qro))
     monkeypatch.setattr(main, "RESEARCH_GRAPH_STORE", store)
-    main.app.dependency_overrides[require_user_dependency] = lambda: SimpleNamespace(username="canvas_user")
+    main.app.dependency_overrides[require_user_dependency] = lambda: SimpleNamespace(username="dreaminate", user_id="dreaminate")
     try:
         response = TestClient(main.app).post(
             "/api/research-os/graph/canvas_layouts",
@@ -1606,7 +2113,7 @@ def test_research_graph_canvas_asset_mutation_api_rejects_live_qro(tmp_path, mon
     qro = _qro(runtime_status=RuntimeStatus.LIVE, output_contract={"strategy_book_ref": "strategy:live"})
     store.apply(_command(qro))
     monkeypatch.setattr(main, "RESEARCH_GRAPH_STORE", store)
-    main.app.dependency_overrides[require_user_dependency] = lambda: SimpleNamespace(username="canvas_user")
+    main.app.dependency_overrides[require_user_dependency] = lambda: SimpleNamespace(username="dreaminate", user_id="dreaminate")
     try:
         response = TestClient(main.app).post(
             "/api/research-os/graph/canvas_asset_mutations",

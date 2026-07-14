@@ -16,9 +16,19 @@ import pytest
 from app.execution.binance_client import BinanceClient, BinanceCredentials, BinanceWithdrawPermissionError
 
 
+_SAFE = {
+    "ipRestrict": True,
+    "enableReading": True,
+    "enableFutures": True,
+    "enableWithdrawals": False,
+    "enableInternalTransfer": False,
+    "permitsUniversalTransfer": False,
+}
+
+
 def _client(payload: dict) -> BinanceClient:
     c = BinanceClient(
-        BinanceCredentials(api_key="k", api_secret="s", network="testnet"),
+        BinanceCredentials(api_key="k", api_secret="s", network="mainnet"),
         product="usdm_futures",
     )
     # 拦截 _signed 直接返回 payload，避免真发请求
@@ -29,13 +39,8 @@ def _client(payload: dict) -> BinanceClient:
 
 def test_safekey_passes_clean_key():
     c = _client({
-        "ipRestrict": True,
-        "enableWithdrawals": False,
-        "enableInternalTransfer": False,
-        "enableUniversalTransfer": False,
+        **_SAFE,
         "enableMargin": False,
-        "enableFutures": True,
-        "enableReading": True,
     })
     result = c.assert_safe_startup()
     assert result["ok"] is True
@@ -45,7 +50,7 @@ def test_safekey_passes_clean_key():
 
 
 def test_safekey_raises_on_withdraw_enabled():
-    c = _client({"enableWithdrawals": True, "enableFutures": True})
+    c = _client({**_SAFE, "enableWithdrawals": True})
     with pytest.raises(BinanceWithdrawPermissionError, match="enableWithdrawals"):
         c.assert_safe_startup()
 
@@ -53,23 +58,21 @@ def test_safekey_raises_on_withdraw_enabled():
 def test_safekey_raises_on_internal_transfer_enabled():
     """旧实现漏：'internalTransfer' 字段里 'withdraw' 子串不存在 → 不报。新实现必拦。"""
 
-    c = _client({"enableInternalTransfer": True, "enableWithdrawals": False})
+    c = _client({**_SAFE, "enableInternalTransfer": True})
     with pytest.raises(BinanceWithdrawPermissionError, match="enableInternalTransfer"):
         c.assert_safe_startup()
 
 
 def test_safekey_raises_on_universal_transfer_enabled():
-    c = _client({"enableUniversalTransfer": True, "enableWithdrawals": False})
-    with pytest.raises(BinanceWithdrawPermissionError, match="enableUniversalTransfer"):
+    c = _client({**_SAFE, "permitsUniversalTransfer": True})
+    with pytest.raises(BinanceWithdrawPermissionError, match="permitsUniversalTransfer"):
         c.assert_safe_startup()
 
 
 def test_safekey_warns_but_passes_on_margin_enabled():
     c = _client({
-        "ipRestrict": True,
-        "enableWithdrawals": False,
+        **_SAFE,
         "enableMargin": True,
-        "enableFutures": True,
     })
     result = c.assert_safe_startup()
     assert result["ok"] is True
@@ -77,22 +80,13 @@ def test_safekey_warns_but_passes_on_margin_enabled():
 
 
 def test_safekey_warns_on_no_ip_restriction():
-    c = _client({
-        "ipRestrict": False,
-        "enableWithdrawals": False,
-        "enableFutures": True,
-    })
-    result = c.assert_safe_startup()
-    assert result["ok"] is True
-    assert result["ip_restricted"] is False
-    assert any("iprestrict" in w.lower() or "ip" in w.lower() for w in result["warnings"])
+    c = _client({**_SAFE, "ipRestrict": False})
+    with pytest.raises(PermissionError, match="ipRestrict"):
+        c.assert_safe_startup()
 
 
 def test_safekey_aggregates_multiple_drain_keys_in_error():
-    c = _client({
-        "enableWithdrawals": True,
-        "enableInternalTransfer": True,
-    })
+    c = _client({**_SAFE, "enableWithdrawals": True, "enableInternalTransfer": True})
     with pytest.raises(BinanceWithdrawPermissionError) as exc:
         c.assert_safe_startup()
     msg = str(exc.value)
@@ -100,11 +94,19 @@ def test_safekey_aggregates_multiple_drain_keys_in_error():
     assert "enableInternalTransfer" in msg
 
 
-def test_safekey_ip_keys_missing_returns_null():
-    """有些 endpoint 不带 ipRestrict 字段 → ip_restricted 应为 None 而非 False。"""
+@pytest.mark.parametrize("field", tuple(_SAFE))
+def test_safekey_missing_or_non_boolean_required_field_fails_closed(field):
+    missing = dict(_SAFE)
+    missing.pop(field)
+    with pytest.raises(PermissionError, match=field):
+        _client(missing).assert_safe_startup()
 
-    c = _client({"enableWithdrawals": False, "enableFutures": True})
-    result = c.assert_safe_startup()
-    assert result["ip_restricted"] is None
-    # 没 ipRestrict 字段时也不应产生 ip warning
-    assert not any("iprestrict" in w.lower() for w in result["warnings"])
+    non_boolean = {**_SAFE, field: int(_SAFE[field])}
+    with pytest.raises(PermissionError, match=field):
+        _client(non_boolean).assert_safe_startup()
+
+
+def test_fix_api_trade_cannot_substitute_for_futures_permission():
+    c = _client({**_SAFE, "enableFutures": False, "enableFixApiTrade": True})
+    with pytest.raises(PermissionError, match="enableFutures"):
+        c.assert_safe_startup()

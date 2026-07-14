@@ -34,7 +34,7 @@ from app.lineage.spine import (
     TheoryImplementationBinding,
 )
 from app.lineage.spine_gate import BANNED_POSITIVE_TERMS
-from app.lineage.spine_ledger import SpineLedger
+from app.lineage.spine_ledger import SpineAuditIntegrityError, SpineLedger
 
 CODE_SRC_A = "def momentum(p, k):\n    return (p[-1] - p[-1 - k]) / p[-1 - k]\n"
 CODE_SRC_B = "def momentum(p, k):\n    return p[-1] / p[-1 - k] - 1.0  # 改了实现\n"
@@ -151,6 +151,28 @@ def test_no_consistency_check_blocks():
     assert any("consistency-present" in v for v in d.violations)
 
 
+def test_pass_check_for_another_binding_cannot_satisfy_current_binding():
+    art = _artifact()
+    binding = _binding(art)
+    foreign = ConsistencyCheck(
+        binding_id="tib_foreign",
+        check_type="numerical",
+        result=CHECK_PASS,
+        expected_property="same",
+        observed_property="same",
+    )
+    decision = evaluate_promotion(
+        art,
+        binding,
+        [foreign],
+        requested_label=LABEL_EVIDENCE_SUFFICIENT,
+        current_code_hash=binding.code_content_hash,
+    )
+    assert decision.promotable is False
+    assert any("consistency-binding" in violation for violation in decision.violations)
+    assert any("consistency-present" in violation for violation in decision.violations)
+
+
 def test_only_pending_check_is_not_decisive():
     art = _artifact()
     b = _binding(art)
@@ -215,6 +237,27 @@ def test_proof_backed_with_user_waiver_rejected():
     assert d.promotable is False
     assert any("proof-honest" in v for v in d.violations)
     assert d.granted_label == LABEL_USER_WAIVED_THEORY  # 诚实降级到放权标签，不冒充
+
+
+def test_evidence_sufficient_with_user_waiver_rejected():
+    art, binding, checks = _full_green(proof=PROOF_SKETCH)
+    choice = MethodologyChoiceRecord(
+        chosen_path=LABEL_USER_WAIVED_THEORY,
+        asset_ref=art.artifact_id,
+        responsibility_boundary="user accepts exploratory-only status",
+        allowed_environment="paper",
+        skipped_steps=("strict_proof",),
+    )
+    decision = evaluate_promotion(
+        art,
+        binding,
+        checks,
+        requested_label=LABEL_EVIDENCE_SUFFICIENT,
+        current_code_hash=binding.code_content_hash,
+        choice=choice,
+    )
+    assert decision.promotable is False
+    assert any("strong-label-honest" in violation for violation in decision.violations)
 
 
 def test_proof_sketch_cannot_claim_proof_backed():
@@ -348,6 +391,7 @@ def test_spine_ledger_records_and_staleness(tmp_path):
 def test_spine_ledger_refresh_appends_new_version(tmp_path):
     led = SpineLedger(tmp_path)
     art = _artifact()
+    led.record_artifact(art)
     led.record_binding(_binding(art, code_source=CODE_SRC_A))
     led.record_binding(_binding(art, code_source=CODE_SRC_B))  # 刷新 = append 新版本
     assert len(led.list_bindings(art.artifact_id)) == 2  # 旧版仍在链上（staleness 可重算）
@@ -357,6 +401,7 @@ def test_spine_ledger_refresh_appends_new_version(tmp_path):
 def test_spine_ledger_tamper_detected(tmp_path):
     led = SpineLedger(tmp_path)
     art = _artifact()
+    led.record_artifact(art)
     led.record_binding(_binding(art))
     led.record_check(_pass(_binding(art)))
     # 篡改：把 jsonl 中间行的 payload 改掉，破坏哈希链
@@ -366,6 +411,7 @@ def test_spine_ledger_tamper_detected(tmp_path):
     rec["payload"]["code_ref"] = "被偷偷改了"
     lines[0] = json.dumps(rec, ensure_ascii=False)
     path.write_text("\n".join(lines) + "\n", encoding="utf-8")
-    led2 = SpineLedger(tmp_path)
-    ok, issues = led2.verify_chain()
+    ok, issues = led.verify_chain()
     assert ok is False and issues  # 篡改被检出
+    with pytest.raises(SpineAuditIntegrityError):
+        SpineLedger(tmp_path)

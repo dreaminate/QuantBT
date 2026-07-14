@@ -13,13 +13,16 @@ index with the invariants that later persistent stores must keep:
 from __future__ import annotations
 
 import json
+import os
 import re
+import threading
 from dataclasses import asdict, dataclass, field, is_dataclass
 from datetime import UTC, datetime
 from enum import Enum
 from pathlib import Path
 from typing import Any
 
+from ..cross_process_lock import acquire_exclusive_fd
 from ..lineage.ids import content_hash
 
 
@@ -252,12 +255,105 @@ class AssetRAGHit:
     score: float
     evidence_label: str
     context_role: str = "candidate_context"
+    document_id: str = ""
 
     def __post_init__(self) -> None:
         if not self.source_id or not self.version:
             raise AssetRAGError("RAG hit requires source_id and version")
         if self.context_role != "candidate_context":
             raise AssetRAGError("RAG hit must remain candidate_context, not system conclusion")
+
+
+@dataclass(frozen=True)
+class RAGUsageDocumentRef:
+    document_id: str
+    source_id: str
+    version: str
+    asset_ref: str
+    projection: str
+    permission: dict[str, tuple[str, ...]]
+    context_role: str = "candidate_context"
+
+    def __post_init__(self) -> None:
+        for field_name in ("document_id", "source_id", "version", "asset_ref", "projection"):
+            if not str(getattr(self, field_name) or "").strip():
+                raise AssetRAGError(f"RAG usage document {field_name} is required")
+        if self.context_role != "candidate_context":
+            raise AssetRAGError("RAG usage documents must remain candidate_context")
+        permission = self.permission
+        if not isinstance(permission, dict):
+            raise AssetRAGError("RAG usage document permission snapshot is required")
+        object.__setattr__(
+            self,
+            "permission",
+            {
+                "allowed_users": _tuple(permission.get("allowed_users")),
+                "allowed_desks": _tuple(permission.get("allowed_desks")),
+                "allowed_assets": _tuple(permission.get("allowed_assets")),
+                "permission_tags": _tuple(permission.get("permission_tags")),
+            },
+        )
+
+
+@dataclass(frozen=True)
+class StrictAgentRAGUsage:
+    usage_id: str
+    owner_user_id: str
+    agent_id: str
+    workflow_ref: str
+    tool_call_ref: str
+    purpose: str
+    query_digest: str
+    context_digest: str
+    desk: str
+    actor: str
+    visible_asset_refs: tuple[str, ...]
+    permission_tags: tuple[str, ...]
+    returned_documents: tuple[RAGUsageDocumentRef, ...]
+    candidate_context_only: bool
+    plaintext_secret_free: bool
+    timestamp: str = field(default_factory=_now)
+
+    def __post_init__(self) -> None:
+        for field_name in (
+            "usage_id",
+            "owner_user_id",
+            "agent_id",
+            "workflow_ref",
+            "tool_call_ref",
+            "purpose",
+            "query_digest",
+            "context_digest",
+            "desk",
+            "actor",
+        ):
+            if not str(getattr(self, field_name) or "").strip():
+                raise AssetRAGError(f"strict RAG usage {field_name} is required")
+        object.__setattr__(self, "visible_asset_refs", _tuple(self.visible_asset_refs))
+        object.__setattr__(self, "permission_tags", _tuple(self.permission_tags))
+        object.__setattr__(self, "returned_documents", tuple(self.returned_documents))
+        if not self.returned_documents:
+            raise AssetRAGError("strict RAG usage requires returned documents")
+        if not self.candidate_context_only:
+            raise AssetRAGError("strict RAG usage must remain candidate_context only")
+        if not self.plaintext_secret_free:
+            raise AssetRAGError("strict RAG usage cannot contain plaintext secrets")
+
+
+@dataclass(frozen=True)
+class RAGConformanceReceipt:
+    usage_id: str
+    owner_user_id: str
+    workflow_ref: str
+    tool_call_ref: str
+    query_digest: str
+    context_digest: str
+    returned_document_ids: tuple[str, ...]
+    visible_asset_refs: tuple[str, ...]
+    candidate_context_only: bool
+    plaintext_secret_free: bool
+    accepted: bool
+    violations: tuple[str, ...] = ()
 
 
 @dataclass(frozen=True)
@@ -362,6 +458,111 @@ def _dense_vector_from_json(value: dict[str, Any]) -> AssetRAGDenseVector:
     return AssetRAGDenseVector(**dict(value))
 
 
+def _document_identity_payload(document: AssetRAGDocument) -> dict[str, Any]:
+    return {
+        "source_id": document.source_id,
+        "version": document.version,
+        "title": document.title,
+        "asset_ref": document.asset_ref,
+        "projection": document.projection_value,
+        "body": document.body,
+        "permission": document.permission.snapshot(),
+        "applicability": document.applicability,
+        "source_kind": document.source_kind,
+        "metadata": document.metadata,
+        "evidence_label": document.evidence_label,
+        "methodology_path": document.methodology_path,
+    }
+
+
+def _expected_document_id(document: AssetRAGDocument) -> str:
+    return "ragdoc_" + content_hash(
+        {
+            "source_id": document.source_id,
+            "version": document.version,
+            "asset_ref": document.asset_ref,
+            "projection": document.projection_value,
+            "body": document.body,
+        }
+    )
+
+
+def _same_document_semantics(left: AssetRAGDocument, right: AssetRAGDocument) -> bool:
+    return _document_identity_payload(left) == _document_identity_payload(right)
+
+
+def _vector_identity_payload(vector: AssetRAGDenseVector) -> dict[str, Any]:
+    return {
+        "vector_ref": vector.vector_ref,
+        "document_id": vector.document_id,
+        "source_id": vector.source_id,
+        "version": vector.version,
+        "embedding_model_ref": vector.embedding_model_ref,
+        "dimensions": vector.dimensions,
+        "vector": vector.vector,
+        "source_hash": vector.source_hash,
+    }
+
+
+def _same_vector_semantics(left: AssetRAGDenseVector, right: AssetRAGDenseVector) -> bool:
+    return _vector_identity_payload(left) == _vector_identity_payload(right)
+
+
+def _strict_usage_to_json(usage: StrictAgentRAGUsage) -> dict[str, Any]:
+    return _json_value(usage)
+
+
+def _strict_usage_from_json(value: dict[str, Any]) -> StrictAgentRAGUsage:
+    raw = dict(value)
+    returned = raw.get("returned_documents")
+    if not isinstance(returned, list):
+        raise AssetRAGError("strict persisted RAG usage missing returned_documents")
+    if any(not isinstance(item, dict) for item in returned):
+        raise AssetRAGError("strict persisted RAG usage has invalid document refs")
+    raw["returned_documents"] = tuple(
+        RAGUsageDocumentRef(**dict(item)) for item in returned
+    )
+    return StrictAgentRAGUsage(**raw)
+
+
+def _document_family(document: AssetRAGDocument) -> tuple[str, str, str]:
+    return (document.source_id, document.asset_ref, document.projection_value)
+
+
+def _context_payload(*, owner_user_id: str, context: RAGQueryContext) -> dict[str, Any]:
+    return {
+        "owner_user_id": owner_user_id,
+        "user_id": context.user_id,
+        "desk": context.desk,
+        "visible_asset_refs": context.visible_asset_refs,
+        "permission_tags": context.permission_tags,
+        "actor": context.actor,
+    }
+
+
+def _strict_usage_identity_payload(usage: StrictAgentRAGUsage) -> dict[str, Any]:
+    return {
+        "owner_user_id": usage.owner_user_id,
+        "agent_id": usage.agent_id,
+        "workflow_ref": usage.workflow_ref,
+        "tool_call_ref": usage.tool_call_ref,
+        "purpose": usage.purpose,
+        "query_digest": usage.query_digest,
+        "context_digest": usage.context_digest,
+        "desk": usage.desk,
+        "actor": usage.actor,
+        "visible_asset_refs": usage.visible_asset_refs,
+        "permission_tags": usage.permission_tags,
+        "returned_documents": tuple(_json_value(item) for item in usage.returned_documents),
+        "candidate_context_only": usage.candidate_context_only,
+        "plaintext_secret_free": usage.plaintext_secret_free,
+    }
+
+
+def _expected_strict_usage_id(usage: StrictAgentRAGUsage) -> str:
+    return "raguse_v2_" + content_hash(_strict_usage_identity_payload(usage))
+
+
 def _reject_plaintext_secret(body: str, metadata: dict[str, Any]) -> None:
     for pattern in _SECRET_VALUE_PATTERNS:
         if pattern.search(body or ""):
@@ -393,10 +594,280 @@ class ResearchAssetRAGIndex:
         self._docs: list[AssetRAGDocument] = []
         self._usage: list[AgentRAGUsage] = []
         self._dense_vectors: dict[str, AssetRAGDenseVector] = {}
+        self._owned_documents: dict[tuple[str, str], AssetRAGDocument] = {}
+        self._owned_vectors: dict[tuple[str, str], AssetRAGDenseVector] = {}
+        self._owned_current: dict[tuple[str, str, str, str], str] = {}
+        self._owned_source_versions: dict[tuple[str, str, str], str] = {}
+        self._strict_usage: dict[tuple[str, str], StrictAgentRAGUsage] = {}
+
+    @staticmethod
+    def _owner(value: Any) -> str:
+        owner = str(value or "").strip()
+        if not owner:
+            raise AssetRAGError("RAG owner_user_id is required")
+        return owner
 
     def add(self, document: AssetRAGDocument) -> None:
         self._docs.append(document)
         self._dense_vectors[document.document_id] = _dense_vector_for_document(document)
+
+    def _apply_owned_document(
+        self,
+        document: AssetRAGDocument,
+        *,
+        owner_user_id: str,
+        supersedes_document_id: str | None,
+        load_compatibility: bool,
+    ) -> AssetRAGDocument:
+        owner = self._owner(owner_user_id)
+        if document.document_id != _expected_document_id(document):
+            raise AssetRAGError("owner-scoped RAG document_id does not match canonical content")
+        if owner not in document.permission.allowed_users:
+            raise AssetRAGError(
+                "owner-scoped RAG permission must explicitly include owner_user_id"
+            )
+        key = (owner, document.document_id)
+        family_key = (owner, *_document_family(document))
+        version_key = (owner, document.source_id, document.version)
+        current_id = self._owned_current.get(family_key)
+        existing = self._owned_documents.get(key)
+        if existing is not None:
+            if not _same_document_semantics(existing, document):
+                raise AssetRAGError("owner/document identity collision with different content")
+            if current_id != document.document_id:
+                raise AssetRAGError("superseded RAG document version cannot become current again")
+            return existing
+        version_document_id = self._owned_source_versions.get(version_key)
+        if version_document_id is not None and version_document_id != document.document_id:
+            raise AssetRAGError("owner/source/version identity collision")
+        supersedes = str(supersedes_document_id or "").strip()
+        if current_id is None:
+            if supersedes:
+                raise AssetRAGError("first owner-scoped RAG document cannot supersede an unknown version")
+        elif supersedes != current_id:
+            raise AssetRAGError("RAG document update must supersede the exact current document_id")
+        vector = _dense_vector_for_document(document)
+        self._owned_documents[key] = document
+        self._owned_vectors[key] = vector
+        self._owned_current[family_key] = document.document_id
+        self._owned_source_versions[version_key] = document.document_id
+        if load_compatibility and not any(
+            existing_document.document_id == document.document_id
+            for existing_document in self._docs
+        ):
+            ResearchAssetRAGIndex.add(self, document)
+        return document
+
+    def add_for_owner(
+        self,
+        document: AssetRAGDocument,
+        *,
+        owner_user_id: str,
+        supersedes_document_id: str | None = None,
+    ) -> AssetRAGDocument:
+        """Add one schema-v2-capable owner version to the in-memory index.
+
+        Ownership is an explicit envelope. ``permission.allowed_users`` remains
+        a visibility list and is never treated as the ownership source.
+        """
+
+        return self._apply_owned_document(
+            document,
+            owner_user_id=owner_user_id,
+            supersedes_document_id=supersedes_document_id,
+            load_compatibility=True,
+        )
+
+    def document_for_owner(
+        self,
+        document_id: str,
+        *,
+        owner_user_id: str,
+        require_current: bool = False,
+    ) -> AssetRAGDocument:
+        owner = self._owner(owner_user_id)
+        document = self._owned_documents[(owner, str(document_id or ""))]
+        if require_current:
+            current_id = self._owned_current[(owner, *_document_family(document))]
+            if current_id != document.document_id:
+                raise AssetRAGError("RAG document is superseded")
+        return document
+
+    def dense_vector_for_owner(
+        self,
+        document_id: str,
+        *,
+        owner_user_id: str,
+        require_current: bool = False,
+    ) -> AssetRAGDenseVector:
+        document = self.document_for_owner(
+            document_id,
+            owner_user_id=owner_user_id,
+            require_current=require_current,
+        )
+        return self._owned_vectors[(self._owner(owner_user_id), document.document_id)]
+
+    def current_document_for_owner(
+        self,
+        *,
+        owner_user_id: str,
+        source_id: str,
+        asset_ref: str,
+        projection: RAGProjection | str,
+    ) -> AssetRAGDocument:
+        owner = self._owner(owner_user_id)
+        projection_value = str(projection.value if isinstance(projection, Enum) else projection)
+        document_id = self._owned_current[(owner, str(source_id), str(asset_ref), projection_value)]
+        return self._owned_documents[(owner, document_id)]
+
+    def owned_documents(self, *, owner_user_id: str, current_only: bool = False) -> list[AssetRAGDocument]:
+        owner = self._owner(owner_user_id)
+        documents = [
+            document
+            for (record_owner, _document_id), document in self._owned_documents.items()
+            if record_owner == owner
+        ]
+        if current_only:
+            current_ids = {
+                document_id
+                for (record_owner, *_family), document_id in self._owned_current.items()
+                if record_owner == owner
+            }
+            documents = [document for document in documents if document.document_id in current_ids]
+        return sorted(documents, key=lambda item: (item.source_id, item.version, item.document_id))
+
+    def _strict_context(self, *, owner_user_id: str, context: RAGQueryContext) -> str:
+        owner = self._owner(owner_user_id)
+        if context.user_id != owner:
+            raise AssetRAGError("RAG query context user_id must match stable owner_user_id")
+        return owner
+
+    def _current_owned_documents(self, owner: str) -> list[AssetRAGDocument]:
+        current_ids = {
+            document_id
+            for (record_owner, *_family), document_id in self._owned_current.items()
+            if record_owner == owner
+        }
+        return [
+            document
+            for (record_owner, document_id), document in self._owned_documents.items()
+            if record_owner == owner and document_id in current_ids
+        ]
+
+    def _search_for_owner(
+        self,
+        query: str,
+        *,
+        owner_user_id: str,
+        context: RAGQueryContext,
+        projections: tuple[RAGProjection | str, ...],
+        top_k: int,
+        mode: str,
+    ) -> list[AssetRAGHit]:
+        owner = self._strict_context(owner_user_id=owner_user_id, context=context)
+        _reject_plaintext_secret(query, {})
+        if top_k <= 0:
+            return []
+        projection_filter = {
+            str(projection.value if isinstance(projection, Enum) else projection)
+            for projection in projections
+        }
+        query_tokens = _tokens(query)
+        query_counts = _token_counts(query)
+        query_dense = _dense_embedding(query)
+        if mode == "lexical" and not query_tokens:
+            return []
+        if mode == "sparse" and not query_counts:
+            return []
+        if mode == "dense" and not any(value != 0.0 for value in query_dense):
+            return []
+        scored: list[tuple[float, AssetRAGDocument]] = []
+        for document in self._current_owned_documents(owner):
+            if projection_filter and document.projection_value not in projection_filter:
+                continue
+            if not _visible(document, context):
+                continue
+            text = " ".join(
+                [
+                    document.title,
+                    document.body,
+                    document.applicability,
+                    document.asset_ref,
+                    document.source_kind,
+                ]
+            )
+            if mode == "lexical":
+                overlap = len(query_tokens & _tokens(text))
+                score = overlap / max(len(query_tokens), 1)
+            elif mode == "sparse":
+                score = _cosine_similarity(query_counts, _token_counts(text))
+            elif mode == "dense":
+                vector = self._owned_vectors.get((owner, document.document_id))
+                if vector is None or not _same_vector_semantics(
+                    vector, _dense_vector_for_document(document)
+                ):
+                    raise AssetRAGError("owner-scoped RAG vector/document mismatch")
+                score = _dense_cosine_similarity(query_dense, vector.vector)
+            else:  # pragma: no cover - private caller pins the three modes.
+                raise AssetRAGError(f"unsupported strict RAG search mode: {mode}")
+            if score > 0:
+                scored.append((score, document))
+        scored.sort(key=lambda item: (-item[0], item[1].source_id, item[1].version))
+        return [_hit(document, score) for score, document in scored[:top_k]]
+
+    def retrieve_for_owner(
+        self,
+        query: str,
+        *,
+        owner_user_id: str,
+        context: RAGQueryContext,
+        projections: tuple[RAGProjection | str, ...] = (),
+        top_k: int = 5,
+    ) -> list[AssetRAGHit]:
+        return self._search_for_owner(
+            query,
+            owner_user_id=owner_user_id,
+            context=context,
+            projections=projections,
+            top_k=top_k,
+            mode="lexical",
+        )
+
+    def vector_search_for_owner(
+        self,
+        query: str,
+        *,
+        owner_user_id: str,
+        context: RAGQueryContext,
+        projections: tuple[RAGProjection | str, ...] = (),
+        top_k: int = 5,
+    ) -> list[AssetRAGHit]:
+        return self._search_for_owner(
+            query,
+            owner_user_id=owner_user_id,
+            context=context,
+            projections=projections,
+            top_k=top_k,
+            mode="sparse",
+        )
+
+    def dense_vector_search_for_owner(
+        self,
+        query: str,
+        *,
+        owner_user_id: str,
+        context: RAGQueryContext,
+        projections: tuple[RAGProjection | str, ...] = (),
+        top_k: int = 5,
+    ) -> list[AssetRAGHit]:
+        return self._search_for_owner(
+            query,
+            owner_user_id=owner_user_id,
+            context=context,
+            projections=projections,
+            top_k=top_k,
+            mode="dense",
+        )
 
     def retrieve(
         self,
@@ -543,26 +1014,325 @@ class ResearchAssetRAGIndex:
             out = [u for u in out if u.user_id == user_id]
         return out
 
+    def _apply_strict_usage(
+        self,
+        usage: StrictAgentRAGUsage,
+        *,
+        owner_user_id: str,
+    ) -> StrictAgentRAGUsage:
+        owner = self._owner(owner_user_id)
+        if usage.owner_user_id != owner:
+            raise AssetRAGError("strict RAG usage owner envelope mismatch")
+        if usage.usage_id != _expected_strict_usage_id(usage):
+            raise AssetRAGError("strict RAG usage_id does not match canonical content")
+        key = (owner, usage.usage_id)
+        existing = self._strict_usage.get(key)
+        if existing is not None:
+            if _strict_usage_identity_payload(existing) != _strict_usage_identity_payload(usage):
+                raise AssetRAGError("owner/usage identity collision with different content")
+            return existing
+        self._strict_usage[key] = usage
+        return usage
+
+    def record_usage_for_owner(
+        self,
+        *,
+        owner_user_id: str,
+        agent_id: str,
+        workflow_ref: str,
+        tool_call_ref: str,
+        query: str,
+        context: RAGQueryContext,
+        hits: tuple[AssetRAGHit, ...] | list[AssetRAGHit],
+        purpose: str,
+    ) -> StrictAgentRAGUsage:
+        owner = self._strict_context(owner_user_id=owner_user_id, context=context)
+        if context.actor != "agent":
+            raise AssetRAGError("strict RAG usage requires actor='agent'")
+        for value in (agent_id, workflow_ref, tool_call_ref, purpose, query):
+            _reject_plaintext_secret(str(value or ""), {})
+        returned_documents: list[RAGUsageDocumentRef] = []
+        seen_document_ids: set[str] = set()
+        for hit in tuple(hits):
+            if not hit.document_id:
+                raise AssetRAGError("strict RAG usage hit requires document_id")
+            if hit.document_id in seen_document_ids:
+                raise AssetRAGError("strict RAG usage contains duplicate document_id")
+            seen_document_ids.add(hit.document_id)
+            document = self.document_for_owner(
+                hit.document_id,
+                owner_user_id=owner,
+                require_current=True,
+            )
+            expected_hit = _hit(document, hit.score)
+            if (
+                hit.source_id != expected_hit.source_id
+                or hit.version != expected_hit.version
+                or hit.asset_ref != expected_hit.asset_ref
+                or hit.projection != expected_hit.projection
+                or hit.permission != expected_hit.permission
+                or hit.context_role != "candidate_context"
+            ):
+                raise AssetRAGError("strict RAG usage hit does not match current owner document")
+            if not _visible(document, context):
+                raise AssetRAGError("strict RAG usage hit is not visible in the exact query context")
+            vector = self._owned_vectors.get((owner, document.document_id))
+            if vector is None or not _same_vector_semantics(
+                vector, _dense_vector_for_document(document)
+            ):
+                raise AssetRAGError("owner-scoped RAG vector/document mismatch")
+            _reject_plaintext_secret(document.body, document.metadata)
+            returned_documents.append(
+                RAGUsageDocumentRef(
+                    document_id=document.document_id,
+                    source_id=document.source_id,
+                    version=document.version,
+                    asset_ref=document.asset_ref,
+                    projection=document.projection_value,
+                    permission=document.permission.snapshot(),
+                )
+            )
+        if not returned_documents:
+            raise AssetRAGError("strict RAG usage requires at least one hit")
+        query_digest = "ragquery_" + content_hash({"query": query})
+        context_digest = "ragctx_" + content_hash(
+            _context_payload(owner_user_id=owner, context=context)
+        )
+        provisional = StrictAgentRAGUsage(
+            usage_id="pending",
+            owner_user_id=owner,
+            agent_id=str(agent_id or "").strip(),
+            workflow_ref=str(workflow_ref or "").strip(),
+            tool_call_ref=str(tool_call_ref or "").strip(),
+            purpose=str(purpose or "").strip(),
+            query_digest=query_digest,
+            context_digest=context_digest,
+            desk=context.desk,
+            actor=context.actor,
+            visible_asset_refs=context.visible_asset_refs,
+            permission_tags=context.permission_tags,
+            returned_documents=tuple(returned_documents),
+            candidate_context_only=True,
+            plaintext_secret_free=True,
+        )
+        usage = StrictAgentRAGUsage(
+            **{
+                **asdict(provisional),
+                "usage_id": _expected_strict_usage_id(provisional),
+                "returned_documents": provisional.returned_documents,
+            }
+        )
+        return self._apply_strict_usage(usage, owner_user_id=owner)
+
+    def strict_usage_for_owner(
+        self,
+        usage_id: str,
+        *,
+        owner_user_id: str,
+    ) -> StrictAgentRAGUsage:
+        return self._strict_usage[(self._owner(owner_user_id), str(usage_id or ""))]
+
+    def strict_usage_records(self, *, owner_user_id: str) -> list[StrictAgentRAGUsage]:
+        owner = self._owner(owner_user_id)
+        return sorted(
+            (
+                usage
+                for (record_owner, _usage_id), usage in self._strict_usage.items()
+                if record_owner == owner
+            ),
+            key=lambda item: (item.timestamp, item.usage_id),
+        )
+
+    def validate_current_usage(
+        self,
+        usage_id: str,
+        *,
+        owner_user_id: str,
+    ) -> RAGConformanceReceipt:
+        owner = self._owner(owner_user_id)
+        usage = self.strict_usage_for_owner(usage_id, owner_user_id=owner)
+        violations: list[str] = []
+        if usage.owner_user_id != owner:
+            violations.append("rag_usage_owner_mismatch")
+        if usage.usage_id != _expected_strict_usage_id(usage):
+            violations.append("rag_usage_identity_mismatch")
+        context = RAGQueryContext(
+            user_id=owner,
+            desk=usage.desk,
+            visible_asset_refs=usage.visible_asset_refs,
+            permission_tags=usage.permission_tags,
+            actor=usage.actor,
+        )
+        if usage.context_digest != "ragctx_" + content_hash(
+            _context_payload(owner_user_id=owner, context=context)
+        ):
+            violations.append("rag_usage_context_digest_mismatch")
+        if not usage.query_digest.startswith("ragquery_"):
+            violations.append("rag_usage_query_digest_missing")
+        if usage.actor != "agent":
+            violations.append("rag_usage_actor_not_agent")
+        if not usage.candidate_context_only:
+            violations.append("rag_usage_not_candidate_context")
+        if not usage.plaintext_secret_free:
+            violations.append("rag_usage_plaintext_secret_flag")
+        try:
+            _reject_plaintext_secret(
+                " ".join(
+                    [usage.agent_id, usage.workflow_ref, usage.tool_call_ref, usage.purpose]
+                ),
+                {},
+            )
+        except AssetRAGError:
+            violations.append("rag_usage_plaintext_secret")
+        for returned in usage.returned_documents:
+            try:
+                document = self.document_for_owner(
+                    returned.document_id,
+                    owner_user_id=owner,
+                    require_current=True,
+                )
+            except (KeyError, AssetRAGError):
+                violations.append(f"rag_usage_document_not_current:{returned.document_id}")
+                continue
+            if (
+                returned.source_id != document.source_id
+                or returned.version != document.version
+                or returned.asset_ref != document.asset_ref
+                or returned.projection != document.projection_value
+                or returned.permission != document.permission.snapshot()
+            ):
+                violations.append(f"rag_usage_document_mismatch:{returned.document_id}")
+            if returned.context_role != "candidate_context":
+                violations.append(f"rag_usage_context_role_mismatch:{returned.document_id}")
+            if not _visible(document, context):
+                violations.append(f"rag_usage_permission_drift:{returned.document_id}")
+            vector = self._owned_vectors.get((owner, document.document_id))
+            if vector is None or not _same_vector_semantics(
+                vector, _dense_vector_for_document(document)
+            ):
+                violations.append(f"rag_usage_vector_mismatch:{returned.document_id}")
+            try:
+                _reject_plaintext_secret(document.body, document.metadata)
+            except AssetRAGError:
+                violations.append(f"rag_usage_document_plaintext_secret:{returned.document_id}")
+        deduped = tuple(dict.fromkeys(violations))
+        return RAGConformanceReceipt(
+            usage_id=usage.usage_id,
+            owner_user_id=owner,
+            workflow_ref=usage.workflow_ref,
+            tool_call_ref=usage.tool_call_ref,
+            query_digest=usage.query_digest,
+            context_digest=usage.context_digest,
+            returned_document_ids=tuple(
+                returned.document_id for returned in usage.returned_documents
+            ),
+            visible_asset_refs=usage.visible_asset_refs,
+            candidate_context_only=usage.candidate_context_only,
+            plaintext_secret_free=usage.plaintext_secret_free,
+            accepted=not deduped,
+            violations=deduped,
+        )
+
 
 class PersistentResearchAssetRAGIndex(ResearchAssetRAGIndex):
     """JSONL-backed Research Asset RAG event log.
 
-    This keeps the contract deliberately simple: documents and agent usage are
-    replayed from an append-only event file. Malformed persisted history raises
-    instead of silently dropping context or usage evidence.
+    Schema-v1 rows remain structurally readable for compatibility, but are
+    counted as quarantined and never enter owner-scoped proof maps. Schema-v2
+    rows carry an explicit stable owner envelope and atomically bind each
+    document to its dense vector or each retrieval to its strict usage record.
     """
 
     def __init__(self, path: str | Path) -> None:
         super().__init__()
         self._path = Path(path)
         self._path.parent.mkdir(parents=True, exist_ok=True)
+        self._lock_path = self._path.with_name(f".{self._path.name}.lock")
+        self._state_lock = threading.RLock()
+        self._legacy_quarantined_count = 0
         self._load_existing()
 
     @property
     def path(self) -> Path:
         return self._path
 
+    @property
+    def legacy_quarantined_count(self) -> int:
+        return self._legacy_quarantined_count
+
+    def refresh(self) -> None:
+        with self._state_lock:
+            ResearchAssetRAGIndex.__init__(self)
+            self._legacy_quarantined_count = 0
+            self._load_existing()
+
+    def _apply_persisted_v2_row(self, row: dict[str, Any]) -> None:
+        owner = self._owner(row.get("owner_user_id"))
+        event_type = row.get("event_type")
+        if event_type == "owner_document_version_recorded":
+            raw_document = row.get("document")
+            raw_vector = row.get("dense_vector")
+            if not isinstance(raw_document, dict) or not isinstance(raw_vector, dict):
+                raise AssetRAGError("schema-v2 RAG document event requires document and vector")
+            document = _document_from_json(raw_document)
+            vector = _dense_vector_from_json(raw_vector)
+            expected_vector = _dense_vector_for_document(document)
+            if not _same_vector_semantics(vector, expected_vector):
+                raise AssetRAGError("persisted owner-scoped RAG vector/document mismatch")
+            stored = self._apply_owned_document(
+                document,
+                owner_user_id=owner,
+                supersedes_document_id=row.get("supersedes_document_id"),
+                load_compatibility=True,
+            )
+            self._owned_vectors[(owner, stored.document_id)] = vector
+            return
+        if event_type == "owner_usage_recorded":
+            raw_usage = row.get("usage")
+            if not isinstance(raw_usage, dict):
+                raise AssetRAGError("schema-v2 RAG usage event requires usage")
+            usage = self._apply_strict_usage(
+                _strict_usage_from_json(raw_usage),
+                owner_user_id=owner,
+            )
+            receipt = ResearchAssetRAGIndex.validate_current_usage(
+                self,
+                usage.usage_id,
+                owner_user_id=owner,
+            )
+            if not receipt.accepted:
+                raise AssetRAGError(
+                    "persisted strict RAG usage is not conformant: "
+                    + ",".join(receipt.violations)
+                )
+            return
+        raise AssetRAGError(f"unknown schema-v2 RAG event_type={event_type!r}")
+
+    def _apply_legacy_row(self, row: dict[str, Any]) -> None:
+        event_type = row.get("event_type")
+        if event_type == "document_added":
+            ResearchAssetRAGIndex.add(self, _document_from_json(row.get("document") or {}))
+        elif event_type == "agent_usage_recorded":
+            self._usage.append(_usage_from_json(row.get("usage") or {}))
+        elif event_type == "dense_embedding_indexed":
+            vector = _dense_vector_from_json(row.get("dense_vector") or {})
+            self._dense_vectors[vector.document_id] = vector
+        else:
+            raise AssetRAGError(f"unknown legacy RAG index event_type={event_type!r}")
+
     def _load_existing(self) -> None:
+        fd = os.open(self._lock_path, os.O_RDWR | os.O_CREAT, 0o600)
+        held = None
+        try:
+            os.chmod(self._lock_path, 0o600)
+            held = acquire_exclusive_fd(fd, timeout_seconds=30.0)
+            self._load_existing_unlocked()
+        finally:
+            if held is not None:
+                held.release()
+            os.close(fd)
+
+    def _load_existing_unlocked(self) -> None:
         if not self._path.exists():
             return
         with self._path.open("r", encoding="utf-8") as fh:
@@ -572,25 +1342,159 @@ class PersistentResearchAssetRAGIndex(ResearchAssetRAGIndex):
                 try:
                     row = json.loads(line)
                     schema_version = row.get("schema_version")
-                    event_type = row.get("event_type")
-                    if schema_version != 1:
-                        raise AssetRAGError("unsupported RAG index schema_version")
-                    if event_type == "document_added":
-                        super().add(_document_from_json(row.get("document") or {}))
-                    elif event_type == "agent_usage_recorded":
-                        self._usage.append(_usage_from_json(row.get("usage") or {}))
-                    elif event_type == "dense_embedding_indexed":
-                        vector = _dense_vector_from_json(row.get("dense_vector") or {})
-                        self._dense_vectors[vector.document_id] = vector
+                    if schema_version == 1:
+                        self._legacy_quarantined_count += 1
+                        self._apply_legacy_row(row)
+                    elif schema_version == 2:
+                        self._apply_persisted_v2_row(row)
                     else:
-                        raise AssetRAGError(f"unknown RAG index event_type={event_type!r}")
+                        raise AssetRAGError("unsupported RAG index schema_version")
                 except Exception as exc:  # noqa: BLE001 - startup must expose the bad row location.
                     raise AssetRAGError(f"invalid persisted Research Asset RAG row at {self._path}:{line_no}") from exc
 
-    def _append_event(self, row: dict[str, Any]) -> None:
-        with self._path.open("a", encoding="utf-8") as fh:
-            fh.write(json.dumps(row, ensure_ascii=False, sort_keys=True, separators=(",", ":")) + "\n")
-            fh.flush()
+    @staticmethod
+    def _v2_identity(row: dict[str, Any]) -> tuple[str, str, str] | None:
+        if row.get("schema_version") != 2:
+            return None
+        owner = str(row.get("owner_user_id") or "")
+        if row.get("event_type") == "owner_document_version_recorded":
+            document = row.get("document")
+            if isinstance(document, dict):
+                return (owner, "document", str(document.get("document_id") or ""))
+        if row.get("event_type") == "owner_usage_recorded":
+            usage = row.get("usage")
+            if isinstance(usage, dict):
+                return (owner, "usage", str(usage.get("usage_id") or ""))
+        return None
+
+    @staticmethod
+    def _same_v2_identity_semantics(left: dict[str, Any], right: dict[str, Any]) -> bool:
+        event_type = left.get("event_type")
+        if event_type != right.get("event_type"):
+            return False
+        if event_type == "owner_document_version_recorded":
+            left_document = _document_from_json(left.get("document") or {})
+            right_document = _document_from_json(right.get("document") or {})
+            left_vector = _dense_vector_from_json(left.get("dense_vector") or {})
+            right_vector = _dense_vector_from_json(right.get("dense_vector") or {})
+            return (
+                _same_document_semantics(left_document, right_document)
+                and _same_vector_semantics(left_vector, right_vector)
+                and str(left.get("supersedes_document_id") or "")
+                == str(right.get("supersedes_document_id") or "")
+            )
+        if event_type == "owner_usage_recorded":
+            left_usage = _strict_usage_from_json(left.get("usage") or {})
+            right_usage = _strict_usage_from_json(right.get("usage") or {})
+            return _strict_usage_identity_payload(left_usage) == _strict_usage_identity_payload(
+                right_usage
+            )
+        return False
+
+    def _strict_shadow_from_disk(self, rows: list[dict[str, Any]]) -> ResearchAssetRAGIndex:
+        shadow = ResearchAssetRAGIndex()
+        for row in rows:
+            if row.get("schema_version") != 2:
+                continue
+            owner = shadow._owner(row.get("owner_user_id"))
+            if row.get("event_type") == "owner_document_version_recorded":
+                document = _document_from_json(row.get("document") or {})
+                vector = _dense_vector_from_json(row.get("dense_vector") or {})
+                if not _same_vector_semantics(vector, _dense_vector_for_document(document)):
+                    raise AssetRAGError("persisted owner-scoped RAG vector/document mismatch")
+                shadow._apply_owned_document(
+                    document,
+                    owner_user_id=owner,
+                    supersedes_document_id=row.get("supersedes_document_id"),
+                    load_compatibility=False,
+                )
+                shadow._owned_vectors[(owner, document.document_id)] = vector
+            elif row.get("event_type") == "owner_usage_recorded":
+                usage = shadow._apply_strict_usage(
+                    _strict_usage_from_json(row.get("usage") or {}),
+                    owner_user_id=owner,
+                )
+                receipt = shadow.validate_current_usage(usage.usage_id, owner_user_id=owner)
+                if not receipt.accepted:
+                    raise AssetRAGError(
+                        "persisted strict RAG usage is not conformant: "
+                        + ",".join(receipt.violations)
+                    )
+            else:
+                raise AssetRAGError("unsupported schema-v2 RAG event")
+        return shadow
+
+    def _append_event(self, row: dict[str, Any]) -> bool:
+        fd = os.open(self._lock_path, os.O_RDWR | os.O_CREAT, 0o600)
+        held = None
+        try:
+            os.chmod(self._lock_path, 0o600)
+            held = acquire_exclusive_fd(fd, timeout_seconds=30.0)
+            rows: list[dict[str, Any]] = []
+            if self._path.exists():
+                for line_no, line in enumerate(
+                    self._path.read_text(encoding="utf-8").splitlines(),
+                    start=1,
+                ):
+                    if not line.strip():
+                        continue
+                    try:
+                        parsed = json.loads(line)
+                    except Exception as exc:  # noqa: BLE001
+                        raise AssetRAGError(
+                            f"invalid persisted Research Asset RAG row at {self._path}:{line_no}"
+                        ) from exc
+                    rows.append(parsed)
+            incoming_identity = self._v2_identity(row)
+            if incoming_identity is not None:
+                shadow = self._strict_shadow_from_disk(rows)
+                owner = self._owner(row.get("owner_user_id"))
+                if row.get("event_type") == "owner_document_version_recorded":
+                    shadow._apply_owned_document(
+                        _document_from_json(row.get("document") or {}),
+                        owner_user_id=owner,
+                        supersedes_document_id=row.get("supersedes_document_id"),
+                        load_compatibility=False,
+                    )
+                else:
+                    usage = shadow._apply_strict_usage(
+                        _strict_usage_from_json(row.get("usage") or {}),
+                        owner_user_id=owner,
+                    )
+                    receipt = shadow.validate_current_usage(
+                        usage.usage_id,
+                        owner_user_id=owner,
+                    )
+                    if not receipt.accepted:
+                        raise AssetRAGError(
+                            "strict RAG usage is not current: "
+                            + ",".join(receipt.violations)
+                        )
+                for line_no, existing in enumerate(rows, start=1):
+                    if self._v2_identity(existing) != incoming_identity:
+                        continue
+                    if self._same_v2_identity_semantics(existing, row):
+                        return False
+                    raise AssetRAGError(
+                        f"RAG {incoming_identity[1]} identity collision at {self._path}:{line_no}"
+                    )
+            with self._path.open("a", encoding="utf-8") as fh:
+                fh.write(
+                    json.dumps(row, ensure_ascii=False, sort_keys=True, separators=(",", ":"))
+                    + "\n"
+                )
+                fh.flush()
+                os.fsync(fh.fileno())
+            directory_fd = os.open(self._path.parent, os.O_RDONLY)
+            try:
+                os.fsync(directory_fd)
+            finally:
+                os.close(directory_fd)
+            return True
+        finally:
+            if held is not None:
+                held.release()
+            os.close(fd)
 
     def add(self, document: AssetRAGDocument) -> None:
         vector = _dense_vector_for_document(document)
@@ -610,6 +1514,91 @@ class PersistentResearchAssetRAGIndex(ResearchAssetRAGIndex):
             }
         )
 
+    def add_for_owner(
+        self,
+        document: AssetRAGDocument,
+        *,
+        owner_user_id: str,
+        supersedes_document_id: str | None = None,
+    ) -> AssetRAGDocument:
+        owner = self._owner(owner_user_id)
+        vector = _dense_vector_for_document(document)
+        row = {
+            "schema_version": 2,
+            "event_type": "owner_document_version_recorded",
+            "owner_user_id": owner,
+            "supersedes_document_id": str(supersedes_document_id or ""),
+            "document": _document_to_json(document),
+            "dense_vector": _dense_vector_to_json(vector),
+        }
+        with self._state_lock:
+            appended = self._append_event(row)
+            self.refresh()
+            stored = self.document_for_owner(document.document_id, owner_user_id=owner)
+            if appended and not _same_document_semantics(stored, document):
+                raise AssetRAGError("persisted owner-scoped RAG document changed after append")
+            return stored
+
+    def retrieve_for_owner(
+        self,
+        query: str,
+        *,
+        owner_user_id: str,
+        context: RAGQueryContext,
+        projections: tuple[RAGProjection | str, ...] = (),
+        top_k: int = 5,
+    ) -> list[AssetRAGHit]:
+        with self._state_lock:
+            self.refresh()
+            return ResearchAssetRAGIndex.retrieve_for_owner(
+                self,
+                query,
+                owner_user_id=owner_user_id,
+                context=context,
+                projections=projections,
+                top_k=top_k,
+            )
+
+    def vector_search_for_owner(
+        self,
+        query: str,
+        *,
+        owner_user_id: str,
+        context: RAGQueryContext,
+        projections: tuple[RAGProjection | str, ...] = (),
+        top_k: int = 5,
+    ) -> list[AssetRAGHit]:
+        with self._state_lock:
+            self.refresh()
+            return ResearchAssetRAGIndex.vector_search_for_owner(
+                self,
+                query,
+                owner_user_id=owner_user_id,
+                context=context,
+                projections=projections,
+                top_k=top_k,
+            )
+
+    def dense_vector_search_for_owner(
+        self,
+        query: str,
+        *,
+        owner_user_id: str,
+        context: RAGQueryContext,
+        projections: tuple[RAGProjection | str, ...] = (),
+        top_k: int = 5,
+    ) -> list[AssetRAGHit]:
+        with self._state_lock:
+            self.refresh()
+            return ResearchAssetRAGIndex.dense_vector_search_for_owner(
+                self,
+                query,
+                owner_user_id=owner_user_id,
+                context=context,
+                projections=projections,
+                top_k=top_k,
+            )
+
     def record_agent_usage(
         self,
         *,
@@ -627,6 +1616,60 @@ class PersistentResearchAssetRAGIndex(ResearchAssetRAGIndex):
             }
         )
         return usage
+
+    def record_usage_for_owner(
+        self,
+        *,
+        owner_user_id: str,
+        agent_id: str,
+        workflow_ref: str,
+        tool_call_ref: str,
+        query: str,
+        context: RAGQueryContext,
+        hits: tuple[AssetRAGHit, ...] | list[AssetRAGHit],
+        purpose: str,
+    ) -> StrictAgentRAGUsage:
+        owner = self._owner(owner_user_id)
+        with self._state_lock:
+            usage = ResearchAssetRAGIndex.record_usage_for_owner(
+                self,
+                owner_user_id=owner,
+                agent_id=agent_id,
+                workflow_ref=workflow_ref,
+                tool_call_ref=tool_call_ref,
+                query=query,
+                context=context,
+                hits=hits,
+                purpose=purpose,
+            )
+            row = {
+                "schema_version": 2,
+                "event_type": "owner_usage_recorded",
+                "owner_user_id": owner,
+                "usage": _strict_usage_to_json(usage),
+            }
+            try:
+                appended = self._append_event(row)
+            except Exception:
+                self.refresh()
+                raise
+            if not appended:
+                self.refresh()
+            return self.strict_usage_for_owner(usage.usage_id, owner_user_id=owner)
+
+    def validate_current_usage(
+        self,
+        usage_id: str,
+        *,
+        owner_user_id: str,
+    ) -> RAGConformanceReceipt:
+        with self._state_lock:
+            self.refresh()
+            return ResearchAssetRAGIndex.validate_current_usage(
+                self,
+                usage_id,
+                owner_user_id=owner_user_id,
+            )
 
 
 def _visible(doc: AssetRAGDocument, ctx: RAGQueryContext) -> bool:
@@ -660,6 +1703,7 @@ def _hit(doc: AssetRAGDocument, score: float) -> AssetRAGHit:
         snippet=snippet,
         score=score,
         evidence_label=doc.evidence_label,
+        document_id=doc.document_id,
     )
 
 
@@ -1106,8 +2150,11 @@ __all__ = [
     "RAGPermission",
     "RAGProjection",
     "RAGQueryContext",
+    "RAGConformanceReceipt",
+    "RAGUsageDocumentRef",
     "PersistentResearchAssetRAGIndex",
     "ResearchAssetRAGIndex",
+    "StrictAgentRAGUsage",
     "REGISTRY_AUTOSYNC_DESKS",
     "build_factor_rag_document",
     "build_model_rag_document",

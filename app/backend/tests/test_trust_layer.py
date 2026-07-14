@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import base64
+import json
 from types import SimpleNamespace
 
 import pytest
@@ -276,6 +277,48 @@ def _client_with_trust_store(tmp_path, monkeypatch):
     return TestClient(main.app), store, check_store, pressure_store, approval_store, disclosure_store
 
 
+def _seed_release_approval_dependencies(
+    *,
+    owner_user_id: str = "u1",
+    review: ExternalExpertReviewRecord | None = None,
+    sign_review: bool = True,
+):
+    run, gate, checks = record_trust_pressure_run(
+        release_ref="release:v1",
+        runner_mode="local_deterministic",
+        scenarios=_release_suite_checks(),
+        evidence_refs=("evidence:pressure-run",),
+        validation_result_refs=("pytest:pressure-run",),
+        runner_ref="trust_pressure_run:release:v1",
+    )
+    for check in checks:
+        main.TRUST_RELEASE_CHECK_REGISTRY.record_check(
+            check, owner_user_id=owner_user_id
+        )
+    main.TRUST_RELEASE_GATE_REGISTRY.record_gate(gate, owner_user_id=owner_user_id)
+    main.TRUST_PRESSURE_RUN_REGISTRY.record_run(run, owner_user_id=owner_user_id)
+    expert_review = review or _expert_review()
+    main.TRUST_DISCLOSURE_REGISTRY.record_external_expert_review(
+        expert_review, owner_user_id=owner_user_id
+    )
+    signature = None
+    if sign_review:
+        identity, key = _expert_identity()
+        main.TRUST_EXPERT_SIGNATURE_REGISTRY.record_identity(
+            identity, owner_user_id=owner_user_id
+        )
+        signature = main.TRUST_EXPERT_SIGNATURE_REGISTRY.record_signature(
+            review=expert_review,
+            identity_ref=identity.identity_ref,
+            signature_b64=base64.b64encode(
+                key.sign(external_expert_review_signature_payload(expert_review))
+            ).decode("ascii"),
+            attestation_ref=expert_review.signed_attestation_ref,
+            owner_user_id=owner_user_id,
+        )
+    return run, gate, checks, expert_review, signature
+
+
 def test_strong_claim_requires_evidence():
     decision = validate_trust_claim(_claim(evidence_refs=()))
     assert not decision.accepted
@@ -390,13 +433,14 @@ def test_external_expert_signature_verifies_review_payload_and_rejects_mismatch(
     identity, key = _expert_identity()
     signature_b64 = base64.b64encode(key.sign(external_expert_review_signature_payload(review))).decode("ascii")
     store = PersistentExternalExpertSignatureRegistry(tmp_path / "trust_expert_signatures.jsonl")
-    store.record_identity(identity)
+    store.record_identity(identity, owner_user_id="u1")
 
     record = store.record_signature(
         review=review,
         identity_ref=identity.identity_ref,
         signature_b64=signature_b64,
         attestation_ref=review.signed_attestation_ref,
+        owner_user_id="u1",
     )
     assert record.verified_signature_ref.startswith("verified_signature:")
     assert record.verification_hash.startswith("sha16:")
@@ -413,6 +457,7 @@ def test_external_expert_signature_verifies_review_payload_and_rejects_mismatch(
             identity_ref=identity.identity_ref,
             signature_b64=base64.b64encode(b"bad-signature").decode("ascii"),
             attestation_ref=review.signed_attestation_ref,
+            owner_user_id="u1",
         )
 
 
@@ -463,11 +508,11 @@ def test_release_check_producer_returns_release_gate_ref_prefixes_and_replays(tm
 
     path = tmp_path / "trust_release_checks.jsonl"
     store = PersistentTrustReleaseCheckRegistry(path)
-    store.record_check(record)
+    store.record_check(record, owner_user_id="u1")
 
     reloaded = PersistentTrustReleaseCheckRegistry(path)
-    assert reloaded.check(record.check_ref).check_kind == "mock_honesty_check"
-    assert "raw_response" not in str(reloaded.check(record.check_ref).__dict__)
+    assert reloaded.check(record.check_ref, owner_user_id="u1").check_kind == "mock_honesty_check"
+    assert "raw_response" not in str(reloaded.check(record.check_ref, owner_user_id="u1").__dict__)
 
 
 def test_release_check_rejects_unknown_kind_behavior_mismatch_and_silent_mock(tmp_path):
@@ -480,7 +525,7 @@ def test_release_check_rejects_unknown_kind_behavior_mismatch_and_silent_mock(tm
 
     store = PersistentTrustReleaseCheckRegistry(tmp_path / "trust_release_checks.jsonl")
     with pytest.raises(ValueError, match="trust_release_check_silent_mock_fallback"):
-        store.record_check(_release_check(silent_mock_fallback_used=True))
+        store.record_check(_release_check(silent_mock_fallback_used=True), owner_user_id="u1")
 
     assert not store.path.exists()
 
@@ -624,27 +669,29 @@ def test_complete_trust_layer_contract_accepts_disclosed_delivery():
 def test_persistent_trust_disclosure_registry_replays_records(tmp_path):
     path = tmp_path / "trust_disclosures.jsonl"
     store = PersistentTrustDisclosureRegistry(path)
-    store.record_claim(_claim())
-    store.record_independence_disclosure(_single_user_disclosure())
-    store.record_external_expert_review(_expert_review())
-    store.record_user_autonomy(_user_choice())
+    store.record_claim(_claim(), owner_user_id="u1")
+    store.record_independence_disclosure(_single_user_disclosure(), owner_user_id="u1")
+    store.record_external_expert_review(_expert_review(), owner_user_id="u1")
+    store.record_user_autonomy(_user_choice(), owner_user_id="u1")
 
     reloaded = PersistentTrustDisclosureRegistry(path)
-    assert reloaded.claim("claim:psr_sufficient").claim_label == TrustClaimLabel.EVIDENCE_SUFFICIENT
-    assert reloaded.independence_disclosure("independence:single_user:001").mode == "single_user"
-    assert reloaded.external_expert_review("expert_review:release:v1").verdict == "approved"
-    assert reloaded.user_autonomy("choice:methodology:001").user_final_choice_ref == "user_choice:exploratory"
-    assert "raw_response" not in str(reloaded.claim("claim:psr_sufficient").__dict__)
+    assert reloaded.claim("claim:psr_sufficient", owner_user_id="u1").claim_label == TrustClaimLabel.EVIDENCE_SUFFICIENT
+    assert reloaded.independence_disclosure("independence:single_user:001", owner_user_id="u1").mode == "single_user"
+    assert reloaded.external_expert_review("expert_review:release:v1", owner_user_id="u1").verdict == "approved"
+    assert reloaded.user_autonomy("choice:methodology:001", owner_user_id="u1").user_final_choice_ref == "user_choice:exploratory"
+    assert "raw_response" not in str(reloaded.claim("claim:psr_sufficient", owner_user_id="u1").__dict__)
 
 
 def test_persistent_trust_disclosure_registry_rejects_invalid_without_writing(tmp_path):
     store = PersistentTrustDisclosureRegistry(tmp_path / "trust_disclosures.jsonl")
 
     with pytest.raises(ValueError, match="strong_claim_without_evidence"):
-        store.record_claim(_claim(evidence_refs=()))
+        store.record_claim(_claim(evidence_refs=()), owner_user_id="u1")
 
     with pytest.raises(ValueError, match="external_expert_review_not_external"):
-        store.record_external_expert_review(_expert_review(reviewer_ref="agent:critic"))
+        store.record_external_expert_review(
+            _expert_review(reviewer_ref="agent:critic"), owner_user_id="u1"
+        )
 
     assert not store.path.exists()
 
@@ -652,18 +699,18 @@ def test_persistent_trust_disclosure_registry_rejects_invalid_without_writing(tm
 def test_persistent_trust_release_gate_registry_replays_gate(tmp_path):
     path = tmp_path / "trust_release_gates.jsonl"
     store = PersistentTrustReleaseGateRegistry(path)
-    store.record_gate(_release_gate())
+    store.record_gate(_release_gate(), owner_user_id="u1")
 
     reloaded = PersistentTrustReleaseGateRegistry(path)
-    assert reloaded.gate("release:v1").mock_honesty_check_ref == "mock_check:001"
-    assert reloaded.gates()[0].expert_veto_ref == "expert_veto:001"
+    assert reloaded.gate("release:v1", owner_user_id="u1").mock_honesty_check_ref == "mock_check:001"
+    assert reloaded.gates(owner_user_id="u1")[0].expert_veto_ref == "expert_veto:001"
 
 
 def test_persistent_trust_release_gate_registry_rejects_invalid_without_writing(tmp_path):
     store = PersistentTrustReleaseGateRegistry(tmp_path / "trust_release_gates.jsonl")
 
     with pytest.raises(ValueError, match="trust_release_gate_missing_check"):
-        store.record_gate(_release_gate(expert_veto_ref=None))
+        store.record_gate(_release_gate(expert_veto_ref=None), owner_user_id="u1")
 
     assert not store.path.exists()
 
@@ -671,19 +718,19 @@ def test_persistent_trust_release_gate_registry_rejects_invalid_without_writing(
 def test_persistent_trust_pressure_run_registry_replays_run(tmp_path):
     path = tmp_path / "trust_pressure_runs.jsonl"
     store = PersistentTrustPressureRunRegistry(path)
-    store.record_run(_pressure_run())
+    store.record_run(_pressure_run(), owner_user_id="u1")
 
     reloaded = PersistentTrustPressureRunRegistry(path)
-    assert reloaded.run("trust_pressure_run:release:v1").runner_mode == "local_deterministic"
-    assert len(reloaded.runs()[0].check_refs) == 6
-    assert "raw_response" not in str(reloaded.runs()[0].__dict__)
+    assert reloaded.run("trust_pressure_run:release:v1", owner_user_id="u1").runner_mode == "local_deterministic"
+    assert len(reloaded.runs(owner_user_id="u1")[0].check_refs) == 6
+    assert "raw_response" not in str(reloaded.runs(owner_user_id="u1")[0].__dict__)
 
 
 def test_persistent_trust_pressure_run_registry_rejects_invalid_without_writing(tmp_path):
     store = PersistentTrustPressureRunRegistry(tmp_path / "trust_pressure_runs.jsonl")
 
     with pytest.raises(ValueError, match="trust_pressure_run_unsafe_mode"):
-        store.record_run(_pressure_run(runner_mode="production"))
+        store.record_run(_pressure_run(runner_mode="production"), owner_user_id="u1")
 
     assert not store.path.exists()
 
@@ -691,27 +738,105 @@ def test_persistent_trust_pressure_run_registry_rejects_invalid_without_writing(
 def test_persistent_trust_release_approval_registry_replays_approval(tmp_path):
     path = tmp_path / "trust_release_approvals.jsonl"
     store = PersistentTrustReleaseApprovalRegistry(path)
-    store.record_approval(_release_approval())
+    store.record_approval(_release_approval(), owner_user_id="u1")
 
     reloaded = PersistentTrustReleaseApprovalRegistry(path)
-    assert reloaded.approval("trust_release_approval:release:v1").verdict == "approved"
-    assert reloaded.approvals()[0].signed_approval_ref == "attestation:release-approval:001"
-    assert "raw_response" not in str(reloaded.approvals()[0].__dict__)
+    assert reloaded.approval("trust_release_approval:release:v1", owner_user_id="u1").verdict == "approved"
+    assert reloaded.approvals(owner_user_id="u1")[0].signed_approval_ref == "attestation:release-approval:001"
+    assert "raw_response" not in str(reloaded.approvals(owner_user_id="u1")[0].__dict__)
 
 
 def test_persistent_trust_release_approval_registry_rejects_invalid_without_writing(tmp_path):
     store = PersistentTrustReleaseApprovalRegistry(tmp_path / "trust_release_approvals.jsonl")
 
     with pytest.raises(ValueError, match="trust_release_approval_signature_missing"):
-        store.record_approval(_release_approval(signed_approval_ref=None))
+        store.record_approval(_release_approval(signed_approval_ref=None), owner_user_id="u1")
 
     assert not store.path.exists()
+
+
+def test_trust_release_registries_isolate_same_refs_by_stable_owner_and_reject_collision(tmp_path):
+    path = tmp_path / "trust_release_checks.jsonl"
+    store = PersistentTrustReleaseCheckRegistry(path)
+    alice = _release_check()
+    bob = _release_check(
+        scenario_ref="scenario:bob",
+        expected_behavior_ref="behavior:bob",
+        observed_behavior_ref="behavior:bob",
+        source_hash="sha256:bob",
+    )
+    store.record_check(alice, owner_user_id="alice")
+    store.record_check(bob, owner_user_id="bob")
+    store.record_check(alice, owner_user_id="alice")
+
+    assert store.check(alice.check_ref, owner_user_id="alice") == alice
+    assert store.check(bob.check_ref, owner_user_id="bob") == bob
+    assert len(store.checks(owner_user_id="alice")) == 1
+    assert len(store.checks(owner_user_id="bob")) == 1
+    assert len(path.read_text(encoding="utf-8").splitlines()) == 2
+    rows = [json.loads(line) for line in path.read_text(encoding="utf-8").splitlines()]
+    assert {row["owner_user_id"] for row in rows} == {"alice", "bob"}
+    assert {row["schema_version"] for row in rows} == {2}
+
+    with pytest.raises(ValueError, match="owner-enveloped trust record collision"):
+        store.record_check(bob, owner_user_id="alice")
+    assert len(path.read_text(encoding="utf-8").splitlines()) == 2
+
+
+def test_trust_release_registry_rejects_ownerless_v1_history(tmp_path):
+    path = tmp_path / "trust_release_gates.jsonl"
+    path.write_text(
+        json.dumps(
+            {
+                "schema_version": 1,
+                "event_type": "trust_release_gate_recorded",
+                "release_gate": _payload(_release_gate()),
+            }
+        )
+        + "\n",
+        encoding="utf-8",
+    )
+
+    with pytest.raises(ValueError, match="invalid persisted Trust Release Gate row"):
+        PersistentTrustReleaseGateRegistry(path)
+
+
+def test_expert_signature_dependencies_cannot_cross_owner_boundary(tmp_path):
+    review = _expert_review()
+    identity, key = _expert_identity()
+    disclosure_store = PersistentTrustDisclosureRegistry(tmp_path / "trust_disclosures.jsonl")
+    signature_store = PersistentExternalExpertSignatureRegistry(
+        tmp_path / "trust_expert_signatures.jsonl"
+    )
+    disclosure_store.record_external_expert_review(review, owner_user_id="alice")
+    signature_store.record_identity(identity, owner_user_id="alice")
+
+    with pytest.raises(KeyError):
+        signature_store.record_signature(
+            review=review,
+            identity_ref=identity.identity_ref,
+            signature_b64=base64.b64encode(
+                key.sign(external_expert_review_signature_payload(review))
+            ).decode("ascii"),
+            owner_user_id="bob",
+        )
+    with pytest.raises(KeyError):
+        disclosure_store.external_expert_review(review.review_ref, owner_user_id="bob")
+    assert signature_store.signatures(owner_user_id="alice") == []
+    assert signature_store.signatures(owner_user_id="bob") == []
 
 
 def test_trust_release_gate_api_records_summary(tmp_path, monkeypatch):
     client, _store, _check_store, _pressure_store, _approval_store, _disclosure_store = _client_with_trust_store(tmp_path, monkeypatch)
     try:
-        response = client.post("/api/research-os/trust/release_gates", json=_payload(_release_gate()))
+        suite = client.post(
+            "/api/research-os/trust/release_check_suites",
+            json={"release_ref": "release:v1", "checks": _release_suite_checks()},
+        )
+        assert suite.status_code == 200, suite.text
+        response = client.post(
+            "/api/research-os/trust/release_gates", json=suite.json()["release_gate"]
+        )
         assert response.status_code == 200, response.text
         assert response.json() == {"release_ref": "release:v1", "recorded_by": "u1"}
 
@@ -720,7 +845,9 @@ def test_trust_release_gate_api_records_summary(tmp_path, monkeypatch):
         body = summary.json()
         assert body["user"] == "u1"
         assert body["release_gate_total"] == 1
-        assert body["release_gates"][0]["anti_flattery_pressure_test_ref"] == "trust_test:anti_flattery"
+        assert body["release_gates"][0]["anti_flattery_pressure_test_ref"].startswith(
+            "trust_test:anti_flattery:"
+        )
     finally:
         main.app.dependency_overrides.pop(require_user_dependency, None)
 
@@ -787,7 +914,7 @@ def test_trust_disclosure_apis_record_summary_and_reject_bad_claim(tmp_path, mon
         )
         assert rejected.status_code == 422
         assert "strong_claim_without_evidence" in rejected.json()["detail"]
-        assert len(disclosure_store.claims()) == 1
+        assert len(disclosure_store.claims(owner_user_id="u1")) == 1
 
         rejected_expert = client.post(
             "/api/research-os/trust/expert_reviews",
@@ -806,7 +933,7 @@ def test_trust_disclosure_apis_record_summary_and_reject_bad_claim(tmp_path, mon
         )
         assert rejected_expert.status_code == 422
         assert "external_expert_review_not_external" in rejected_expert.json()["detail"]
-        assert len(disclosure_store.external_expert_reviews()) == 1
+        assert len(disclosure_store.external_expert_reviews(owner_user_id="u1")) == 1
 
         summary = client.get("/api/research-os/trust/summary")
         assert summary.status_code == 200
@@ -829,7 +956,9 @@ def test_trust_expert_identity_and_signature_apis_record_summary_and_reject_bad_
     )
     try:
         review = _expert_review()
-        main.TRUST_DISCLOSURE_REGISTRY.record_external_expert_review(review)
+        main.TRUST_DISCLOSURE_REGISTRY.record_external_expert_review(
+            review, owner_user_id="u1"
+        )
         identity, key = _expert_identity()
         identity_response = client.post(
             "/api/research-os/trust/expert_identities",
@@ -868,7 +997,7 @@ def test_trust_expert_identity_and_signature_apis_record_summary_and_reject_bad_
         )
         assert rejected.status_code == 422
         assert "external_expert_signature_invalid" in rejected.json()["detail"]
-        assert len(main.TRUST_EXPERT_SIGNATURE_REGISTRY.signatures()) == 1
+        assert len(main.TRUST_EXPERT_SIGNATURE_REGISTRY.signatures(owner_user_id="u1")) == 1
 
         summary = client.get("/api/research-os/trust/summary")
         assert summary.status_code == 200
@@ -915,7 +1044,7 @@ def test_trust_release_check_api_records_summary_and_rejects_bad_check(tmp_path,
         )
         assert rejected.status_code == 422
         assert "trust_release_check_behavior_mismatch" in rejected.json()["detail"]
-        assert len(check_store.checks()) == 1
+        assert len(check_store.checks(owner_user_id="u1")) == 1
 
         summary = client.get("/api/research-os/trust/summary")
         assert summary.status_code == 200
@@ -947,8 +1076,8 @@ def test_trust_release_check_suite_api_records_checks_gate_and_summary(tmp_path,
             "cold_start_honesty_check",
         }
         assert body["release_gate"]["expert_veto_ref"].startswith("expert_veto:")
-        assert len(check_store.checks()) == 6
-        assert gate_store.gate("release:v2").mock_honesty_check_ref.startswith("mock_check:")
+        assert len(check_store.checks(owner_user_id="u1")) == 6
+        assert gate_store.gate("release:v2", owner_user_id="u1").mock_honesty_check_ref.startswith("mock_check:")
 
         summary = client.get("/api/research-os/trust/summary")
         assert summary.status_code == 200
@@ -974,8 +1103,8 @@ def test_trust_release_check_suite_api_rejects_incomplete_or_duplicate_without_p
         )
         assert rejected_missing.status_code == 422
         assert "trust_release_check_suite_missing_kind" in rejected_missing.json()["detail"]
-        assert check_store.checks() == []
-        assert gate_store.gates() == []
+        assert check_store.checks(owner_user_id="u1") == []
+        assert gate_store.gates(owner_user_id="u1") == []
 
         duplicate = _release_suite_checks()
         duplicate[-1] = {**duplicate[0], "scenario_ref": "scenario:duplicate"}
@@ -985,8 +1114,8 @@ def test_trust_release_check_suite_api_rejects_incomplete_or_duplicate_without_p
         )
         assert rejected_duplicate.status_code == 422
         assert "trust_release_check_suite_duplicate_kind" in rejected_duplicate.json()["detail"]
-        assert check_store.checks() == []
-        assert gate_store.gates() == []
+        assert check_store.checks(owner_user_id="u1") == []
+        assert gate_store.gates(owner_user_id="u1") == []
     finally:
         main.app.dependency_overrides.pop(require_user_dependency, None)
 
@@ -1010,9 +1139,9 @@ def test_trust_pressure_run_api_records_runner_checks_gate_and_summary(tmp_path,
         assert body["runner_ref"].startswith("trust_pressure_run:")
         assert len(body["release_checks"]) == 6
         assert body["release_gate"]["release_ref"] == "release:v4"
-        assert len(check_store.checks()) == 6
-        assert gate_store.gate("release:v4").cold_start_honesty_check_ref.startswith("cold_start_check:")
-        assert pressure_store.runs()[0].release_ref == "release:v4"
+        assert len(check_store.checks(owner_user_id="u1")) == 6
+        assert gate_store.gate("release:v4", owner_user_id="u1").cold_start_honesty_check_ref.startswith("cold_start_check:")
+        assert pressure_store.runs(owner_user_id="u1")[0].release_ref == "release:v4"
 
         summary = client.get("/api/research-os/trust/summary")
         assert summary.status_code == 200
@@ -1042,9 +1171,9 @@ def test_trust_pressure_run_api_rejects_failed_scenario_without_partial_write(tm
         )
         assert rejected.status_code == 422
         assert "trust_pressure_run_failed_scenario" in rejected.json()["detail"]
-        assert check_store.checks() == []
-        assert gate_store.gates() == []
-        assert pressure_store.runs() == []
+        assert check_store.checks(owner_user_id="u1") == []
+        assert gate_store.gates(owner_user_id="u1") == []
+        assert pressure_store.runs(owner_user_id="u1") == []
     finally:
         main.app.dependency_overrides.pop(require_user_dependency, None)
 
@@ -1054,9 +1183,8 @@ def test_trust_release_approval_api_records_approval_and_summary(tmp_path, monke
         tmp_path, monkeypatch
     )
     try:
-        gate_store.record_gate(_release_gate())
-        pressure_store.record_run(_pressure_run())
-        disclosure_store.record_external_expert_review(_expert_review())
+        _run, _gate, _checks, _review, signature = _seed_release_approval_dependencies()
+        assert signature is not None
 
         response = client.post(
             "/api/research-os/trust/release_approvals",
@@ -1069,7 +1197,7 @@ def test_trust_release_approval_api_records_approval_and_summary(tmp_path, monke
                 "approval_protocol_ref": "protocol:release-approval:v1",
                 "verdict": "approved",
                 "evidence_refs": ["evidence:release-approval"],
-                "signed_approval_ref": "attestation:release-approval:001",
+                "signed_approval_ref": signature.verified_signature_ref,
             },
         )
         assert response.status_code == 200, response.text
@@ -1077,7 +1205,7 @@ def test_trust_release_approval_api_records_approval_and_summary(tmp_path, monke
         assert body["recorded_by"] == "u1"
         assert body["approval_ref"].startswith("trust_release_approval:")
         assert body["release_approval"]["pressure_run_ref"] == "trust_pressure_run:release:v1"
-        assert len(approval_store.approvals()) == 1
+        assert len(approval_store.approvals(owner_user_id="u1")) == 1
 
         summary = client.get("/api/research-os/trust/summary")
         assert summary.status_code == 200
@@ -1094,10 +1222,13 @@ def test_trust_release_approval_api_rejects_unknown_ref_and_bad_expert_without_w
         tmp_path, monkeypatch
     )
     try:
-        gate_store.record_gate(_release_gate())
-        pressure_store.record_run(_pressure_run())
-        disclosure_store.record_external_expert_review(
-            _expert_review(verdict="needs_revision", veto_reason_refs=("reason:revise",), signed_attestation_ref=None)
+        _seed_release_approval_dependencies(
+            review=_expert_review(
+                verdict="needs_revision",
+                veto_reason_refs=("reason:revise",),
+                signed_attestation_ref=None,
+            ),
+            sign_review=False,
         )
 
         unknown = client.post(
@@ -1133,6 +1264,37 @@ def test_trust_release_approval_api_rejects_unknown_ref_and_bad_expert_without_w
         )
         assert rejected.status_code == 422
         assert "trust_release_approval_expert_review_not_approved" in rejected.json()["detail"]
-        assert approval_store.approvals() == []
+        assert approval_store.approvals(owner_user_id="u1") == []
+    finally:
+        main.app.dependency_overrides.pop(require_user_dependency, None)
+
+
+def test_trust_summary_and_same_ref_writes_are_isolated_by_stable_user_id(tmp_path, monkeypatch):
+    client, _gate_store, _check_store, _pressure_store, _approval_store, _disclosure_store = (
+        _client_with_trust_store(tmp_path, monkeypatch)
+    )
+    payload = {"trust_claim": _payload(_claim())}
+    try:
+        first = client.post("/api/research-os/trust/claims", json=payload)
+        assert first.status_code == 200, first.text
+
+        main.app.dependency_overrides[require_user_dependency] = lambda: SimpleNamespace(
+            username="same-display-name",
+            user_id="u2",
+        )
+        empty = client.get("/api/research-os/trust/summary")
+        assert empty.status_code == 200
+        assert empty.json()["trust_claim_total"] == 0
+        second = client.post("/api/research-os/trust/claims", json=payload)
+        assert second.status_code == 200, second.text
+        assert client.get("/api/research-os/trust/summary").json()["trust_claim_total"] == 1
+
+        main.app.dependency_overrides[require_user_dependency] = lambda: SimpleNamespace(
+            username="u1-renamed",
+            user_id="u1",
+        )
+        restored = client.get("/api/research-os/trust/summary")
+        assert restored.status_code == 200
+        assert restored.json()["trust_claim_total"] == 1
     finally:
         main.app.dependency_overrides.pop(require_user_dependency, None)

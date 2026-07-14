@@ -1,57 +1,16 @@
-"""C-S17-RDP-PROMOTE-ENFORCE · §17 RDP 发版 check（插 SA-3 promote 门链）。
+"""§17 RDP gate for formal promotion.
 
-这张卡只建 PARALLEL-SAFE 的 check + 注册函数——把（已建的）§17 Research Delivery Package 四拒绝门
-经 SA-3 门链接到 promote 收口，关掉 codemap C-S17-RDP-PROMOTE-ENFORCE 点出的洞：正式因子/模型/信号/
-StrategyBook 晋级**必须能追溯到一套完整 RDP**（GOAL §17 北极星总闸·`delivery/rdp_gate.py` 4 门），但
-今天 `validate_rdp` / `require_valid_rdp` **未在真 promote 决定上被调**——追不到完整 RDP（缺 manifest /
-artifact hash / reproducibility command / DatasetVersion / IngestionSkill ref / 未验证残余）的晋级今天
-能溜过 release。**不**在此串进 `ide/promote.py`（那是后续 CENTER-SERIAL 的一次性改·两步法）；本模块是
-新建孤立件，中心后续经 `gate_registry` 调 `register_section17_rdp_gate(...)`。
+The check delegates RDP completeness, lineage, residual, traceability, and
+reproduction-receipt decisions to :mod:`app.delivery.rdp_gate`.  A promotion
+claim requires an exact current receipt resolved from the trusted persistent
+issuer store and bound to the owner, RDP manifest, artifact, structured
+reproduction spec, and source IDE result.  The receipt is
+stored at run-manifest top level to avoid a receipt/manifest hash cycle.
 
-═══ 复用不重造（RULES §1 单一源）═══
-§17 完整性/追溯判定的唯一源是交付层 `delivery.rdp_gate`：本模块**只**做 manifest(dict)→canonical
-`RDPManifest`/`PromotionClaim` 的薄适配（全程复用 `delivery.rdp` 自己的 `RDPManifest.from_dict` 适配器·
-rdp_id 走单一身份源 `lineage.ids.content_hash`），再把判定**整体委托**给 canonical 聚合器
-`validate_rdp(rdp, promotion=...)`——它内部循环 `gate_manifest_completeness`（manifest/artifact_hash/
-reproducibility_command）/ `gate_dataset_lineage`（DatasetVersion + IngestionSkill）/
-`gate_unverified_residual`（诚实残余闸）/ `gate_promotion_traceability`（晋级可追溯·仅当给 promotion）。
-本模块**绝不**重写任何一条 RDP 门判定，连缺字段码都直接搬运 rdp_gate 的原码（missing = 各门 outcome
-原 field 名）。
-
-═══ 4 道拒绝门 → rdp_gate 缺字段（construction-map C-S17 的可证伪点）═══
-  - manifest 完整性：缺 asset_ref / artifact_hash / reproducibility_command ⇒ ok=False（exact 缺项）。
-  - 数据血统：缺可解析 DatasetVersion 或 IngestionSkill ref（空壳引用不算）⇒ ok=False。
-  - 未验证残余：`unverified_residual=None`（未声明）⇒ ok=False；显式零残余却无 residual_attestation ⇒ 拒。
-  - 晋级可追溯：晋级断言追不到一份**关于本资产**的有效 RDP（无 rdp / 空 rdp_ref / 张冠李戴 / 追到残缺
-    RDP）⇒ ok=False。
-
-═══ 职责分离（gaming-proof）═══
-check **只懂「这个 promote run 的 §17 RDP 完整且可追溯否」**，返回 `GateCheckResult(ok, reason, missing)`
-——它**不**决定自己是 advisory 还是 enforce。advisory/enforce 由 SA-2 策略（`governance.enforcement_policy`）
-经门链统一盖章：仅当 `s17_rdp_runjson_producers`（§17 RDP 结构进 manifest 的接线测试·把真血统/真 artifact
-hash 写进 manifest 那层）转绿，门才从 advisory 翻 enforce（LOCKED 决策 1）。check 连 mode 字段都没有 →
-**无法自封 enforce 绕过 producer 绿灯门**。
-
-═══ 诚实限界（RULES §3·设计极限·非残余）═══
-`section17_rdp` 缺省（或 rdp/promotion 均未声明）→ `ok=True`，语义是**「未声明 §17 RDP 结构 ⇒ 无可证伪
-RDP 违例」**，**不**代表「整本 run 已查清 §17」。「是否真有完整 RDP 被如实写进 manifest」由 producer
-绿灯门（`s17_rdp_runjson_producers` 接线测试 = 未来 C-S17-RUNJSON-PRODUCERS）负责——producer 未绿时本门
-只 advisory，绝不在未接线门上误拒诚实 run。节存在但格式非法（section 非 dict / rdp|promotion 子对象非
-dict / RDP 字段解析炸）→ fail-closed 记 ok=False（codex 在 C-S9 找到的「非 list/非 dict 静默 skip 让违例
-溜走」洞，本模块同款堵死·绝不 fail-open）。**晋级断言在场却无任何 RDP 可追溯**（self-promote without
-RDP）→ 经 canonical `gate_promotion_traceability(promotion, None)` 判 ok=False（不当「未声明」放行）。
-
-═══ 委托边界（诚实限界·非本门 fail-open）═══
-本门**严格只与 `delivery.rdp_gate.validate_rdp` 同强**——它判过的本门判过，它放过的本门放过。rdp_gate
-对「present 即算有」的边界（如 `unverified_residual=()` + residual_attestation 在场 = 显式零残余放行）
-属 rdp_gate 单一源语义，本门遵「reuse·不擅改 rdp_gate」只忠实委托·绝不在网关层重写判定（= 防 §1 单一源
-漂移）。
-
-═══ 冷导入安全 ═══
-顶层只 import 同包 `promote_gate_chain`（cold-safe·已证）与交付层子模块 `delivery.rdp` / `delivery.rdp_gate`
-（经 `python -c` 实证冷导入安全·只触 lineage.ids·不触 governance 冷循环）。**不**在顶层 import governance
-（SA-2 符号由门链在 evaluate 期惰性载入）。**不**碰 `release_gate/__init__.py`（既有冷导入环·SA-3 note）
-——消费方从本子模块直接 import。模块**无 import 期副作用**（不 auto-register）。
+The free-form ``reproducibility_command`` remains documentary and is never
+executed here.  Missing sections remain an honest advisory surface until the
+canonical §17 producer is green; malformed or declared-but-incomplete sections
+fail closed.  A self-hashed receipt without the trusted store is also red.
 """
 
 from __future__ import annotations
@@ -61,6 +20,8 @@ from typing import Any
 
 from ..delivery.rdp import PromotionClaim, RDPManifest
 from ..delivery.rdp_gate import gate_promotion_traceability, validate_rdp
+from ..research_os.rdp_reproduction import reproduction_receipt_from_dict
+from ..research_os.rdp_reproduction import PersistentRDPReproductionReceiptStore
 from .promote_gate_chain import GateCheckResult, PromoteGateChain, RunManifest
 
 # —— 门身份 + 证据 producer key（中心注册/绿灯账据此钉）。gate_name 与门链其它节门同族短名 ——
@@ -71,6 +32,10 @@ SECTION17_RDP_PRODUCER_KEY = "s17_rdp_runjson_producers"
 #   {"rdp": {...RDPManifest 字段...}, "promotion": {...PromotionClaim 字段·可选...}}
 # rdp 缺省 ⇒ 未声明；promotion 在场而 rdp 缺 ⇒ 晋级追不到 RDP ⇒ 拒（gate4 语义）。
 SECTION17_RDP_MANIFEST_KEY = "section17_rdp"
+# Top-level proof remains outside the content-addressed RDP manifest to avoid a
+# receipt↔manifest hash cycle.  The final run manifest and §17 verdict both bind
+# this exact payload, so the existing promotion-verification digest covers it.
+RDP_REPRODUCTION_RECEIPT_MANIFEST_KEY = "rdp_reproduction_receipt"
 # 子键名（producer 契约）。
 _RDP_KEY = "rdp"
 _PROMOTION_KEY = "promotion"
@@ -79,7 +44,9 @@ _NOTHING_DECLARED = (
     "§17：manifest 未声明 section17_rdp（rdp/promotion 均缺）—— 无可证伪 RDP 违例"
     "（诚实限界：非『整本已查清』·查清由 producer 绿灯门负责）"
 )
-_ALL_SATISFIED = "§17 RDP 完整且可追溯（已声明 RDP 过全部拒绝门）"
+_ALL_SATISFIED = (
+    "§17 RDP 完整且可追溯（正式晋级另已验证当前、内容绑定的 ReproductionReceipt）"
+)
 
 
 def _build_promotion(d: Mapping[str, Any]) -> PromotionClaim:
@@ -102,7 +69,11 @@ def _build_promotion(d: Mapping[str, Any]) -> PromotionClaim:
 # ════════════════════════════════════════════════════════════════════════════
 # 公开 check：promote manifest → GateCheckResult（门链插它）
 # ════════════════════════════════════════════════════════════════════════════
-def section17_rdp_check(manifest: RunManifest) -> GateCheckResult:
+def section17_rdp_check(
+    manifest: RunManifest,
+    *,
+    reproduction_receipt_store: PersistentRDPReproductionReceiptStore | None = None,
+) -> GateCheckResult:
     """§17 RDP 发版 check：把 RDP 喂 delivery canonical 4 门·返回完整且可追溯否。
 
     - 节缺省 / rdp&promotion 均缺 → ok=True（无可证伪违例·诚实限界见模块 docstring）。
@@ -129,6 +100,7 @@ def section17_rdp_check(manifest: RunManifest) -> GateCheckResult:
 
     rdp_dict = section.get(_RDP_KEY)
     promo_dict = section.get(_PROMOTION_KEY)
+    receipt_dict = manifest.get(RDP_REPRODUCTION_RECEIPT_MANIFEST_KEY)
 
     # rdp 与 promotion 均未声明 → 诚实限界（producer 绿灯门才决定「§17 是否必须在场」）。
     if rdp_dict is None and promo_dict is None:
@@ -163,6 +135,12 @@ def section17_rdp_check(manifest: RunManifest) -> GateCheckResult:
     # —— 构造 canonical RDP（薄适配·fail-closed）——
     # RDPManifest.from_dict 重算 rdp_id（弃外部传入·防伪造 id）；asset_kind 非法/缺必填 → raise → 这里
     # fail-closed 记 unparseable（不静默放行半成品冒充正式交付）。
+    if not rdp_dict or not (rdp_dict.get("asset_ref") or rdp_dict.get("asset_refs")):
+        return GateCheckResult(
+            ok=False,
+            reason="§17 RDP 缺资产身份，无法构造正式交付 manifest（fail-closed·视为未过）",
+            missing=("section17_rdp_unparseable",),
+        )
     try:
         rdp = RDPManifest.from_dict(dict(rdp_dict))
     except Exception as exc:  # noqa: BLE001 — 构造炸 → fail-closed（记违例·不静默 ok=True·不炸整链）
@@ -172,11 +150,52 @@ def section17_rdp_check(manifest: RunManifest) -> GateCheckResult:
             missing=("section17_rdp_unparseable",),
         )
 
+    reproduction_receipt = None
+    if promotion is not None:
+        if receipt_dict is not None and not isinstance(receipt_dict, Mapping):
+            return GateCheckResult(
+                ok=False,
+                reason="§17 RDP ReproductionReceipt 格式非法（应为对象/dict）—— fail-closed 视为未过",
+                missing=("rdp_reproduction_receipt_malformed",),
+            )
+        if isinstance(receipt_dict, Mapping):
+            try:
+                reproduction_receipt = reproduction_receipt_from_dict(receipt_dict)
+            except Exception as exc:  # noqa: BLE001 - forged/malformed receipt is red.
+                return GateCheckResult(
+                    ok=False,
+                    reason=(
+                        "§17 RDP ReproductionReceipt 无法构造（fail-closed·视为未过）: "
+                        f"{type(exc).__name__}: {exc}"
+                    ),
+                    missing=("rdp_reproduction_receipt_unparseable",),
+                )
+
+    source = manifest.get("source")
+    source_owner_user_id = (
+        str(source.get("owner_user_id") or "").strip()
+        if isinstance(source, Mapping)
+        else ""
+    )
+    source_result_content_hash = (
+        str(source.get("result_content_hash") or "").strip()
+        if isinstance(source, Mapping)
+        else ""
+    )
+
     # —— 完整性 + 追溯判定**单一源**：全委托 rdp_gate.validate_rdp（gate1-3 恒跑·gate4 仅当 promotion 在场）——
     # ★ mutation 目标（见 test 文件头三态）：把下面 `if validation.ok:` 弱化成 `if True:`（无视 canonical
     #   裁定）→ incomplete RDP 溜成 ok=True → 对抗测试转 RED → 还原 → GREEN。
     try:
-        validation = validate_rdp(rdp, promotion=promotion)
+        validation = validate_rdp(
+            rdp,
+            promotion=promotion,
+            reproduction_receipt=reproduction_receipt,
+            reproduction_owner_user_id=source_owner_user_id,
+            source_result_content_hash=source_result_content_hash,
+            require_reproduction_receipt=promotion is not None,
+            reproduction_receipt_store=reproduction_receipt_store,
+        )
     except Exception as exc:  # noqa: BLE001 — 判定炸 → fail-closed（记违例·绝不静默 ok=True 放行）
         return GateCheckResult(
             ok=False,
@@ -194,7 +213,10 @@ def section17_rdp_check(manifest: RunManifest) -> GateCheckResult:
 
 
 def register_section17_rdp_gate(
-    chain: PromoteGateChain, *, enforce_intent: bool = True
+    chain: PromoteGateChain,
+    *,
+    enforce_intent: bool = True,
+    reproduction_receipt_store: PersistentRDPReproductionReceiptStore | None = None,
 ) -> None:
     """把 §17 RDP 发版 check 注册进给定门链（中心后续经 gate_registry 串 promote.py 时调一次）。
 
@@ -209,7 +231,10 @@ def register_section17_rdp_gate(
 
     chain.register(
         gate_name=SECTION17_RDP_GATE_NAME,
-        check=section17_rdp_check,
+        check=lambda manifest: section17_rdp_check(
+            manifest,
+            reproduction_receipt_store=reproduction_receipt_store,
+        ),
         required_producer=SECTION17_RDP_PRODUCER_KEY,
         enforce_intent=enforce_intent,
     )
@@ -219,6 +244,7 @@ __all__ = [
     "SECTION17_RDP_GATE_NAME",
     "SECTION17_RDP_PRODUCER_KEY",
     "SECTION17_RDP_MANIFEST_KEY",
+    "RDP_REPRODUCTION_RECEIPT_MANIFEST_KEY",
     "section17_rdp_check",
     "register_section17_rdp_gate",
 ]

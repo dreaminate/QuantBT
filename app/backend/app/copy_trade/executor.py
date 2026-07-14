@@ -20,6 +20,7 @@
 from __future__ import annotations
 
 import logging
+import hashlib
 from typing import Any, Protocol
 
 from ..execution.base import ExecutionVenue, Order
@@ -35,12 +36,27 @@ from ..security.gate.policy import (
     gate_hash,
 )
 from ..security.keystore import KeystoreError, SecureKeystore
+from ..security.mainnet_guards import MainnetGuardError, MainnetGuardsService
 from .beta import CopyTradeBetaService, IdempotencyViolation, apply_follower_leverage_cap
 from .gate_binding import follower_gate, follower_tier, live_requires_deps, relay_nonce
 from .service import CopyTradeService, Follower, Signal
+from .formal_execution import CopyTradeFormalError, PreparedCopyTradeExecution
 
 
 logger = logging.getLogger(__name__)
+
+
+def copy_trade_quota_reservation_ref(
+    signal_id: str,
+    follower_id: str,
+    client_order_id: str,
+) -> str:
+    """Canonical quota identity shared by the hot path and crash recovery."""
+
+    values = tuple(str(value or "").strip() for value in (signal_id, follower_id, client_order_id))
+    if not all(values):
+        raise ValueError("copy-trade quota identity requires signal, follower, and client order refs")
+    return "mainnet_quota_" + hashlib.sha256("::".join(values).encode("utf-8")).hexdigest()
 
 
 def _fail_closed_decision(tier: TrustTier) -> PolicyDecision:
@@ -55,6 +71,12 @@ class VenueFactory(Protocol):
     """构造 follower 自己的 BinanceVenue。注入式，方便测试 mock。"""
 
     def __call__(self, follower: Follower, keystore: SecureKeystore) -> ExecutionVenue | None: ...
+
+
+class MainnetReadinessProvider(Protocol):
+    """Authoritative process readiness used before any live-order sensitive surface."""
+
+    def __call__(self) -> bool: ...
 
 
 class SignalRelayer:
@@ -77,6 +99,9 @@ class SignalRelayer:
         broker: KeyBroker | None = None,
         nonce_ledger: NonceLedger | None = None,
         on_gate_event: Any = None,
+        formal_coordinator: Any = None,
+        mainnet_guards: MainnetGuardsService | None = None,
+        mainnet_readiness_provider: MainnetReadinessProvider | None = None,
     ) -> None:
         self._ct = copy_trade
         self._keystore = keystore
@@ -88,6 +113,9 @@ class SignalRelayer:
         self._broker = broker
         self._nonce_ledger = nonce_ledger
         self._on_gate_event = on_gate_event
+        self._formal = formal_coordinator
+        self._mainnet_guards = mainnet_guards
+        self._mainnet_readiness_provider = mainnet_readiness_provider
 
     def relay(self, signal: Signal) -> list[dict[str, Any]]:
         """relay 单个 signal 到所有 active follower。返回每个 follower 的执行结果摘要。"""
@@ -106,7 +134,17 @@ class SignalRelayer:
             results.append(result)
         return results
 
-    def _place(self, venue: ExecutionVenue, order: Order, signal: Signal, f: Follower) -> Any:
+    def _place(
+        self,
+        venue: ExecutionVenue,
+        order: Order,
+        signal: Signal,
+        f: Follower,
+        *,
+        prepared: PreparedCopyTradeExecution | None = None,
+        before_lease: Any = None,
+        before_submit: Any = None,
+    ) -> Any:
         """下单提交点。enforce_gate=False → 原样直发（向后兼容）；True → 必经 OrderGuard。
 
         OrderGuard 顺序：S1 防重放 → S2 deny-by-default 策略门 → S4 JIT lease → S5 提交。
@@ -137,6 +175,12 @@ class SignalRelayer:
             cap = self._broker.issue_capability(
                 action="request_live_order", gate_ref=gate_hash(gate),
                 keystore_name=f.binance_keystore_name,
+                account_identity_ref=f.account_binding_ref or None,
+                owner_user_id=f.user_id,
+                # This flag is derived from the trusted persisted follower
+                # tier, never from signal/order payloads.  Mainnet cannot
+                # degrade into the testnet-compatible unfenced path.
+                requires_halt_fence=(tier == TrustTier.CRYPTO_LIVE),
             )
         nonce = relay_nonce(signal.signal_id, f.follower_id) if self._nonce_ledger is not None else None
         # 复核 fix B：market 单 order.price=None，非 PAPER 门会判 notional_unverifiable 全拒。
@@ -148,8 +192,18 @@ class SignalRelayer:
         guarded = OrderGuard.wrap(
             venue, gate=gate, broker=self._broker, capability=cap,
             nonce_ledger=self._nonce_ledger, on_event=self._on_gate_event,
+            before_lease=before_lease, before_submit=before_submit,
         )
-        return guarded.place_order(order, nonce=nonce, ref_price=ref_price)
+        return guarded.place_order(
+            order,
+            nonce=nonce,
+            attestation=prepared.attestation if prepared is not None else None,
+            drawdown_now=prepared.reservation.drawdown_now if prepared is not None else 0.0,
+            daily_turnover_so_far=(
+                prepared.reservation.daily_turnover_before if prepared is not None else 0.0
+            ),
+            ref_price=(prepared.reservation.trusted_mark_price if prepared is not None else ref_price),
+        )
 
     @staticmethod
     def _trusted_mark(venue: ExecutionVenue, symbol: str) -> float | None:
@@ -188,11 +242,65 @@ class SignalRelayer:
             self._ct.record_execution(signal.signal_id, f.follower_id, "skipped", error="no keystore configured")
             return {"follower_id": f.follower_id, "status": "skipped", "reason": "no_keystore"}
 
+        tier = follower_tier(f)
+        if tier == TrustTier.CRYPTO_LIVE:
+            # Fail closed before any credential lookup or venue construction.  A
+            # missing live dependency must not materialize a key as a side effect
+            # of discovering that the order cannot be submitted safely.
+            if self._nonce_ledger is None or self._broker is None:
+                decision = _fail_closed_decision(tier)
+                self._ct.record_execution(
+                    signal.signal_id,
+                    f.follower_id,
+                    "rejected",
+                    error="gate: " + "; ".join(decision.violations),
+                )
+                return {
+                    "follower_id": f.follower_id,
+                    "status": "rejected",
+                    "reason": "; ".join(decision.violations),
+                    "verdict_text": decision.verdict_text,
+                }
+            if self._formal is None:
+                self._ct.record_execution(
+                    signal.signal_id,
+                    f.follower_id,
+                    "rejected",
+                    error="formal execution coordinator unavailable",
+                )
+                return {
+                    "follower_id": f.follower_id,
+                    "status": "rejected",
+                    "reason": "formal_execution_unavailable",
+                }
+            try:
+                mainnet_ready = (
+                    self._mainnet_readiness_provider is not None
+                    and self._mainnet_readiness_provider() is True
+                )
+            except Exception:  # noqa: BLE001 - readiness uncertainty must fail closed.
+                mainnet_ready = False
+            if not mainnet_ready:
+                self._ct.record_execution(
+                    signal.signal_id,
+                    f.follower_id,
+                    "rejected",
+                    error="mainnet reconciliation readiness unavailable",
+                )
+                return {
+                    "follower_id": f.follower_id,
+                    "status": "rejected",
+                    "reason": "mainnet_reconciliation_unavailable_fail_closed",
+                }
+
         # 2. key 存在性预检（master 永远拿不到 follower key）。
         #    T-022：注入 broker 时走 broker.has_key（不返回 key 本体）→ relayer 不再 self-fetch；
         #    否则退化到既有 keystore.fetch（向后兼容无 broker 的调用/测试）。
         if self._broker is not None:
-            if not self._broker.has_key(f.binance_keystore_name):
+            if not self._broker.has_key(
+                f.binance_keystore_name,
+                owner_user_id=f.user_id,
+            ):
                 self._ct.record_execution(signal.signal_id, f.follower_id, "skipped", error="keystore miss")
                 return {"follower_id": f.follower_id, "status": "skipped", "reason": "keystore_miss"}
         else:
@@ -230,33 +338,270 @@ class SignalRelayer:
             order_type=signal.order_type,
             price=signal.price,
             leverage=order_leverage,
+            client_order_id=(
+                "qbt-" + hashlib.sha256(
+                    f"{signal.signal_id}::{f.follower_id}".encode("utf-8")
+                ).hexdigest()[:28]
+            ),
         )
-        try:
-            rm.pre_trade(order, mark_price=signal.price)
-        except Exception as exc:  # noqa: BLE001
-            self._ct.record_execution(
-                signal.signal_id, f.follower_id, "rejected", error=f"risk: {exc}",
+        prepared: PreparedCopyTradeExecution | None = None
+        if tier == TrustTier.CRYPTO_LIVE:
+            try:
+                prepared = self._formal.prepare(
+                    follower=f,
+                    signal=signal,
+                    order=order,
+                    actor="copy_trade_signal_relayer",
+                )
+            except CopyTradeFormalError as exc:
+                self._formal.abort_pre_submit(
+                    follower=f,
+                    signal=signal,
+                    reason_ref="formal_pre_submit_reject_" + hashlib.sha256(
+                        str(exc).encode("utf-8")
+                    ).hexdigest(),
+                )
+                self._ct.record_execution(
+                    signal.signal_id,
+                    f.follower_id,
+                    "rejected",
+                    error=f"formal: {exc}",
+                )
+                return {"follower_id": f.follower_id, "status": "rejected", "reason": str(exc)}
+            except Exception as exc:  # noqa: BLE001 - persistence errors fail closed before venue access.
+                reason_ref = "formal_pre_submit_failure_" + hashlib.sha256(
+                    type(exc).__name__.encode("utf-8")
+                ).hexdigest()
+                try:
+                    self._formal.abort_pre_submit(
+                        follower=f,
+                        signal=signal,
+                        reason_ref=reason_ref,
+                    )
+                except Exception as abort_exc:  # noqa: BLE001
+                    logger.critical(
+                        "formal pre-submit abort persistence failed signal=%s follower=%s: %s",
+                        signal.signal_id,
+                        f.follower_id,
+                        abort_exc,
+                    )
+                self._ct.record_execution(
+                    signal.signal_id,
+                    f.follower_id,
+                    "failed",
+                    error=f"formal_pre_submit_failed:{type(exc).__name__}",
+                )
+                return {
+                    "follower_id": f.follower_id,
+                    "status": "failed",
+                    "reason": "formal_pre_submit_failed",
+                }
+        else:
+            try:
+                trusted_mark = signal.price if signal.price is not None else self._trusted_mark(venue, order.symbol)
+                rm.pre_trade(order, mark_price=trusted_mark)
+            except Exception as exc:  # noqa: BLE001
+                self._ct.record_execution(
+                    signal.signal_id, f.follower_id, "rejected", error=f"risk: {exc}",
+                )
+                return {"follower_id": f.follower_id, "status": "rejected", "reason": str(exc)}
+
+        quota_ref = ""
+        quota_reserved = False
+        venue_attempted = False
+
+        def _quota_denied(code: str) -> OrderGated:
+            decision = PolicyDecision(
+                allow=False,
+                tier=tier,
+                violations=[code],
+                verdict_text=_verdict_text(False, tier, [code], False),
             )
-            return {"follower_id": f.follower_id, "status": "rejected", "reason": str(exc)}
+            return OrderGated(decision)
+
+        def _before_lease(_order: Order, _decision: PolicyDecision) -> None:
+            nonlocal quota_ref, quota_reserved
+            if tier != TrustTier.CRYPTO_LIVE:
+                return
+            if self._mainnet_guards is None:
+                raise _quota_denied("mainnet_quota_guard_unavailable")
+            if self._mainnet_guards.get_config(f.user_id).require_password_per_order:
+                raise _quota_denied("standing_auto_copy_authorization_required")
+            quota_ref = copy_trade_quota_reservation_ref(
+                signal.signal_id,
+                f.follower_id,
+                str(order.client_order_id or ""),
+            )
+            try:
+                self._mainnet_guards.reserve_operation(
+                    f.user_id,
+                    "copy_trade_live_order",
+                    reservation_ref=quota_ref,
+                    notional_usdt=(prepared.reservation.notional_usdt if prepared is not None else 0.0),
+                )
+            except MainnetGuardError as exc:
+                raise _quota_denied("mainnet_daily_quota_rejected") from exc
+            quota_reserved = True
+
+        def _before_submit(_order: Order, _decision: PolicyDecision) -> None:
+            nonlocal venue_attempted
+            # This callback is invoked by the venue only after position-mode /
+            # margin / leverage preflight and immediately before the exact
+            # order POST.  Persist uncertainty first, then cross the boundary.
+            if prepared is not None:
+                self._formal.mark_order_request_started(prepared)
+            # The venue has not been attempted until the durable boundary
+            # marker succeeds. A marker failure is therefore a definitive
+            # pre-submit reject, not an unqueryable outcome-unknown order.
+            venue_attempted = True
+
+        def _finish_quota(*, result: str, error: str | None = None) -> None:
+            nonlocal quota_reserved
+            if not quota_reserved or self._mainnet_guards is None:
+                return
+            if result == "rejected":
+                self._mainnet_guards.release_operation(quota_ref, error=error or "pre_submit_rejected")
+            else:
+                self._mainnet_guards.settle_operation(
+                    quota_ref,
+                    venue=getattr(venue, "name", None),
+                    symbol=order.symbol,
+                    side=order.side,
+                    result=result,
+                    error=error,
+                )
+            quota_reserved = False
 
         # 5. 真下单（生产：必经会话外硬墙 OrderGuard；门拒 → rejected 不下单、不取 key）
         try:
-            ack = self._place(venue, order, signal, f)
+            ack = self._place(
+                venue,
+                order,
+                signal,
+                f,
+                prepared=prepared,
+                before_lease=_before_lease,
+                before_submit=_before_submit,
+            )
         except OrderGated as gated:
+            try:
+                _finish_quota(result="rejected", error=";".join(gated.decision.violations))
+            except Exception:  # noqa: BLE001 - quota stays reserved and fail-safe on settlement outage.
+                logger.critical("mainnet quota release failed", exc_info=True)
+            formal_refs: dict[str, str] = {}
+            if prepared is not None:
+                formal_refs = self._formal.record_failure(
+                    prepared,
+                    reason_ref="order_guard_reject_" + hashlib.sha256(
+                        str(gated.decision.model_dump()).encode("utf-8")
+                    ).hexdigest(),
+                    definitive_reject=True,
+                    actor="copy_trade_signal_relayer",
+                )
             self._ct.record_execution(
                 signal.signal_id, f.follower_id, "rejected",
                 error="gate: " + "; ".join(gated.decision.violations),
             )
             return {"follower_id": f.follower_id, "status": "rejected",
                     "reason": "; ".join(gated.decision.violations),
-                    "verdict_text": gated.decision.verdict_text}
+                    "verdict_text": gated.decision.verdict_text, **formal_refs}
         except Exception as exc:  # noqa: BLE001
-            self._ct.record_execution(signal.signal_id, f.follower_id, "failed", error=str(exc))
-            return {"follower_id": f.follower_id, "status": "failed", "reason": str(exc)}
+            definitive_pre_submit_reject = not venue_attempted
+            try:
+                _finish_quota(
+                    result="outcome_unknown" if venue_attempted else "rejected",
+                    error=type(exc).__name__,
+                )
+            except Exception:  # noqa: BLE001 - pending reservation remains counted fail-safe.
+                logger.critical("mainnet quota finalization failed", exc_info=True)
+            formal_refs = {}
+            if prepared is not None:
+                formal_refs = self._formal.record_failure(
+                    prepared,
+                    reason_ref=(
+                        "pre_submit_reject_" if definitive_pre_submit_reject else "submission_unknown_"
+                    ) + hashlib.sha256(
+                        type(exc).__name__.encode("utf-8")
+                    ).hexdigest(),
+                    definitive_reject=definitive_pre_submit_reject,
+                    actor="copy_trade_signal_relayer",
+                )
+            execution_status = (
+                "failed"
+                if prepared is None
+                else "outcome_unknown"
+                if venue_attempted
+                else "rejected"
+            )
+            self._ct.record_execution(
+                signal.signal_id,
+                f.follower_id,
+                execution_status,
+                error=str(exc),
+            )
+            return {
+                "follower_id": f.follower_id,
+                "status": execution_status,
+                "reason": str(exc),
+                **formal_refs,
+            }
+
+        try:
+            _finish_quota(result="submitted")
+        except Exception:  # noqa: BLE001 - ack is real; leave reserved quota counted and continue formal recording.
+            logger.critical("mainnet quota settlement after venue ack failed", exc_info=True)
 
         status = "placed"
-        if (ack.status or "").lower() == "filled":
-            status = "filled"
+        formal_refs: dict[str, str] = {}
+        if prepared is not None:
+            try:
+                formal_refs = self._formal.record_success(
+                    prepared,
+                    ack=ack,
+                    actor="copy_trade_signal_relayer",
+                )
+            except Exception as exc:  # noqa: BLE001
+                logger.critical(
+                    "venue ack 已返回但 formal outcome 持久化失败 signal=%s follower=%s: %s",
+                    signal.signal_id,
+                    f.follower_id,
+                    exc,
+                )
+                durable = self._formal.durable_outcome_after_projection_failure(prepared)
+                durable_status = durable.pop("formal_status", "outcome_unknown")
+                self._ct.record_execution(
+                    signal.signal_id,
+                    f.follower_id,
+                    durable_status,
+                    venue_order_id=ack.order_id,
+                    error=f"formal_outcome_persistence_failed:{type(exc).__name__}",
+                )
+                return {
+                    "follower_id": f.follower_id,
+                    "status": durable_status,
+                    "venue_order_id": ack.order_id,
+                    "reason": "formal_projection_pending",
+                    **{key: value for key, value in durable.items() if value},
+                }
+            formal_status = formal_refs.pop("formal_status", "placed")
+            formal_reason = formal_refs.pop("formal_reason", None)
+            if formal_status in {"rejected", "outcome_unknown", "needs_reconcile"}:
+                self._ct.record_execution(
+                    signal.signal_id,
+                    f.follower_id,
+                    formal_status,
+                    venue_order_id=ack.order_id or None,
+                    error=formal_reason or ("venue rejected order" if formal_status == "rejected" else None),
+                )
+                result = {
+                    "follower_id": f.follower_id,
+                    "status": formal_status,
+                    "venue_order_id": ack.order_id,
+                    **formal_refs,
+                }
+                if formal_reason:
+                    result["reason"] = formal_reason
+                return result
         self._ct.record_execution(
             signal.signal_id, f.follower_id, status,  # type: ignore[arg-type]
             venue_order_id=ack.order_id,
@@ -282,7 +627,8 @@ class SignalRelayer:
             "venue_order_id": ack.order_id,
             "leverage": applied_leverage,
             "leverage_clamped": leverage_clamped,
+            **formal_refs,
         }
 
 
-__all__ = ["SignalRelayer", "VenueFactory"]
+__all__ = ["SignalRelayer", "VenueFactory", "copy_trade_quota_reservation_ref"]

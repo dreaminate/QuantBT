@@ -25,6 +25,7 @@ from app.strategy_goal_store import StrategyGoalStore
 from app.verification import Verifier, VerdictStore
 
 MARKET_DATA_USE_REFS = ["market_data_use:delivery_slice:accepted"]
+TEST_OWNER_USER_ID = "test:delivery-slice"
 
 
 class _DatasetSemantics:
@@ -48,16 +49,22 @@ class _MarketDataUseRegistry:
             accepted=True,
             violation_codes=(),
             evidence_refs=("evidence:delivery_slice_market_data_use",),
-            recorded_by="test",
+            recorded_by=TEST_OWNER_USER_ID,
             created_at_utc="2026-06-27T00:00:00Z",
         )
 
-    def use_validation(self, validation_ref: str) -> MarketDataUseValidationRecord:
+    def use_validation(
+        self, validation_ref: str, *, owner_user_id: str,
+    ) -> MarketDataUseValidationRecord:
+        if owner_user_id != TEST_OWNER_USER_ID:
+            raise PermissionError(owner_user_id)
         if validation_ref != self._record.validation_ref:
             raise KeyError(validation_ref)
         return self._record
 
-    def dataset(self, dataset_ref: str) -> _DatasetSemantics:
+    def dataset(self, dataset_ref: str, *, owner_user_id: str) -> _DatasetSemantics:
+        if owner_user_id != TEST_OWNER_USER_ID:
+            raise PermissionError(owner_user_id)
         if dataset_ref != _DatasetSemantics.dataset_ref:
             raise KeyError(dataset_ref)
         return _DatasetSemantics()
@@ -104,6 +111,7 @@ def test_stranger_full_path_chat_to_paper_all_real(tmp_path, monkeypatch):
         ledger=ledger, returns_store=None, data_root=tmp_path,
         verdict_store=vstore, verifier=verifier, llm_client=None,
         market_data_registry=_MarketDataUseRegistry(),
+        owner_user_id=TEST_OWNER_USER_ID,
     )
     assert bt.get("error") is None, bt
     run_id = bt["run_id"]
@@ -114,7 +122,7 @@ def test_stranger_full_path_chat_to_paper_all_real(tmp_path, monkeypatch):
     # ③ 裁决 → run_id 被 run_verdict 真消费（真 PBO/DSR/Bootstrap，非 mock 0.18/1.34）
     overfit = project_overfit(run_id)
     assert overfit["run_id"] == run_id
-    assert "config_hash" in (bt.get("overfit") or {})
+    assert overfit["n_observed"] >= 1
     verdict = project_verdict(run_id, verdict_store=vstore, verifier=verifier)
     assert "verdict" in verdict  # 诚实裁决（无权威记录则 concern，不假绿灯）
 

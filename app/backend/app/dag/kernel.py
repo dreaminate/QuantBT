@@ -31,7 +31,7 @@ from dataclasses import dataclass, field, replace
 from pathlib import Path
 from typing import Any, Callable, Iterable
 
-from ..lineage.ids import DECORATIVE_KEYS, node_id as _ids_node_id
+from ..lineage.ids import DECORATIVE_KEYS, canonical_json, node_id as _ids_node_id
 from .artifact_store import ArtifactStore
 from .effect_ledger import EffectIdempotencyViolation, EffectLedger
 from .engine import DAGTask, _OP_VERSIONS, _OPS, _topological_sort
@@ -41,6 +41,12 @@ from .engine import DAGTask, _OP_VERSIONS, _OPS, _topological_sort
 _RUN = "run"          # 正向执行（含崩溃后续跑）：effectful 已消费→复用；未消费→执行副作用
 _REPLAY = "replay"    # 重放：effectful 已消费且有工件→复用；否则 HALT（不在重放路径触达券商）
 _FORK = "fork"        # what-if：改了的子图里 effectful 一律 HALT（绝不在假设分支动钱）
+_CAPABILITY_KIND_BY_MODE = {
+    _RUN: "dag_checkpoint",
+    _REPLAY: "dag_replay",
+    _FORK: "dag_fork",
+    "rollback": "dag_rollback",
+}
 
 logger = logging.getLogger(__name__)
 
@@ -115,6 +121,7 @@ class KernelRunResult:
     nodes: list[NodeRunResult]
     node_id_by_task: dict[str, str]
     events: list[dict[str, Any]] = field(default_factory=list)
+    capability_record_ref: str = ""
 
     def node(self, task_id: str) -> NodeRunResult | None:
         return next((n for n in self.nodes if n.task_id == task_id), None)
@@ -133,6 +140,9 @@ class DurableExecutor:
         ops: dict[str, Callable[..., Any]] | None = None,
         on_event: Callable[[dict[str, Any]], None] | None = None,
         on_attempt: Callable[[str, str], None] | None = None,
+        capability_ledger: Any | None = None,
+        capability_owner_user_id: str = "",
+        capability_workflow_id: str = "",
     ) -> None:
         if store is None or ledger is None:
             if root is None:
@@ -145,18 +155,185 @@ class DurableExecutor:
         self._ops = ops if ops is not None else _OPS   # 默认复用 engine 全局 op 注册表
         self._on_event = on_event
         self._on_attempt = on_attempt
+        self._capability_ledger = None
+        self._capability_owner_user_id = ""
+        self._capability_workflow_id = ""
+        if (
+            capability_ledger is not None
+            or capability_owner_user_id
+            or capability_workflow_id
+        ):
+            self.bind_capability_scope(
+                ledger=capability_ledger,
+                owner_user_id=capability_owner_user_id,
+                workflow_id=capability_workflow_id,
+            )
 
     def _node_id(self, task: DAGTask, upstream_ids: Iterable[str]) -> str:
         """执行器内统一身份口径：含 op 代码指纹（复核 #3）。run/replay/fork/rollback 全走此处，保证一致。"""
 
         return compute_node_id(task, upstream_ids, op_version=op_fingerprint(self._ops.get(task.op), task.op))
 
+    def bind_capability_scope(
+        self,
+        *,
+        ledger: Any,
+        owner_user_id: str,
+        workflow_id: str,
+    ) -> None:
+        """Bind one exact owner/workflow capability sink to this executor.
+
+        An executor cannot be rebound across tenants or workflows.  Callers that
+        have no real owner/workflow identity must leave the sink unbound rather
+        than insert a service/default identity.
+        """
+
+        owner = str(owner_user_id or "").strip()
+        workflow = str(workflow_id or "").strip()
+        required_methods = (
+            "prepare_operation",
+            "record_dag_operation",
+            "commit_operation",
+            "abort_operation",
+        )
+        if ledger is None or any(
+            not callable(getattr(ledger, method, None)) for method in required_methods
+        ):
+            raise ValueError(
+                "capability ledger must expose prepared DAG operation methods"
+            )
+        if not owner:
+            raise ValueError("capability owner_user_id is required")
+        if not workflow:
+            raise ValueError("capability workflow_id is required")
+        if self._capability_ledger is not None:
+            if (
+                self._capability_ledger is not ledger
+                or self._capability_owner_user_id != owner
+                or self._capability_workflow_id != workflow
+            ):
+                raise ValueError("DurableExecutor capability scope cannot be rebound")
+            return
+        self._capability_ledger = ledger
+        self._capability_owner_user_id = owner
+        self._capability_workflow_id = workflow
+
+    @staticmethod
+    def _capability_failure_ref(exc: BaseException) -> str:
+        material = canonical_json({"exception_type": type(exc).__name__})
+        return "capability_failure:sha256:" + hashlib.sha256(
+            material.encode("utf-8")
+        ).hexdigest()
+
+    def _prepare_capability(
+        self,
+        *,
+        mode: str,
+        tasks: list[DAGTask],
+        details: dict[str, Any] | None = None,
+    ) -> Any | None:
+        if self._capability_ledger is None:
+            return None
+        request_material = {
+            "mode": mode,
+            "tasks": [
+                {
+                    "task_id": task.id,
+                    "op": task.op,
+                    "kind": task.kind,
+                    "deps": list(task.deps),
+                    "params_hash": hashlib.sha256(
+                        canonical_json(task.params).encode("utf-8")
+                    ).hexdigest(),
+                }
+                for task in tasks
+            ],
+            "details": dict(details or {}),
+        }
+        request_ref = "dag_operation_request:sha256:" + hashlib.sha256(
+            canonical_json(request_material).encode("utf-8")
+        ).hexdigest()
+        return self._capability_ledger.prepare_operation(
+            owner_user_id=self._capability_owner_user_id,
+            workflow_id=self._capability_workflow_id,
+            target_kind=_CAPABILITY_KIND_BY_MODE[mode],
+            request_ref=request_ref,
+        )
+
+    def _abort_capability(self, prepared: Any | None, exc: BaseException) -> None:
+        if prepared is None:
+            return
+        self._capability_ledger.abort_operation(
+            owner_user_id=self._capability_owner_user_id,
+            workflow_id=self._capability_workflow_id,
+            prepared_record_ref=prepared.record_ref,
+            failure_ref=self._capability_failure_ref(exc),
+        )
+
+    def _record_capability(
+        self,
+        *,
+        mode: str,
+        tasks: list[DAGTask],
+        result: KernelRunResult,
+        details: dict[str, Any] | None = None,
+        prepared: Any | None = None,
+    ) -> KernelRunResult:
+        # A failed/halted DAG result is useful diagnostic state, but it is not a
+        # successful capability and must not mint a green durable record.
+        if self._capability_ledger is None:
+            return result
+        if result.succeeded is not True:
+            self._abort_capability(
+                prepared,
+                RuntimeError(f"DAG operation returned succeeded={result.succeeded!r}"),
+            )
+            return result
+        try:
+            record = self._capability_ledger.record_dag_operation(
+                owner_user_id=self._capability_owner_user_id,
+                workflow_id=self._capability_workflow_id,
+                mode=mode,
+                tasks=tuple(tasks),
+                result=result,
+                details=dict(details or {}),
+            )
+        except Exception as exc:
+            if type(exc).__name__ != "AgentCapabilityCommitUncertain":
+                self._abort_capability(prepared, exc)
+            raise
+        result.capability_record_ref = str(record.record_ref)
+        if prepared is not None:
+            self._capability_ledger.commit_operation(
+                owner_user_id=self._capability_owner_user_id,
+                workflow_id=self._capability_workflow_id,
+                prepared_record_ref=prepared.record_ref,
+                capability_refs=(record.record_ref,),
+            )
+        return result
+
     # ── 公开操作 ──────────────────────────────────────────────────────────
     def run(self, tasks: list[DAGTask], context: dict[str, Any] | None = None) -> KernelRunResult:
-        return self._execute(tasks, context or {}, _RUN)
+        prepared = self._prepare_capability(mode=_RUN, tasks=tasks)
+        try:
+            result = self._execute(tasks, context or {}, _RUN)
+        except Exception as exc:
+            self._abort_capability(prepared, exc)
+            raise
+        return self._record_capability(
+            mode=_RUN, tasks=tasks, result=result, prepared=prepared
+        )
 
     def replay(self, tasks: list[DAGTask], context: dict[str, Any] | None = None) -> KernelRunResult:
-        return self._execute(tasks, context or {}, _REPLAY)
+        prepared = self._prepare_capability(mode=_REPLAY, tasks=tasks)
+        try:
+            result = self._execute(tasks, context or {}, _REPLAY)
+        except Exception as exc:
+            self._abort_capability(prepared, exc)
+            raise
+        return self._record_capability(
+            mode=_REPLAY, tasks=tasks, result=result, prepared=prepared
+        )
 
     def fork(
         self,
@@ -175,7 +352,28 @@ class DurableExecutor:
             replace(t, params={**t.params, **overrides}) if t.id == from_task_id else t
             for t in tasks
         ]
-        return self._execute(forked, context or {}, _FORK)
+        details = {
+            "from_task_id": from_task_id,
+            "overrides_ref": "sha256:"
+            + hashlib.sha256(canonical_json(overrides).encode("utf-8")).hexdigest(),
+        }
+        prepared = self._prepare_capability(
+            mode=_FORK,
+            tasks=forked,
+            details=details,
+        )
+        try:
+            result = self._execute(forked, context or {}, _FORK)
+        except Exception as exc:
+            self._abort_capability(prepared, exc)
+            raise
+        return self._record_capability(
+            mode=_FORK,
+            tasks=forked,
+            result=result,
+            details=details,
+            prepared=prepared,
+        )
 
     def rollback(
         self, tasks: list[DAGTask], *, to_task_id: str, context: dict[str, Any] | None = None
@@ -195,31 +393,68 @@ class DurableExecutor:
         descendants = _descendants(tasks, to_task_id)
         nodes: list[NodeRunResult] = []
         events: list[dict[str, Any]] = []
-        for task in ordered:
-            nid = node_id_by_task[task.id]
-            if task.id not in descendants:
-                nodes.append(NodeRunResult(task.id, nid, task.kind, status="reused", reused=True))
-                continue
-            if task.kind == "pure":
-                self._store.discard(nid)
-                nodes.append(NodeRunResult(task.id, nid, "pure", status="rolled_back"))
-                self._emit(events, "ROLLED_BACK", nid, task.id)
-            else:  # effectful：已消费的副作用不可撤——HALT + 对账，绝不撤单
-                consumed = self._ledger.is_consumed(task.effect_idempotency_key or "")
-                if consumed:
-                    nodes.append(NodeRunResult(
-                        task.id, nid, "effectful", status="halted", halted=True,
-                        requires_reconcile=True, effect_idempotency_key=task.effect_idempotency_key,
-                    ))
-                    self._emit(events, "HALT", nid, task.id)
-                    self._emit(events, "RECONCILE_REQUIRED", nid, task.id)
-                else:
-                    nodes.append(NodeRunResult(
-                        task.id, nid, "effectful", status="rolled_back",
-                        effect_idempotency_key=task.effect_idempotency_key,
-                    ))
-        return KernelRunResult(mode="rollback", succeeded=True, nodes=nodes,
-                               node_id_by_task=node_id_by_task, events=events)
+        details = {"to_task_id": to_task_id}
+        prepared = self._prepare_capability(
+            mode="rollback",
+            tasks=tasks,
+            details=details,
+        )
+        try:
+            for task in ordered:
+                nid = node_id_by_task[task.id]
+                if task.id not in descendants:
+                    nodes.append(
+                        NodeRunResult(
+                            task.id, nid, task.kind, status="reused", reused=True
+                        )
+                    )
+                    continue
+                if task.kind == "pure":
+                    self._store.discard(nid)
+                    nodes.append(
+                        NodeRunResult(task.id, nid, "pure", status="rolled_back")
+                    )
+                    self._emit(events, "ROLLED_BACK", nid, task.id)
+                else:  # effectful：已消费的副作用不可撤——HALT + 对账，绝不撤单
+                    consumed = self._ledger.is_consumed(
+                        task.effect_idempotency_key or ""
+                    )
+                    if consumed:
+                        nodes.append(
+                            NodeRunResult(
+                                task.id,
+                                nid,
+                                "effectful",
+                                status="halted",
+                                halted=True,
+                                requires_reconcile=True,
+                                effect_idempotency_key=task.effect_idempotency_key,
+                            )
+                        )
+                        self._emit(events, "HALT", nid, task.id)
+                        self._emit(events, "RECONCILE_REQUIRED", nid, task.id)
+                    else:
+                        nodes.append(
+                            NodeRunResult(
+                                task.id,
+                                nid,
+                                "effectful",
+                                status="rolled_back",
+                                effect_idempotency_key=task.effect_idempotency_key,
+                            )
+                        )
+        except Exception as exc:
+            self._abort_capability(prepared, exc)
+            raise
+        result = KernelRunResult(mode="rollback", succeeded=True, nodes=nodes,
+                                 node_id_by_task=node_id_by_task, events=events)
+        return self._record_capability(
+            mode="rollback",
+            tasks=tasks,
+            result=result,
+            details=details,
+            prepared=prepared,
+        )
 
     # ── 执行核心 ──────────────────────────────────────────────────────────
     def _execute(self, tasks: list[DAGTask], context: dict[str, Any], mode: str) -> KernelRunResult:

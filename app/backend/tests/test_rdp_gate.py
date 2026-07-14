@@ -30,6 +30,7 @@ from app.delivery import (
     validate_rdp,
 )
 from app.lineage.ids import content_hash
+from app.research_os import PersistentRDPStore, RDPManifest as ResearchOSRDPManifest
 
 
 # ── builders ──────────────────────────────────────────────────────────────────
@@ -59,6 +60,10 @@ def _complete_fields(**overrides):
 
 def _complete_rdp(**overrides) -> RDPManifest:
     return RDPManifest(**_complete_fields(**overrides))
+
+
+def test_delivery_and_research_os_share_one_canonical_rdp_class():
+    assert RDPManifest is ResearchOSRDPManifest
 
 
 # ── 全绿路径：门不是一刀切摆设 ────────────────────────────────────────────────
@@ -225,6 +230,23 @@ def test_rdp_from_dict_recomputes_id_not_trusting_input():
     rebuilt = RDPManifest.from_dict(d)
     assert rebuilt.rdp_id != "rdp_forged0000000"
     assert rebuilt.rdp_id == "rdp_" + content_hash(rebuilt._identity_payload())
+
+
+def test_rdp_direct_constructor_rejects_forged_identity():
+    with pytest.raises(ValueError, match="canonical content identity"):
+        RDPManifest(**_complete_fields(), package_id="rdp_forged0000000")
+
+
+def test_rdp_store_rejects_post_construction_content_mutation(tmp_path):
+    manifest = _complete_rdp()
+    object.__setattr__(manifest, "artifact_hash", "tampered-after-construction")
+
+    with pytest.raises(ValueError, match="content_identity_mismatch"):
+        PersistentRDPStore(tmp_path / "rdp.jsonl").record_manifest(
+            manifest,
+            owner_user_id="u1",
+            recorded_by="u1",
+        )
 
 
 # ── 身份复用：rdp_id 走单一身份源 ids.content_hash，不另造哈希族 ──────────────

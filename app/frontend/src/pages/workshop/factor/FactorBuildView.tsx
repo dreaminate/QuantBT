@@ -36,7 +36,7 @@ export interface FactorBuildViewProps {
   onGate: () => void;
   onGateClose: () => void;
   onGateConfirm: () => void;
-  /** 真实后端即时校验（编译/前视门 + IC）；存在则覆盖 mock 预览并改挂 LIVE。 */
+  /** 后端即时校验（编译/前视门 + 汇总 IC）；不包含 IC 序列或 registry 写入能力。 */
   live?: FactorValidateLive | null;
 }
 
@@ -150,11 +150,10 @@ export function FactorBuildView(props: FactorBuildViewProps) {
   } = props;
 
   const balanced = isBalanced(expr);
-  // 注册门：表达式配平 +（未接入真实后端则演示放行 / 已接入真实后端则必须 live.valid）。
-  // 绝不在后端判前视未过时仍放行注册（不假绿灯）。
-  const canRegister = balanced && (!live || live.valid);
+  // 当前没有 registry 写入端点：任何本地/后端校验结果都不能变成“已注册”。
+  const canRegister = false;
   // 真实后端：编译/前视门状态用后端 validate 真结果（前视未过 = 红，绝不假绿灯）。
-  let validTxt = balanced ? "✓ 括号配平 · 编译通过" : "✕ 括号未配平";
+  let validTxt = balanced ? "✓ 括号配平 · 未执行后端编译" : "✕ 括号未配平";
   let validColor = balanced ? "var(--desk-success)" : "var(--desk-danger)";
   if (live) {
     if (live.valid) {
@@ -207,11 +206,13 @@ export function FactorBuildView(props: FactorBuildViewProps) {
     return out;
   }, [previewSeed]);
   const previewBars = svgBars(previewSeries, 300, 70, 35);
-  // 真实后端：IC/IR 用后端 validate 的真实 IC 报告；否则 mock。
-  const previewIc =
-    live?.ic?.ic_mean != null ? live.ic.ic_mean.toFixed(3) : (0.03 + (nz(previewSeed) - 0.5) * 0.03).toFixed(3);
-  const previewIr =
-    live?.ic?.ic_ir != null ? live.ic.ic_ir.toFixed(2) : (0.7 + nz(previewSeed + 1) * 0.8).toFixed(2);
+  // 波形始终是 DEMO 合成；后端只提供汇总值，缺失时明确不可用，绝不拿合成值补洞。
+  const previewIc = live
+    ? live.ic?.ic_mean == null ? "不可用" : live.ic.ic_mean.toFixed(3)
+    : (0.03 + (nz(previewSeed) - 0.5) * 0.03).toFixed(3);
+  const previewIr = live
+    ? live.ic?.ic_ir == null ? "不可用" : live.ic.ic_ir.toFixed(2)
+    : (0.7 + nz(previewSeed + 1) * 0.8).toFixed(2);
 
   const lints = [
     { icon: "✓", color: "var(--desk-success)", t: "无前视：仅用 ts_* 历史窗口与当期字段" },
@@ -222,16 +223,16 @@ export function FactorBuildView(props: FactorBuildViewProps) {
   // 接入真实后端后：live 存在且未过校验时，前视/重名门不得再显示绿 ✓（否则与第一门红 ✕ 自相矛盾、假绿灯）。
   const liveFailed = !!live && !live.valid;
   const gateChecks = [
-    { icon: balanced ? "✓" : "✕", color: validColor, t: "表达式编译通过（polars 计算图）" },
+    { icon: balanced ? "✓" : "✕", color: balanced ? "var(--desk-success)" : "var(--desk-danger)", t: "表达式括号配平（本地演示校验）" },
     {
-      icon: liveFailed ? "✕" : "✓",
-      color: liveFailed ? "var(--desk-danger)" : "var(--desk-success)",
-      t: "前视检查通过 · 无标签穿越",
+      icon: liveFailed ? "✕" : live?.valid ? "✓" : "○",
+      color: liveFailed ? "var(--desk-danger)" : live?.valid ? "var(--desk-success)" : "var(--desk-text-muted)",
+      t: live ? "前视检查 · 后端 validate" : "前视检查后端未连接",
     },
     {
-      icon: liveFailed ? "○" : "✓",
-      color: liveFailed ? "var(--desk-text-muted)" : "var(--desk-success)",
-      t: "registry 无重名 · 版本 v1",
+      icon: "○",
+      color: "var(--desk-text-muted)",
+      t: "registry 查重与写入端点未连接",
     },
   ];
 
@@ -379,12 +380,10 @@ export function FactorBuildView(props: FactorBuildViewProps) {
               <PanelCard style={{ flex: 1 }}>
                 <SectionTitle
                   right={
-                    <span style={{ fontSize: 9.5, fontWeight: 400, color: "var(--desk-success)" }}>
-                      样本内 · 60日
-                    </span>
+                    <MockBadge label="DEMO 合成波形 · 不代表后端 IC 序列" />
                   }
                 >
-                  即时 IC 预览
+                  即时 IC · DEMO 波形
                 </SectionTitle>
                 <svg viewBox="0 0 300 70" preserveAspectRatio="none" style={{ width: "100%", height: 58, display: "block" }}>
                   <line x1="0" y1="35" x2="300" y2="35" stroke="var(--desk-border-strong)" strokeWidth="1" strokeDasharray="2 3" />
@@ -392,10 +391,10 @@ export function FactorBuildView(props: FactorBuildViewProps) {
                 </svg>
                 <div style={{ display: "flex", gap: 14, marginTop: 8, fontSize: 11 }}>
                   <span style={{ color: "var(--desk-text-muted)" }}>
-                    IC <span style={{ color: "var(--desk-accent)", fontWeight: 700 }}>{previewIc}</span>
+                    {live ? "后端汇总 IC" : "DEMO IC"} <span style={{ color: "var(--desk-accent)", fontWeight: 700 }}>{previewIc}</span>
                   </span>
                   <span style={{ color: "var(--desk-text-muted)" }}>
-                    IR <span style={{ color: "var(--desk-text-soft)" }}>{previewIr}</span>
+                    {live ? "后端汇总 IR" : "DEMO IR"} <span style={{ color: "var(--desk-text-soft)" }}>{previewIr}</span>
                   </span>
                 </div>
                 <div style={{ marginTop: 10 }}>
@@ -411,10 +410,10 @@ export function FactorBuildView(props: FactorBuildViewProps) {
                         padding: "1px 6px",
                       }}
                     >
-                      {live.valid ? "LIVE · 即时 IC 真实后端" : `校验未过 · ${live.stage}`}
+                      {live.valid ? "后端校验 · 汇总 IC" : `后端校验未过 · ${live.stage}`}
                     </span>
                   ) : (
-                    <MockBadge label="MOCK 数据 · 即时 IC（待接 /api/factors/validate）" />
+                    <MockBadge label="DEMO 汇总值 · 未调用 /api/factors/validate" />
                   )}
                 </div>
               </PanelCard>
@@ -450,7 +449,7 @@ export function FactorBuildView(props: FactorBuildViewProps) {
                     marginTop: 2,
                   }}
                 >
-                  ⊕ 注册到因子库
+                  ⊕ 注册预检（DEMO）
                 </button>
               </div>
             </div>
@@ -499,9 +498,8 @@ export function FactorBuildView(props: FactorBuildViewProps) {
             </div>
             <div style={{ padding: "14px 16px" }}>
               <div style={{ fontSize: 12, color: "var(--desk-text-soft)", marginBottom: 11, lineHeight: 1.6 }}>
-                把 <span style={{ color: "var(--desk-accent)" }}>{factorId}</span> 写入 registry，初始状态{" "}
-                <span style={{ color: "var(--desk-text-muted)", fontWeight: 600 }}>NEW</span>
-                。表达式编译通过、无前视、无重名才可注册。
+                这是 <span style={{ color: "var(--desk-accent)" }}>{factorId}</span> 的 DEMO 注册预检。
+                当前未连接 registry 写入端点；本面板不会创建因子、改变状态或报告注册成功。
               </div>
               <div style={{ display: "flex", flexDirection: "column", gap: 6, marginBottom: 13 }}>
                 {gateChecks.map((c, i) => (
@@ -515,7 +513,7 @@ export function FactorBuildView(props: FactorBuildViewProps) {
                 <button
                   onClick={onGateConfirm}
                   disabled={!canRegister}
-                  title={canRegister ? undefined : "表达式需配平且通过前视/编译校验后才能注册"}
+                  title="registry 写入端点未连接"
                   style={{
                     background: "var(--desk-accent)",
                     border: "none",
@@ -529,7 +527,7 @@ export function FactorBuildView(props: FactorBuildViewProps) {
                     opacity: canRegister ? 1 : 0.5,
                   }}
                 >
-                  ✓ 注册
+                  未连接 · 不注册
                 </button>
                 <button
                   onClick={onGateClose}

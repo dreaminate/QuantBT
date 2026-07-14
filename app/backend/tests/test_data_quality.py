@@ -89,6 +89,89 @@ def test_dataset_registry_ge_rules_persist(tmp_path: Path) -> None:
     assert all(r["passed"] for r in version.ge_results)
 
 
+def test_dataset_registry_resolves_all_supported_exact_version_refs(tmp_path: Path) -> None:
+    path = tmp_path / "registry.jsonl"
+    written = DatasetRegistry(path).register(
+        "btc_daily",
+        make_fetch_result(_sample_frame(), source_name="test"),
+    )
+    reg = DatasetRegistry(path)
+
+    refs = (
+        written.version_id,
+        f"dataset_version:{written.version_id}",
+        f"dataset_version:{written.dataset_id}:{written.version_id}",
+        f"dataset_version:{written.dataset_id}@{written.version_id}",
+    )
+    for ref in refs:
+        assert reg.resolve_version_ref(ref) == written
+    assert reg.find_version(written.version_id) == written
+    assert reg.find_version(refs[-1]) is None
+
+
+def test_dataset_registry_version_ref_resolution_fails_closed_on_missing_or_mutated_ref(
+    tmp_path: Path,
+) -> None:
+    reg = DatasetRegistry(tmp_path / "registry.jsonl")
+    written = reg.register(
+        "btc_daily",
+        make_fetch_result(_sample_frame(), source_name="test"),
+    )
+
+    for ref in (
+        None,
+        "",
+        "dataset_version:missing",
+        f"dataset:{written.dataset_id}:{written.version_id}",
+        f"dataset_version:{written.dataset_id}:{written.version_id}-mutated",
+    ):
+        with pytest.raises(ValueError):
+            reg.resolve_version_ref(ref)
+
+
+def test_dataset_registry_version_ref_resolution_rejects_cross_dataset_ambiguity(
+    tmp_path: Path,
+) -> None:
+    reg = DatasetRegistry(tmp_path / "registry.jsonl")
+    fetch_result = make_fetch_result(_sample_frame(), source_name="test")
+    first = reg.register("btc_daily", fetch_result)
+    second = reg.register("btc_daily_copy", fetch_result)
+    assert first.version_id == second.version_id
+
+    for ambiguous_ref in (
+        first.version_id,
+        f"dataset_version:{first.version_id}",
+    ):
+        with pytest.raises(ValueError, match="ambiguous"):
+            reg.resolve_version_ref(ambiguous_ref)
+
+    assert reg.find_version(first.version_id) is None
+    assert reg.resolve_version_ref(
+        f"dataset_version:{first.dataset_id}:{first.version_id}"
+    ) == first
+    assert reg.resolve_version_ref(
+        f"dataset_version:{second.dataset_id}@{second.version_id}"
+    ) == second
+
+
+def test_dataset_registry_version_ref_resolution_is_read_only_after_replay(tmp_path: Path) -> None:
+    path = tmp_path / "registry.jsonl"
+    reg = DatasetRegistry(path)
+    fetch_result = make_fetch_result(_sample_frame(), source_name="test")
+    written = reg.register("btc_daily", fetch_result)
+    assert reg.register("btc_daily", fetch_result) == written
+    before = path.read_bytes()
+
+    reloaded = DatasetRegistry(path)
+    assert reloaded.resolve_version_ref(
+        f"dataset_version:{written.dataset_id}:{written.version_id}"
+    ) == written
+    with pytest.raises(ValueError):
+        reloaded.resolve_version_ref("dataset_version:not-recorded")
+
+    assert path.read_bytes() == before
+
+
 def test_version_id_format() -> None:
     vid = make_version_id("2024-05-01T10:00:00+00:00", "abcdef1234567890" * 4)
     assert vid.endswith("__abcdef12")

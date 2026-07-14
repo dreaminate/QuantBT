@@ -407,20 +407,66 @@ class DatasetRegistry:
         )
         return versions[-1] if versions else None
 
+    @staticmethod
+    def _version_ref_candidates(version: DatasetVersion) -> set[str]:
+        """Return the exact DatasetVersion identities accepted by production callers."""
+
+        return {
+            version.version_id,
+            f"dataset_version:{version.version_id}",
+            f"dataset_version:{version.dataset_id}:{version.version_id}",
+            f"dataset_version:{version.dataset_id}@{version.version_id}",
+        }
+
+    def resolve_version_ref(self, ref: str | None) -> DatasetVersion:
+        """Resolve one persisted DatasetVersion reference without guessing.
+
+        Supported identities intentionally match the production DatasetVersion reference
+        forms: bare ``version_id``, ``dataset_version:<version_id>``, and the two qualified
+        ``dataset_version:<dataset_id>:<version_id>`` / ``dataset_version:<dataset_id>@<version_id>``
+        forms.  Missing and ambiguous references raise ``ValueError`` so callers cannot
+        accidentally treat an arbitrary first registry row as canonical.
+
+        Repeated byte-equivalent append-only rows describe the same record and are
+        de-duplicated.  Conflicting rows, including equal version ids across datasets,
+        remain ambiguous and fail closed.  This method only reads ``registry.jsonl``.
+        """
+
+        ref_text = str(ref or "").strip()
+        if not ref_text:
+            raise ValueError("dataset_version_ref is required")
+
+        matches = [
+            version
+            for version in self.list_versions()
+            if ref_text in self._version_ref_candidates(version)
+        ]
+        if not matches:
+            raise ValueError(f"dataset_version_ref {ref_text!r} is not recorded")
+
+        distinct: list[DatasetVersion] = []
+        for version in matches:
+            if version not in distinct:
+                distinct.append(version)
+        if len(distinct) != 1:
+            raise ValueError(f"dataset_version_ref {ref_text!r} is ambiguous")
+        return distinct[0]
+
     def find_version(self, version_id: str) -> DatasetVersion | None:
         """按 version_id 精确查一条【已注册】DatasetVersion（confirmatory 数据身份门用）。
 
-        version_id 全库唯一（``make_version_id`` = fetched_at + sha256[:8]）；遍历 ``list_versions``
-        取首个匹配。confirmatory 边界门（``eval.confirmatory_data_gate``）据此把 dataset_version
+        ``make_version_id`` 不包含 dataset_id，同一批数据可能在多个 dataset 下产生相同
+        version_id；这种歧义必须返回 None，不能取 registry 首行。confirmatory 边界门
+        （``eval.confirmatory_data_gate``）据此把 dataset_version
         映回注册身份 + known_at(PIT) + lineage，验证「无 PIT/无注册 数据不得进 confirmatory」。
-        未命中 / 空 version_id → None（由调用方判拒，不在此造异常）。"""
+        未命中 / 空 / 歧义 version_id → None（由调用方判拒，不在此造异常）。"""
 
-        if not (version_id or "").strip():
+        version_text = str(version_id or "").strip()
+        try:
+            resolved = self.resolve_version_ref(version_text)
+        except ValueError:
             return None
-        for v in self.list_versions():
-            if v.version_id == version_id:
-                return v
-        return None
+        return resolved if version_text == resolved.version_id else None
 
     def list_dataset_ids(self) -> list[str]:
         return sorted({v.dataset_id for v in self.list_versions()})

@@ -59,17 +59,47 @@ from ..research_os.methodology_validation import (
     ValidationDepthRecord,
     ValidationMethodologyRecord,
 )
+from ..research_os.spine import (
+    Section6PromotionClaim,
+    build_section6_mathchain_record,
+)
+from ..research_os.trust_layer import (
+    ExternalExpertReviewRecord,
+    FunctionalIndependenceDisclosure,
+    TrustClaimRecord,
+    TrustPressureRunRecord,
+    TrustReleaseApprovalRecord,
+    TrustReleaseCheckRecord,
+    TrustReleaseGateRecord,
+    UserAutonomyRecord,
+)
+from ..research_os.engineering_standards import (
+    DataUpdateStandardRecord,
+    FatalRuntimeStandardRecord,
+    LLMReplayStandardRecord,
+    MockHonestyRecord,
+    PerformanceBaselineMeasurement,
+    TheoryImplementationStandardRecord,
+)
 from .mock_honesty import ExecutionBlock
 from .release_gate import ReleaseCandidate, ReleaseValidation, evaluate_release
 
 # producer 契约 key = 各 section_*_gate 的 MANIFEST_KEY 单一源（**只读复用·不重定义**·防漂；
 # 门若重命名 key → 此 import 立刻炸·loud-fail）。section gate 模块经实证冷导入安全（各自 cold-import 测）。
-from .section9_boundary_gate import SECTION9_BOUNDARY_MANIFEST_KEY
+from .section6_mathchain_gate import SECTION6_MATHCHAIN_MANIFEST_KEY, SECTION6_MATHCHAIN_PRODUCER_KEY
+from .section9_boundary_gate import SECTION9_BOUNDARY_MANIFEST_KEY, SECTION9_BOUNDARY_PRODUCER_KEY
 from .section10_methodology_gate import (
     SECTION10_CONTROLPLANE_MANIFEST_KEY,
+    SECTION10_CONTROLPLANE_PRODUCER_KEY,
     SECTION10_COST_MANIFEST_KEY,
+    SECTION10_COST_PRODUCER_KEY,
 )
-from .section17_rdp_gate import SECTION17_RDP_MANIFEST_KEY
+from .section13_trust_gate import SECTION13_TRUST_MANIFEST_KEY, SECTION13_TRUST_PRODUCER_KEY
+from .section16_engineering_standards_gate import (
+    SECTION16_ENGINEERING_STANDARDS_MANIFEST_KEY,
+    SECTION16_ENGINEERING_STANDARDS_PRODUCER_KEY,
+)
+from .section17_rdp_gate import SECTION17_RDP_MANIFEST_KEY, SECTION17_RDP_PRODUCER_KEY
 
 # run.json 缺省（`ide/promote.py.promote_ide_run` 当前不写）→ 组装器对这些 run 恒留空标缺的证据类。
 # 中心接真 promote 端点时要知道：携带这些证据是 run/ledger 端 follow-on，不是组装器能凭空补的。
@@ -94,10 +124,43 @@ class AssemblyError(ValueError):
     """run manifest 无法建立资产身份（缺 run_id 且缺 strategy_id）——fail-closed，不伪造身份放行。"""
 
 
+_SECTION_PRODUCER_BY_MANIFEST_KEY = {
+    SECTION6_MATHCHAIN_MANIFEST_KEY: SECTION6_MATHCHAIN_PRODUCER_KEY,
+    SECTION9_BOUNDARY_MANIFEST_KEY: SECTION9_BOUNDARY_PRODUCER_KEY,
+    SECTION10_COST_MANIFEST_KEY: SECTION10_COST_PRODUCER_KEY,
+    SECTION10_CONTROLPLANE_MANIFEST_KEY: SECTION10_CONTROLPLANE_PRODUCER_KEY,
+    SECTION13_TRUST_MANIFEST_KEY: SECTION13_TRUST_PRODUCER_KEY,
+    SECTION16_ENGINEERING_STANDARDS_MANIFEST_KEY: SECTION16_ENGINEERING_STANDARDS_PRODUCER_KEY,
+    SECTION17_RDP_MANIFEST_KEY: SECTION17_RDP_PRODUCER_KEY,
+}
+
+
 def _clean(s: object) -> str:
     """非空白字符串视图（None / 非串 / 纯空白 → ""）——与 release_gate._clean 同口径。"""
 
     return s.strip() if isinstance(s, str) and s.strip() else ""
+
+
+def _resolve_requested_label(
+    manifest: Mapping[str, Any], explicit: str | None
+) -> str:
+    """解析标签优先级，并对两个输入面做 fail-closed 类型校验。
+
+    ``None`` 表示未声明；空白字符串沿用既有优先级回退语义。任何其他非字符串值都不是可解释的
+    标签声明，必须拒绝，而不能经 ``_clean`` 静默变成 exploratory。
+    """
+
+    manifest_value = manifest.get("requested_label")
+    for source, value in (
+        ("requested_label parameter", explicit),
+        ("run_manifest.requested_label", manifest_value),
+    ):
+        if value is not None and not isinstance(value, str):
+            raise AssemblyError(
+                f"{source} 须为 str 或 None，得到 {type(value).__name__}"
+                "（fail-closed·不把畸形标签静默降级为 exploratory）"
+            )
+    return _clean(explicit) or _clean(manifest_value) or DEFAULT_REQUESTED_LABEL
 
 
 @dataclass(frozen=True)
@@ -142,11 +205,17 @@ def _block_from_dict(raw: Mapping[str, Any], idx: int) -> ExecutionBlock:
         raise AssemblyError(
             f"execution_blocks[{idx}] 缺 mode——无法诚实分类执行块（不静默吞·缺即拒组装）"
         )
+    mock_marked = raw.get("mock_marked", False)
+    if not isinstance(mock_marked, bool):
+        raise AssemblyError(
+            f"execution_blocks[{idx}].mock_marked 须为 bool，得到 "
+            f"{type(mock_marked).__name__}（fail-closed·不以 truthiness 改写声明）"
+        )
     return ExecutionBlock(
         block_id=_clean(raw.get("block_id")) or f"block_{idx}",
         mode=mode,
         result_grade=_clean(raw.get("result_grade")) or "none",
-        mock_marked=bool(raw.get("mock_marked", False)),
+        mock_marked=mock_marked,
         live_source_ref=_clean(raw.get("live_source_ref")),
         fallback_reason=_clean(raw.get("fallback_reason")),
         note=_clean(raw.get("note")),
@@ -160,12 +229,23 @@ def _resolve_execution_blocks(
 
     if explicit is not None:
         return tuple(explicit)
+    if "execution_blocks" not in manifest:
+        return ()
     raw_blocks = manifest.get("execution_blocks")
-    if isinstance(raw_blocks, Sequence) and not isinstance(raw_blocks, (str, bytes)):
-        return tuple(
-            _block_from_dict(b, i) for i, b in enumerate(raw_blocks) if isinstance(b, Mapping)
+    if not isinstance(raw_blocks, Sequence) or isinstance(raw_blocks, (str, bytes)):
+        raise AssemblyError(
+            "run_manifest.execution_blocks 须为非字符串 Sequence，得到 "
+            f"{type(raw_blocks).__name__}（fail-closed·不把畸形声明当成未声明）"
         )
-    return ()
+    blocks: list[ExecutionBlock] = []
+    for i, raw_block in enumerate(raw_blocks):
+        if not isinstance(raw_block, Mapping):
+            raise AssemblyError(
+                f"execution_blocks[{i}] 须为 Mapping，得到 "
+                f"{type(raw_block).__name__}（fail-closed·不静默丢执行声明）"
+            )
+        blocks.append(_block_from_dict(raw_block, i))
+    return tuple(blocks)
 
 
 def _dataset_ref_from_dict(raw: Mapping[str, Any]) -> DatasetVersionRef:
@@ -301,17 +381,22 @@ def _probe_ledger_spine(
     return binding, checks, choice
 
 
-def _probe_ledger_llm(ledger: Any, *, asset_ref: str) -> tuple[LLMCallRecord, ...]:
+def _probe_ledger_llm(
+    ledger: Any,
+    *,
+    asset_ref: str,
+    owner_user_id: str | None,
+) -> tuple[LLMCallRecord, ...]:
     """duck-typed 探 ledger 的 LLMCallRecord（forward-compat：若 ledger 暴露 llm_records_for）。
 
     SpineLedger / T-013 Ledger 都不持 LLMCallRecord——故默认探不到、留空。绝不编造账。
     """
 
     if ledger is not None and hasattr(ledger, "llm_records_for"):
-        try:
-            rows = ledger.llm_records_for(asset_ref)
-        except Exception:
-            rows = []
+        owner = _clean(owner_user_id)
+        if not owner:
+            raise AssemblyError("owner_user_id is required for owner-scoped LLM record lookup")
+        rows = ledger.llm_records_for(asset_ref, owner_user_id=owner)
         return tuple(r for r in rows if isinstance(r, LLMCallRecord))
     return ()
 
@@ -323,6 +408,7 @@ def assemble(
     run_manifest: Mapping[str, Any],
     *,
     ledger: Any = None,
+    owner_user_id: str | None = None,
     requested_label: str | None = None,
     asset_kind: str | None = None,
     theory_ref: str | None = None,
@@ -356,11 +442,7 @@ def assemble(
 
     asset_ref = _resolve_asset_ref(run_manifest)
     kind = _clean(asset_kind) or _clean(run_manifest.get("asset_kind")) or DEFAULT_ASSET_KIND
-    label = (
-        _clean(requested_label)
-        or _clean(run_manifest.get("requested_label"))
-        or DEFAULT_REQUESTED_LABEL
-    )
+    label = _resolve_requested_label(run_manifest, requested_label)
 
     # —— assembly_inputs 透传（绝不静默丢；它是组装【意图】，非「已注入」证明）——
     raw_ai = run_manifest.get("assembly_inputs")
@@ -385,7 +467,11 @@ def assemble(
     final_llm_records = (
         tuple(llm_call_records)
         if llm_call_records is not None
-        else _probe_ledger_llm(ledger, asset_ref=asset_ref)
+        else _probe_ledger_llm(
+            ledger,
+            asset_ref=asset_ref,
+            owner_user_id=owner_user_id,
+        )
     )
 
     candidate = ReleaseCandidate(
@@ -526,10 +612,11 @@ def evaluate_run_releasable(
 
 
 # ════════════════════════════════════════════════════════════════════════════
-# C-S17-RUNJSON-PRODUCERS · promote 门链 section 记录组装（§9 边界 / §10 成本+控制面 / §17 RDP）
+# C-S17-RUNJSON-PRODUCERS · promote 门链 section 记录组装（§6 数学链 / §9 边界 / §10 成本+控制面 / §17 RDP）
 # ════════════════════════════════════════════════════════════════════════════
-# 缺口（codemap C-S17-RUNJSON-PRODUCERS）：promote 真路径未把各 section 记录如实组装进 manifest，故
-# §9/§10/§17 节门恒见「未声明」→ producer 接线测试无真对象、producer 无从诚实转绿。本段补这块：从
+# 缺口（codemap C-S17-RUNJSON-PRODUCERS + NC-S6-MATHCHAIN-PRODUCER）：promote 真路径未把各 section
+# 记录如实组装进 manifest，故 §6/§9/§10/§17 节门恒见「未声明」→ producer 接线测试无真对象、producer
+# 无从诚实转绿。本段补这块：从
 # **真血统/真运行产物**（typed domain 对象）如实序列化成各 section_*_gate 的 producer 契约 dict——
 # 让门有真对象可判（合规 run 过、坏 run 拒）。**只组装·零判定**：判定全留给 section_*_gate→canonical。
 #
@@ -578,6 +665,20 @@ def _typed_list(seq: Sequence[Any] | None, typ: type, what: str) -> list[Any]:
     return items
 
 
+# ── §6 数学链 producer（复用 research_os.spine builder 单一源·本段不重写序列化）─────────────
+def _assemble_section6_mathchain(
+    mathchain_claims: Sequence[Section6PromotionClaim],
+) -> dict[str, Any] | None:
+    """§6 数学链：canonical Section6PromotionClaim 序列 → producer dict；无 claim → None。
+
+    复用 `research_os.spine.build_section6_mathchain_record`，让 §6 的 typed 对象校验、no-whitewash、
+    fail-closed None/错 flavor 等语义保持单一源。本函数只作为 promote_assembler 的接入口，不重造 §6
+    序列化或判定。
+    """
+
+    return build_section6_mathchain_record(mathchain_claims)
+
+
 # ── §10 控制面 tier-claim 与 §9 StrategyBook 交叉引用的 producer 输入类型（复用 canonical 类型·不重造）──
 @dataclass(frozen=True)
 class Section10TierClaim:
@@ -622,6 +723,7 @@ class AssembledSections:
     emitted: tuple[str, ...]
     absent: tuple[str, ...]
     honest_gaps: tuple[str, ...]
+    verified_producer_keys: tuple[str, ...] = ()
 
     def apply_to(self, run_manifest: Mapping[str, Any]) -> dict[str, Any]:
         """返回 `run_manifest` 浅拷贝 + 已组装 section（中心串 promote.py 时 `evaluate` 前调）。
@@ -633,6 +735,16 @@ class AssembledSections:
         merged = dict(run_manifest)
         merged.update(self.sections)
         return merged
+
+    def producer_status(self) -> Any:
+        """Return green only for producer keys carrying resolver receipts."""
+
+        from ..governance.enforcement_policy import ProducerStatusLedger
+
+        ledger = ProducerStatusLedger()
+        for producer_key in self.verified_producer_keys:
+            ledger.mark_green(producer_key)
+        return ledger
 
 
 # ── 各节序列化（只组装·缺子键即不发·绝不补占位）──────────────────────────────────────────
@@ -739,10 +851,96 @@ def _assemble_section10_controlplane(
     return {"tier_claims": [_serialize_tier_claim(c) for c in claims]}
 
 
-# ── 主入口：真血统 → 四节 producer 契约 dict（honest-absent）──────────────────────────────
+def _assemble_section13(
+    trust_claims: Sequence[TrustClaimRecord],
+    independence_disclosures: Sequence[FunctionalIndependenceDisclosure],
+    expert_reviews: Sequence[ExternalExpertReviewRecord],
+    user_choices: Sequence[UserAutonomyRecord],
+    release_gates: Sequence[TrustReleaseGateRecord],
+    release_checks: Sequence[TrustReleaseCheckRecord],
+    pressure_runs: Sequence[TrustPressureRunRecord],
+    release_approvals: Sequence[TrustReleaseApprovalRecord],
+) -> dict[str, Any]:
+    """§13 信任：八族 trust_layer typed records → producer dict（每族非空才发其 key·全空 → {}）。"""
+
+    section: dict[str, Any] = {}
+    claims = _typed_list(trust_claims, TrustClaimRecord, "trust_claims[*]")
+    if claims:
+        section["trust_claims"] = [_json_safe(r) for r in claims]
+    disclosures = _typed_list(
+        independence_disclosures,
+        FunctionalIndependenceDisclosure,
+        "independence_disclosures[*]",
+    )
+    if disclosures:
+        section["independence_disclosures"] = [_json_safe(r) for r in disclosures]
+    reviews = _typed_list(expert_reviews, ExternalExpertReviewRecord, "expert_reviews[*]")
+    if reviews:
+        section["expert_reviews"] = [_json_safe(r) for r in reviews]
+    choices = _typed_list(user_choices, UserAutonomyRecord, "user_choices[*]")
+    if choices:
+        section["user_choices"] = [_json_safe(r) for r in choices]
+    gates = _typed_list(release_gates, TrustReleaseGateRecord, "release_gates[*]")
+    if gates:
+        section["release_gates"] = [_json_safe(r) for r in gates]
+    checks = _typed_list(release_checks, TrustReleaseCheckRecord, "release_checks[*]")
+    if checks:
+        section["release_checks"] = [_json_safe(r) for r in checks]
+    runs = _typed_list(pressure_runs, TrustPressureRunRecord, "pressure_runs[*]")
+    if runs:
+        section["pressure_runs"] = [_json_safe(r) for r in runs]
+    approvals = _typed_list(release_approvals, TrustReleaseApprovalRecord, "release_approvals[*]")
+    if approvals:
+        section["release_approvals"] = [_json_safe(r) for r in approvals]
+    return section
+
+
+def _assemble_section16(
+    mock_records: Sequence[MockHonestyRecord],
+    data_updates: Sequence[DataUpdateStandardRecord],
+    llm_calls: Sequence[LLMReplayStandardRecord],
+    theory_claims: Sequence[TheoryImplementationStandardRecord],
+    fatal_records: Sequence[FatalRuntimeStandardRecord],
+    performance_records: Sequence[PerformanceBaselineMeasurement],
+) -> dict[str, Any]:
+    """§16 工程标准：六族 engineering_standards typed records → producer dict（每族非空才发其 key）。"""
+
+    section: dict[str, Any] = {}
+    mock = _typed_list(mock_records, MockHonestyRecord, "mock_records[*]")
+    if mock:
+        section["mock_records"] = [_json_safe(r) for r in mock]
+    updates = _typed_list(data_updates, DataUpdateStandardRecord, "data_updates[*]")
+    if updates:
+        section["data_updates"] = [_json_safe(r) for r in updates]
+    llm = _typed_list(llm_calls, LLMReplayStandardRecord, "llm_calls[*]")
+    if llm:
+        section["llm_calls"] = [_json_safe(r) for r in llm]
+    theory = _typed_list(
+        theory_claims,
+        TheoryImplementationStandardRecord,
+        "theory_claims[*]",
+    )
+    if theory:
+        section["theory_claims"] = [_json_safe(r) for r in theory]
+    fatal = _typed_list(fatal_records, FatalRuntimeStandardRecord, "fatal_records[*]")
+    if fatal:
+        section["fatal_records"] = [_json_safe(r) for r in fatal]
+    perf = _typed_list(
+        performance_records,
+        PerformanceBaselineMeasurement,
+        "performance_records[*]",
+    )
+    if perf:
+        section["performance_records"] = [_json_safe(r) for r in perf]
+    return section
+
+
+# ── 主入口：真血统 → 五节 producer 契约 dict（honest-absent）──────────────────────────────
 def assemble_promote_sections(
     run_manifest: Mapping[str, Any],
     *,
+    # —— §6 数学链（复用 research_os.spine builder / section6_mathchain_gate 单一源）——
+    mathchain_claims: Sequence[Section6PromotionClaim] = (),
     # —— §17 RDP（复用 delivery.rdp / rdp_gate 单一源）——
     rdp: RDPManifest | None = None,
     promotion: PromotionClaim | None = None,
@@ -755,8 +953,25 @@ def assemble_promote_sections(
     validation_methodologies: Sequence[ValidationMethodologyRecord] = (),
     validation_depths: Sequence[ValidationDepthRecord] = (),
     tier_claims: Sequence[Section10TierClaim] = (),
+    # —— §13 信任（复用 trust_layer 单一源）——
+    trust_claims: Sequence[TrustClaimRecord] = (),
+    independence_disclosures: Sequence[FunctionalIndependenceDisclosure] = (),
+    expert_reviews: Sequence[ExternalExpertReviewRecord] = (),
+    user_choices: Sequence[UserAutonomyRecord] = (),
+    release_gates: Sequence[TrustReleaseGateRecord] = (),
+    release_checks: Sequence[TrustReleaseCheckRecord] = (),
+    pressure_runs: Sequence[TrustPressureRunRecord] = (),
+    release_approvals: Sequence[TrustReleaseApprovalRecord] = (),
+    # —— §16 工程标准（复用 engineering_standards 单一源）——
+    mock_records: Sequence[MockHonestyRecord] = (),
+    data_updates: Sequence[DataUpdateStandardRecord] = (),
+    llm_calls: Sequence[LLMReplayStandardRecord] = (),
+    theory_claims: Sequence[TheoryImplementationStandardRecord] = (),
+    fatal_records: Sequence[FatalRuntimeStandardRecord] = (),
+    performance_records: Sequence[PerformanceBaselineMeasurement] = (),
+    verified_producer_keys: Sequence[str] = (),
 ) -> AssembledSections:
-    """从真血统/真运行产物（typed 对象）组装 §9/§10/§17 节门的 producer 契约 dict（honest-absent）。
+    """从真血统/真运行产物（typed 对象）组装 §6/§9/§10/§17 节门的 producer 契约 dict（honest-absent）。
 
     每节：有真证据 → 序列化进 `sections`（key = 对应 section_*_gate 的 MANIFEST_KEY）；无证据 → **不发**该
     key（门 honest-bound·不误拒「只是没那类资产」的诚实 run）。**只序列化·零判定**：坏对象如实序列化让门据
@@ -782,6 +997,11 @@ def assemble_promote_sections(
             gaps.append(undeclared_gap)
 
     _take(
+        SECTION6_MATHCHAIN_MANIFEST_KEY,
+        _assemble_section6_mathchain(mathchain_claims),
+        "section6_mathchain:undeclared——本 run 无 §6 数学链升级断言，诚实留空（未声明≠违例）",
+    )
+    _take(
         SECTION17_RDP_MANIFEST_KEY,
         _assemble_section17(rdp, promotion),
         "section17_rdp:undeclared——本 run 无 RDP/晋级断言，§17 节诚实留空"
@@ -802,12 +1022,51 @@ def assemble_promote_sections(
         _assemble_section10_controlplane(tier_claims),
         "section10_control_plane:undeclared——本 run 无 §10 档位声明，诚实留空（未声明≠违例）",
     )
+    _take(
+        SECTION13_TRUST_MANIFEST_KEY,
+        _assemble_section13(
+            trust_claims,
+            independence_disclosures,
+            expert_reviews,
+            user_choices,
+            release_gates,
+            release_checks,
+            pressure_runs,
+            release_approvals,
+        ),
+        "section13_trust:undeclared——本 run 无 §13 信任发版结构，诚实留空（未声明≠违例）",
+    )
+    _take(
+        SECTION16_ENGINEERING_STANDARDS_MANIFEST_KEY,
+        _assemble_section16(
+            mock_records,
+            data_updates,
+            llm_calls,
+            theory_claims,
+            fatal_records,
+            performance_records,
+        ),
+        "section16_engineering_standards:undeclared——本 run 无 §16 工程标准结构，诚实留空（未声明≠违例）",
+    )
 
+    emitted_producer_keys = {
+        _SECTION_PRODUCER_BY_MANIFEST_KEY[key]
+        for key in emitted
+        if key in _SECTION_PRODUCER_BY_MANIFEST_KEY
+    }
+    verified = tuple(dict.fromkeys(str(key or "") for key in verified_producer_keys if str(key or "")))
+    unknown = sorted(set(verified) - emitted_producer_keys)
+    if unknown:
+        raise AssemblyError(
+            "verified producer receipt has no emitted canonical section: "
+            + ",".join(unknown)
+        )
     return AssembledSections(
         sections=sections,
         emitted=tuple(emitted),
         absent=tuple(absent),
         honest_gaps=tuple(gaps),
+        verified_producer_keys=verified,
     )
 
 
@@ -821,8 +1080,23 @@ __all__ = [
     "assemble_release_candidate",
     "evaluate_run_releasable",
     # —— C-S17-RUNJSON-PRODUCERS：promote 门链 section 组装 ——
+    "Section6PromotionClaim",
     "Section10TierClaim",
     "Section9StrategyBook",
     "AssembledSections",
     "assemble_promote_sections",
+    "TrustClaimRecord",
+    "FunctionalIndependenceDisclosure",
+    "ExternalExpertReviewRecord",
+    "UserAutonomyRecord",
+    "TrustReleaseGateRecord",
+    "TrustReleaseCheckRecord",
+    "TrustPressureRunRecord",
+    "TrustReleaseApprovalRecord",
+    "MockHonestyRecord",
+    "DataUpdateStandardRecord",
+    "LLMReplayStandardRecord",
+    "TheoryImplementationStandardRecord",
+    "FatalRuntimeStandardRecord",
+    "PerformanceBaselineMeasurement",
 ]

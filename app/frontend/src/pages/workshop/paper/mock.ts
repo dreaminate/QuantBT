@@ -593,5 +593,7 @@ export function defaultBoardData(): import("./types").PaperBoardData {
       turnover: "60%/周",
       ddHalt: "20%",
     },
+    runtimeEvidence: { status: "running", label: "运行中" },
+    riskEvidence: { violationCount: 0, chainIntact: true },
   };
 }

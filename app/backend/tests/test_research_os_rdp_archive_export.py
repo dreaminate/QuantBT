@@ -1,7 +1,9 @@
 from __future__ import annotations
 
 import io
+import hashlib
 import zipfile
+from functools import partial
 from types import SimpleNamespace
 
 import pytest
@@ -17,6 +19,14 @@ from app.research_os import (
     RDPSourceFileBundler,
     RuntimeStatus,
 )
+
+RDPOpenPackageMaterializer = partial(RDPOpenPackageMaterializer, owner_user_id="u1")
+RDPSourceFileBundler = partial(RDPSourceFileBundler, owner_user_id="u1")
+RDPPackageArchiveExporter = partial(RDPPackageArchiveExporter, owner_user_id="u1")
+
+
+def _owned_root(root):
+    return root / "_owners" / hashlib.sha256(b"u1").hexdigest()
 
 
 def _manifest(**overrides) -> RDPManifest:
@@ -102,9 +112,9 @@ def test_rdp_package_archive_exporter_writes_deterministic_zip_with_package_file
     _materialize_and_bundle(materializer, bundler, manifest, source_root)
 
     first = exporter.export(manifest)
-    first_bytes = (tmp_path / "rdp_packages" / "_archives" / f"{manifest.package_id}.zip").read_bytes()
+    first_bytes = (_owned_root(tmp_path / "rdp_packages") / "_archives" / f"{manifest.package_id}.zip").read_bytes()
     second = exporter.export(manifest)
-    second_bytes = (tmp_path / "rdp_packages" / "_archives" / f"{manifest.package_id}.zip").read_bytes()
+    second_bytes = (_owned_root(tmp_path / "rdp_packages") / "_archives" / f"{manifest.package_id}.zip").read_bytes()
 
     assert first.archive_sha256 == second.archive_sha256
     assert first_bytes == second_bytes
@@ -117,7 +127,7 @@ def test_rdp_package_archive_exporter_writes_deterministic_zip_with_package_file
         assert f"{manifest.package_id}/refs.json" in names
         assert f"{manifest.package_id}/source_files_index.json" in names
         assert sum(name.startswith(f"{manifest.package_id}/source_files/") for name in names) == 2
-        assert {info.date_time for info in archive.infolist()} == {RDPPackageArchiveExporter._FIXED_ZIP_DT}
+        assert {info.date_time for info in archive.infolist()} == {(1980, 1, 1, 0, 0, 0)}
 
 
 def test_rdp_package_archive_exporter_requires_materialized_package(tmp_path):
@@ -128,10 +138,8 @@ def test_rdp_package_archive_exporter_requires_materialized_package(tmp_path):
 
 
 def test_rdp_package_archive_exporter_rejects_reserved_package_id(tmp_path):
-    exporter = RDPPackageArchiveExporter(tmp_path / "rdp_packages")
-
-    with pytest.raises(ValueError, match="package_id is unsafe"):
-        exporter.export(_manifest(package_id="_archives", source_file_refs=()))
+    with pytest.raises(ValueError, match="canonical content identity"):
+        _manifest(package_id="_archives", source_file_refs=())
 
 
 def test_rdp_package_archive_exporter_requires_source_bundle_for_declared_sources(tmp_path):
@@ -149,7 +157,9 @@ def test_rdp_package_archive_exporter_rejects_tampered_manifest_file(tmp_path):
     exporter = RDPPackageArchiveExporter(materializer.package_root)
     manifest = _manifest(source_file_refs=())
     materializer.materialize(manifest)
-    (materializer.package_root / manifest.package_id / "manifest.json").write_text("{}\n", encoding="utf-8")
+    (_owned_root(materializer.package_root) / manifest.package_id / "manifest.json").write_text(
+        "{}\n", encoding="utf-8"
+    )
 
     with pytest.raises(ValueError, match="manifest file does not match"):
         exporter.export(manifest)
@@ -164,7 +174,7 @@ def test_rdp_package_archive_exporter_rejects_symlink_escape(tmp_path):
     outside.write_text("do not include\n", encoding="utf-8")
 
     try:
-        (materializer.package_root / manifest.package_id / "leak.txt").symlink_to(outside)
+        (_owned_root(materializer.package_root) / manifest.package_id / "leak.txt").symlink_to(outside)
     except OSError as exc:
         pytest.skip(f"symlink unavailable: {exc}")
 
@@ -174,7 +184,9 @@ def test_rdp_package_archive_exporter_rejects_symlink_escape(tmp_path):
 
 def test_rdp_package_archive_api_returns_downloadable_zip(tmp_path, monkeypatch):
     client, store, materializer, bundler, _exporter, source_root = _client_with_rdp_archive(tmp_path, monkeypatch)
-    manifest = store.record_manifest(_manifest())
+    manifest = store.record_manifest(
+        _manifest(), owner_user_id="u1", recorded_by="u1"
+    )
     _materialize_and_bundle(materializer, bundler, manifest, source_root)
     try:
         response = client.get(f"/api/research-os/rdp/manifests/{manifest.package_id}/archive")

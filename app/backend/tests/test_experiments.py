@@ -7,6 +7,9 @@ import pytest
 from app.experiments import ExperimentStore, ModelRegistry, RunStore
 
 
+_OWNER_USER_ID = "test-owner"
+
+
 def test_experiment_create_and_list(tmp_path: Path) -> None:
     store = ExperimentStore(tmp_path)
     e = store.create_experiment(name="hs300_lgbm_v1", asset_class="equity_cn", description="demo")
@@ -48,20 +51,35 @@ def test_run_lineage_forked_from(tmp_path: Path) -> None:
 
 def test_model_registry_versioning_and_promotion(tmp_path: Path) -> None:
     reg = ModelRegistry(tmp_path)
-    v1 = reg.register_version("lgbm_xs", artifact_path="a.pkl", metrics={"sharpe": 1.1})
-    v2 = reg.register_version("lgbm_xs", artifact_path="b.pkl", metrics={"sharpe": 1.4})
+    v1 = reg.register_version(
+        "lgbm_xs",
+        artifact_path="a.pkl",
+        metrics={"sharpe": 1.1},
+        owner_user_id=_OWNER_USER_ID,
+    )
+    v2 = reg.register_version(
+        "lgbm_xs",
+        artifact_path="b.pkl",
+        metrics={"sharpe": 1.4},
+        owner_user_id=_OWNER_USER_ID,
+    )
     assert v1.version == 1
     assert v2.version == 2
     assert v1.stage == "dev"
     # T-019：staging/production 需经审批门；dev/archived 仍直翻（向后兼容）。这里测直翻路径。
-    promoted = reg.promote("lgbm_xs", 2, "archived")
+    promoted = reg.promote(
+        "lgbm_xs",
+        2,
+        "archived",
+        owner_user_id=_OWNER_USER_ID,
+    )
     assert promoted.stage == "archived"
     # 重新拉取
-    versions = reg.list_versions("lgbm_xs")
+    versions = reg.list_versions("lgbm_xs", owner_user_id=_OWNER_USER_ID)
     assert any(v.version == 2 and v.stage == "archived" for v in versions)
-    assert "lgbm_xs" in reg.list_models()
+    assert "lgbm_xs" in reg.list_models(owner_user_id=_OWNER_USER_ID)
     # 无 gate_service 时晋升 production 必 raise（禁裸翻）。
     import pytest as _pytest
     from app.approval.schema import GateStateError
     with _pytest.raises(GateStateError):
-        reg.promote("lgbm_xs", 2, "production")
+        reg.promote("lgbm_xs", 2, "production", owner_user_id=_OWNER_USER_ID)

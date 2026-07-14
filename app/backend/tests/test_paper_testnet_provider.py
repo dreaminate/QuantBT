@@ -18,6 +18,7 @@ key 也可验：testnet REST client 抽象成可注入接缝（`TestnetMarketCli
 from __future__ import annotations
 
 import tempfile
+from datetime import UTC, datetime, timedelta
 from pathlib import Path
 from typing import Any
 
@@ -30,6 +31,7 @@ from app.paper.testnet_provider import (
     TestnetBarProvider,
     make_testnet_provider,
 )
+from app.verification import Verifier
 
 
 # 一个真实感的 testnet 价格序列（BTC ~量级，验首价反推 qty 不跨尺度失真）。
@@ -40,6 +42,37 @@ _REAL_TESTNET_SECRET = "SECRET-must-never-leak-anywhere-1234567890"  # noqa: S10
 
 def _tmp_eqlog(name: str) -> Path:
     return Path(tempfile.mkdtemp()) / f"{name}_equity.jsonl"
+
+
+def _authorize_exact_promotion(
+    svc: PaperDeskService, gate, *, reviewer: str = "bob"
+) -> str:
+    record = Verifier().reconcile(
+        target_ref=gate.verification_target_ref,
+        claims={"promotion_snapshot": 1.0},
+        recomputed={"promotion_snapshot": 1.0},
+        generator_model="paper-builder-model",
+        checker_model="paper-reviewer-model",
+        generator_seed=1,
+        checker_seed=2,
+        generator_slice="builder-slice",
+        checker_slice="reviewer-slice",
+        replay_ref=f"paper_fixture:{gate.gate_id}",
+    )
+    svc.configure_promotion_endorsement_lookup(
+        lambda ref: record if ref == record.verdict_id else None
+    )
+    svc.configure_promotion_reviewer_authority(
+        lambda actor: "paper_verifier_authority:sha256:test" if actor == reviewer else None
+    )
+    svc.grant_promotion_reviewer(
+        gate.gate_id,
+        owner_user_id=gate.creator,
+        reviewer_user_id=reviewer,
+        permissions=("approve",),
+        expires_at_utc=(datetime.now(UTC) + timedelta(hours=1)).isoformat(),
+    )
+    return record.verdict_id
 
 
 # ════════════════════════════════════════════════════════════════════
@@ -148,6 +181,33 @@ def test_with_key_status_exposes_testnet_kind():
     assert st["provider_kind"] == "testnet"
     assert st["simulated_source"] == "binance_testnet_live"
     assert st["degrade_reason"] is None
+
+
+def test_testnet_source_with_five_gates_allows_human_approval():
+    """真实 testnet provider + 运行指标 4 门 + 独立人工背书齐，5 门才允许晋级。"""
+
+    svc = PaperDeskService()
+    ks = SpyKeystore(names=["binance_testnet"])
+    rec = svc.register_run(
+        run_id="tn_promo", name="tn_promo", origin="o", market="crypto", symbols=["BTCUSDT"],
+        bench="BTC", creator="alice", equity_log_path=_tmp_eqlog("tn_promo"),
+        days_running=30, paper_excess_return=0.02, backtest_annual=0.2, paper_annual=0.18,
+        testnet=True, testnet_keystore=ks, testnet_client_factory=lambda: FakeTestnetClient(),
+    )
+    assert rec.simulated_source == TESTNET_SOURCE
+    assert rec.provider_kind == "testnet" and rec.degrade_reason is None
+    gate = svc.open_promotion_gate("tn_promo", creator="alice")
+    assert gate.eligible is True
+    assert next(c for c in gate.checks if c["key"] == "data_source")["passed"] is True
+    endorsement_ref = _authorize_exact_promotion(svc, gate)
+    approved = svc.approve_promotion(
+        gate.gate_id,
+        approver="bob",
+        endorsement_ref=endorsement_ref,
+        reason="独立复核通过",
+    )
+    assert approved.decision == "approved"
+    assert rec.promoted is True
 
 
 def test_testnet_first_price_back_derives_qty_no_scale_distortion():

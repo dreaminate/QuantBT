@@ -3,13 +3,13 @@
 # 用法 (首次部署):
 #   1. SSH 到 VPS, cd /opt/quantbt
 #   2. cp deploy/cloud/.env.template .env  → 填上 真实 secrets
-#   3. 把 secrets.yaml 放 ./data/secrets/ (chmod 600)
+#   3. 可选：把仅含 LLM/Tushare/Sentry 的 secrets.yaml 放 ./data/secrets/ (chmod 600)
 #   4. docker compose -f deploy/cloud/docker-compose.prod.yml up -d
 #   5. docker compose logs -f caddy  → 看 HTTPS 自动签发
 #
 # 含:
 #   - caddy: HTTPS 自动 cert + reverse proxy → backend
-#   - backend: FastAPI uvicorn (3 worker)
+#   - backend: FastAPI uvicorn（当前镜像入口为单 worker；多副本仍必须依赖持久锁/epoch）
 #   - postgres: 用户/run/event 数据 (替代 sqlite 单文件)
 #   - watchtower: 自动 pull 镜像 + restart
 #
@@ -52,6 +52,8 @@ services:
     environment:
       # 主密钥 (mainnet keystore 加密派生)
       - QUANTBT_MASTER_KEY=${QUANTBT_MASTER_KEY}
+      - QUANTBT_KEYSTORE_BACKEND=fernet_file
+      - QUANTBT_RUNTIME_MODE=production
       - BACKTEST_DATA_ROOT=/data
       - QUANTBT_KEYSTORE_INDEX=/data/keystore_index.json
       # Postgres (生产 db)
@@ -67,7 +69,7 @@ services:
       - CORS_ALLOWED_ORIGINS=https://${QUANTBT_DOMAIN}
     volumes:
       - ./data:/data
-      - ./data/secrets:/root/.quantbt:ro  # secrets.yaml 只读挂
+      - ./data/secrets:/root/.quantbt:ro  # 可选非交易 secrets.yaml；禁止 Binance key
     depends_on:
       - postgres
     healthcheck:

@@ -71,3 +71,6 @@ graphify-out/
 data/strategy/
 # 模拟台 paper run 净值产物（每次运行/重启由 register_run+prime_run 重建，本地生成不入库）
 data/paper/
+# Copy-trade risk runtime state and its local HMAC key are user-specific generated data.
+data/risk/
+.gstack/

@@ -376,7 +376,8 @@ export function LLMSettingsPage() {
       <h1>模型连接配置</h1>
       <p className="cc-dim" style={{ fontSize: 13, margin: 0 }}>
         填一个 LLM provider，研究执行台才会用真实模型参与意图结构化和候选实现。没填任何 provider
-        时后端回退到开发期本地模型（DevLocalLLM）——能跑通流程，但能力有限。
+        时真实流会明确返回 NoLLMConfigured，不会静默回退到开发期模拟模型。需要演示时必须显式进入
+        DEMO / 测试路径。
       </p>
 
       {/* === Hermes 预设（Fork1：用订阅额度，经本地 OAuth 代理）=== */}

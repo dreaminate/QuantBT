@@ -1,6 +1,6 @@
 import { useCallback, useEffect, useRef, useState } from "react";
 import { useSearchParams } from "react-router-dom";
-import { authFetch, getStoredUser } from "../../lib/auth";
+import { authFetch, getStoredUser, getToken } from "../../lib/auth";
 
 /**
  * v0.8.6 · 诊断台多轮研究问答 (/chat)
@@ -46,6 +46,7 @@ const MARKET_MODES = [
 
 export function Mode2ChatPage() {
   const me = getStoredUser();
+  const userId = me?.user_id;
   const [searchParams] = useSearchParams();
   const bindRunId = searchParams.get("run");
   const initialQuery = searchParams.get("q");
@@ -61,7 +62,7 @@ export function Mode2ChatPage() {
   const autoOpenedRef = useRef(false);
 
   const reloadThreads = useCallback(async () => {
-    if (!me) return;
+    if (!userId) return;
     try {
       const r = await authFetch("/api/agent/chat/threads");
       const data = await r.json();
@@ -69,7 +70,7 @@ export function Mode2ChatPage() {
     } catch {
       setThreads([]);
     }
-  }, [me]);
+  }, [userId]);
 
   const loadThread = useCallback(async (tid: string) => {
     try {
@@ -90,7 +91,7 @@ export function Mode2ChatPage() {
   // v0.9.x · 若 URL 带 ?run=&q= → 自动新建 thread + 填充 query (来自 CoachSuggestionBanner)
   useEffect(() => {
     if (autoOpenedRef.current) return;
-    if (!me) return;
+    if (!userId) return;
     if (!bindRunId && !initialQuery) return;
     autoOpenedRef.current = true;
     void (async () => {
@@ -107,7 +108,7 @@ export function Mode2ChatPage() {
         reloadThreads();
       }
     })();
-  }, [me, bindRunId, initialQuery, marketMode, reloadThreads]);
+  }, [userId, bindRunId, initialQuery, marketMode, reloadThreads]);
 
   useEffect(() => {
     if (activeThreadId) loadThread(activeThreadId);
@@ -161,7 +162,7 @@ export function Mode2ChatPage() {
     setMessages((ms) => [...ms, optimisticAssistant]);
 
     try {
-      const token = localStorage.getItem("qb-token");
+      const token = getToken();
       const headers: Record<string, string> = {};
       if (token) headers["authorization"] = `Bearer ${token}`;
       const url = `/api/agent/chat/${activeThreadId}/stream?q=${encodeURIComponent(userText)}`;

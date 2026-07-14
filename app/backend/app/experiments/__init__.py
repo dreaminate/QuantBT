@@ -2,6 +2,14 @@
 
 from __future__ import annotations
 
+from .reviewer_grants import (
+    ModelReviewerGrant,
+    PersistentModelReviewerGrantRegistry,
+    ReviewerGrantAuthorizationError,
+    ReviewerGrantError,
+    ReviewerGrantPermission,
+    ReviewerGrantStatus,
+)
 from .store import (
     Experiment,
     ExperimentStore,
@@ -15,9 +23,15 @@ from .store import (
 __all__ = [
     "Experiment",
     "ExperimentStore",
+    "ModelReviewerGrant",
     "ModelRegistry",
     "ModelStage",
     "ModelVersion",
+    "PersistentModelReviewerGrantRegistry",
+    "ReviewerGrantAuthorizationError",
+    "ReviewerGrantError",
+    "ReviewerGrantPermission",
+    "ReviewerGrantStatus",
     "Run",
     "RunStore",
 ]

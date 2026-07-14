@@ -45,6 +45,7 @@ from .llm_adapter import GatewayBypassError, GatewayLLMAdapter, assert_llm_admis
 from .orchestrator import (
     MODES,
     AgentOrchestrator,
+    AgentRuntimeContext,
     GraphWriteAuthorityError,
     OrchestrationResult,
     OrchestratorError,
@@ -73,6 +74,11 @@ from .roles import (
     get_role,
     is_verifier,
 )
+from .task_router import (
+    PRODUCTION_COORDINATOR_TASK_ID,
+    ProductionAgentTaskRoute,
+    route_production_agent_task,
+)
 from .trust_advisory import (
     TRUST_ADVISORY_SOURCE,
     TrustAdvisory,
@@ -84,6 +90,7 @@ from .trust_advisory import (
 __all__ = [
     # orchestrator
     "AgentOrchestrator",
+    "AgentRuntimeContext",
     "OrchestrationResult",
     "OrchestratorError",
     "VerifierIndependenceError",
@@ -135,6 +142,9 @@ __all__ = [
     "UnknownRoleError",
     "get_role",
     "is_verifier",
+    "PRODUCTION_COORDINATOR_TASK_ID",
+    "ProductionAgentTaskRoute",
+    "route_production_agent_task",
     # §13 信任层 advisory 接线（trust_advisory）
     "TrustAdvisory",
     "TRUST_ADVISORY_SOURCE",

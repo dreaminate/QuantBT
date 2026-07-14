@@ -26,6 +26,7 @@ from app.verification import Verifier, VerdictStore
 
 MARKET_DATA_USE_REFS = ["market_data_use:agent_builder:accepted"]
 MARKET_DATASET_REF = "dataset:btc_daily"
+TEST_OWNER_USER_ID = "test:ds1-run-spine"
 
 
 class _DatasetSemantics:
@@ -52,10 +53,16 @@ class _MarketDataUseRegistry:
         self._records = {record.validation_ref: record for record in source}
         self._datasets = {MARKET_DATASET_REF: _DatasetSemantics()} if datasets is None else datasets
 
-    def use_validation(self, validation_ref: str) -> MarketDataUseValidationRecord:
+    def use_validation(
+        self, validation_ref: str, *, owner_user_id: str,
+    ) -> MarketDataUseValidationRecord:
+        if owner_user_id != TEST_OWNER_USER_ID:
+            raise PermissionError(owner_user_id)
         return self._records[validation_ref]
 
-    def dataset(self, dataset_ref: str) -> _DatasetSemantics:
+    def dataset(self, dataset_ref: str, *, owner_user_id: str) -> _DatasetSemantics:
+        if owner_user_id != TEST_OWNER_USER_ID:
+            raise PermissionError(owner_user_id)
         return self._datasets[dataset_ref]
 
 
@@ -72,7 +79,7 @@ def _market_data_use_validation(**overrides) -> MarketDataUseValidationRecord:
         "accepted": True,
         "violation_codes": (),
         "evidence_refs": ("evidence:agent_builder_market_data_use",),
-        "recorded_by": "test",
+        "recorded_by": TEST_OWNER_USER_ID,
         "created_at_utc": "2026-06-27T00:00:00Z",
     }
     data.update(overrides)
@@ -133,6 +140,7 @@ def test_strategy_builder_requires_market_data_use_refs_before_synthesis(tmp_pat
         verifier=None,
         llm_client=llm,
         market_data_registry=_MarketDataUseRegistry(),
+        owner_user_id=TEST_OWNER_USER_ID,
     )
     assert "market_data_use_validation_refs" in (out.get("error") or "")
     assert out.get("no_write") is True
@@ -189,11 +197,37 @@ def test_strategy_builder_rejects_bad_market_data_use_refs_before_run(tmp_path, 
         verifier=None,
         llm_client=None,
         market_data_registry=registry,
+        owner_user_id=TEST_OWNER_USER_ID,
     )
     assert message in (out.get("error") or "")
     assert out.get("no_write") is True
     assert out.get("run_id") is None
     assert not (tmp_path / "artifacts" / "experiments").exists(), "bad refs must not create run artifacts"
+
+
+def test_strategy_builder_rejects_market_data_ref_owned_by_another_user(tmp_path):
+    registry = _MarketDataUseRegistry([
+        _market_data_use_validation(recorded_by="test:another-owner")
+    ])
+    out = _synth_and_promote(
+        args=_with_market_data_use({
+            "market": "crypto_perp",
+            "strategy_goal_ref": "g-owner-mismatch",
+            "lookback": 20,
+        }),
+        ledger=Ledger(tmp_path / "lineage"),
+        returns_store=None,
+        data_root=tmp_path,
+        verdict_store=None,
+        verifier=None,
+        llm_client=None,
+        market_data_registry=registry,
+        owner_user_id=TEST_OWNER_USER_ID,
+    )
+    assert "owner mismatch" in (out.get("error") or "")
+    assert out.get("no_write") is True
+    assert out.get("run_id") is None
+    assert not (tmp_path / "artifacts" / "experiments").exists()
 
 
 @needs_btc
@@ -204,6 +238,7 @@ def test_agent_backtest_produces_real_run_consumable_by_verdict(iso):
         ledger=iso["ledger"], returns_store=None, data_root=iso["root"],
         verdict_store=iso["vstore"], verifier=iso["verifier"], llm_client=None,
         market_data_registry=iso["market_data_registry"],
+        owner_user_id=TEST_OWNER_USER_ID,
     )
     assert out.get("error") is None, out
     run_id = out["run_id"]
@@ -242,6 +277,7 @@ def test_assembly_inputs_recorded_in_metadata_and_disclosed_honestly(iso):
         ledger=iso["ledger"], returns_store=None, data_root=iso["root"],
         verdict_store=iso["vstore"], verifier=iso["verifier"], llm_client=None,
         market_data_registry=iso["market_data_registry"],
+        owner_user_id=TEST_OWNER_USER_ID,
     )
     assert out.get("error") is None, out
     run_id = out["run_id"]
@@ -272,6 +308,7 @@ def test_no_assembly_no_assembly_inputs_key(iso):
         ledger=iso["ledger"], returns_store=None, data_root=iso["root"],
         verdict_store=None, verifier=None, llm_client=None,
         market_data_registry=iso["market_data_registry"],
+        owner_user_id=TEST_OWNER_USER_ID,
     )
     assert out.get("error") is None, out
     run_json = json.loads(
@@ -282,24 +319,25 @@ def test_no_assembly_no_assembly_inputs_key(iso):
 
 
 @needs_btc
-def test_same_goal_rerun_config_hash_stable_and_honest_n_not_double_spent(iso):
-    """同 goal 重跑：config_hash 稳定 + honest-N 不重刷（memoize 单一源）。"""
+def test_same_goal_rerun_overfit_projection_stable(iso):
+    """同 goal 重跑：每次保留独立 run，权威 overfit 投影保持稳定。"""
     ref = "goal-momentum-stable"
     args = _with_market_data_use({"market": "crypto_perp", "strategy_goal_ref": ref, "lookback": 20})
     out1 = _synth_and_promote(args=args, ledger=iso["ledger"], returns_store=None,
                               data_root=iso["root"], verdict_store=None, verifier=None, llm_client=None,
-                              market_data_registry=iso["market_data_registry"])
-    n1 = iso["ledger"].honest_n(ref)
+                              market_data_registry=iso["market_data_registry"],
+                              owner_user_id=TEST_OWNER_USER_ID)
+    overfit1 = project_overfit(out1["run_id"])
     out2 = _synth_and_promote(args=args, ledger=iso["ledger"], returns_store=None,
                               data_root=iso["root"], verdict_store=None, verifier=None, llm_client=None,
-                              market_data_registry=iso["market_data_registry"])
-    n2 = iso["ledger"].honest_n(ref)
+                              market_data_registry=iso["market_data_registry"],
+                              owner_user_id=TEST_OWNER_USER_ID)
+    overfit2 = project_overfit(out2["run_id"])
     assert out1.get("error") is None and out2.get("error") is None, (out1, out2)
-    ch1 = out1["overfit"]["config_hash"]
-    ch2 = out2["overfit"]["config_hash"]
-    assert ch1 and ch1 == ch2, f"同 goal 应同 config_hash：{ch1} vs {ch2}"
-    assert n1 >= 1, "honest-N 应至少记一次（真记账）"
-    assert n2 == n1, f"honest-N 重刷：{n1} → {n2}（同 config_hash 必须 memoize、不二次计数）"
+    assert out1["run_id"] != out2["run_id"], "独立重跑必须保留各自可审计 run"
+    assert overfit1["n_observed"] >= 1
+    assert overfit2["n_observed"] == overfit1["n_observed"]
+    assert overfit2["dsr_conservative"] == overfit1["dsr_conservative"]
 
 
 @needs_btc
@@ -319,6 +357,7 @@ def test_break_engine_wiring_fails_honestly_not_fake_green(iso, monkeypatch):
         ledger=iso["ledger"], returns_store=None, data_root=iso["root"],
         verdict_store=None, verifier=None, llm_client=None,
         market_data_registry=iso["market_data_registry"],
+        owner_user_id=TEST_OWNER_USER_ID,
     )
     assert out.get("run_id") is None, "引擎断了绝不返回 run_id（防假绿灯）"
     assert "equity_curve" in (out.get("error") or ""), out
@@ -332,6 +371,7 @@ def test_missing_sample_fails_honestly_no_fake_run(iso):
         ledger=iso["ledger"], returns_store=None, data_root=iso["root"],
         verdict_store=None, verifier=None, llm_client=None,
         market_data_registry=iso["market_data_registry"],
+        owner_user_id=TEST_OWNER_USER_ID,
     )
     assert out.get("needs_sample") is True
     assert out.get("run_id") is None, "样本缺绝不伪造 run"

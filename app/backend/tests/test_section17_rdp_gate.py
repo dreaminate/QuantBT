@@ -178,15 +178,16 @@ def test_promotion_without_rdp_rejected_selfpromote():
     assert "rdp" in cr.missing
 
 
-def test_traceable_promotion_passes():
-    """完整 RDP + 晋级 rdp_ref 解析到本 RDP + 资产对得上 → ok=True（可追溯）。"""
+def test_traceable_promotion_without_reproduction_receipt_is_rejected():
+    """RDP 身份可追溯但缺当前 ReproductionReceipt 仍须 fail-closed。"""
 
     section = {
         "rdp": dict(_BASE_RDP),
         "promotion": {"asset_ref": "factor::alpha_x", "asset_kind": "factor", "rdp_ref": _rdp_id()},
     }
     cr = section17_rdp_check(_manifest(section))
-    assert cr.ok is True
+    assert cr.ok is False
+    assert "rdp_reproduction_receipt" in cr.missing
 
 
 def test_promotion_wrong_rdp_ref_rejected():

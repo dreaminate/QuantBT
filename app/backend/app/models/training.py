@@ -112,12 +112,20 @@ def _make_model(spec: ModelSpec, n_train: int) -> Any:
 
     params = dict(spec.hyperparams)
     if spec.model == "lgbm":
+        base = {
+            "verbose": -1,
+            "n_estimators": 100,
+            "random_state": 42,
+            "n_jobs": 1,
+            "force_col_wise": True,
+            **params,
+        }
         if spec.task == "classification":
-            return lgb.LGBMClassifier(**{"verbose": -1, "n_estimators": 100, **params})
+            return lgb.LGBMClassifier(**base)
         if spec.task == "regression":
-            return lgb.LGBMRegressor(**{"verbose": -1, "n_estimators": 100, **params})
+            return lgb.LGBMRegressor(**base)
         if spec.task == "lambdarank":
-            return lgb.LGBMRanker(**{"verbose": -1, "n_estimators": 100, **params})
+            return lgb.LGBMRanker(**base)
     if spec.model == "xgboost":
         import xgboost as xgb
 

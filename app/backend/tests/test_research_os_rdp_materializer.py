@@ -1,6 +1,8 @@
 from __future__ import annotations
 
 import json
+import hashlib
+from functools import partial
 from types import SimpleNamespace
 
 import pytest
@@ -9,6 +11,12 @@ from fastapi.testclient import TestClient
 from app import main
 from app.auth import require_user_dependency
 from app.research_os import PersistentRDPStore, RDPOpenPackageMaterializer, RDPManifest, RuntimeStatus
+
+RDPOpenPackageMaterializer = partial(RDPOpenPackageMaterializer, owner_user_id="u1")
+
+
+def _owned_root(root):
+    return root / "_owners" / hashlib.sha256(b"u1").hexdigest()
 
 
 def _client_with_rdp_package_store(tmp_path, monkeypatch):
@@ -67,8 +75,8 @@ def test_rdp_materializer_writes_manifest_and_refs_index_without_source_payload(
 
     package = materializer.materialize(manifest)
 
-    manifest_path = tmp_path / "rdp_packages" / manifest.package_id / "manifest.json"
-    refs_path = tmp_path / "rdp_packages" / manifest.package_id / "refs.json"
+    manifest_path = _owned_root(tmp_path / "rdp_packages") / manifest.package_id / "manifest.json"
+    refs_path = _owned_root(tmp_path / "rdp_packages") / manifest.package_id / "refs.json"
     assert package.manifest_path == str(manifest_path)
     assert package.refs_index_path == str(refs_path)
     assert manifest_path.exists()
@@ -81,7 +89,7 @@ def test_rdp_materializer_writes_manifest_and_refs_index_without_source_payload(
     assert refs["compiler_artifact_refs"] == ["compiler_artifact:strategy:001"]
     assert refs["mathematical_spine_chain_refs"] == ["math_spine_chain:btc_momentum:v1"]
     assert refs["goal_entrypoint_coverage_refs"] == ["goal_entrypoint_coverage:strategy:001"]
-    assert not (tmp_path / "rdp_packages" / manifest.package_id / "source_files").exists()
+    assert not (_owned_root(tmp_path / "rdp_packages") / manifest.package_id / "source_files").exists()
     assert "source_file_payload" not in refs
 
 
@@ -98,18 +106,17 @@ def test_rdp_materializer_is_idempotent_for_same_manifest(tmp_path):
 
 
 def test_rdp_materializer_rejects_unsafe_package_id(tmp_path):
-    materializer = RDPOpenPackageMaterializer(tmp_path / "rdp_packages")
-    manifest = _manifest(package_id="../escape")
-
-    with pytest.raises(ValueError, match="package_id is unsafe"):
-        materializer.materialize(manifest)
+    with pytest.raises(ValueError, match="canonical content identity"):
+        _manifest(package_id="../escape")
 
     assert not (tmp_path / "escape").exists()
 
 
 def test_rdp_materialize_api_writes_package_for_recorded_manifest(tmp_path, monkeypatch):
     client, store, materializer = _client_with_rdp_package_store(tmp_path, monkeypatch)
-    manifest = store.record_manifest(_manifest())
+    manifest = store.record_manifest(
+        _manifest(), owner_user_id="u1", recorded_by="u1"
+    )
     try:
         response = client.post(f"/api/research-os/rdp/manifests/{manifest.package_id}/materialize", json={})
         assert response.status_code == 200
@@ -117,8 +124,8 @@ def test_rdp_materialize_api_writes_package_for_recorded_manifest(tmp_path, monk
         assert body["package_id"] == manifest.package_id
         assert body["materialized_by"] == "u1"
         assert body["source_file_refs"] == ["source-file:strategy.py", "source-file:README.md"]
-        assert (materializer.package_root / manifest.package_id / "manifest.json").exists()
-        assert (materializer.package_root / manifest.package_id / "refs.json").exists()
+        assert (_owned_root(materializer.package_root) / manifest.package_id / "manifest.json").exists()
+        assert (_owned_root(materializer.package_root) / manifest.package_id / "refs.json").exists()
     finally:
         main.app.dependency_overrides.pop(require_user_dependency, None)
 

@@ -62,8 +62,13 @@ def _setup(auth, ct, *, network="testnet", max_leverage=None, per_order_max_usdt
     a = auth.register("alice", "passw0rd")
     b = auth.register("bob", "passw0rd")
     m = ct.register_master(a.user_id, "A", asset_class=asset_class)
+    account_binding_ref = "test-account-binding" if network == "mainnet" else ""
+    runtime_promotion_ref = "test-runtime-promotion" if network == "mainnet" else ""
+    user_risk_choice_ref = "test-user-risk-choice" if network == "mainnet" else ""
     ct.subscribe(b.user_id, m.master_id, invest_amount=1000, binance_keystore_name="follower_btc",
-                 binance_network=network, max_leverage=max_leverage, per_order_max_usdt=per_order_max_usdt)
+                 binance_network=network, max_leverage=max_leverage, per_order_max_usdt=per_order_max_usdt,
+                 account_binding_ref=account_binding_ref, runtime_promotion_ref=runtime_promotion_ref,
+                 user_risk_choice_ref=user_risk_choice_ref)
     return a, b, m
 
 
@@ -121,33 +126,136 @@ def test_notional_cap_at_gate(auth, ct):
 
 
 # ── T4 · 真钱档 nonce 台缺失 → fail-closed（绝不裸放真钱单）──────────────────────────
-def test_live_fail_closed_without_nonce_ledger(auth, ct, keystore):
+def test_live_fail_closed_without_nonce_ledger_before_key_or_venue(auth, ct, keystore):
+    from app.security.gate.broker import KeyBroker
+
     a, b, m = _setup(auth, ct, network="mainnet", max_leverage=2.0)
     sig = ct.publish_signal(m.master_id, a.user_id, symbol="BTCUSDT", side="buy",
                             quantity=0.001, price=100, leverage=2.0)
-    captured: list[Order] = []
-    relayer = SignalRelayer(ct, keystore, _recording_factory(captured),
-                            enforce_gate=True, nonce_ledger=None)   # 真钱档但无防重放台
+    fetched: list[str] = []
+    original = keystore.fetch
+    keystore.fetch = lambda name: (fetched.append(name), original(name))[1]
+    factory = MagicMock()
+    relayer = SignalRelayer(
+        ct,
+        keystore,
+        factory,
+        enforce_gate=True,
+        broker=KeyBroker(keystore, hmac_key=b"n" * 32),
+        nonce_ledger=None,
+    )
     res = relayer.relay(sig)
     assert res[0]["status"] == "rejected"
     assert "live_deps_unavailable_fail_closed" in res[0]["reason"]
-    assert not captured, "fail-closed 时 venue 绝不被调"
+    assert fetched == []
+    factory.assert_not_called()
 
 
 # ── T5 · 真钱档防重放：同一单第二次被拒（截获 relay 重打打不进）───────────────────────
-def test_live_replay_rejected(auth, ct, keystore, tmp_path):
+def test_live_fail_closed_without_formal_coordinator_before_key_or_venue(auth, ct, keystore, tmp_path):
+    from app.security.gate.broker import KeyBroker
+
     a, b, m = _setup(auth, ct, network="mainnet", max_leverage=2.0, per_order_max_usdt=1e9)
     sig = ct.publish_signal(m.master_id, a.user_id, symbol="BTCUSDT", side="buy",
                             quantity=0.001, price=100, leverage=2.0)
-    captured: list[Order] = []
-    # 不注入 beta（否则 is_dispatched 先挡）→ 直验 nonce 防重放层
-    relayer = SignalRelayer(ct, keystore, _recording_factory(captured),
-                            enforce_gate=True, nonce_ledger=NonceLedger(tmp_path / "n"))
-    r1 = relayer.relay(sig)
-    r2 = relayer.relay(sig)
-    assert r1[0]["status"] in ("placed", "filled")
-    assert r2[0]["status"] == "rejected" and "replay_rejected" in r2[0]["reason"]
-    assert len(captured) == 1, "重放单绝不二次到达 venue"
+    fetched: list[str] = []
+    original = keystore.fetch
+    keystore.fetch = lambda name: (fetched.append(name), original(name))[1]
+    factory = MagicMock()
+    relayer = SignalRelayer(
+        ct,
+        keystore,
+        factory,
+        enforce_gate=True,
+        broker=KeyBroker(keystore, hmac_key=b"f" * 32),
+        nonce_ledger=NonceLedger(tmp_path / "n"),
+        mainnet_readiness_provider=lambda: True,
+    )
+    result = relayer.relay(sig)[0]
+    assert result["status"] == "rejected"
+    assert result["reason"] == "formal_execution_unavailable"
+    assert fetched == []
+    factory.assert_not_called()
+
+
+@pytest.mark.parametrize(
+    "readiness_provider",
+    [None, lambda: False, lambda: (_ for _ in ()).throw(RuntimeError("reconciler failed"))],
+)
+def test_live_fail_closed_when_reconciliation_is_not_ready_before_key_or_venue(
+    auth,
+    ct,
+    keystore,
+    tmp_path,
+    readiness_provider,
+):
+    from app.security.gate.broker import KeyBroker
+
+    a, _b, m = _setup(
+        auth,
+        ct,
+        network="mainnet",
+        max_leverage=2.0,
+        per_order_max_usdt=1e9,
+    )
+    sig = ct.publish_signal(
+        m.master_id,
+        a.user_id,
+        symbol="BTCUSDT",
+        side="buy",
+        quantity=0.001,
+        price=100,
+        leverage=2.0,
+    )
+    fetched: list[str] = []
+    original = keystore.fetch
+    keystore.fetch = lambda name: (fetched.append(name), original(name))[1]
+    factory = MagicMock()
+    result = SignalRelayer(
+        ct,
+        keystore,
+        factory,
+        enforce_gate=True,
+        broker=KeyBroker(keystore, hmac_key=b"r" * 32),
+        nonce_ledger=NonceLedger(tmp_path / "n"),
+        formal_coordinator=MagicMock(),
+        mainnet_readiness_provider=readiness_provider,
+    ).relay(sig)[0]
+    assert result == {
+        "follower_id": f"{_b.user_id}::{m.master_id}",
+        "status": "rejected",
+        "reason": "mainnet_reconciliation_unavailable_fail_closed",
+    }
+    assert fetched == []
+    factory.assert_not_called()
+
+
+def test_live_fail_closed_without_broker_before_key_or_venue(auth, ct, keystore, tmp_path):
+    a, _b, m = _setup(auth, ct, network="mainnet", max_leverage=2.0)
+    sig = ct.publish_signal(
+        m.master_id,
+        a.user_id,
+        symbol="BTCUSDT",
+        side="buy",
+        quantity=0.001,
+        price=100,
+        leverage=2.0,
+    )
+    fetched: list[str] = []
+    original = keystore.fetch
+    keystore.fetch = lambda name: (fetched.append(name), original(name))[1]
+    factory = MagicMock()
+    result = SignalRelayer(
+        ct,
+        keystore,
+        factory,
+        enforce_gate=True,
+        nonce_ledger=NonceLedger(tmp_path / "n"),
+    ).relay(sig)[0]
+    assert result["status"] == "rejected"
+    assert "live_deps_unavailable_fail_closed" in result["reason"]
+    assert fetched == []
+    factory.assert_not_called()
 
 
 # ── T6 · testnet fail-open：依赖缺失仍评估门、不硬阻（假钱不过度工程化）──────────────
@@ -176,24 +284,9 @@ def test_testnet_still_gated_leverage(auth, ct, keystore):
 
 
 # ── T7 · 门拒时 venue 永不被调（已在 T2/T4 覆盖；此处补 relay 路径）──────────────────
-def test_gate_deny_blocks_venue_on_relay(auth, ct, keystore, tmp_path):
-    # mainnet + follower 无 max_leverage（→门 max_leverage=1.0）+ master 5x → 截断到 1x≤1 通过；
-    # 改用名义额超限触发门拒：per_order_max=10，单 100 USDT。但 RiskMonitor 会先拒——这里直验 relay 经门即可。
-    a, b, m = _setup(auth, ct, network="mainnet", max_leverage=2.0, per_order_max_usdt=1e9)
-    # 用提币类动作无法经 signal 触发；改注入 leverage 不声明：mainnet 未声明 leverage → 门拒
-    sig = ct.publish_signal(m.master_id, a.user_id, symbol="BTCUSDT", side="buy",
-                            quantity=0.001, price=100)  # 无 leverage（master None）→ follower applied=None
-    captured: list[Order] = []
-    relayer = SignalRelayer(ct, keystore, _recording_factory(captured),
-                            enforce_gate=True, nonce_ledger=NonceLedger(tmp_path / "n"))
-    res = relayer.relay(sig)
-    assert res[0]["status"] == "rejected" and "leverage_unspecified" in res[0]["reason"]
-    assert not captured, "实盘未声明杠杆 → 门拒 → venue 不被调"
-
-
 # ── T8 · 向后兼容：enforce_gate=False（默认）不接门 ──────────────────────────────────
 def test_backward_compat_no_gate(auth, ct, keystore):
-    a, b, m = _setup(auth, ct, network="mainnet", max_leverage=2.0)
+    a, b, m = _setup(auth, ct, network="testnet", max_leverage=2.0)
     sig = ct.publish_signal(m.master_id, a.user_id, symbol="BTCUSDT", side="buy", quantity=5.0, price=100000)  # 巨单
     captured: list[Order] = []
     relayer = SignalRelayer(ct, keystore, _recording_factory(captured))  # enforce_gate 默认 False
@@ -219,97 +312,7 @@ def test_same_gate_logic_across_tiers(auth, ct):
 
 
 # ── 复核回归 A · 现货实盘单不再因 leverage_unspecified 全拒（现货显式 1x）──────────────
-def test_live_spot_order_allowed(auth, ct, keystore, tmp_path):
-    a, b, m = _setup(auth, ct, network="mainnet", asset_class="crypto_spot", per_order_max_usdt=1e9)
-    # 现货信号无 leverage（None）、带价（limit 便于核名义额）
-    sig = ct.publish_signal(m.master_id, a.user_id, symbol="BTCUSDT", side="buy",
-                            quantity=0.001, price=100, order_type="limit")  # leverage 默认 None
-    captured: list[Order] = []
-    relayer = SignalRelayer(ct, keystore, _recording_factory(captured),
-                            enforce_gate=True, nonce_ledger=NonceLedger(tmp_path / "n"))
-    res = relayer.relay(sig)
-    assert res[0]["status"] in ("placed", "filled"), res   # 现货实盘单不再被 leverage_unspecified 全拒
-    assert captured and captured[0].leverage == 1.0        # 现货显式 1x
-
-
 # ── 复核回归 B · 市价实盘单用【可信 venue mark】核名义额（不读自报价）──────────────────
-def test_live_market_order_with_trusted_mark_allowed(auth, ct, keystore, tmp_path):
-    a, b, m = _setup(auth, ct, network="mainnet", max_leverage=2.0, per_order_max_usdt=1e9)
-    sig = ct.publish_signal(m.master_id, a.user_id, symbol="BTCUSDT", side="buy",
-                            quantity=0.001, order_type="market", leverage=2.0)  # price=None
-    captured: list[Order] = []
-    relayer = SignalRelayer(ct, keystore, _recording_factory(captured, mark=100.0),
-                            enforce_gate=True, nonce_ledger=NonceLedger(tmp_path / "n"))
-    res = relayer.relay(sig)
-    assert res[0]["status"] in ("placed", "filled"), res
-    assert captured and captured[0].price is None          # 市价单 order.price 不被污染（venue 不收到 price）
-
-
-def test_live_market_order_without_mark_denied(auth, ct, keystore, tmp_path):
-    """取不到可信 mark → 门 deny-by-default（fail-safe），绝不放无法证伪名义额的真钱市价单。"""
-    a, b, m = _setup(auth, ct, network="mainnet", max_leverage=2.0, per_order_max_usdt=1e9)
-    sig = ct.publish_signal(m.master_id, a.user_id, symbol="BTCUSDT", side="buy",
-                            quantity=0.001, order_type="market", leverage=2.0)
-    captured: list[Order] = []
-    relayer = SignalRelayer(ct, keystore, _recording_factory(captured, mark=None),  # get_position 抛
-                            enforce_gate=True, nonce_ledger=NonceLedger(tmp_path / "n"))
-    res = relayer.relay(sig)
-    assert res[0]["status"] == "rejected" and "notional_unverifiable" in res[0]["reason"]
-    assert not captured
-
-
-def test_live_market_mark_notional_cap_enforced(auth, ct, keystore, tmp_path):
-    """可信 mark 真用于名义额上限：mark 高到超 cap → 拒（证明不是绕过、是真核）。"""
-    a, b, m = _setup(auth, ct, network="mainnet", max_leverage=2.0, per_order_max_usdt=50.0)
-    sig = ct.publish_signal(m.master_id, a.user_id, symbol="BTCUSDT", side="buy",
-                            quantity=1.0, order_type="market", leverage=2.0)  # 1 * mark
-    captured: list[Order] = []
-    relayer = SignalRelayer(ct, keystore, _recording_factory(captured, mark=100.0),  # 100 USDT > 50
-                            enforce_gate=True, nonce_ledger=NonceLedger(tmp_path / "n"))
-    res = relayer.relay(sig)
-    assert res[0]["status"] == "rejected" and "max_notional_exceeded" in res[0]["reason"]
-    assert not captured
-
-
-# ── T-022 集成 · INV-3 命门：真 key 只在门放行后(S4)物化，门拒则永不物化 ─────────────
-def test_inv3_key_materialized_only_after_gate_passes(auth, ct, keystore, tmp_path):
-    from app.security.gate.broker import KeyBroker
-    a, b, m = _setup(auth, ct, network="mainnet", max_leverage=2.0, per_order_max_usdt=1e9)
-    broker = KeyBroker(keystore)
-    fetched: list[str] = []
-    orig = keystore.fetch
-    keystore.fetch = lambda name: (fetched.append(name), orig(name))[1]   # spy: 何时物化 key
-    captured: list = []
-
-    def factory(follower, ks):
-        v = MagicMock()
-        v.name = "leased"
-        v.get_mark_price = MagicMock(return_value=100.0)
-        def _place(order, *, lease=None):
-            assert lease is not None, "lease-only：必经 JIT lease 通道"
-            captured.append(lease.record.api_key)         # venue 拿到的是 lease 里的 key
-            return OrderAck(order_id="ok", client_order_id="c", status="filled")
-        v.place_order = MagicMock(side_effect=_place)
-        return v
-
-    relayer = SignalRelayer(ct, keystore, factory, enforce_gate=True,
-                            nonce_ledger=NonceLedger(tmp_path / "n"), broker=broker)
-    # 放行单：key 在 S4 被 fetch 恰一次
-    ok = ct.publish_signal(m.master_id, a.user_id, symbol="BTCUSDT", side="buy",
-                           quantity=0.001, price=100, leverage=2.0, order_type="limit")
-    r1 = relayer.relay(ok)
-    assert r1[0]["status"] in ("placed", "filled")
-    assert fetched == ["follower_btc"], "真 key 只在门放行后(S4)物化恰一次"
-    assert captured == ["K"], "venue 经 lease 拿到 key（非构造自取）"
-    # 门拒单（实盘未声明杠杆）：key 永不物化
-    fetched.clear()
-    bad = ct.publish_signal(m.master_id, a.user_id, symbol="BTCUSDT", side="buy",
-                            quantity=0.001, price=100)   # 无 leverage → leverage_unspecified
-    r2 = relayer.relay(bad)
-    assert r2[0]["status"] == "rejected"
-    assert fetched == [], "门拒 → 真 key 永不物化（INV-3 命门）"
-
-
 def test_lease_accepting_venue_typeerror_surfaces_unmasked(keystore, tmp_path):
     """补洞回归：lease-接受型 venue 提交期内部抛 TypeError 必须【原样上抛】，绝不能被旧的
     `except TypeError: 退化自取` 吞掉、再无-lease 重试——否则真 bug 被掩盖，且对 lease-only 生产

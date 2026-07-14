@@ -39,24 +39,67 @@ from app.factor_factory.mining import (
 from app.main import app
 from app.research_os import (
     PersistentCompilerIRStore,
+    PersistentEntrypointEvidenceRegistry,
     PersistentGoalEntrypointCoverageRegistry,
-    PersistentResearchGraphStore,
+    PersistentGoalValidationReceiptRegistry,
     PersistentSignalValidationRegistry,
     QROType,
+    ResearchGraphStore,
 )
+from app.research_os.goal_proof_ledger import GoalProofLedger
+from app.research_os.ref_resolution import build_real_ref_resolver
+
+
+def _patch_goal_proof_stores(tmp_path, monkeypatch):  # noqa: ANN001
+    graph = ResearchGraphStore()
+    proof_ledger = GoalProofLedger(tmp_path / "goal_proof_ledger")
+    compiler = PersistentCompilerIRStore(
+        tmp_path / "compiler_ir.jsonl",
+        proof_ledger=proof_ledger,
+        legacy_read_only=True,
+    )
+    validations = PersistentGoalValidationReceiptRegistry(
+        tmp_path / "goal_validation_receipts.jsonl",
+        proof_ledger=proof_ledger,
+        legacy_read_only=True,
+    )
+    evidence = PersistentEntrypointEvidenceRegistry(
+        tmp_path / "entrypoint_evidence.jsonl",
+        research_graph_store=graph,
+        compiler_store=compiler,
+        validation_receipt_registry=validations,
+        proof_ledger=proof_ledger,
+        legacy_read_only=True,
+    )
+    coverage = PersistentGoalEntrypointCoverageRegistry(
+        tmp_path / "goal_entrypoint_coverage.jsonl",
+        proof_ledger=proof_ledger,
+        legacy_read_only=True,
+    )
+    coverage.set_ref_resolver(
+        build_real_ref_resolver(
+            research_graph_store=graph,
+            lifecycle_registry=None,
+            governance_registry=None,
+            rag_index=None,
+            spine_chain_registry=None,
+            compiler_store=compiler,
+            goal_validation_receipt_registry=validations,
+            platform_source_evidence_registry=evidence,
+        )
+    )
+    monkeypatch.setattr(app_main, "RESEARCH_GRAPH_STORE", graph)
+    monkeypatch.setattr(app_main, "COMPILER_IR_STORE", compiler)
+    monkeypatch.setattr(app_main, "GOAL_VALIDATION_RECEIPT_REGISTRY", validations)
+    monkeypatch.setattr(app_main, "ENTRYPOINT_EVIDENCE_REGISTRY", evidence)
+    monkeypatch.setattr(app_main, "GOAL_ENTRYPOINT_COVERAGE_REGISTRY", coverage)
 
 
 @pytest.fixture
 def client(tmp_path, monkeypatch):
     monkeypatch.setattr(app_main, "SIGNAL_CONTRACTS", SignalContractRegistry(tmp_path / "signal_contracts.jsonl"))
     monkeypatch.setattr(app_main, "SIGNAL_VALIDATIONS", PersistentSignalValidationRegistry(tmp_path / "signal_validations.jsonl"))
-    monkeypatch.setattr(app_main, "RESEARCH_GRAPH_STORE", PersistentResearchGraphStore(tmp_path / "research_graph.jsonl"))
-    monkeypatch.setattr(app_main, "COMPILER_IR_STORE", PersistentCompilerIRStore(tmp_path / "compiler_ir.jsonl"))
-    monkeypatch.setattr(
-        app_main,
-        "GOAL_ENTRYPOINT_COVERAGE_REGISTRY",
-        PersistentGoalEntrypointCoverageRegistry(tmp_path / "goal_entrypoint_coverage.jsonl"),
-    )
+    _patch_goal_proof_stores(tmp_path, monkeypatch)
     app.dependency_overrides[require_user_dependency] = lambda: SimpleNamespace(user_id="tester")
     try:
         yield TestClient(app)
@@ -219,7 +262,10 @@ def test_signal_validation_api_records_and_summarizes(tmp_path, monkeypatch, cli
     assert "raw_returns" not in payload["validations"][0]
 
     reloaded = PersistentSignalValidationRegistry(validation_path)
-    assert reloaded.validation(validation_id).performance_summary_ref == "signal_perf:validated:oos"
+    assert (
+        reloaded.validation(validation_id, owner_user_id="tester").performance_summary_ref
+        == "signal_perf:validated:oos"
+    )
 
 
 def test_signal_validation_api_rejects_unknown_signal_without_write(tmp_path, monkeypatch, client):

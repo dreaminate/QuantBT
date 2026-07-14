@@ -13,6 +13,8 @@
 
 from __future__ import annotations
 
+import hashlib
+
 import pytest
 
 from app.agent.llm_client import LLMMessage, LLMResponse
@@ -53,6 +55,7 @@ from app.agent.orchestrator.events import (
     EV_RUN_VERDICT_PRODUCED,
     EV_TOOL_CALL_FINISHED,
     EventProjector,
+    PersistentWorkflowEventLedger,
     WorkflowEvent,
     GATEWAY_EVENT_KINDS,
 )
@@ -71,6 +74,12 @@ from app.llm import (
     RoutingMode,
     SecretRef,
 )
+from app.llm.call_record_store import LLMCallRecordStore
+from app.llm.call_record import (
+    bind_review_verifier_record,
+    make_review_subject_binding,
+)
+from app.lineage.ids import canonical_json, content_hash
 from app.qro.envelope import (
     ACTOR_AGENT,
     ACTOR_SCHEDULED_AGENT,
@@ -94,9 +103,11 @@ class ReadAssetThenFinal:
 
     def __init__(self) -> None:
         self.calls = 0
+        self.message_batches = []
 
     def chat(self, messages, *, tools=None, model=None, temperature=0.2):
         self.calls += 1
+        self.message_batches.append(tuple(messages))
         if any(getattr(m, "role", "") == "tool" for m in messages):
             return LLMResponse(content="完成（已读资产）", tool_calls=[])
         return LLMResponse(content="", tool_calls=[{"id": "c1", "name": "read_asset", "arguments": "{}"}])
@@ -162,13 +173,19 @@ def _pool(profiles, ks):
     return pool
 
 
-def _gateway(profiles, *, factory, extra_secrets=None):
+def _gateway(profiles, *, factory, extra_secrets=None, seal_secret=None):
     ks = _seed_keystore(profiles)
     for name, val in (extra_secrets or {}).items():
         ks.store(KeystoreRecord(name=name, api_key=val, api_secret=val))
     pool = _pool(profiles, ks)
     policy = ModelRoutingPolicy(profiles, mode=RoutingMode.HYBRID_ADAPTIVE)
-    return LLMGateway(policy=policy, credential_pool=pool, client_factory=factory, strict_degrade=False)
+    return LLMGateway(
+        policy=policy,
+        credential_pool=pool,
+        client_factory=factory,
+        strict_degrade=False,
+        seal_secret=seal_secret,
+    )
 
 
 def _ready_plan(orch, todos_spec, deps):
@@ -191,7 +208,9 @@ def test_react_dispatch_runs_role_nodes_via_dag(tmp_path):
     """端到端正例：plan→冻结 DAG→DurableExecutor 跑 role 节点；LLM 经 Gateway、工具经治理闸、24 事件投影。"""
     shared = ReadAssetThenFinal()
     gw = _gateway(_two_strong(), factory=lambda c: shared)
-    orch = AgentOrchestrator(gateway=gw)
+    orch = AgentOrchestrator(
+        gateway=gw, owner_user_id="owner-orch", workflow_id="workflow-react"
+    )
     plan = _ready_plan(orch, [("t_factor", "factor_engineer"), ("t_report", "reporter")],
                        {"t_factor": [], "t_report": ["t_factor"]})
     assert plan.is_ready
@@ -276,7 +295,9 @@ def test_gate1_INTEGRATION_node_fails_on_planned_tool_bypass(tmp_path):
     → 节点 op 查 violation 非空即 raise → 内核判节点 failed → FailureDetected 投影。"""
     shared = EmitToolThenFinal("train_model")
     gw = _gateway(_two_strong(), factory=lambda c: shared)
-    orch = AgentOrchestrator(gateway=gw)
+    orch = AgentOrchestrator(
+        gateway=gw, owner_user_id="owner-orch", workflow_id="workflow-tool-bypass"
+    )
     plan = _ready_plan(orch, [("t1", "factor_engineer")], {"t1": []})
     ex = make_executor(tmp_path)
     # 故意把越权工具 handler 喂给节点（模拟误注册 / 恶意）——治理闸 dispatch 期 authoritative 拒。
@@ -292,13 +313,71 @@ def test_gate2_every_orchestrator_llm_call_is_gateway_sealed(tmp_path):
     """orchestrator 跑出的每条 LLM 结果都经本 Gateway 封印 + 可准入（正例）。"""
     shared = ReadAssetThenFinal()
     gw = _gateway(_two_strong(), factory=lambda c: shared)
-    orch = AgentOrchestrator(gateway=gw)
+    orch = AgentOrchestrator(
+        gateway=gw, owner_user_id="owner-orch", workflow_id="workflow-gateway-seal"
+    )
     plan = _ready_plan(orch, [("t1", "factor_engineer")], {"t1": []})
     ex = make_executor(tmp_path)
     res = orch.dispatch(plan, executor=ex, tool_handlers=_handlers(["factor_engineer"]))
     assert res.sealed_results
     for _t, _r, sealed in res.sealed_results:
         assert_llm_admissible(sealed, gw)  # 不抛 = 准入
+
+
+def test_provider_failure_projects_durable_llm_finish_before_bound_failure_event(tmp_path):
+    class _AlwaysFails:
+        provider = "scripted-failure"
+
+        def chat(self, *args, **kwargs):
+            raise RuntimeError("provider unavailable")
+
+    owner = "owner-provider-failure"
+    workflow = "workflow-provider-failure"
+    call_store = LLMCallRecordStore(tmp_path / "llm-call-records.jsonl")
+    event_ledger = PersistentWorkflowEventLedger(tmp_path / "workflow-events.jsonl")
+    gw = _gateway(
+        _two_strong(),
+        factory=lambda _credential: _AlwaysFails(),
+        seal_secret=call_store.seal_secret,
+    )
+    orch = AgentOrchestrator(
+        gateway=gw,
+        owner_user_id=owner,
+        workflow_id=workflow,
+        event_ledger=event_ledger,
+        record_sink=call_store.append,
+    )
+    plan = _ready_plan(orch, [("t1", "factor_engineer")], {"t1": []})
+
+    result = orch.dispatch(
+        plan,
+        executor=make_executor(tmp_path / "kernel"),
+        requires_tool_evidence={"t1": False},
+    )
+
+    assert result.succeeded is False
+    records = call_store.read_all(owner_user_id=owner)
+    terminal = records[-1]
+    assert terminal.record_kind == "terminal"
+    assert terminal.status == "error"
+    assert terminal.failure_stage == "provider"
+
+    restarted = PersistentWorkflowEventLedger(event_ledger.path)
+    events = list(restarted.events(owner_user_id=owner, workflow_id=workflow))
+    terminal_finished_index = next(
+        index
+        for index, event in enumerate(events)
+        if event.kind == "LLMCallFinished"
+        and event.data.get("call_id") == terminal.call_id
+    )
+    failure_index = next(
+        index for index, event in enumerate(events) if event.kind == EV_FAILURE_DETECTED
+    )
+    failure = events[failure_index]
+    assert terminal_finished_index < failure_index
+    assert failure.data["call_id"] == terminal.call_id
+    assert failure.data["llm_status"] == "error"
+    assert failure.data["failure_stage"] == "provider"
 
 
 def test_gate2_bypass_gateway_forged_result_not_admissible(tmp_path):
@@ -330,7 +409,13 @@ def test_gate2_MUT_paper_door_no_seal_check(tmp_path):
 def test_gate2_role_agent_gets_no_provider_or_key(tmp_path):
     """GatewayLLMAdapter 后面 role agent 拿不到 provider 名 / key——它只见治理层。"""
     gw = _gateway(_two_strong(), factory=lambda c: ReadAssetThenFinal())
-    adapter = GatewayLLMAdapter(gw, RoleCapabilityRequest(role="factor_engineer", difficulty="hard"))
+    adapter = GatewayLLMAdapter(
+        gw,
+        RoleCapabilityRequest(role="factor_engineer", difficulty="hard"),
+        owner_user_id="owner-orch",
+        workflow_id="workflow-adapter",
+        invocation_id_factory=lambda: "adapter-invocation-1",
+    )
     assert adapter.provider == "gateway"  # 永远是治理层，不是真 provider
     resp = adapter.chat([LLMMessage(role="user", content="hi")])
     rec = adapter.last_record()
@@ -343,21 +428,58 @@ def test_gate2_role_agent_gets_no_provider_or_key(tmp_path):
 # ════════════════════════════ 门3：Verifier 独立性（+MUT）════════════════════════════
 
 def _builder_rec(provider="anthropic", model="claude-opus-4"):
-    return LLMCallRecord(provider=provider, model=model, auth_ref="r", replay_state="live", prompt_digest="dB")
+    output = "exact builder output"
+    return LLMCallRecord(
+        provider=provider,
+        model=model,
+        auth_ref="r",
+        replay_state="live",
+        call_id="call-builder",
+        prompt_digest="dB",
+        response_digest=content_hash({"content": output, "tool_calls": []}),
+    )
 
 
 def _verifier_rec(provider, model, *, satisfied, digest="dV"):
-    return LLMCallRecord(provider=provider, model=model, auth_ref="r", replay_state="live", prompt_digest=digest,
-                         independence=IndependenceRecord(required=True, satisfied=satisfied))
+    return LLMCallRecord(
+        provider=provider,
+        model=model,
+        auth_ref="r",
+        replay_state="live",
+        call_id="call-verifier",
+        prompt_digest=digest,
+        response_digest=content_hash({"content": "verifier output", "tool_calls": []}),
+        independence=IndependenceRecord(
+            required=True,
+            satisfied=satisfied,
+            builder_call_id="call-builder",
+        ),
+    )
+
+
+def _review_binding(builder, verifier):
+    output = "exact builder output"
+    output_ref = hashlib.sha256(canonical_json(output).encode("utf-8")).hexdigest()
+    binding, _instruction = make_review_subject_binding(
+        builder=builder,
+        builder_artifact_ref="artifact:builder",
+        builder_artifact_output_ref=output_ref,
+        builder_output=output,
+        review_criteria="challenge the exact builder output",
+    )
+    return bind_review_verifier_record(binding, verifier)
 
 
 def test_gate3_verifier_distinct_provider_admitted():
     """builder=anthropic，verifier 换 openai 且 satisfied=True → 独立成立，admit 返回 independent。"""
     gw = _gateway(_two_strong(), factory=lambda c: ReadAssetThenFinal())
     orch = AgentOrchestrator(gateway=gw)
+    builder = _builder_rec("anthropic", "claude-opus-4")
+    verifier = _verifier_rec("openai", "gpt-4o", satisfied=True)
     verdict = orch.admit_verifier_challenge(
-        _builder_rec("anthropic", "claude-opus-4"),
-        _verifier_rec("openai", "gpt-4o", satisfied=True),
+        builder,
+        verifier,
+        subject_binding=_review_binding(builder, verifier),
     )
     assert verdict.independent is True
 
@@ -366,9 +488,12 @@ def test_gate3_verifier_shared_context_honest_insufficient_not_rejected():
     """verifier 与 builder 同源但诚实标 satisfied=False → 不抛，返回 independent=False（honest·非干净独立）。"""
     gw = _gateway(_one_strong(), factory=lambda c: ReadAssetThenFinal())
     orch = AgentOrchestrator(gateway=gw)
+    builder = _builder_rec("anthropic", "claude-opus-4")
+    verifier = _verifier_rec("anthropic", "claude-opus-4", satisfied=False)
     verdict = orch.admit_verifier_challenge(
-        _builder_rec("anthropic", "claude-opus-4"),
-        _verifier_rec("anthropic", "claude-opus-4", satisfied=False),
+        builder,
+        verifier,
+        subject_binding=_review_binding(builder, verifier),
     )
     assert verdict.independent is False and "独立性不足" in verdict.reason
 
@@ -377,10 +502,26 @@ def test_gate3_verifier_false_independence_rejected():
     """种坏门：verifier 与 builder 同 provider+model 却声称 satisfied=True（假独立·未标不足）→ 拒。"""
     gw = _gateway(_one_strong(), factory=lambda c: ReadAssetThenFinal())
     orch = AgentOrchestrator(gateway=gw)
+    builder = _builder_rec("anthropic", "claude-opus-4")
+    verifier = _verifier_rec("anthropic", "claude-opus-4", satisfied=True)
     with pytest.raises(VerifierIndependenceError):
         orch.admit_verifier_challenge(
-            _builder_rec("anthropic", "claude-opus-4"),
-            _verifier_rec("anthropic", "claude-opus-4", satisfied=True),  # 假独立
+            builder,
+            verifier,
+            subject_binding=_review_binding(builder, verifier),
+        )
+
+
+def test_gate3_cross_provider_same_gpt_false_independence_rejected():
+    gw = _gateway(_two_strong(), factory=lambda c: ReadAssetThenFinal())
+    orch = AgentOrchestrator(gateway=gw)
+    builder = _builder_rec("gateway-a", "gpt-5.6-sol-pro")
+    verifier = _verifier_rec("gateway-b", "gpt-4o", satisfied=True)
+    with pytest.raises(VerifierIndependenceError, match="双重异源"):
+        orch.admit_verifier_challenge(
+            builder,
+            verifier,
+            subject_binding=_review_binding(builder, verifier),
         )
 
 
@@ -393,7 +534,11 @@ def test_gate3_MUT_paper_door_independence():
     liar = _verifier_rec("anthropic", "claude-opus-4", satisfied=True)
 
     with pytest.raises(VerifierIndependenceError):
-        orch.admit_verifier_challenge(builder, liar)   # 真门（生产代码）：抓住假独立
+        orch.admit_verifier_challenge(
+            builder,
+            liar,
+            subject_binding=_review_binding(builder, liar),
+        )   # 真门（生产代码）：抓住假独立
 
     def mutant_gate(b, v):  # ← 拆了独立性裁决
         return True
@@ -406,7 +551,12 @@ def test_gate3_INTEGRATION_verifier_routed_distinct_provider(tmp_path):
     provider（独立性满足）。"""
     shared = ReadAssetThenFinal()
     gw = _gateway(_two_strong(), factory=lambda c: shared)
-    orch = AgentOrchestrator(gateway=gw, session_id="sx")
+    orch = AgentOrchestrator(
+        gateway=gw,
+        session_id="sx",
+        owner_user_id="owner-orch",
+        workflow_id="workflow-independent-verifier",
+    )
     plan = _ready_plan(orch, [("t_b", "factor_engineer"), ("t_v", "verifier_critic")],
                        {"t_b": [], "t_v": ["t_b"]})
     ex = make_executor(tmp_path)
@@ -417,8 +567,153 @@ def test_gate3_INTEGRATION_verifier_routed_distinct_provider(tmp_path):
     # verifier 要求独立 → record.independence.required True，且 provider 相对 builder 不同源
     assert verifier_recs[-1].independence.required is True
     assert verifier_recs[-1].provider != builder_recs[-1].provider
-    verdict = orch.admit_verifier_challenge(builder_recs[-1], verifier_recs[-1])
+    binding = res.review_subject_bindings["t_v"]
+    verdict = orch.admit_verifier_challenge(
+        builder_recs[-1],
+        verifier_recs[-1],
+        subject_binding=binding,
+    )
     assert verdict.independent is True
+    verifier_prompt = "\n".join(
+        str(message.content) for message in shared.message_batches[2]
+    )
+    assert '"builder_output":"完成（已读资产）"' in verifier_prompt
+    assert '"review_criteria":"do t_v"' in verifier_prompt
+    assert binding.review_subject_ref in verifier_prompt
+
+
+def test_gate3_single_configured_model_refuses_before_verifier_provider_call(tmp_path):
+    shared = ReadAssetThenFinal()
+    gw = _gateway(_one_strong(), factory=lambda _credential: shared)
+    orch = AgentOrchestrator(
+        gateway=gw,
+        session_id="single-model-review",
+        owner_user_id="owner-orch",
+        workflow_id="workflow-single-model-review",
+    )
+    plan = _ready_plan(
+        orch,
+        [("t_b", "factor_engineer"), ("t_v", "verifier_critic")],
+        {"t_b": [], "t_v": ["t_b"]},
+    )
+    result = orch.dispatch(
+        plan,
+        executor=make_executor(tmp_path),
+        tool_handlers=_handlers(["factor_engineer", "verifier_critic"]),
+    )
+
+    assert result.succeeded is False
+    assert shared.calls == 2
+    verifier_node = result.kernel_result.node("t_v")
+    assert verifier_node is not None
+    assert str(verifier_node.error).startswith("VerifierIndependenceUnavailable:")
+
+
+def test_gate3_two_gpt_providers_refuse_before_verifier_provider_call(tmp_path):
+    """两个 GPT 入口仍只有一个 foundation-model family，必须显式不可用。"""
+
+    shared = ReadAssetThenFinal()
+    profiles = [
+        LLMModelProfile(
+            provider="gateway_a",
+            model="gpt-5.6-sol-pro",
+            capability_tier=ModelTier.STRONG.value,
+            pool_id="gateway_a",
+        ),
+        LLMModelProfile(
+            provider="gateway_b",
+            model="gpt-4o",
+            capability_tier=ModelTier.STRONG.value,
+            pool_id="gateway_b",
+        ),
+    ]
+    gw = _gateway(profiles, factory=lambda _credential: shared)
+    orch = AgentOrchestrator(
+        gateway=gw,
+        session_id="same-gpt-review",
+        owner_user_id="owner-orch",
+        workflow_id="workflow-same-gpt-review",
+    )
+    plan = _ready_plan(
+        orch,
+        [("t_b", "factor_engineer"), ("t_v", "verifier_critic")],
+        {"t_b": [], "t_v": ["t_b"]},
+    )
+    result = orch.dispatch(
+        plan,
+        executor=make_executor(tmp_path),
+        tool_handlers=_handlers(["factor_engineer", "verifier_critic"]),
+    )
+
+    assert result.succeeded is False
+    assert shared.calls == 2
+    verifier_node = result.kernel_result.node("t_v")
+    assert verifier_node is not None
+    assert str(verifier_node.error).startswith("VerifierIndependenceUnavailable:")
+
+
+def test_gate3_independent_provider_unavailable_cannot_fallback_to_success(tmp_path):
+    """Preflight profile presence is not enough; the final executed verifier route must be independent."""
+
+    class ExhaustIndependentAfterBuilder(ReadAssetThenFinal):
+        gateway = None
+
+        def chat(self, messages, *, tools=None, model=None, temperature=0.2):
+            response = super().chat(
+                messages,
+                tools=tools,
+                model=model,
+                temperature=temperature,
+            )
+            if self.calls == 2:
+                assert self.gateway is not None
+                self.gateway.mark_quota_exhausted("openai")
+            return response
+
+    shared = ExhaustIndependentAfterBuilder()
+    gw = _gateway(_two_strong(), factory=lambda _credential: shared)
+    shared.gateway = gw
+    orch = AgentOrchestrator(
+        gateway=gw,
+        session_id="independent-route-disappears",
+        owner_user_id="owner-orch",
+        workflow_id="workflow-independent-route-disappears",
+    )
+    plan = _ready_plan(
+        orch,
+        [("t_b", "factor_engineer"), ("t_v", "verifier_critic")],
+        {"t_b": [], "t_v": ["t_b"]},
+    )
+    result = orch.dispatch(
+        plan,
+        executor=make_executor(tmp_path),
+        tool_handlers=_handlers(["factor_engineer", "verifier_critic"]),
+    )
+
+    assert result.succeeded is False
+    assert shared.calls == 4
+    verifier_node = result.kernel_result.node("t_v")
+    assert verifier_node is not None
+    assert str(verifier_node.error).startswith("VerifierIndependenceUnavailable:")
+
+
+@pytest.mark.parametrize("verifier_dependencies", [[], ["t_b1", "t_b2"]])
+def test_gate3_verifier_requires_exactly_one_review_subject(verifier_dependencies):
+    gw = _gateway(_two_strong(), factory=lambda _credential: ReadAssetThenFinal())
+    orch = AgentOrchestrator(gateway=gw)
+    todos = [("t_v", "verifier_critic")]
+    dependencies = {"t_v": list(verifier_dependencies)}
+    for builder_id in verifier_dependencies:
+        todos.insert(0, (builder_id, "factor_engineer"))
+        dependencies[builder_id] = []
+
+    plan = _ready_plan(orch, todos, dependencies)
+
+    assert plan.is_ready is False
+    assert plan.status == "draft"
+    assert "exactly one declared review subject" in plan.draft_reason
+    with pytest.raises(PlanError, match="plan 未就绪"):
+        orch.build_dag(plan)
 
 
 # ════════════════════════════ 门4：完成 / plan draft / code change ════════════════════════════
@@ -451,7 +746,9 @@ def test_gate4_INTEGRATION_node_fails_when_claims_complete_no_tool(tmp_path):
     """集成：节点 LLM 直接终态、零工具，但要求工具证据 → 节点 failed（完成门在节点内咬）。"""
     shared = NoToolFinal()
     gw = _gateway(_two_strong(), factory=lambda c: shared)
-    orch = AgentOrchestrator(gateway=gw)
+    orch = AgentOrchestrator(
+        gateway=gw, owner_user_id="owner-orch", workflow_id="workflow-no-tool"
+    )
     plan = _ready_plan(orch, [("t1", "factor_engineer")], {"t1": []})
     ex = make_executor(tmp_path)
     res = orch.dispatch(plan, executor=ex, tool_handlers=_handlers(["factor_engineer"]),
@@ -675,7 +972,9 @@ def test_replay_reuses_durable_artifacts_zero_rerun(tmp_path):
     """Replay 形态：命中 kernel durable 工件 → 节点复用、零重跑（零新 LLM 调用）。"""
     shared = ReadAssetThenFinal()
     gw = _gateway(_two_strong(), factory=lambda c: shared)
-    orch = AgentOrchestrator(gateway=gw)
+    orch = AgentOrchestrator(
+        gateway=gw, owner_user_id="owner-orch", workflow_id="workflow-replay"
+    )
     plan = _ready_plan(orch, [("t1", "factor_engineer")], {"t1": []})
     ex = make_executor(tmp_path)
     res1 = orch.dispatch(plan, executor=ex, tool_handlers=_handlers(["factor_engineer"]))
@@ -686,6 +985,138 @@ def test_replay_reuses_durable_artifacts_zero_rerun(tmp_path):
     res2 = orch.replay(plan, executor=ex, tool_handlers=_handlers(["factor_engineer"]))
     assert res2.kernel_result.node("t1").reused is True
     assert shared.calls == calls_after_run, "replay 重跑了节点 → durable 复用门破"
+
+
+def test_dispatch_requires_explicit_owner_and_workflow_before_role_llm(tmp_path):
+    gw = _gateway(_two_strong(), factory=lambda c: ReadAssetThenFinal())
+    orch = AgentOrchestrator(gateway=gw)
+    plan = _ready_plan(orch, [("t1", "factor_engineer")], {"t1": []})
+
+    with pytest.raises(ValueError, match="owner_user_id"):
+        orch.dispatch(plan, executor=make_executor(tmp_path))
+
+
+def test_role_llm_scope_sink_and_invocation_ids_are_durable_and_stable(tmp_path):
+    owner = "owner-orch"
+    workflow = "workflow-audit"
+    store = LLMCallRecordStore(tmp_path / "llm-audit.jsonl")
+    first_client = ReadAssetThenFinal()
+    first_gateway = _gateway(
+        _two_strong(), factory=lambda c: first_client, seal_secret=store.seal_secret
+    )
+    first_orch = AgentOrchestrator(
+        gateway=first_gateway,
+        owner_user_id=owner,
+        workflow_id=workflow,
+        record_sink=store.append,
+    )
+    first_plan = _ready_plan(first_orch, [("t1", "factor_engineer")], {"t1": []})
+    first = first_orch.dispatch(
+        first_plan,
+        executor=make_executor(tmp_path / "first-run"),
+        tool_handlers=_handlers(["factor_engineer"]),
+    )
+
+    assert first.succeeded is True
+    durable_rows = store.read_all(owner_user_id=owner)
+    assert durable_rows
+    assert {row.owner_user_id for row in durable_rows} == {owner}
+    assert {row.workflow_id for row in durable_rows} == {workflow}
+    first_invocations = list(dict.fromkeys(row.invocation_id for row in durable_rows))
+    assert len(first_invocations) == 2
+    assert all(invocation.startswith("orch:") for invocation in first_invocations)
+    assert first_invocations[0].endswith(":step:1")
+    assert first_invocations[1].endswith(":step:2")
+    assert [row.call_id for row in LLMCallRecordStore(store.path).read_all(owner_user_id=owner)] == [
+        row.call_id for row in durable_rows
+    ]
+
+    # An exact retry with a fresh gateway/executor derives the same first id.
+    # The durable sink rejects it before provider access instead of double-calling.
+    retry_client = ReadAssetThenFinal()
+    retry_gateway = _gateway(
+        _two_strong(), factory=lambda c: retry_client, seal_secret=store.seal_secret
+    )
+    retry_orch = AgentOrchestrator(
+        gateway=retry_gateway,
+        owner_user_id=owner,
+        workflow_id=workflow,
+        record_sink=store.append,
+    )
+    retry_plan = _ready_plan(retry_orch, [("t1", "factor_engineer")], {"t1": []})
+    retried = retry_orch.dispatch(
+        retry_plan,
+        executor=make_executor(tmp_path / "exact-retry"),
+        tool_handlers=_handlers(["factor_engineer"]),
+    )
+    assert retried.succeeded is False
+    assert "already has durable audit evidence" in retried.kernel_result.node("t1").error
+    assert retry_client.calls == 0
+    assert store.read_all(owner_user_id=owner) == durable_rows
+
+    # A changed frozen instruction is a new task execution scope, not an exact
+    # retry. It gets new deterministic invocation ids and may call the provider.
+    changed_client = ReadAssetThenFinal()
+    changed_gateway = _gateway(
+        _two_strong(), factory=lambda c: changed_client, seal_secret=store.seal_secret
+    )
+    changed_orch = AgentOrchestrator(
+        gateway=changed_gateway,
+        owner_user_id=owner,
+        workflow_id=workflow,
+        record_sink=store.append,
+    )
+    changed_plan = _ready_plan(changed_orch, [("t1", "factor_engineer")], {"t1": []})
+    changed = changed_orch.dispatch(
+        changed_plan,
+        executor=make_executor(tmp_path / "changed-task"),
+        instructions={"t1": "changed frozen instruction"},
+        tool_handlers=_handlers(["factor_engineer"]),
+    )
+    assert changed.succeeded is True
+    assert changed_client.calls == 2
+    changed_rows = store.read_all(owner_user_id=owner)
+    changed_invocations = list(dict.fromkeys(row.invocation_id for row in changed_rows))
+    assert set(changed_invocations[:2]).isdisjoint(changed_invocations[2:])
+
+
+def test_durable_role_artifacts_are_not_reused_across_owner_scopes(tmp_path):
+    executor = make_executor(tmp_path / "shared-kernel")
+    first_client = ReadAssetThenFinal()
+    first_gateway = _gateway(_two_strong(), factory=lambda c: first_client)
+    first_orch = AgentOrchestrator(
+        gateway=first_gateway,
+        owner_user_id="owner-a",
+        workflow_id="shared-workflow",
+    )
+    first_plan = _ready_plan(first_orch, [("t1", "factor_engineer")], {"t1": []})
+    first = first_orch.dispatch(
+        first_plan,
+        executor=executor,
+        tool_handlers=_handlers(["factor_engineer"]),
+    )
+    assert first.succeeded is True
+
+    second_client = ReadAssetThenFinal()
+    second_gateway = _gateway(_two_strong(), factory=lambda c: second_client)
+    second_orch = AgentOrchestrator(
+        gateway=second_gateway,
+        owner_user_id="owner-b",
+        workflow_id="shared-workflow",
+    )
+    second_plan = _ready_plan(second_orch, [("t1", "factor_engineer")], {"t1": []})
+    second = second_orch.dispatch(
+        second_plan,
+        executor=executor,
+        tool_handlers=_handlers(["factor_engineer"]),
+    )
+
+    assert second.succeeded is True
+    assert second.kernel_result.node("t1").reused is False
+    assert second_client.calls == 2
+    assert {sealed.record.owner_user_id for _task, _role, sealed in second.sealed_results} == {
+        "owner-b"
+    }
 
 
 # ════════════════════════════ 12 role / 五形态 覆盖 ════════════════════════════

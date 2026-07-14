@@ -72,6 +72,15 @@ from app.release_gate.section6_mathchain_gate import (  # noqa: E402
 # 一条**完整且诚实**的升级 claim（过 evidence_sufficient 全部相关子句·非 PIT/非 proof-requiring）：
 #   artifact(statement/definition) + 完整 binding(code+config+data_contract+content_hash+test_refs)
 #   + 决定性通过 ConsistencyCheck。各对抗用例从此基线**删/篡一项**隔离出对应子句。
+_BASE_BINDING = TheoryImplementationBinding(
+    theory_ref="theory::alpha_x",
+    code_ref="factors/alpha_x.py",
+    code_content_hash="hash::v1",
+    config_ref="cfg::alpha_x",
+    data_contract_ref="dc::alpha_x",
+    test_refs=("test::alpha_x",),
+)
+
 _BASE_CLAIM = {
     "requested_label": "evidence_sufficient",
     "asset_ref": "factor::alpha_x",
@@ -90,7 +99,11 @@ _BASE_CLAIM = {
         "test_refs": ["test::alpha_x"],
     },
     "consistency_checks": [
-        {"binding_id": "b1", "check_type": "numerical", "result": "pass"}
+        {
+            "binding_id": _BASE_BINDING.binding_id,
+            "check_type": "numerical",
+            "result": "pass",
+        }
     ],
 }
 
@@ -160,7 +173,7 @@ def test_failed_consistency_check_flagged():
     """★ 可证伪③（mutation 目标）：ConsistencyCheck=fail（实现↔定义不一致）→ ok=False·consistency-pass。"""
 
     bad = _claim(consistency_checks=[
-        {"binding_id": "b1", "check_type": "numerical", "result": "fail",
+        {"binding_id": _BASE_BINDING.binding_id, "check_type": "numerical", "result": "fail",
          "failure_reason": "相对误差 0.3 超容差"}
     ])
     cr = section6_mathchain_check(_manifest(_section([bad])))

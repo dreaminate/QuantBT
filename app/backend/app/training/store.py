@@ -33,6 +33,7 @@ class TrainingJob:
     model: str  # catalog key，或 "(code)" 表示自由代码任务
     family: str  # ml / dl / code / mixed —— 仅作标签，执行不再硬分
     task: str
+    owner_user_id: str = ""
     status: JobStatus = "queued"
     created_at_utc: str = field(default_factory=_now)
     started_at_utc: str | None = None

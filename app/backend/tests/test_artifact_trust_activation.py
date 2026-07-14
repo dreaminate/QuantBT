@@ -31,6 +31,9 @@ from app.training import TrainingRequest, TrainingService, artifact_trust  # noq
 from app.training.artifact_trust import ArtifactTrustError  # noqa: E402
 
 
+_OWNER_USER_ID = "test-owner"
+
+
 @pytest.fixture(autouse=True)
 def _reset_global_trust():
     """复位进程级默认策略（本卡不用 configure_default_trust，纯防跨文件全局态泄漏污染基线）。"""
@@ -109,7 +112,11 @@ def test_service_compose_registered_under_enforce_default_on(tmp_path: Path):
     """正路径（默认 enforce ON）：A 系统自产→登记；B 组合 A 的输出当特征 → 加载放行、B 训练成功。"""
     svc = TrainingService(root=tmp_path / "tr", timeout=300)  # enforce 默认 ON
     assert svc._trust_enforce is True  # 默认翻开（生产激活）
-    a = svc.train_now(_req("A", model="xgboost", hyperparams={"n_estimators": 30}), _panel())
+    a = svc.train_now(
+        _req("A", model="xgboost", hyperparams={"n_estimators": 30}),
+        _panel(),
+        owner_user_id=_OWNER_USER_ID,
+    )
     assert a.status == "succeeded", a.error
     artifact = str(Path(a.artifact_dir) / "model.pkl")
     b = svc.train_now(
@@ -117,6 +124,7 @@ def test_service_compose_registered_under_enforce_default_on(tmp_path: Path):
             {"artifact_path": artifact, "feature_cols": ["f1", "f2"], "as_col": "a_pred"}
         ]),
         _panel(),
+        owner_user_id=_OWNER_USER_ID,
     )
     assert b.status == "succeeded", b.error  # enforce ON 不误伤【已登记】自产模型（含 xgboost 走白名单）
 
@@ -130,6 +138,7 @@ def test_service_compose_registered_dl_under_enforce(tmp_path: Path):
         _req("dl", model="lstm", label_col="label",
              hyperparams={"max_epochs": 2, "lookback": 10, "hidden_size": 8, "batch_size": 32}),
         _panel(),
+        owner_user_id=_OWNER_USER_ID,
     )
     assert dl.status == "succeeded", dl.error
     pt = str(Path(dl.artifact_dir) / "model.pt")
@@ -140,6 +149,7 @@ def test_service_compose_registered_dl_under_enforce(tmp_path: Path):
             {"artifact_path": pt, "feature_cols": ["f1", "f2"], "as_col": "lstm_pred"}
         ]),
         _panel(),
+        owner_user_id=_OWNER_USER_ID,
     )
     assert b.status == "succeeded", b.error
 
@@ -161,6 +171,7 @@ def test_service_compose_external_pkl_refused_end_to_end(tmp_path: Path):
             {"artifact_path": str(ext), "feature_cols": ["f1", "f2"], "as_col": "x"}
         ]),
         _panel(),
+        owner_user_id=_OWNER_USER_ID,
     )
     assert b.status == "failed"
     assert "ArtifactTrust" in (b.error or ""), b.error  # 未登记 full-sha256 不命中 → 拒
@@ -169,7 +180,7 @@ def test_service_compose_external_pkl_refused_end_to_end(tmp_path: Path):
 def test_service_compose_tampered_registered_refused(tmp_path: Path):
     """种坏门（tamper-evident·端到端）：自产模型登记后被改一字节 → full-sha256 变 → 组合时被拒。"""
     svc = TrainingService(root=tmp_path / "tr", timeout=300)
-    a = svc.train_now(_req("A"), _panel())
+    a = svc.train_now(_req("A"), _panel(), owner_user_id=_OWNER_USER_ID)
     assert a.status == "succeeded", a.error
     pkl = Path(a.artifact_dir) / "model.pkl"
     with pkl.open("ab") as fh:  # 篡改：追加一字节（绑定的是内容 hash，不是路径）
@@ -179,6 +190,7 @@ def test_service_compose_tampered_registered_refused(tmp_path: Path):
             {"artifact_path": str(pkl), "feature_cols": ["f1", "f2"], "as_col": "a_pred"}
         ]),
         _panel(),
+        owner_user_id=_OWNER_USER_ID,
     )
     assert b.status == "failed"
     assert "ArtifactTrust" in (b.error or ""), b.error
@@ -202,6 +214,7 @@ def test_service_optin_off_loads_external_backward_compat(tmp_path: Path):
             {"artifact_path": str(ext), "feature_cols": ["f1", "f2"], "as_col": "x"}
         ]),
         _panel(),
+        owner_user_id=_OWNER_USER_ID,
     )
     assert b.status == "succeeded", b.error  # opt-in：外来仍经 blocklist 加载（不查登记）
 

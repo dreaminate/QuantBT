@@ -6,6 +6,13 @@
 
 from __future__ import annotations
 
+from .account_halt import (
+    AccountHaltBatch,
+    AccountHaltEvidence,
+    AccountHaltError,
+    AccountHaltSnapshot,
+    PersistentAccountHaltBarrier,
+)
 from .broker import CapabilityToken, KeyBroker, Lease
 from .enforcer import OrderGuard
 from .ingest import Attestation, IngestResult, isolated_ingest, sanity_check
@@ -23,6 +30,10 @@ from .policy import (
 
 __all__ = [
     "Attestation",
+    "AccountHaltBatch",
+    "AccountHaltEvidence",
+    "AccountHaltError",
+    "AccountHaltSnapshot",
     "CapabilityToken",
     "IngestResult",
     "KeyBroker",
@@ -32,6 +43,7 @@ __all__ = [
     "OrderGuard",
     "PolicyDecision",
     "PolicyGate",
+    "PersistentAccountHaltBarrier",
     "TCB_DISCLOSURE",
     "TrustTier",
     "classify",

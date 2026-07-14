@@ -99,10 +99,12 @@ class GenericTradingVenue(ExecutionVenue):
         return self._audit
 
     def assert_safe_startup(self) -> dict[str, Any]:
-        """若 YAML 配了 permission_check，必须返回非 withdraw 权限才允许工作。"""
+        """Require an observed permission response with no withdrawal grant."""
 
         if not self._cfg.permission_check:
-            return {"ok": True, "checked": False, "reason": "no permission_check configured"}
+            raise PermissionError(
+                f"DIY venue {self.name} 缺 permission_check，拒绝启动（不能把未检查包装成 ok）。"
+            )
         payload = self._call(self._cfg.permission_check, ctx={})
         if not isinstance(payload, dict):
             raise PermissionError(
@@ -211,6 +213,11 @@ def guarded_generic_venue(
 
     guarded_cfg = config.model_copy(update={"deny_by_default": True})  # 接活恒 deny-by-default，不可关
     venue = GenericTradingVenue(guarded_cfg, http=http, audit=audit)
+    startup = venue.assert_safe_startup()
+    if startup.get("ok") is not True or startup.get("checked") is not True:
+        raise PermissionError(
+            f"DIY venue {venue.name} 未返回已执行的安全启动检查，拒绝接入真钱执行面。"
+        )
     return OrderGuard.wrap(venue, gate=gate, nonce_ledger=nonce_ledger, on_event=on_event)
 
 

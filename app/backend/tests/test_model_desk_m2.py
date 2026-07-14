@@ -36,6 +36,19 @@ from app.research_os import (
 from app.training.codegen import GraphCodegenError, graph_to_code
 
 client = TestClient(app)
+_TRAINING_FEATURES = ("f_mom5", "f_mom20", "f_vol20", "f_value")
+
+
+@pytest.fixture(autouse=True)
+def _authenticated_training_user():
+    app.dependency_overrides[require_user_dependency] = lambda: SimpleNamespace(
+        user_id="pytest",
+        username="pytest",
+    )
+    try:
+        yield
+    finally:
+        app.dependency_overrides.pop(require_user_dependency, None)
 
 
 def _good_evidence() -> dict:
@@ -76,7 +89,7 @@ def test_training_submit_persists_detail(training_market_data_use_validation_ref
               "design": "d", "arch": "a", "hparams": "h", "sections": []}
     r = client.post("/api/training/jobs", json={
         "name": "m2-detail", "model": "xgboost", "task": "regression",
-        "feature_cols": ["f_mom5"], "label_col": "label",
+        "feature_cols": list(_TRAINING_FEATURES), "label_col": "label",
         "dataset_id": "demo_ashare_xsec", "detail": detail,
         "market_data_use_validation_refs": [training_market_data_use_validation_ref],
     })
@@ -90,7 +103,7 @@ def test_training_job_without_detail_is_empty_not_fabricated(training_market_dat
     """旧 job 无 detail → 空 dict（向后兼容），绝不编造（不假绿）。"""
     r = client.post("/api/training/jobs", json={
         "name": "m2-nodetail", "model": "xgboost", "task": "regression",
-        "feature_cols": ["f_mom5"], "dataset_id": "demo_ashare_xsec",
+        "feature_cols": list(_TRAINING_FEATURES), "dataset_id": "demo_ashare_xsec",
         "market_data_use_validation_refs": [training_market_data_use_validation_ref],
     })
     assert r.status_code == 200
@@ -172,7 +185,7 @@ def test_walk_forward_endpoint_unrun_job_not_fabricated(training_market_data_use
     """未训完 / 无 artifact 的 job walk-forward → windows=[]，ran=False（不编造逐窗）。"""
     r = client.post("/api/training/jobs", json={
         "name": "m2-wf", "model": "xgboost", "task": "regression",
-        "feature_cols": ["f_mom5"], "dataset_id": "demo_ashare_xsec",
+        "feature_cols": list(_TRAINING_FEATURES), "dataset_id": "demo_ashare_xsec",
         "market_data_use_validation_refs": [training_market_data_use_validation_ref],
     })
     job_id = r.json()["job_id"]
@@ -216,11 +229,24 @@ def _consistent_verdict(config_hash: str) -> str:
 
 
 def _record_model_passport(model_id: str, version: int) -> str:
+    from app.main import TRAINING_SERVICE
+    from app.training import TrainingRequest
+    from app.training.store import TrainingJob
+
+    job_id = f"{model_id}:v{version}"
+    request = TrainingRequest(
+        name=f"{model_id}-v{version}",
+        model=model_id,
+        task="regression",
+        feature_cols=["feature:fixture"],
+        label_col="label:fixture",
+        asset_class="a_share",
+    )
     passport = ModelGovernancePassport(
         model_version_ref=f"model_version:{model_id}:v{version}",
-        model_type_card_ref="model_type_card:lgbm",
-        training_plan_ref=f"training_plan:{model_id}:v{version}",
-        training_run_ref=f"training_run:{model_id}:v{version}",
+        model_type_card_ref=f"model_type_card:{model_id}",
+        training_plan_ref=f"training_plan:{job_id}",
+        training_run_ref=f"training_run:{job_id}",
         model_risk_tier=ModelRiskTier.MEDIUM,
         materiality="model desk staging candidate",
         intended_use=("staging review",),
@@ -252,7 +278,28 @@ def _record_model_passport(model_id: str, version: int) -> str:
         validation_dossier_ref=f"validation_dossier:{model_id}:v{version}",
         challenger_result="fixture challenger review complete",
     )
-    return MODEL_GOVERNANCE_REGISTRY.record_passport(passport).passport_id
+    recorded = MODEL_GOVERNANCE_REGISTRY.record_passport(
+        passport,
+        owner_user_id="tester",
+        recorded_by="tester",
+    )
+    TRAINING_SERVICE._jobs.create(
+        TrainingJob(
+            job_id=job_id,
+            name=request.name,
+            model=model_id,
+            family="ml",
+            task=request.task,
+            owner_user_id="tester",
+            status="succeeded",
+            request=request.to_dict(),
+            run_id=job_id,
+            model_version=version,
+            model_passport_ref=recorded.passport_id,
+            validation_dossier_ref=passport.validation_dossier_ref,
+        )
+    )
+    return recorded.passport_id
 
 
 def _open_staging_gate(creator: str):
@@ -260,24 +307,53 @@ def _open_staging_gate(creator: str):
     import uuid
 
     mid = f"m2adv-{uuid.uuid4().hex[:8]}"
-    MODEL_REGISTRY.register_version(mid, artifact_path="a.pkl")
+    MODEL_REGISTRY.register_version(
+        mid,
+        artifact_path="a.pkl",
+        owner_user_id="tester",
+    )
     passport_ref = _record_model_passport(mid, 2)
-    MODEL_REGISTRY.register_version(mid, artifact_path="b.pkl", model_passport_ref=passport_ref)
+    MODEL_REGISTRY.register_version(
+        mid,
+        artifact_path="b.pkl",
+        model_passport_ref=passport_ref,
+        owner_user_id="tester",
+    )
     evidence = _good_evidence()
     vid = _consistent_verdict(evidence["config_hash"])
     gate = MODEL_REGISTRY.promote(
         mid, 2, "staging", created_by=creator, verification_record_id=vid,
         evidence=evidence, strategy_goal_ref="theme", model_passport_ref=passport_ref,
+        owner_user_id="tester",
     )
     assert gate.decision == "pending", f"门未 pending（前置坏，无法测自批）: {gate}"
     return mid, gate.gate_id
 
 
+def _grant_staging_reviewer(mid: str, gate_id: str, reviewer: str = "reviewer-bob"):
+    return MODEL_REGISTRY.grant_promotion_reviewer(
+        gate_id,
+        model_id=mid,
+        owner_user_id="tester",
+        reviewer_user_id=reviewer,
+        permissions=("view", "approve", "reject"),
+        expires_at_utc="2099-01-01T00:00:00+00:00",
+        issued_by="tester",
+    )
+
+
+def _authenticate_as(user_id: str) -> None:
+    app.dependency_overrides[require_user_dependency] = lambda: SimpleNamespace(
+        user_id=user_id,
+        username=user_id,
+    )
+
+
 def test_promote_approve_self_approve_rejected_422(_auth_override) -> None:
     """对抗：approver == creator（裸自批）→ 422（self-approve 必走正路，否则绝不放行）。"""
-    mid, gate_id = _open_staging_gate(creator="alice")
+    mid, gate_id = _open_staging_gate(creator="tester")
     r = client.post(f"/api/models/{mid}/gates/{gate_id}/approve",
-                    json={"approver": "alice", "reason": "想自批，理由够长够具体",
+                    json={"approver": "spoofed-other", "reason": "想自批，理由够长够具体",
                           "risk_restated": True})
     assert r.status_code == 422, f"approver==creator 竟放行（双控门坏）: {r.text}"
 
@@ -285,6 +361,8 @@ def test_promote_approve_self_approve_rejected_422(_auth_override) -> None:
 def test_promote_approve_empty_reason_rejected_422(_auth_override) -> None:
     """对抗：reason 空 → 422（审批理由不可空/套话）。"""
     mid, gate_id = _open_staging_gate(creator="alice")
+    _grant_staging_reviewer(mid, gate_id)
+    _authenticate_as("reviewer-bob")
     r = client.post(f"/api/models/{mid}/gates/{gate_id}/approve",
                     json={"approver": "bob", "reason": "", "risk_restated": True})
     assert r.status_code == 422, f"空 reason 竟放行（门坏）: {r.text}"
@@ -293,12 +371,14 @@ def test_promote_approve_empty_reason_rejected_422(_auth_override) -> None:
 def test_promote_approve_distinct_approver_with_reason_passes(_auth_override) -> None:
     """正路：approver≠creator + 实质 reason → 真翻 stage 到 staging。"""
     mid, gate_id = _open_staging_gate(creator="alice")
+    _grant_staging_reviewer(mid, gate_id)
+    _authenticate_as("reviewer-bob")
     r = client.post(f"/api/models/{mid}/gates/{gate_id}/approve",
                     json={"approver": "bob", "reason": "独立复核证据三角同向适用域明确，可上 staging",
                           "risk_restated": True})
     assert r.status_code == 200, r.text
-    versions = client.get(f"/api/models/{mid}/versions").json()
-    assert any(v["version"] == 2 and v["stage"] == "staging" for v in versions), \
+    versions = MODEL_REGISTRY.list_versions(mid, owner_user_id="tester")
+    assert any(v.version == 2 and v.stage == "staging" for v in versions), \
         "approve 后 stage 未真翻 staging（gate→registry 执行断链）"
 
 
@@ -308,9 +388,18 @@ def test_promote_bare_flip_to_staging_blocked() -> None:
 
     import uuid
     mid = f"m2bare-{uuid.uuid4().hex[:8]}"
-    MODEL_REGISTRY.register_version(mid, artifact_path="a.pkl")
+    MODEL_REGISTRY.register_version(
+        mid,
+        artifact_path="a.pkl",
+        owner_user_id="pytest",
+    )
     with pytest.raises(GateStateError):
-        MODEL_REGISTRY.apply_stage(mid, 1, "staging")
+        MODEL_REGISTRY.apply_stage(
+            mid,
+            1,
+            "staging",
+            owner_user_id="pytest",
+        )
 
 
 # ===========================================================================

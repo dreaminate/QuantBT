@@ -10,7 +10,7 @@ import { AgentChat, type AgentBlock } from "./AgentChat";
 const here = dirname(fileURLToPath(import.meta.url));
 
 describe("G3 Agent 对话组件", () => {
-  it("ChatBubble 7 型渲染：user/think/say/todos/tool/patch/gate", () => {
+  it("ChatBubble 8 型渲染：user/think/say/todos/tool/patch/gate/workflow", () => {
     const { rerender } = render(<ChatBubble type="user" text="组装策略" />);
     expect(screen.getByText("组装策略")).toBeInTheDocument();
 
@@ -56,6 +56,21 @@ describe("G3 Agent 对话组件", () => {
     );
     expect(screen.getByText("加 VaR 节点")).toBeInTheDocument();
     expect(screen.getByText("pt_4f1a")).toBeInTheDocument();
+
+    rerender(
+      <ChatBubble
+        type="workflow"
+        workflowKind="FailureDetected"
+        workflowRole="risk_manager"
+        workflowDesk="risk"
+        workflowAt="2026-07-13T01:02:03Z"
+        workflowSummary="failure_stage=provider_call · next_step=retry"
+      />,
+    );
+    const workflow = document.querySelector('[data-block="workflow"]') as HTMLElement;
+    expect(workflow.dataset.workflowKind).toBe("FailureDetected");
+    expect(screen.getByText("risk_manager · risk")).toBeInTheDocument();
+    expect(screen.getByText(/failure_stage=provider_call/)).toBeInTheDocument();
   });
 
   it("对抗：gate block 默认 expanded=true（种 collapsed 默认必抓）", () => {
@@ -114,7 +129,7 @@ describe("G3 Agent 对话组件", () => {
         draft="跑回测"
         onDraftChange={onDraftChange}
         onSend={onSend}
-        model="sonnet-4.5"
+        model="runtime LLM"
         permissionMode="ask"
         branch="strat/weekly-cn"
       />,
@@ -138,7 +153,7 @@ describe("G3 Agent 对话组件", () => {
         draft=""
         onDraftChange={() => {}}
         onSend={() => {}}
-        model="sonnet-4.5"
+        model="runtime LLM"
         permissionMode="bypass"
         branch="main"
       />,

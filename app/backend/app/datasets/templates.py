@@ -18,6 +18,18 @@ class StrategyTemplate:
     expected_metrics: dict[str, float]  # 模板预期 metric 范围（用户对照看是否过拟合）
     code: str
 
+    @property
+    def mock_label_ref(self) -> str:
+        return f"mock_label:strategy_template:{self.template_id}"
+
+    @property
+    def asset_category_ref(self) -> str:
+        return f"asset_category:{self.asset_class}:{self.template_id}"
+
+    @property
+    def display_label(self) -> str:
+        return f"MOCK · TEMPLATE · {self.asset_class}"
+
     def to_dict(self) -> dict[str, Any]:
         return {
             "template_id": self.template_id,
@@ -25,8 +37,35 @@ class StrategyTemplate:
             "asset_class": self.asset_class,
             "description": self.description,
             "expected_metrics": self.expected_metrics,
+            "category": "template",
+            "mock_label_ref": self.mock_label_ref,
+            "asset_category_ref": self.asset_category_ref,
+            "display_label": self.display_label,
+            "production_eligible": False,
             "code": self.code,
         }
+
+    def to_governed_asset_record(self):
+        """Build the typed lifecycle producer record used when a user forks this template."""
+
+        from ..research_os.asset_lifecycle import (
+            AssetCategory,
+            GovernedAssetRecord,
+            LifecycleState,
+        )
+
+        return GovernedAssetRecord(
+            asset_ref=f"template:{self.template_id}",
+            asset_type="StrategyTemplate",
+            category=AssetCategory.TEMPLATE,
+            lifecycle_state=LifecycleState.SPECIFIED,
+            evidence_refs=(f"source:datasets.templates:{self.template_id}",),
+            validation_plan_ref=f"validation:strategy_template_contract:{self.template_id}",
+            promotion_history=(),
+            display_label=self.display_label,
+            mock_label_ref=self.mock_label_ref,
+            asset_category_ref=self.asset_category_ref,
+        )
 
 
 _BTC_MOMENTUM = StrategyTemplate(

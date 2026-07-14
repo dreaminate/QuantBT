@@ -150,7 +150,11 @@ def test_make_settings_managed_denies_when_unconfigured(tmp_path, monkeypatch) -
     ks = SecureKeystore(InMemoryKeystore())
     registry = PersistentOnboardingRegistry(tmp_path / "onboarding_settings.jsonl")
     with pytest.raises(NoLLMConfigured):
-        make_settings_managed_llm_client(keystore=ks, registry=registry)
+        make_settings_managed_llm_client(
+            keystore=ks,
+            registry=registry,
+            owner_user_id="service:test-llm-gateway",
+        )
 
 
 def test_make_llm_client_explicit_provider_with_explicit_key() -> None:

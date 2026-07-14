@@ -79,6 +79,9 @@ export function SettingsSecurityPage() {
   const [opLimit, setOpLimit] = useState(50);
   const [notionalLimit, setNotionalLimit] = useState(1000);
   const [requirePwd, setRequirePwd] = useState(true);
+  const [autoCopyPassword, setAutoCopyPassword] = useState("");
+  const [autoCopyTotp, setAutoCopyTotp] = useState("");
+  const [autoCopyStatement, setAutoCopyStatement] = useState("");
 
   async function refresh() {
     setLoading(true);
@@ -123,13 +126,21 @@ export function SettingsSecurityPage() {
       daily_operation_limit: opLimit,
       daily_notional_limit_usdt: notionalLimit,
       require_password_per_order: requirePwd,
+      ...(!requirePwd
+        ? {
+            password: autoCopyPassword,
+            totp_code: autoCopyTotp,
+            standing_authorization_statement: autoCopyStatement,
+          }
+        : {}),
     };
     const r = await authFetch("/api/security/mainnet/config", {
       method: "POST",
       body: JSON.stringify(payload),
     });
     if (!r.ok) {
-      setErr(`保存失败: ${r.status}`);
+      const body = await r.json().catch(() => ({}));
+      setErr(`保存失败: ${r.status} ${body.detail || ""}`);
       return;
     }
     await refresh();
@@ -314,6 +325,32 @@ export function SettingsSecurityPage() {
         <p style={{ opacity: 0.6, fontSize: 12, marginTop: 4 }}>
           强烈推荐保留勾选 — 即便会话 token 被劫持，攻击者也下不了单。
         </p>
+        {!requirePwd && (
+          <div className="cc-stack" style={{ gap: 8, marginTop: 12 }}>
+            <p className="cc-soft">
+              关闭后代表给自动跟单长期授权。后端仍逐单执行账户额度、策略门和审计，但不会逐单等待密码。
+            </p>
+            <input
+              className="cc-input"
+              type="password"
+              value={autoCopyPassword}
+              onChange={(e) => setAutoCopyPassword(e.target.value)}
+              placeholder="账户密码（或填写下方 TOTP）"
+            />
+            <input
+              className="cc-input"
+              value={autoCopyTotp}
+              onChange={(e) => setAutoCopyTotp(e.target.value)}
+              placeholder="TOTP code（可替代密码）"
+            />
+            <input
+              className="cc-input"
+              value={autoCopyStatement}
+              onChange={(e) => setAutoCopyStatement(e.target.value)}
+              placeholder="输入：我授权自动跟单"
+            />
+          </div>
+        )}
       </section>
 
       <div className="cc-row" style={{ gap: 8 }}>

@@ -9,7 +9,11 @@
 
 from __future__ import annotations
 
+import threading
+from copy import deepcopy
+from datetime import UTC, datetime, timedelta
 from types import SimpleNamespace
+from uuid import uuid4
 
 import pytest
 from fastapi.testclient import TestClient
@@ -17,10 +21,11 @@ from fastapi.testclient import TestClient
 from app.auth import require_user_dependency
 from app.execution.base import Order
 from app.execution.paper_venue import PaperVenue
-from app.main import PAPER_DESK, app
+from app.main import PAPER_DESK, VERDICT_STORE, VERIFIER, app
 from app.paper.desk import (
     AShareLiveForbidden,
     PaperDeskService,
+    RiskEvidenceCorrupted,
     RiskGateMutationForbidden,
     aggregate_promotion_checks,
 )
@@ -35,11 +40,39 @@ from app.paper.replay_provider import (
 
 @pytest.fixture
 def client():
-    app.dependency_overrides[require_user_dependency] = lambda: SimpleNamespace(user_id="tester")
+    identity = {"user_id": "tester"}
+    app.dependency_overrides[require_user_dependency] = lambda: SimpleNamespace(
+        user_id=identity["user_id"]
+    )
     try:
-        yield TestClient(app)
+        test_client = TestClient(app)
+        test_client.paper_test_identity = identity
+        yield test_client
     finally:
         app.dependency_overrides.pop(require_user_dependency, None)
+
+
+def _as_user(client: TestClient, user_id: str) -> None:
+    client.paper_test_identity["user_id"] = user_id
+
+
+def _record_paper_endorsement(target_ref: str, *, suffix: str):
+    record = VERIFIER.reconcile(
+        target_ref=target_ref,
+        claims={"promotion_snapshot": 1.0},
+        recomputed={"promotion_snapshot": 1.0},
+        generator_model="paper-builder-model",
+        checker_model="paper-reviewer-model",
+        generator_seed=1,
+        checker_seed=2,
+        generator_slice="builder-slice",
+        checker_slice="reviewer-slice",
+        replay_ref=f"paper_fixture:{suffix}",
+        notes="test-only exact paper promotion endorsement",
+        created_at_utc=datetime.now(UTC).isoformat(),
+    )
+    VERDICT_STORE.record(record)
+    return record
 
 
 # ════════════════ 基线：正常读路径 ════════════════
@@ -118,10 +151,11 @@ def test_ashare_live_never_reaches_venue():
 def test_promotion_naked_flip_without_endorsement_rejected(client):
     """无验证背书（endorsement_ref）直接审批 → 422 裸翻必拒。"""
 
+    _as_user(client, "strat_wk_cn_01")
     gate = client.post("/api/paper/runs/weekly_cn_multifactor/promotion/open",
-                       json={"creator": "alice"}).json()
+                       json={}).json()
     r = client.post(f"/api/paper/promotion/{gate['gate_id']}/approve",
-                    json={"approver": "bob", "reason": "looks good"})  # 缺 endorsement_ref
+                    json={"reason": "looks good"})  # 缺 endorsement_ref
     assert r.status_code == 422
     assert r.json()["detail"]["endorsement_or_reason_missing"] is True
     # 未晋级
@@ -131,43 +165,297 @@ def test_promotion_naked_flip_without_endorsement_rejected(client):
 def test_promotion_self_approve_rejected(client):
     """approver == creator（自审）→ 422（生成≠验证不可自我满足）。"""
 
+    _as_user(client, "strat_wk_cn_01")
     gate = client.post("/api/paper/runs/weekly_cn_multifactor/promotion/open",
-                       json={"creator": "alice"}).json()
+                       json={}).json()
     r = client.post(f"/api/paper/promotion/{gate['gate_id']}/approve",
-                    json={"approver": "alice", "endorsement_ref": "verdict_x", "reason": "ok"})
+                    json={"endorsement_ref": "verdict_x", "reason": "ok"})
     assert r.status_code == 422
     assert r.json()["detail"]["approver_equals_creator"] is True
 
 
 def test_promotion_cannot_skip_gates(client):
-    """4 门未全过的 run（dividend_lowvol_cn：14天<28 且超额<0）→ 即便有背书也拒（不可跳级）。"""
+    """5 门未全过的 run（天数/超额/来源均不合格）→ 即便有背书也拒（不可跳级）。"""
 
+    _as_user(client, "strat_div_03")
     gate = client.post("/api/paper/runs/dividend_lowvol_cn/promotion/open",
-                       json={"creator": "alice"}).json()
+                       json={}).json()
     assert gate["eligible"] is False
+    _as_user(client, "bob")
     r = client.post(f"/api/paper/promotion/{gate['gate_id']}/approve",
-                    json={"approver": "bob", "endorsement_ref": "verdict_x", "reason": "ok"})
+                    json={"endorsement_ref": "verdict_x", "reason": "ok"})
     assert r.status_code == 422
     assert r.json()["detail"]["gate_not_eligible"] is True
 
 
-def test_promotion_proper_human_approval_succeeds(client):
-    """合规人工审批（approver≠creator + 背书 + 4 门全过 + 理由）→ 晋级成功。"""
+def test_promotion_replay_source_fails_closed_even_with_human_approval(client):
+    """捆绑样本回放即使运行指标全过且人工背书齐，也不能晋级。"""
 
+    _as_user(client, "strat_crypto_02")
     gate = client.post("/api/paper/runs/crypto_perp_mom/promotion/open",
-                       json={"creator": "alice"}).json()
-    assert gate["eligible"] is True
+                       json={}).json()
+    assert gate["eligible"] is False
+    source_check = next(c for c in gate["checks"] if c["key"] == "data_source")
+    assert source_check["passed"] is False
+    assert "bundled_sample_replay" in source_check["value"]
+    _as_user(client, "bob")
     r = client.post(f"/api/paper/promotion/{gate['gate_id']}/approve",
-                    json={"approver": "bob", "endorsement_ref": "verdict_crypto_1",
+                    json={"endorsement_ref": "verdict_crypto_1",
                           "reason": "异模型对账一致，超额稳定"})
-    assert r.status_code == 200
-    body = r.json()
-    assert body["decision"] == "approved" and body["approver"] == "bob"
-    assert body["endorsement_ref"] == "verdict_crypto_1"
+    assert r.status_code == 422
+    assert r.json()["detail"]["gate_not_eligible"] is True
 
 
-def test_promotion_aggregation_4_gates():
-    """判定聚合恰 4 门：天数 / 超额 / 0违规 / 衰减。"""
+def test_promotion_identity_aliases_are_rejected_without_partial_state(client):
+    """请求体 creator/approver 别名不能伪造两个认证主体。"""
+
+    _as_user(client, "strat_wk_cn_01")
+    before = client.get("/api/paper/runs/weekly_cn_multifactor/promotion").json()
+    bad_open = client.post(
+        "/api/paper/runs/weekly_cn_multifactor/promotion/open",
+        json={"creator": "alice"},
+    )
+    assert bad_open.status_code == 422
+    assert bad_open.json()["detail"]["identity_from_auth_only"] is True
+    after_bad_open = client.get("/api/paper/runs/weekly_cn_multifactor/promotion").json()
+    assert after_bad_open == before
+
+    gate = client.post(
+        "/api/paper/runs/weekly_cn_multifactor/promotion/open", json={}
+    ).json()
+    assert gate["creator"] == "strat_wk_cn_01"
+    bad_approve = client.post(
+        f"/api/paper/promotion/{gate['gate_id']}/approve",
+        json={"approver": "bob", "endorsement_ref": "verdict_x", "reason": "alias attack"},
+    )
+    assert bad_approve.status_code == 422
+    assert bad_approve.json()["detail"]["identity_from_auth_only"] is True
+    gate_after = client.get(f"/api/paper/promotion/{gate['gate_id']}").json()
+    assert gate_after["decision"] == "pending"
+    assert gate_after["approver"] is None
+    assert gate_after["endorsement_ref"] is None
+
+
+def test_only_authenticated_run_owner_can_open_promotion_gate(client):
+    before = client.get("/api/paper/runs/weekly_cn_multifactor/promotion").json()
+    _as_user(client, "unrelated-user")
+    denied = client.post(
+        "/api/paper/runs/weekly_cn_multifactor/promotion/open", json={}
+    )
+    assert denied.status_code == 403
+    assert "paper run owner" in denied.json()["detail"]
+    after = client.get("/api/paper/runs/weekly_cn_multifactor/promotion").json()
+    assert after == before
+
+
+def test_promotion_gate_nonce_prevents_restart_endorsement_replay():
+    def build_gate():
+        svc = PaperDeskService()
+        svc.register_run(
+            run_id="nonce-run",
+            name="nonce-run",
+            origin="test",
+            market="crypto",
+            symbols=["BTCUSDT"],
+            bench="BTC",
+            creator="alice",
+            equity_log_path=_tmp_eqlog(uuid4().hex),
+            simulate=False,
+        )
+        return svc.open_promotion_gate("nonce-run", creator="alice")
+
+    first = build_gate()
+    after_restart = build_gate()
+    assert first.gate_id != after_restart.gate_id
+    assert first.verification_target_ref != after_restart.verification_target_ref
+
+
+def test_new_promotion_gate_supersedes_old_pending_gate_without_partial_promotion():
+    from app.approval.schema import GateStateError
+
+    svc = PaperDeskService()
+    rec = svc.register_run(
+        run_id="supersede-run",
+        name="supersede-run",
+        origin="test",
+        market="crypto",
+        symbols=["BTCUSDT"],
+        bench="BTC",
+        creator="alice",
+        equity_log_path=_tmp_eqlog("supersede-run"),
+        simulate=False,
+    )
+    first = svc.open_promotion_gate("supersede-run", creator="alice")
+    current = svc.open_promotion_gate("supersede-run", creator="alice")
+    assert first.decision == "superseded"
+    assert rec.promotion_gate_id == current.gate_id
+    with pytest.raises(GateStateError, match="superseded|非 pending"):
+        svc.approve_promotion(
+            first.gate_id,
+            approver="bob",
+            endorsement_ref="vd_old",
+            reason="old gate must never approve",
+        )
+    assert rec.promoted is False
+    assert current.decision == "pending"
+
+
+def test_promoted_run_cannot_open_a_new_pending_gate():
+    from app.approval.schema import GateStateError
+
+    svc = PaperDeskService()
+    rec = svc.register_run(
+        run_id="already-promoted",
+        name="already-promoted",
+        origin="test",
+        market="crypto",
+        symbols=["BTCUSDT"],
+        bench="BTC",
+        creator="alice",
+        equity_log_path=_tmp_eqlog("already-promoted"),
+        simulate=False,
+    )
+    rec.promoted = True
+    before_gate_id = rec.promotion_gate_id
+    with pytest.raises(GateStateError, match="already promoted"):
+        svc.open_promotion_gate("already-promoted", creator="alice")
+    assert rec.promoted is True
+    assert rec.promotion_gate_id == before_gate_id
+
+
+def test_promoted_run_open_endpoint_returns_conflict_without_state_change(client):
+    run_id = "already_promoted_http_" + uuid4().hex
+    rec = PAPER_DESK.register_run(
+        run_id=run_id,
+        name=run_id,
+        origin="test",
+        market="crypto",
+        symbols=["BTCUSDT"],
+        bench="BTC",
+        creator="alice",
+        equity_log_path=_tmp_eqlog(run_id),
+        simulate=False,
+    )
+    rec.promoted = True
+    before_gate_id = rec.promotion_gate_id
+
+    _as_user(client, "alice")
+    denied = client.post(f"/api/paper/runs/{run_id}/promotion/open", json={})
+
+    assert denied.status_code == 409
+    assert "already promoted" in denied.json()["detail"]
+    assert rec.promoted is True
+    assert rec.promotion_gate_id == before_gate_id
+
+
+def test_promotion_requires_authenticated_reviewer_grant_and_exact_typed_endorsement(
+    client, monkeypatch
+):
+    """两个认证主体 + exact grant + 本门 typed verdict 才能翻态。"""
+
+    run_id = "auth_promo_" + uuid4().hex
+    rec = PAPER_DESK.register_run(
+        run_id=run_id,
+        name=run_id,
+        origin="test",
+        market="crypto",
+        symbols=["BTCUSDT"],
+        bench="BTC",
+        creator="alice",
+        equity_log_path=_tmp_eqlog(run_id),
+        simulate=False,
+        days_running=30,
+        paper_excess_return=0.02,
+        backtest_annual=0.20,
+        paper_annual=0.18,
+    )
+    rec.simulated_source = "binance_testnet_live"
+    rec.provider_kind = "testnet"
+    rec.degrade_reason = None
+    monkeypatch.delenv("QUANTBT_PAPER_VERIFIER_USER_IDS", raising=False)
+
+    _as_user(client, "alice")
+    gate = client.post(f"/api/paper/runs/{run_id}/promotion/open", json={}).json()
+    endorsement = _record_paper_endorsement(
+        gate["verification_target_ref"], suffix=gate["gate_id"]
+    )
+    grant = client.post(
+        f"/api/paper/promotion/{gate['gate_id']}/reviewer-grants",
+        json={
+            "reviewer_user_id": "bob",
+            "permissions": ["approve"],
+            "expires_at_utc": (datetime.now(UTC) + timedelta(hours=1)).isoformat(),
+        },
+    )
+    assert grant.status_code == 200
+
+    _as_user(client, "bob")
+    no_machine_authority = client.post(
+        f"/api/paper/promotion/{gate['gate_id']}/approve",
+        json={
+            "endorsement_ref": endorsement.verdict_id,
+            "reason": "ordinary second account is not a verifier trust root",
+        },
+    )
+    assert no_machine_authority.status_code == 403
+    assert "allowlist" in no_machine_authority.json()["detail"]["reason"]
+    pending = client.get(f"/api/paper/promotion/{gate['gate_id']}").json()
+    assert pending["decision"] == "pending"
+    assert pending["reviewer_authority_ref"] is None
+
+    monkeypatch.setenv("QUANTBT_PAPER_VERIFIER_USER_IDS", "bob")
+    _as_user(client, "mallory")
+    unauthorized = client.post(
+        f"/api/paper/promotion/{gate['gate_id']}/approve",
+        json={
+            "endorsement_ref": endorsement.verdict_id,
+            "reason": "not the granted reviewer",
+        },
+    )
+    assert unauthorized.status_code == 403
+    pending = client.get(f"/api/paper/promotion/{gate['gate_id']}").json()
+    assert pending["decision"] == "pending"
+    assert pending["approver"] is None and pending["endorsement_ref"] is None
+
+    _as_user(client, "bob")
+    wrong_endorsement = client.post(
+        f"/api/paper/promotion/{gate['gate_id']}/approve",
+        json={
+            "endorsement_ref": "vd_" + "0" * 16,
+            "reason": "wrong endorsement must not mutate",
+        },
+    )
+    assert wrong_endorsement.status_code == 422
+    assert wrong_endorsement.json()["detail"]["endorsement_invalid"] is True
+    pending = client.get(f"/api/paper/promotion/{gate['gate_id']}").json()
+    assert pending["decision"] == "pending"
+    assert pending["reviewer_grant_id"] is None
+    assert pending["endorsement_evidence_sha256"] is None
+
+    approved = client.post(
+        f"/api/paper/promotion/{gate['gate_id']}/approve",
+        json={
+            "endorsement_ref": endorsement.verdict_id,
+            "reason": "exact snapshot independently recomputed",
+        },
+    )
+    assert approved.status_code == 200
+    body = approved.json()
+    assert body["decision"] == "approved"
+    assert body["run_id"] == run_id and body["gate_id"] == gate["gate_id"]
+    assert body["approver"] == "bob"
+    assert body["reviewer_grant_id"] == grant.json()["grant_id"]
+    assert body["reviewer_authority_ref"].startswith(
+        "paper_verifier_authority:sha256:"
+    )
+    assert body["endorsement_evidence_sha256"].startswith(
+        "paper_promotion_endorsement:sha256:"
+    )
+    assert PAPER_DESK.get(run_id).promoted is True
+
+
+def test_promotion_aggregation_5_gates_includes_data_source():
+    """判定聚合恰 5 门；默认 replay 失败，未降级 testnet 才可过数据源门。"""
 
     svc = PaperDeskService()
     rec = svc.register_run(run_id="agg", name="agg", origin="o", market="crypto",
@@ -176,12 +464,36 @@ def test_promotion_aggregation_4_gates():
                            days_running=30, paper_excess_return=0.02,
                            backtest_annual=0.2, paper_annual=0.18)
     checks, eligible = aggregate_promotion_checks(rec, svc.risk)
-    assert [c["key"] for c in checks] == ["days", "excess", "zero_violation", "decay"]
+    assert [c["key"] for c in checks] == ["days", "excess", "zero_violation", "decay", "data_source"]
+    assert eligible is False
+    assert checks[-1]["passed"] is False
+    rec.simulated_source = "binance_testnet_live"
+    rec.provider_kind = "testnet"
+    rec.degrade_reason = None
+    checks, eligible = aggregate_promotion_checks(rec, svc.risk)
     assert eligible is True
+    assert checks[-1]["passed"] is True
     # 种坏门：注入一条违规 → 0违规门翻红 → 不合格
     svc.risk.record_violation("agg", title="x", detail="触线")
     _checks, elig2 = aggregate_promotion_checks(rec, svc.risk)
     assert elig2 is False
+
+
+def test_promotion_ashare_cannot_spoof_testnet_source_metadata():
+    """A股即使元数据被错误标成 testnet，也不能通过数据源门。"""
+
+    svc = PaperDeskService()
+    rec = svc.register_run(run_id="cn_source_spoof", name="x", origin="o", market="equity_cn",
+                           symbols=["600519"], bench="500", creator="c",
+                           equity_log_path=_tmp_eqlog("cn_source_spoof"),
+                           days_running=30, paper_excess_return=0.02,
+                           backtest_annual=0.2, paper_annual=0.18)
+    rec.simulated_source = "binance_testnet_live"
+    rec.provider_kind = "testnet"
+    rec.degrade_reason = None
+    checks, eligible = aggregate_promotion_checks(rec, svc.risk)
+    assert eligible is False
+    assert next(c for c in checks if c["key"] == "data_source")["passed"] is False
 
 
 # ════════════════ 对抗#3 · 风险门会话内改必拒 + 入哈希链 ════════════════
@@ -236,6 +548,273 @@ def test_chain_tamper_detected():
     # 直接改内部链的历史条目 detail（模拟篡改）
     svc.risk._chain["tp"][0]["detail"] = "篡改后的内容"  # noqa: SLF001
     assert svc.risk.verify_chain("tp") is False
+
+
+def test_corrupted_zero_violation_chain_cannot_open_an_eligible_promotion_gate():
+    """违规数即使仍为 0，风险证据链损坏也必须让晋级 fail closed。"""
+
+    svc = PaperDeskService()
+    rec = svc.register_run(
+        run_id="risk_chain_promotion",
+        name="risk_chain_promotion",
+        origin="test",
+        market="crypto",
+        symbols=["BTCUSDT"],
+        bench="BTC",
+        creator="alice",
+        equity_log_path=_tmp_eqlog("risk_chain_promotion"),
+        simulate=False,
+        days_running=30,
+        paper_excess_return=0.02,
+        backtest_annual=0.20,
+        paper_annual=0.18,
+    )
+    rec.simulated_source = "binance_testnet_live"
+    rec.provider_kind = "testnet"
+    rec.degrade_reason = None
+    assert svc.risk.violation_count(rec.run_id) == 0
+    svc.risk._chain[rec.run_id][0]["detail"] = "tampered"  # noqa: SLF001
+
+    gate = svc.open_promotion_gate(rec.run_id, creator="alice")
+
+    risk_check = next(check for check in gate.checks if check["key"] == "zero_violation")
+    assert risk_check == {
+        "key": "zero_violation",
+        "label": "风险门 0 违规且证据链完整",
+        "value": "证据链损坏",
+        "passed": False,
+    }
+    assert gate.eligible is False
+    assert rec.promoted is False
+
+
+def test_truncated_violation_chain_cannot_heal_on_next_append():
+    """截掉违规历史后，后续事件不得把残链重新锚定成完整或晋级全绿。"""
+
+    svc = PaperDeskService()
+    rec = svc.register_run(
+        run_id="risk_chain_truncate",
+        name="risk_chain_truncate",
+        origin="test",
+        market="crypto",
+        symbols=["BTCUSDT"],
+        bench="BTC",
+        creator="alice",
+        equity_log_path=_tmp_eqlog("risk_chain_truncate"),
+        simulate=False,
+        days_running=30,
+        paper_excess_return=0.02,
+        backtest_annual=0.20,
+        paper_annual=0.18,
+    )
+    rec.simulated_source = "binance_testnet_live"
+    rec.provider_kind = "testnet"
+    rec.degrade_reason = None
+    svc.risk.record_violation(rec.run_id, title="breach", detail="must remain anchored")
+    svc.risk._chain[rec.run_id].clear()  # noqa: SLF001 - simulate truncation.
+    assert svc.risk.verify_chain(rec.run_id) is False
+
+    with pytest.raises(RiskEvidenceCorrupted, match="refusing to append"):
+        svc.risk.attempt_mutation(rec.run_id, {"leverage": 99}, actor="attacker")
+
+    assert svc.risk.verify_chain(rec.run_id) is False
+    checks, eligible = aggregate_promotion_checks(rec, svc.risk)
+    assert next(c for c in checks if c["key"] == "zero_violation")["passed"] is False
+    assert eligible is False
+
+
+def test_corrupted_chain_republish_fails_without_partial_state_change():
+    svc = PaperDeskService()
+    svc.register_run(
+        run_id="risk_chain_republish",
+        name="risk_chain_republish",
+        origin="test",
+        market="crypto",
+        symbols=["BTCUSDT"],
+        bench="BTC",
+        creator="alice",
+        equity_log_path=_tmp_eqlog("risk_chain_republish"),
+        simulate=False,
+    )
+    svc.risk._chain["risk_chain_republish"][0]["detail"] = "tampered"  # noqa: SLF001
+    before = {
+        "frozen": svc.risk._frozen["risk_chain_republish"],  # noqa: SLF001
+        "limits": deepcopy(svc.risk._limits["risk_chain_republish"]),  # noqa: SLF001
+        "anchor": svc.risk._chain_anchors["risk_chain_republish"],  # noqa: SLF001
+        "chain": deepcopy(svc.risk._chain["risk_chain_republish"]),  # noqa: SLF001
+    }
+
+    with pytest.raises(RiskEvidenceCorrupted, match="refusing to publish"):
+        svc.risk.publish("risk_chain_republish", {"leverage": 99})
+
+    after = {
+        "frozen": svc.risk._frozen["risk_chain_republish"],  # noqa: SLF001
+        "limits": svc.risk._limits["risk_chain_republish"],  # noqa: SLF001
+        "anchor": svc.risk._chain_anchors["risk_chain_republish"],  # noqa: SLF001
+        "chain": svc.risk._chain["risk_chain_republish"],  # noqa: SLF001
+    }
+    assert after == before
+
+
+def test_violation_during_endorsement_lookup_is_rechecked_before_promotion():
+    """外部验证期间新增的违规必须被最终快照抓住，审批保持 pending。"""
+
+    from app.approval.schema import GateStateError
+
+    svc = PaperDeskService()
+    rec = svc.register_run(
+        run_id="risk_race_before_final_snapshot",
+        name="risk_race_before_final_snapshot",
+        origin="test",
+        market="crypto",
+        symbols=["BTCUSDT"],
+        bench="BTC",
+        creator="alice",
+        equity_log_path=_tmp_eqlog("risk_race_before_final_snapshot"),
+        simulate=False,
+        days_running=30,
+        paper_excess_return=0.02,
+        backtest_annual=0.20,
+        paper_annual=0.18,
+    )
+    rec.simulated_source = "binance_testnet_live"
+    rec.provider_kind = "testnet"
+    rec.degrade_reason = None
+    gate = svc.open_promotion_gate(rec.run_id, creator="alice")
+    endorsement = _record_paper_endorsement(
+        gate.verification_target_ref, suffix=gate.gate_id
+    )
+    lookup_started = threading.Event()
+    release_lookup = threading.Event()
+
+    def blocking_lookup(ref):
+        lookup_started.set()
+        assert release_lookup.wait(timeout=2)
+        return endorsement if ref == endorsement.verdict_id else None
+
+    svc.configure_promotion_endorsement_lookup(blocking_lookup)
+    svc.configure_promotion_reviewer_authority(
+        lambda actor: "paper_verifier_authority:sha256:test" if actor == "bob" else None
+    )
+    svc.grant_promotion_reviewer(
+        gate.gate_id,
+        owner_user_id="alice",
+        reviewer_user_id="bob",
+        permissions=("approve",),
+        expires_at_utc=(datetime.now(UTC) + timedelta(hours=1)).isoformat(),
+    )
+    result: dict[str, object] = {}
+
+    def approve() -> None:
+        try:
+            result["gate"] = svc.approve_promotion(
+                gate.gate_id,
+                approver="bob",
+                endorsement_ref=endorsement.verdict_id,
+                reason="concurrent risk evidence must be rechecked",
+            )
+        except Exception as exc:  # noqa: BLE001 - asserted below.
+            result["error"] = exc
+
+    approval_thread = threading.Thread(target=approve)
+    approval_thread.start()
+    assert lookup_started.wait(timeout=2)
+    svc.risk.record_violation(
+        rec.run_id, title="concurrent breach", detail="arrived before final snapshot"
+    )
+    release_lookup.set()
+    approval_thread.join(timeout=2)
+
+    assert not approval_thread.is_alive()
+    assert isinstance(result.get("error"), GateStateError)
+    assert "风险门" in str(result["error"])
+    assert "gate" not in result
+    assert gate.decision == "pending"
+    assert gate.approver is None and gate.endorsement_ref is None
+    assert rec.promoted is False
+
+
+def test_final_risk_snapshot_and_promotion_commit_are_one_critical_section(monkeypatch):
+    """违规写入不能落在最终风险快照与晋级 commit 的中间。"""
+
+    svc = PaperDeskService()
+    rec = svc.register_run(
+        run_id="risk_race_during_commit",
+        name="risk_race_during_commit",
+        origin="test",
+        market="crypto",
+        symbols=["BTCUSDT"],
+        bench="BTC",
+        creator="alice",
+        equity_log_path=_tmp_eqlog("risk_race_during_commit"),
+        simulate=False,
+        days_running=30,
+        paper_excess_return=0.02,
+        backtest_annual=0.20,
+        paper_annual=0.18,
+    )
+    rec.simulated_source = "binance_testnet_live"
+    rec.provider_kind = "testnet"
+    rec.degrade_reason = None
+    gate = svc.open_promotion_gate(rec.run_id, creator="alice")
+    endorsement = _record_paper_endorsement(
+        gate.verification_target_ref, suffix=gate.gate_id
+    )
+    svc.configure_promotion_endorsement_lookup(
+        lambda ref: endorsement if ref == endorsement.verdict_id else None
+    )
+    svc.configure_promotion_reviewer_authority(
+        lambda actor: "paper_verifier_authority:sha256:test" if actor == "bob" else None
+    )
+    svc.grant_promotion_reviewer(
+        gate.gate_id,
+        owner_user_id="alice",
+        reviewer_user_id="bob",
+        permissions=("approve",),
+        expires_at_utc=(datetime.now(UTC) + timedelta(hours=1)).isoformat(),
+    )
+
+    original_snapshot = svc.risk.promotion_snapshot
+    snapshot_calls = 0
+    final_snapshot_reached = threading.Event()
+    violation_started = threading.Event()
+    violation_finished = threading.Event()
+    finished_inside_snapshot: list[bool] = []
+
+    def observed_snapshot(run_id: str):
+        nonlocal snapshot_calls
+        value = original_snapshot(run_id)
+        snapshot_calls += 1
+        if snapshot_calls == 2:  # approval preliminary snapshot is #1; final guarded snapshot is #2.
+            final_snapshot_reached.set()
+            assert violation_started.wait(timeout=2)
+            finished_inside_snapshot.append(violation_finished.wait(timeout=0.2))
+        return value
+
+    monkeypatch.setattr(svc.risk, "promotion_snapshot", observed_snapshot)
+
+    def add_violation() -> None:
+        assert final_snapshot_reached.wait(timeout=2)
+        violation_started.set()
+        svc.risk.record_violation(
+            rec.run_id, title="serialized breach", detail="must not land inside commit"
+        )
+        violation_finished.set()
+
+    violation_thread = threading.Thread(target=add_violation)
+    violation_thread.start()
+    approved = svc.approve_promotion(
+        gate.gate_id,
+        approver="bob",
+        endorsement_ref=endorsement.verdict_id,
+        reason="final snapshot and commit are atomic against risk writes",
+    )
+    violation_thread.join(timeout=2)
+
+    assert not violation_thread.is_alive()
+    assert finished_inside_snapshot == [False]
+    assert approved.decision == "approved" and rec.promoted is True
+    assert violation_finished.is_set()
 
 
 # ════════════════ DS-4 · provider 产净值（非空壳）+ 治理门不破 ════════════════
@@ -360,12 +939,42 @@ def test_register_does_not_bypass_inv5_approval():
                            backtest_annual=0.2, paper_annual=0.18)
     svc.prime_run("ds4inv5")
     _checks, eligible = aggregate_promotion_checks(rec, svc.risk)
-    assert eligible is True
+    assert eligible is False
+    assert next(c for c in _checks if c["key"] == "data_source")["passed"] is False
     gate = svc.open_promotion_gate("ds4inv5", creator="alice")
     from app.approval.schema import ApproverEqualsCreator
     with pytest.raises(ApproverEqualsCreator):  # 自审恒拒——register 未削弱 INV-5
         svc.approve_promotion(gate.gate_id, approver="alice",
                               endorsement_ref="v1", reason="ok")
+
+
+def test_approve_rechecks_source_after_gate_open():
+    """开门时 testnet 合格，审批前降级回 replay → 旧门立即转红且不晋级。"""
+
+    from app.approval.schema import GateStateError
+
+    svc = PaperDeskService()
+    rec = svc.register_run(run_id="source_drift", name="x", origin="o", market="crypto",
+                           symbols=["BTCUSDT"], bench="BTC", creator="alice",
+                           equity_log_path=_tmp_eqlog("source_drift"),
+                           days_running=30, paper_excess_return=0.02,
+                           backtest_annual=0.2, paper_annual=0.18)
+    rec.simulated_source = "binance_testnet_live"
+    rec.provider_kind = "testnet"
+    rec.degrade_reason = None
+    gate = svc.open_promotion_gate("source_drift", creator="alice")
+    assert gate.eligible is True
+
+    rec.simulated_source = BUNDLED_SAMPLE_SOURCE
+    rec.provider_kind = "replay_fallback"
+    rec.degrade_reason = "testnet 连接失败"
+    with pytest.raises(GateStateError, match="数据源"):
+        svc.approve_promotion(gate.gate_id, approver="bob",
+                              endorsement_ref="v1", reason="ok")
+    assert rec.promoted is False
+    assert gate.eligible is True
+    assert gate.decision == "pending"
+    assert gate.approver is None and gate.endorsement_ref is None
 
 
 def test_post_paper_runs_registers_runnable_run(client):

@@ -43,6 +43,7 @@ def follower_gate(f: Follower, signal: Signal, *, tier: TrustTier | None = None)
         max_notional_per_order_usdt=notional,          # D-T021-2：既有 per_order_max_usdt
         max_leverage=max_lev,
         daily_turnover_cap=turnover,
+        require_validation_attestation=t == TrustTier.CRYPTO_LIVE,
     )
 
 

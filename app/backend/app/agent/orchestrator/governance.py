@@ -73,6 +73,7 @@ class ToolCallRecord:
     role: str
     ok: bool
     error_kind: str = ""
+    call_ref: str = ""
 
     def to_dict(self) -> dict[str, Any]:
         return {
@@ -82,6 +83,7 @@ class ToolCallRecord:
             "role": self.role,
             "ok": self.ok,
             "error_kind": self.error_kind,
+            "call_ref": self.call_ref,
         }
 
 
@@ -112,6 +114,7 @@ class GovernedToolDispatcher:
         self._violations: list[ToolViolation] = []
         self._active: set[str] = set()                 # 当前在册的有效节点令牌（进/出节点维护）
         self._on_event = on_event                      # 投影 ToolCallStarted/Finished（可选）
+        self._call_sequence = 0
 
     # —— 工具注册 ——
     def register(self, tool: str, handler: ToolHandler) -> None:
@@ -188,23 +191,57 @@ class GovernedToolDispatcher:
         if handler is None:
             raise ToolPermissionError(f"工具 {tool!r} 未注册到受治理派发器（不可裸调）")
 
+        self._call_sequence += 1
+        call_ref = "tool_call:" + hashlib.sha256(
+            (
+                f"{node_ctx.node_id}\x00{node_ctx.task_id}\x00{node_ctx.role}\x00"
+                f"{tool}\x00{self._call_sequence}\x00{node_ctx.token}"
+            ).encode("utf-8")
+        ).hexdigest()
+
         if self._on_event is not None:
-            self._on_event("started", {"tool": tool, "args_keys": sorted(args)}, node_ctx)
+            self._on_event(
+                "started",
+                {
+                    "tool": tool,
+                    "args_keys": sorted(args),
+                    "tool_call_ref": call_ref,
+                },
+                node_ctx,
+            )
         try:
             payload = handler(tool, args)
         except Exception as exc:  # noqa: BLE001  —— handler 内部错如实落账，不静默
             self._records.append(ToolCallRecord(
                 tool=tool, node_id=node_ctx.node_id, task_id=node_ctx.task_id, role=node_ctx.role,
-                ok=False, error_kind=type(exc).__name__,
+                ok=False, error_kind=type(exc).__name__, call_ref=call_ref,
             ))
             if self._on_event is not None:
-                self._on_event("finished", {"tool": tool, "ok": False, "error_kind": type(exc).__name__}, node_ctx)
+                self._on_event(
+                    "finished",
+                    {
+                        "tool": tool,
+                        "ok": False,
+                        "error_kind": type(exc).__name__,
+                        "tool_call_ref": call_ref,
+                    },
+                    node_ctx,
+                )
             raise
         self._records.append(ToolCallRecord(
-            tool=tool, node_id=node_ctx.node_id, task_id=node_ctx.task_id, role=node_ctx.role, ok=True,
+            tool=tool,
+            node_id=node_ctx.node_id,
+            task_id=node_ctx.task_id,
+            role=node_ctx.role,
+            ok=True,
+            call_ref=call_ref,
         ))
         if self._on_event is not None:
-            self._on_event("finished", {"tool": tool, "ok": True}, node_ctx)
+            self._on_event(
+                "finished",
+                {"tool": tool, "ok": True, "tool_call_ref": call_ref},
+                node_ctx,
+            )
         return payload
 
     # —— 账 / 违规读取 ——

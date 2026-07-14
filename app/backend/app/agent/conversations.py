@@ -70,10 +70,22 @@ def _utc_now() -> str:
     return time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime())
 
 
+def _owner_user_id(value: object) -> str:
+    owner = str(value or "").strip()
+    if not owner:
+        raise ChatError("authenticated chat owner is required")
+    return owner
+
+
+def _thread_not_found() -> ChatError:
+    # Deliberately identical for an absent thread and a foreign-owner thread.
+    return ChatError("thread not found")
+
+
 @dataclass
 class ChatThread:
     thread_id: str
-    user_id: str | None
+    user_id: str
     market_mode: str
     active_run_id: str | None
     active_strategy_id: str | None
@@ -117,12 +129,13 @@ class ChatService:
     def start_thread(
         self,
         *,
-        user_id: str | None,
+        user_id: str,
         market_mode: str = "ashare_research",
         active_run_id: str | None = None,
         active_strategy_id: str | None = None,
         title: str = "",
     ) -> ChatThread:
+        owner = _owner_user_id(user_id)
         if market_mode not in VALID_MARKET_MODES:
             raise ChatError(f"market_mode 必须 ∈ {sorted(VALID_MARKET_MODES)}")
         thread_id = "thr_" + token_urlsafe(8)
@@ -130,25 +143,30 @@ class ChatService:
         with self._conn() as c:
             c.execute(
                 "INSERT INTO chat_conversations (thread_id, user_id, market_mode, active_run_id, active_strategy_id, title, state, created_at_utc, updated_at_utc) VALUES (?,?,?,?,?,?,?,?,?)",
-                (thread_id, user_id, market_mode, active_run_id, active_strategy_id, title, "ENTER_THREAD", now, now),
+                (thread_id, owner, market_mode, active_run_id, active_strategy_id, title, "ENTER_THREAD", now, now),
             )
             c.commit()
-        return self.get_thread(thread_id)
+        return self.get_thread(thread_id, owner_user_id=owner)
 
-    def get_thread(self, thread_id: str) -> ChatThread:
+    def get_thread(self, thread_id: str, *, owner_user_id: str) -> ChatThread:
+        owner = _owner_user_id(owner_user_id)
         with self._conn() as c:
-            r = c.execute("SELECT * FROM chat_conversations WHERE thread_id=?", (thread_id,)).fetchone()
+            r = c.execute(
+                "SELECT * FROM chat_conversations WHERE thread_id=? AND user_id=?",
+                (thread_id, owner),
+            ).fetchone()
         if not r:
-            raise ChatError(f"thread not found: {thread_id}")
+            raise _thread_not_found()
         d = dict(r)
         d["metadata"] = json.loads(d.get("metadata") or "{}")
         return ChatThread(**d)
 
     def list_threads(self, user_id: str, limit: int = 50) -> list[ChatThread]:
+        owner = _owner_user_id(user_id)
         with self._conn() as c:
             rows = c.execute(
                 "SELECT * FROM chat_conversations WHERE user_id=? ORDER BY updated_at_utc DESC LIMIT ?",
-                (user_id, limit),
+                (owner, limit),
             ).fetchall()
         out: list[ChatThread] = []
         for r in rows:
@@ -157,23 +175,29 @@ class ChatService:
             out.append(ChatThread(**d))
         return out
 
-    def update_state(self, thread_id: str, state: str) -> None:
+    def update_state(self, thread_id: str, state: str, *, owner_user_id: str) -> None:
+        owner = _owner_user_id(owner_user_id)
         if state not in VALID_STATES:
             raise ChatError(f"state 必须 ∈ {sorted(VALID_STATES)}")
         with self._conn() as c:
-            c.execute(
-                "UPDATE chat_conversations SET state=?, updated_at_utc=? WHERE thread_id=?",
-                (state, _utc_now(), thread_id),
+            cursor = c.execute(
+                "UPDATE chat_conversations SET state=?, updated_at_utc=? "
+                "WHERE thread_id=? AND user_id=?",
+                (state, _utc_now(), thread_id, owner),
             )
+            if cursor.rowcount != 1:
+                raise _thread_not_found()
             c.commit()
 
     def update_active_context(
         self,
         thread_id: str,
         *,
+        owner_user_id: str,
         active_run_id: str | None = None,
         active_strategy_id: str | None = None,
     ) -> None:
+        owner = _owner_user_id(owner_user_id)
         with self._conn() as c:
             sets = []
             args: list[Any] = []
@@ -188,7 +212,14 @@ class ChatService:
             sets.append("updated_at_utc=?")
             args.append(_utc_now())
             args.append(thread_id)
-            c.execute(f"UPDATE chat_conversations SET {','.join(sets)} WHERE thread_id=?", args)
+            args.append(owner)
+            cursor = c.execute(
+                f"UPDATE chat_conversations SET {','.join(sets)} "
+                "WHERE thread_id=? AND user_id=?",
+                args,
+            )
+            if cursor.rowcount != 1:
+                raise _thread_not_found()
             c.commit()
 
     # ---------- messages ----------
@@ -199,23 +230,32 @@ class ChatService:
         role: str,
         content: str,
         *,
+        owner_user_id: str,
         metadata: dict[str, Any] | None = None,
     ) -> ChatMessage:
+        owner = _owner_user_id(owner_user_id)
         if role not in VALID_ROLES:
             raise ChatError(f"role 必须 ∈ {sorted(VALID_ROLES)}")
-        # 校验 thread 存在
-        self.get_thread(thread_id)
         message_id = "msg_" + token_urlsafe(8)
         now = _utc_now()
         meta_json = json.dumps(metadata or {}, ensure_ascii=False)
         with self._conn() as c:
+            c.execute("BEGIN IMMEDIATE")
+            owned_thread = c.execute(
+                "SELECT 1 FROM chat_conversations WHERE thread_id=? AND user_id=?",
+                (thread_id, owner),
+            ).fetchone()
+            if owned_thread is None:
+                c.rollback()
+                raise _thread_not_found()
             c.execute(
                 "INSERT INTO chat_messages (message_id, thread_id, role, content, metadata, created_at_utc) VALUES (?,?,?,?,?,?)",
                 (message_id, thread_id, role, content, meta_json, now),
             )
             c.execute(
-                "UPDATE chat_conversations SET updated_at_utc=? WHERE thread_id=?",
-                (now, thread_id),
+                "UPDATE chat_conversations SET updated_at_utc=? "
+                "WHERE thread_id=? AND user_id=?",
+                (now, thread_id, owner),
             )
             c.commit()
         return ChatMessage(
@@ -227,8 +267,21 @@ class ChatService:
             created_at_utc=now,
         )
 
-    def list_messages(self, thread_id: str, limit: int = 100) -> list[ChatMessage]:
+    def list_messages(
+        self,
+        thread_id: str,
+        *,
+        owner_user_id: str,
+        limit: int = 100,
+    ) -> list[ChatMessage]:
+        owner = _owner_user_id(owner_user_id)
         with self._conn() as c:
+            owned_thread = c.execute(
+                "SELECT 1 FROM chat_conversations WHERE thread_id=? AND user_id=?",
+                (thread_id, owner),
+            ).fetchone()
+            if owned_thread is None:
+                raise _thread_not_found()
             rows = c.execute(
                 "SELECT * FROM chat_messages WHERE thread_id=? ORDER BY created_at_utc ASC, rowid ASC LIMIT ?",
                 (thread_id, limit),
@@ -240,9 +293,20 @@ class ChatService:
             out.append(ChatMessage(**d))
         return out
 
-    def compress_history(self, thread_id: str, *, max_messages: int = 6, max_chars: int = 800) -> str:
+    def compress_history(
+        self,
+        thread_id: str,
+        *,
+        owner_user_id: str,
+        max_messages: int = 6,
+        max_chars: int = 800,
+    ) -> str:
         """压缩历史成 800 token-equivalent 字符串供 system prompt 注入。"""
-        msgs = self.list_messages(thread_id, limit=100)
+        msgs = self.list_messages(
+            thread_id,
+            owner_user_id=owner_user_id,
+            limit=100,
+        )
         recent = msgs[-max_messages:]
         lines = []
         for m in recent:

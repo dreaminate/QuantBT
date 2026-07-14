@@ -169,9 +169,20 @@ def evaluate_promotion(
                     f"§8 binding-complete：TheoryImplementationBinding 缺 {','.join(miss)} → 拒"
                 )
 
-        # (3) consistency-present + (4) consistency-pass
-        decisive = [c for c in check_list if c.result != CHECK_PENDING]
-        failed = [c for c in check_list if c.result == CHECK_FAIL]
+        # (3) consistency-present + (4) consistency-pass.  A PASS belonging to
+        # another binding is unrelated evidence and must never satisfy this one.
+        bound_checks = (
+            [c for c in check_list if c.binding_id == binding.binding_id]
+            if binding is not None
+            else []
+        )
+        foreign_checks = [c for c in check_list if c not in bound_checks]
+        if foreign_checks:
+            violations.append(
+                "§6 consistency-binding：ConsistencyCheck 未绑定当前 TheoryImplementationBinding → 拒"
+            )
+        decisive = [c for c in bound_checks if c.result != CHECK_PENDING]
+        failed = [c for c in bound_checks if c.result == CHECK_FAIL]
         if not decisive:
             violations.append(
                 "§8 consistency-present：声称按理论实现但无决定性 ConsistencyCheck → 拒"
@@ -217,6 +228,15 @@ def evaluate_promotion(
                 violations.append(
                     "§6 pit-bound：estimator/统计检验未绑定 data timing/PIT(known_at∧effective_at) → 拒"
                 )
+
+        waiver_present = (choice is not None and choice.is_waiver) or (
+            has_binding and binding is not None and bool(binding.waiver_ref)
+        )
+        if waiver_present:
+            violations.append(
+                "§6 strong-label-honest：用户 waiver/skip 产物不得标为 evidence_sufficient、"
+                "proof_backed 或 production_ready → 拒"
+            )
 
     # (6) proof-honest —— 理论未达证明却请求 proof_backed/production_ready → 拒
     if proof_req:

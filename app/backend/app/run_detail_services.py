@@ -29,12 +29,30 @@ def get_run_series_response(run_id: str, series: str, segment: str = "overall") 
     return load_series_response(run_id, series, segment)
 
 
-def query_runs_response(payload: dict) -> dict:
-    return query_runs(payload)
+def query_runs_response(
+    payload: dict,
+    *,
+    allowed_run_ids: set[str] | None = None,
+    source_rows: list[dict] | None = None,
+) -> dict:
+    return query_runs(
+        payload,
+        allowed_run_ids=allowed_run_ids,
+        source_rows=source_rows,
+    )
 
 
-def delete_run_response(run_id: str) -> None:
-    delete_run(run_id)
+def delete_run_response(
+    run_id: str,
+    *,
+    expected_file_hashes: dict[str, str] | None = None,
+    expected_directory_identity: tuple[int, int] | None = None,
+) -> None:
+    delete_run(
+        run_id,
+        expected_file_hashes=expected_file_hashes,
+        expected_directory_identity=expected_directory_identity,
+    )
 
 
 def compare_runs_response(run_ids: list[str]) -> dict:

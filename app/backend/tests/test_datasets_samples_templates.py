@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+from types import SimpleNamespace
+
 import pytest
 from fastapi.testclient import TestClient
 
@@ -16,6 +18,10 @@ from app.datasets import (
     load_sample,
 )
 from app.main import app
+from app.research_os import PersistentAssetLifecycleRegistry, validate_governed_asset
+from app.research_os.platform_business_history_m16_m21 import (
+    PlatformBusinessHistoryM16M21Result,
+)
 
 
 # ============================================================
@@ -99,6 +105,19 @@ def test_template_expected_metrics_present():
         assert "pbo_max" in t.expected_metrics
 
 
+def test_templates_expose_typed_mock_and_asset_category_classification():
+    for template in STRATEGY_TEMPLATES.values():
+        payload = template.to_dict()
+        assert payload["category"] == "template"
+        assert payload["production_eligible"] is False
+        assert payload["mock_label_ref"].startswith("mock_label:strategy_template:")
+        assert payload["asset_category_ref"].startswith(
+            f"asset_category:{template.asset_class}:"
+        )
+        assert payload["display_label"].startswith("MOCK · TEMPLATE · ")
+        assert validate_governed_asset(template.to_governed_asset_record()).accepted
+
+
 def test_get_template():
     t = get_template("btc_momentum_v1")
     assert t is not None
@@ -161,3 +180,75 @@ def test_api_template_detail(client: TestClient):
 def test_api_template_detail_404(client: TestClient):
     r = client.get("/api/strategies/templates/bogus")
     assert r.status_code == 404
+
+
+def test_authenticated_template_fork_persists_owner_scoped_classification(
+    tmp_path,
+    monkeypatch,
+):
+    import app.main as main
+
+    registry = PersistentAssetLifecycleRegistry(tmp_path / "asset_lifecycle.jsonl")
+    recorder_calls = []
+
+    def record_history(**kwargs):
+        recorder_calls.append(dict(kwargs))
+        return PlatformBusinessHistoryM16M21Result(
+            owner_user_id=kwargs["owner_user_id"],
+            row=kwargs["row"],
+            anchor_ref=kwargs["anchor_ref"],
+            entrypoint_ref="api:strategies.templates.fork_to_ide",
+            qro_ref="qro:test:template-fork",
+            graph_command_ref="rgcmd_test_template_fork",
+            graph_command_created=True,
+            compiler_ir_ref="compiler_ir:test:template-fork",
+            compiler_pass_ref="compiler_pass:test:template-fork",
+            entrypoint_coverage_ref="goal_entrypoint_coverage:test:template-fork",
+        )
+
+    monkeypatch.setattr(main, "ASSET_LIFECYCLE_REGISTRY", registry)
+    monkeypatch.setattr(
+        main,
+        "PLATFORM_BUSINESS_HISTORY_M16_M21_RECORDER",
+        SimpleNamespace(record=record_history),
+    )
+    monkeypatch.setattr(
+        main,
+        "IDE_SERVICE",
+        SimpleNamespace(
+            save_strategy=lambda username, name, code, **kwargs: SimpleNamespace(
+                strategy_id=f"strategy:{username}:{name}",
+                name=name,
+            )
+        ),
+    )
+    main.app.dependency_overrides[main.require_user_dependency] = lambda: SimpleNamespace(
+        username="u1",
+        user_id="u1",
+    )
+    try:
+        response = TestClient(main.app).post(
+            "/api/strategies/templates/btc_momentum_v1/fork_to_ide",
+            json={},
+        )
+    finally:
+        main.app.dependency_overrides.pop(main.require_user_dependency, None)
+
+    assert response.status_code == 200, response.text
+    body = response.json()
+    assert body["category"] == "template"
+    assert body["production_eligible"] is False
+    assert body["ide_strategy_ref"] == "ide_strategy:strategy:u1:btc_momentum_v1_fork"
+    assert body["governed_asset_ref"] == "template:btc_momentum_v1"
+    assert body["business_history"]["anchor_ref"] == body["ide_strategy_ref"]
+    persisted = registry.governed_asset(
+        "template:btc_momentum_v1",
+        owner_user_id="u1",
+    )
+    assert persisted.mock_label_ref == body["mock_label_ref"]
+    assert persisted.asset_category_ref == body["asset_category_ref"]
+    assert len(recorder_calls) == 1
+    assert recorder_calls[0]["owner_user_id"] == "u1"
+    assert recorder_calls[0]["row"] == "M21"
+    assert recorder_calls[0]["anchor_ref"] == body["ide_strategy_ref"]
+    assert recorder_calls[0]["subject"].governed_asset == persisted

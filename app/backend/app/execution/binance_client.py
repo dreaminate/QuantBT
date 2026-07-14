@@ -41,6 +41,11 @@ BASE_URLS: dict[tuple[BinanceProduct, BinanceNetwork], str] = {
     ("usdm_futures", "testnet"): "https://testnet.binancefuture.com",
 }
 
+# Binance documents API-key permission inspection under the Wallet API, not
+# under the USD-M Futures REST base.  Keep this explicit so a futures client
+# cannot silently fall back to an undocumented ``/fapi/.../permissions`` path.
+WALLET_MAINNET_BASE_URL = "https://api.binance.com"
+
 
 @dataclass
 class BinanceCredentials:
@@ -60,8 +65,20 @@ class BinanceWithdrawPermissionError(PermissionError):
     """
 
 
-# 资金外流类权限：含此关键字的 permission 名（小写比较）→ 必拦。
-_FUND_DRAIN_KEYWORDS = ("withdraw", "internaltransfer", "universaltransfer")
+class BinanceAPIError(RuntimeError):
+    """Structured Binance HTTP/API rejection after a response was received."""
+
+    def __init__(self, *, status_code: int, code: int | None, message: str) -> None:
+        self.status_code = status_code
+        self.code = code
+        self.message = message
+        self.request_sent = True
+        super().__init__(
+            f"Binance API error status={status_code} code={code if code is not None else 'unknown'} "
+            f"msg={message or '<missing>'}"
+        )
+
+
 # 高风险但 trading-only key 可能合理开启的权限：警告但不拦截
 _HIGH_RISK_KEYWORDS = ("margin",)
 
@@ -113,42 +130,70 @@ class BinanceClient:
         / margin / ipRestrict 等关键 surface。
         """
 
+        if self._cred.network != "mainnet":
+            raise PermissionError(
+                "Binance futures testnet has no documented API-key permission endpoint; "
+                "permission safety cannot be verified and automatic trading activation is denied"
+            )
+
         try:
             self.sync_time()
         except Exception as exc:  # noqa: BLE001
             logger.warning("Binance 校时失败：%s", exc)
-        path = (
-            "/fapi/v1/apiKey/permissions"
-            if self._product == "usdm_futures"
-            else "/sapi/v1/account/apiRestrictions"
-        )
-        payload = self._signed("GET", path, {})
+        path = "/sapi/v1/account/apiRestrictions"
+        payload = self._signed("GET", path, {}, base_url=WALLET_MAINNET_BASE_URL)
+        if not isinstance(payload, dict):
+            raise ValueError("Binance API-key permission endpoint returned a non-object")
         warnings: list[str] = []
         permission_state: dict[str, bool] = {}
-        drained_blockers: list[str] = []
         for raw_key, raw_val in payload.items():
-            if not isinstance(raw_val, bool):
-                continue
-            permission_state[raw_key] = raw_val
-            key_norm = str(raw_key).lower()
-            if any(kw in key_norm for kw in _FUND_DRAIN_KEYWORDS) and raw_val:
-                drained_blockers.append(raw_key)
-            elif any(kw in key_norm for kw in _HIGH_RISK_KEYWORDS) and raw_val:
+            if isinstance(raw_val, bool):
+                permission_state[raw_key] = raw_val
+            if isinstance(raw_val, bool) and any(
+                kw in str(raw_key).lower() for kw in _HIGH_RISK_KEYWORDS
+            ) and raw_val:
                 warnings.append(f"{raw_key}=True（margin 借贷开启，被攻破时可能放大损失）")
 
-        if drained_blockers:
-            joined = ", ".join(drained_blockers)
+        required_exact: dict[str, bool] = {
+            "ipRestrict": True,
+            "enableReading": True,
+            "enableWithdrawals": False,
+            "enableInternalTransfer": False,
+            "permitsUniversalTransfer": False,
+            (
+                "enableFutures"
+                if self._product == "usdm_futures"
+                else "enableSpotAndMarginTrading"
+            ): True,
+        }
+        missing_or_invalid = [
+            key
+            for key, expected in required_exact.items()
+            if key not in payload
+            or not isinstance(payload.get(key), bool)
+            or payload.get(key) is not expected
+        ]
+        drain_fields = {
+            "enableWithdrawals",
+            "enableInternalTransfer",
+            "permitsUniversalTransfer",
+        }
+        drain_enabled = [
+            key for key in drain_fields if payload.get(key) is True
+        ]
+        if drain_enabled:
             raise BinanceWithdrawPermissionError(
-                f"Binance {self._product} API key 含资金外流权限 [{joined}]，拒绝启动。"
-                " 请到 Binance 网页 → API 管理 → 编辑限制 → 取消"
-                " withdraw / internalTransfer / universalTransfer 等权限后重启。"
+                f"Binance {self._product} API key 含资金外流权限 [{', '.join(sorted(drain_enabled))}]，拒绝启动。"
             )
-
-        # ipRestrict：字段名可能是 ipRestrict / ipRestricted / ipWhiteList
-        ip_keys = [k for k in payload if "iprestrict" in str(k).lower() or "ipwhitelist" in str(k).lower()]
-        ip_restricted = any(bool(payload.get(k)) for k in ip_keys)
-        if ip_keys and not ip_restricted:
-            warnings.append("ipRestrict=False（建议在 Binance API 管理加 IP 白名单）")
+        if missing_or_invalid:
+            expected = ", ".join(
+                f"{key}={value}" for key, value in required_exact.items()
+            )
+            raise PermissionError(
+                "Binance API-key permission proof is incomplete or mismatched: "
+                f"{', '.join(sorted(missing_or_invalid))}; required {expected}"
+            )
+        ip_restricted = True
 
         return {
             "ok": True,
@@ -156,7 +201,7 @@ class BinanceClient:
             "product": self._product,
             "permission_state": permission_state,
             "warnings": warnings,
-            "ip_restricted": ip_restricted if ip_keys else None,
+            "ip_restricted": ip_restricted,
             "raw": payload,
         }
 
@@ -169,7 +214,14 @@ class BinanceClient:
         r.raise_for_status()
         return r.json()
 
-    def _signed(self, method: str, path: str, params: dict[str, Any]) -> Any:
+    def _signed(
+        self,
+        method: str,
+        path: str,
+        params: dict[str, Any],
+        *,
+        base_url: str | None = None,
+    ) -> Any:
         ts_ms = int(time.time() * 1000) + self._time_offset_ms
         full_params = {**params, "timestamp": ts_ms, "recvWindow": self._recv}
         qs = urllib.parse.urlencode(full_params, doseq=True)
@@ -178,16 +230,29 @@ class BinanceClient:
             qs.encode("utf-8"),
             hashlib.sha256,
         ).hexdigest()
-        url = self._base + path
+        url = (base_url or self._base) + path
         headers = {"X-MBX-APIKEY": self._cred.api_key}
         send_params = {**full_params, "signature": signature}
         r = self._http.request(method, url, params=send_params if method == "GET" else None,
                                data=send_params if method != "GET" else None,
                                headers=headers, timeout=10)
-        if r.status_code == 429 or r.status_code == 418:
-            sleep_s = 60
-            logger.warning("Binance 限流 %d，sleep %ds", r.status_code, sleep_s)
-            time.sleep(sleep_s)
+        status_code = r.status_code if isinstance(r.status_code, int) else 0
+        if status_code >= 400:
+            try:
+                error_payload = r.json()
+            except Exception:  # noqa: BLE001
+                error_payload = {}
+            code_raw = error_payload.get("code") if isinstance(error_payload, dict) else None
+            try:
+                code = int(code_raw) if code_raw is not None else None
+            except (TypeError, ValueError):
+                code = None
+            message = (
+                str(error_payload.get("msg") or "")
+                if isinstance(error_payload, dict)
+                else ""
+            )
+            raise BinanceAPIError(status_code=status_code, code=code, message=message)
         r.raise_for_status()
         return r.json()
 
@@ -196,7 +261,9 @@ __all__ = [
     "BASE_URLS",
     "BinanceClient",
     "BinanceCredentials",
+    "BinanceAPIError",
     "BinanceNetwork",
     "BinanceProduct",
     "BinanceWithdrawPermissionError",
+    "WALLET_MAINNET_BASE_URL",
 ]

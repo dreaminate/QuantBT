@@ -10,18 +10,36 @@ from __future__ import annotations
 
 import time
 from pathlib import Path
+from types import SimpleNamespace
 
 import numpy as np
 import pandas as pd
 import pytest
 from fastapi.testclient import TestClient
 
+from app.auth import require_user_dependency
 from app.main import app
 from app.training import TrainingRequest, TrainingService
 from app.training.backtest_bridge import backtest_job, backtest_trained_model, scores_to_weights
 from app.training.datasets import FEATURES, load_training_panel
 
 client = TestClient(app)
+TEST_OWNER_USER_ID = "pytest"
+
+
+@pytest.fixture(autouse=True)
+def _authenticated_training_user():
+    app.dependency_overrides[require_user_dependency] = lambda: SimpleNamespace(
+        user_id=TEST_OWNER_USER_ID,
+        username="pytest",
+    )
+    try:
+        yield
+    finally:
+        app.dependency_overrides.pop(require_user_dependency, None)
+
+
+FAST_LGBM_PARAMS = {"n_estimators": 12, "num_leaves": 8, "min_data_in_leaf": 2}
 
 
 # ─────────── scores_to_weights ───────────
@@ -55,6 +73,99 @@ def test_scores_to_weights_nan_rows_zero() -> None:
     assert (w.loc[ts[0]] == 0.0).all()  # 全 NaN 行 → 空仓，不报错
 
 
+def _pit_backtest_panel(*, include_known_at: bool = True) -> pd.DataFrame:
+    rows = [
+        {
+            "ts": pd.Timestamp("2024-01-01", tz="UTC"),
+            "symbol": "A",
+            "f": 1.0,
+            "close": 100.0,
+            "known_at": pd.Timestamp("2024-01-01", tz="UTC"),
+        },
+        {
+            "ts": pd.Timestamp("2024-01-01", tz="UTC"),
+            "symbol": "A",
+            "f": 999.0,
+            "close": 999.0,
+            "known_at": pd.Timestamp("2024-06-01", tz="UTC"),
+        },
+        {
+            "ts": pd.Timestamp("2024-01-02", tz="UTC"),
+            "symbol": "A",
+            "f": 2.0,
+            "close": 101.0,
+            "known_at": pd.Timestamp("2024-01-02", tz="UTC"),
+        },
+    ]
+    panel = pd.DataFrame(rows)
+    return panel if include_known_at else panel.drop(columns=["known_at"])
+
+
+def test_confirmatory_backtest_requires_pit_cutoff_before_model_use(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    called = False
+
+    def _predict(*_args, **_kwargs):
+        nonlocal called
+        called = True
+        return np.array([1.0])
+
+    monkeypatch.setattr("app.training.backtest_bridge.predict_with", _predict)
+    with pytest.raises(ValueError, match="as_of_known"):
+        backtest_trained_model(
+            "unused.pkl",
+            _pit_backtest_panel(),
+            feature_cols=["f"],
+            use_context="confirmatory_validation",
+        )
+    assert called is False
+
+
+def test_confirmatory_backtest_requires_known_at_axis_before_model_use(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    called = False
+
+    def _predict(*_args, **_kwargs):
+        nonlocal called
+        called = True
+        return np.array([1.0])
+
+    monkeypatch.setattr("app.training.backtest_bridge.predict_with", _predict)
+    with pytest.raises(ValueError, match="known_at"):
+        backtest_trained_model(
+            "unused.pkl",
+            _pit_backtest_panel(include_known_at=False),
+            feature_cols=["f"],
+            as_of_known="2024-02-01",
+            use_context="confirmatory_validation",
+        )
+    assert called is False
+
+
+def test_confirmatory_backtest_filters_future_restatement(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    captured: dict[str, pd.DataFrame] = {}
+
+    def _predict(_artifact, panel, _features):
+        captured["panel"] = panel.copy()
+        return panel["f"].to_numpy()
+
+    monkeypatch.setattr("app.training.backtest_bridge.predict_with", _predict)
+    result = backtest_trained_model(
+        "unused.pkl",
+        _pit_backtest_panel(),
+        feature_cols=["f"],
+        as_of_known="2024-02-01",
+        use_context="confirmatory_validation",
+    )
+
+    assert captured["panel"]["f"].tolist() == [1.0, 2.0]
+    assert result["n_days"] == 2
+
+
 # ─────────── ML 模型 → 回测 ───────────
 
 def test_backtest_ml_model(tmp_path: Path) -> None:
@@ -67,6 +178,7 @@ def test_backtest_ml_model(tmp_path: Path) -> None:
             hyperparams={"n_estimators": 40, "max_depth": 3},
         ),
         panel,
+        owner_user_id=TEST_OWNER_USER_ID,
     )
     assert job.status == "succeeded", job.error
     result = backtest_job(job.artifact_dir, panel, feature_cols=FEATURES)
@@ -89,6 +201,7 @@ def test_backtest_dl_model(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> N
             hyperparams={"max_epochs": 2, "lookback": 8, "hidden_size": 8, "batch_size": 32},
         ),
         panel,
+        owner_user_id=TEST_OWNER_USER_ID,
     )
     assert job.status == "succeeded", job.error
     # .pt 模型经 predict_with 跑回测（warmup 行 NaN → 该日空仓，不应崩）
@@ -101,8 +214,17 @@ def test_backtest_missing_price_col_raises(tmp_path: Path) -> None:
     svc = TrainingService(root=tmp_path / "tr", timeout=300)
     panel = load_training_panel("demo_ashare_xsec")
     job = svc.train_now(
-        TrainingRequest(name="m", model="lgbm", task="regression", feature_cols=FEATURES, label_col="label", n_splits=4),
+        TrainingRequest(
+            name="m",
+            model="lgbm",
+            task="regression",
+            feature_cols=FEATURES,
+            label_col="label",
+            n_splits=4,
+            hyperparams=FAST_LGBM_PARAMS,
+        ),
         panel,
+        owner_user_id=TEST_OWNER_USER_ID,
     )
     with pytest.raises(ValueError, match="缺列"):
         backtest_trained_model(
@@ -158,7 +280,18 @@ def test_backtest_endpoint(tmp_path: Path, training_market_data_use_validation_r
     assert "artifact_path" not in qro_text
     ir = app_main.COMPILER_IR_STORE.ir(body["compiler_ir_ref"])
     coverage = app_main.GOAL_ENTRYPOINT_COVERAGE_REGISTRY.coverage(body["entrypoint_coverage_ref"])
-    assert training_market_data_use_validation_ref in ir.validation_refs
+    assert len(ir.validation_refs) == 1
+    [validation_ref] = ir.validation_refs
+    assert validation_ref.startswith("goal_validation_receipt:")
+    receipt = app_main.GOAL_VALIDATION_RECEIPT_REGISTRY.receipt(
+        validation_ref,
+        owner_user_id=qro.owner,
+    )
+    assert receipt.subject_qro_refs == (body["qro_id"],)
+    assert receipt.graph_command_refs == (body["research_graph_command_id"],)
+    assert receipt.outcome == "passed"
+    assert training_market_data_use_validation_ref in receipt.evidence_refs
+    assert coverage.validation_refs == (validation_ref,)
     assert coverage.entrypoint_ref == "api:training.jobs.backtest"
 
 
@@ -179,6 +312,7 @@ def test_oos_fraction_subsets_dates(tmp_path: Path) -> None:
             hyperparams={"n_estimators": 40, "max_depth": 3},
         ),
         panel,
+        owner_user_id=TEST_OWNER_USER_ID,
     )
     full = backtest_job(job.artifact_dir, panel, feature_cols=FEATURES)
     oos = backtest_job(job.artifact_dir, panel, feature_cols=FEATURES, oos_fraction=0.3)
@@ -191,8 +325,17 @@ def test_oos_fraction_validation(tmp_path: Path) -> None:
     svc = TrainingService(root=tmp_path / "tr", timeout=300)
     panel = load_training_panel("demo_ashare_xsec")
     job = svc.train_now(
-        TrainingRequest(name="m", model="lgbm", task="regression", feature_cols=FEATURES, label_col="label", n_splits=4),
+        TrainingRequest(
+            name="m",
+            model="lgbm",
+            task="regression",
+            feature_cols=FEATURES,
+            label_col="label",
+            n_splits=4,
+            hyperparams=FAST_LGBM_PARAMS,
+        ),
         panel,
+        owner_user_id=TEST_OWNER_USER_ID,
     )
     for bad in (0.0, -0.1, 1.5):
         with pytest.raises(ValueError, match="oos_fraction"):
@@ -211,8 +354,17 @@ def test_backtest_feature_mismatch_raises(tmp_path: Path) -> None:
     svc = TrainingService(root=tmp_path / "tr", timeout=300)
     panel = load_training_panel("demo_ashare_xsec")
     job = svc.train_now(
-        TrainingRequest(name="m", model="lgbm", task="regression", feature_cols=FEATURES, label_col="label", n_splits=4),
+        TrainingRequest(
+            name="m",
+            model="lgbm",
+            task="regression",
+            feature_cols=FEATURES,
+            label_col="label",
+            n_splits=4,
+            hyperparams=FAST_LGBM_PARAMS,
+        ),
         panel,
+        owner_user_id=TEST_OWNER_USER_ID,
     )
     with pytest.raises(ValueError, match="缺模型所需特征列"):
         backtest_job(job.artifact_dir, panel.drop(columns=[FEATURES[0]]), feature_cols=FEATURES)
@@ -319,6 +471,7 @@ def test_strict_walkforward_zero_leakage(tmp_path: Path) -> None:
             hyperparams={"n_estimators": 40, "max_depth": 3},
         ),
         panel,
+        owner_user_id=TEST_OWNER_USER_ID,
     )
     assert job.status == "succeeded", job.error
     train_dates = set(_slice_front_dates(panel, "ts", 0.7)["ts"].unique())

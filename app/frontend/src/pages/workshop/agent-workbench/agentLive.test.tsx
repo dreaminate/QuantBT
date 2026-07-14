@@ -2,7 +2,7 @@ import { describe, it, expect, vi, beforeEach, afterEach } from "vitest";
 import { screen, fireEvent, waitFor } from "@testing-library/react";
 import { renderWithDesk } from "../../../test/harness";
 import { AgentWorkbenchPage } from "./AgentWorkbenchPage";
-import { streamAgentWorkbench } from "./agentLive";
+import { streamAgentWorkbench, WORKFLOW_EVENT_KINDS } from "./agentLive";
 
 /**
  * A4 真实流测试：研究执行台 LIVE 模式（真 /api/agent/workbench/stream）+ handoff
@@ -89,6 +89,102 @@ describe("agentLive · SSE 事件投影（纯逻辑，无真网络）", () => {
     expect(gates[0].weakness).toBe(true);
   });
 
+  it("24 种 durable workflow event 均按类型即时投影，且先于 done", async () => {
+    const observed: string[] = [];
+    const frames = WORKFLOW_EVENT_KINDS.map(
+      (kind, index) =>
+        `event: ${kind}\ndata: ${JSON.stringify({
+          event_id: `event_${index}`,
+          workflow_id: "agentwf_live",
+          sequence: index + 1,
+          role: index === 2 ? "factor_engineer" : "coordinator_planner",
+          desk: index === 2 ? "factor" : "research",
+          at: "2026-07-13T01:02:03Z",
+          data: { status: "recorded", next_step: "continue" },
+        })}`,
+    );
+    frames.push('event: done\ndata: {"final_message":"ok","succeeded":true}');
+    vi.stubGlobal("fetch", vi.fn().mockResolvedValue(sseResponse(frames)));
+
+    await new Promise<void>((resolve) => {
+      streamAgentWorkbench("x", "ask", {
+        onBlock: (block) => {
+          if (block.type === "workflow") observed.push(String(block.workflowKind));
+        },
+        onToolEnd: () => {},
+        onMilestone: () => {},
+        onDone: () => {
+          observed.push("done");
+          resolve();
+        },
+        onError: () => resolve(),
+      });
+    });
+
+    expect(observed.slice(0, -1)).toEqual([...WORKFLOW_EVENT_KINDS]);
+    expect(observed[observed.length - 1]).toBe("done");
+  });
+
+  it("done.workflow_id 补读 durable history，并按 event_id 去重", async () => {
+    const kinds: string[] = [];
+    let completedWorkflow = "";
+    const fetchMock = vi
+      .fn()
+      .mockResolvedValueOnce(
+        sseResponse([
+          'event: AgentPlanCreated\ndata: {"event_id":"ev_1","workflow_id":"agentwf_1","sequence":1,"data":{"status":"started"}}',
+          'event: done\ndata: {"final_message":"ok","succeeded":true,"workflow_id":"agentwf_1"}',
+        ]),
+      )
+      .mockResolvedValueOnce(
+        new Response(
+          JSON.stringify({
+            events: [
+              {
+                kind: "AgentPlanCreated",
+                event_id: "ev_1",
+                workflow_id: "agentwf_1",
+                sequence: 1,
+                data: { status: "started" },
+              },
+              {
+                kind: "RoleAgentDispatched",
+                event_id: "ev_2",
+                workflow_id: "agentwf_1",
+                sequence: 2,
+                role: "backtest_engineer",
+                desk: "backtest",
+                data: { next_step: "run" },
+              },
+            ],
+          }),
+          { status: 200, headers: { "content-type": "application/json" } },
+        ),
+      );
+    vi.stubGlobal("fetch", fetchMock);
+
+    await new Promise<void>((resolve) => {
+      streamAgentWorkbench("x", "ask", {
+        onBlock: (block) => {
+          if (block.type === "workflow") kinds.push(String(block.workflowKind));
+        },
+        onToolEnd: () => {},
+        onMilestone: () => {},
+        onDone: (_final, _succeeded, workflowId) => {
+          completedWorkflow = workflowId ?? "";
+          resolve();
+        },
+        onError: () => resolve(),
+      });
+    });
+
+    expect(kinds).toEqual(["AgentPlanCreated", "RoleAgentDispatched"]);
+    expect(completedWorkflow).toBe("agentwf_1");
+    expect(String(fetchMock.mock.calls[1][0])).toBe(
+      "/api/agent/workflows/agentwf_1/events",
+    );
+  });
+
   it("流非 200 → onError（诚实呈现，不假绿灯）", async () => {
     let err = "";
     vi.stubGlobal("fetch", vi.fn().mockResolvedValue(new Response("nope", { status: 500 })));
@@ -130,11 +226,45 @@ describe("AgentWorkbenchPage · 真实流开关 + handoff 真端点", () => {
     const { container } = renderWithDesk(<AgentWorkbenchPage />);
     expect(container.querySelector("[data-live-badge]")).not.toBeNull();
     expect(screen.queryByText("MOCK 数据")).toBeNull();
+    expect(screen.getByText(/runtime LLM/)).toBeInTheDocument();
+    expect(screen.queryByText(/sonnet-4\.5/)).toBeNull();
     // 默认真实流 → 挂载即调真 workbench stream 端点（不放 mock 假绿灯）。
     await waitFor(() => {
       const called = fetchMock.mock.calls.map((c) => String(c[0]));
       expect(called.some((u) => u.includes("/api/agent/workbench/stream"))).toBe(true);
     });
+  });
+
+  it("保留 done.workflow_id 并在台面展示，不丢弃 durable 审计身份", async () => {
+    const fetchMock = vi.fn().mockImplementation((input: RequestInfo | URL) => {
+      const url = String(input);
+      if (url.includes("/api/agent/workflows/agentwf_ui/events")) {
+        return Promise.resolve(
+          new Response(JSON.stringify({ events: [] }), {
+            status: 200,
+            headers: { "content-type": "application/json" },
+          }),
+        );
+      }
+      return Promise.resolve(
+        sseResponse([
+          'event: done\ndata: {"final_message":"","succeeded":true,"workflow_id":"agentwf_ui"}',
+        ]),
+      );
+    });
+    vi.stubGlobal("fetch", fetchMock);
+    const { container } = renderWithDesk(<AgentWorkbenchPage />);
+
+    await waitFor(() => {
+      expect(container.querySelector("[data-live-workflow-id]")?.textContent).toContain(
+        "agentwf_ui",
+      );
+    });
+    expect(
+      fetchMock.mock.calls.some((call) =>
+        String(call[0]).includes("/api/agent/workflows/agentwf_ui/events"),
+      ),
+    ).toBe(true);
   });
 
   it("点「看演示」→ 切 demo（MockBadge 出现、LIVE badge 消失，mock 剧本回放）", async () => {

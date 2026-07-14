@@ -83,11 +83,19 @@ def _market_data_use_validation_refs(
     args: dict[str, Any],
     market_data_registry: Any | None,
     *,
+    owner_user_id: str | None,
     operation: str = "backtest.run",
     require_dataset_timing: bool = False,
     allowed_use_contexts: tuple[str, ...] = (),
 ) -> tuple[str, ...] | dict[str, Any]:
     """Validate refs before strategy synthesis/backtest builder side effects."""
+    owner = str(owner_user_id or "").strip()
+    if not owner:
+        return {
+            "error": f"{operation} requires an authenticated owner_user_id",
+            "field": "market_data_use_validation_refs",
+            "no_write": True,
+        }
     if market_data_registry is None:
         return {
             "error": f"{operation} requires MarketDataUse registry before execution",
@@ -114,10 +122,20 @@ def _market_data_use_validation_refs(
     resolved: list[str] = []
     for ref in refs:
         try:
-            record = market_data_registry.use_validation(ref)
+            record = market_data_registry.use_validation(
+                ref,
+                owner_user_id=owner,
+            )
         except Exception:  # noqa: BLE001
             return {
                 "error": f"unknown MarketDataUse validation ref: {ref}",
+                "field": "market_data_use_validation_refs",
+                "validation_ref": ref,
+                "no_write": True,
+            }
+        if str(getattr(record, "recorded_by", "") or "").strip() != owner:
+            return {
+                "error": f"MarketDataUse validation ref owner mismatch: {ref}",
                 "field": "market_data_use_validation_refs",
                 "validation_ref": ref,
                 "no_write": True,
@@ -159,7 +177,10 @@ def _market_data_use_validation_refs(
                 }
             for dataset_ref in dataset_refs:
                 try:
-                    dataset = market_data_registry.dataset(dataset_ref)
+                    dataset = market_data_registry.dataset(
+                        dataset_ref,
+                        owner_user_id=owner,
+                    )
                 except Exception:  # noqa: BLE001
                     return {
                         "error": f"unknown DatasetSemantics ref for {operation}: {dataset_ref}",
@@ -196,6 +217,7 @@ def _synth_and_promote(
     verifier: Any,
     llm_client: Any,
     market_data_registry: Any | None = None,
+    owner_user_id: str | None = None,
 ) -> dict[str, Any]:
     """DS-1 脊梁：对话意图 → 合成最小策略 → 沙箱跑真样本 → promote 落 RUN_ROOT → 真 run_id。
 
@@ -213,6 +235,7 @@ def _synth_and_promote(
     validation_refs = _market_data_use_validation_refs(
         args,
         market_data_registry,
+        owner_user_id=owner_user_id,
         operation="backtest.run strategy synthesis",
         require_dataset_timing=True,
         allowed_use_contexts=("strategy_builder_backtest", "backtest", "confirmatory_validation"),
@@ -295,22 +318,24 @@ def _synth_and_promote(
             "synthesis_method": synth.method,
         }
 
-    # 落 RUN_ROOT 单一契约 + 多证据三角 gate（opt-in ledger）。
+    # 落 RUN_ROOT 单一契约。沙箱 emit_result 是 caller-controlled；这里不把它写入
+    # confirmatory overfit ledger，正式证据须由 canonical run/data lineage 另行晋级。
     try:
+        owner = str(owner_user_id or "").strip()
         promoted = promote_ide_run(
             ide_run_id=f"agentbt_{synth.market}",
-            owner_username=str(args.get("owner") or "agent"),
+            owner_username=owner,
+            owner_user_id=owner,
             strategy_name=synth.strategy_name,
             strategy_code=synth.code,
             result=ur,
             record_name=f"{synth.strategy_name} · agent 对话回测",
             run_root=run_root,
-            ledger=ledger,
-            returns_store=returns_store,
             # M1：把用户组装意图落进 run.json（assembly_inputs），不静默丢弃。
             extra_metadata=(assembly_inputs or None),
             # §16：把执行诚实块（未注入=template+production）落进 run.json，供组装器→R4/R5 硬拒模板冒充。
             execution_blocks=execution_blocks,
+            market_data_use_validation_refs=validation_refs,
         )
     except PromoteError as exc:
         return {"error": f"落盘 promote 失败: {exc}", "synthesis_method": synth.method}
@@ -377,6 +402,7 @@ def register_business_tools(
     data_root=None,
     llm_client=None,
     market_data_registry=None,
+    owner_user_id: str | None = None,
 ) -> None:
     """把策略台脊柱业务工具注册进 AgentRuntime（全部 side_effect="none"）。
 
@@ -387,8 +413,11 @@ def register_business_tools(
       · ledger / returns_store —— promote 落 RUN_ROOT 时跑多证据三角 gate（honest-N 单一源）。
       · data_root —— 真行情样本位置 + run_root 派生的单旋钮（缺省 paths.DATA_ROOT；测试可注入 tmp）。
       · llm_client —— 合成器 LLM 路 seam（缺省 None 走确定性模板；DS-2 注入真客户端）。
+      · owner_user_id —— 由认证入口注入的稳定用户 id；工具参数中的 owner 字段不参与授权。
     全部有默认值 → 既有调用方（只传 3 store 的测试）不受影响（扩展不替换）。
     """
+
+    authenticated_owner_user_id = str(owner_user_id or "").strip() or None
 
     # ── 1. hypothesis.create：建可证伪假设卡（exploratory 默认，P2 不挡探索） ──
     def _hypothesis_create(_n: str, args: dict) -> dict[str, Any]:
@@ -454,13 +483,20 @@ def register_business_tools(
     def _model_registry_select(_n: str, args: dict) -> dict[str, Any]:
         model_id = args.get("model_id") or args.get("model")
         want_stage = args.get("stage")
+        if authenticated_owner_user_id is None:
+            return {"error": "Model台查询需要认证 owner_user_id"}
         if not model_id:
             # 无指定 → 列出可选模型（只读浏览）。
             return {
-                "models": model_registry.list_models(),
+                "models": model_registry.list_models(
+                    owner_user_id=authenticated_owner_user_id
+                ),
                 "note": "只读浏览 Model台已注册模型；选用须给 model_id。训练/翻 stage 去 Model台（写动作经审批门）。",
             }
-        versions = model_registry.list_versions(str(model_id))
+        versions = model_registry.list_versions(
+            str(model_id),
+            owner_user_id=authenticated_owner_user_id,
+        )
         if not versions:
             return {"error": f"Model台无此模型: {model_id}"}
         # 血统门：策略台只引用 staging/production 的已发布模型（dev 是探索通道，不该直接进策略组装）。
@@ -629,6 +665,7 @@ def register_business_tools(
             validation_refs = _market_data_use_validation_refs(
                 args,
                 market_data_registry,
+                owner_user_id=authenticated_owner_user_id,
                 operation="backtest.run existing run projection",
                 require_dataset_timing=True,
                 allowed_use_contexts=("backtest", "confirmatory_validation"),
@@ -665,6 +702,7 @@ def register_business_tools(
             verifier=verifier,
             llm_client=llm_client,
             market_data_registry=market_data_registry,
+            owner_user_id=authenticated_owner_user_id,
         )
 
     # ── 7. eval.pbo（真实计算）：CSCV → PBO（复用 eval.pbo 单一源，无副作用） ──
@@ -702,6 +740,7 @@ def register_business_tools(
         validation_refs = _market_data_use_validation_refs(
             args,
             market_data_registry,
+            owner_user_id=authenticated_owner_user_id,
             operation="report.generate",
             require_dataset_timing=True,
             allowed_use_contexts=("backtest", "confirmatory_validation"),

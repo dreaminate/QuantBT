@@ -1,5 +1,6 @@
 import { useEffect, useState } from "react";
 import { Link } from "react-router-dom";
+import { authFetch } from "../../lib/auth";
 import { trackEvent } from "./trackEvent";
 
 /**
@@ -31,22 +32,52 @@ const SEV_PRESET = {
 export function CoachSuggestionBanner({ runId }: Props) {
   const [sugg, setSugg] = useState<Suggestion | null>(null);
   const [dismissed, setDismissed] = useState(false);
+  const [readyRunId, setReadyRunId] = useState("");
 
   useEffect(() => {
     if (!runId) return;
-    fetch(`/api/runs/${runId}/coach_suggestion`)
-      .then((r) => r.json())
-      .then((data) => setSugg(data?.suggestion ?? null))
-      .catch(() => setSugg(null));
+    setReadyRunId("");
+    setSugg(null);
+    setDismissed(false);
+    authFetch(`/api/runs/${encodeURIComponent(runId)}/coach_suggestion`)
+      .then((response) => {
+        if (!response.ok) throw new Error(`coach suggestion HTTP ${response.status}`);
+        return response.json();
+      })
+      .then((data) => {
+        if (
+          !data ||
+          typeof data !== "object" ||
+          !("suggestion" in data) ||
+          !("risk_summary" in data) ||
+          !data.risk_summary ||
+          typeof data.risk_summary !== "object" ||
+          Array.isArray(data.risk_summary)
+        ) {
+          throw new Error("coach suggestion response is malformed");
+        }
+        setSugg(data.suggestion ?? null);
+        setReadyRunId(runId);
+      })
+      .catch(() => {
+        setSugg(null);
+        setReadyRunId("");
+      });
   }, [runId]);
 
-  if (!sugg || dismissed) return null;
+  const readyMarker = readyRunId === runId ? (
+    <span hidden data-run-coach-ready="true" data-run-id={runId} />
+  ) : null;
+
+  if (!sugg || dismissed) return readyMarker;
 
   const preset = SEV_PRESET[sugg.severity];
   const chatHref = `/chat?run=${encodeURIComponent(runId)}&q=${encodeURIComponent(sugg.suggested_chat_query)}`;
 
   return (
-    <div
+    <>
+      {readyMarker}
+      <div
       style={{
         margin: "12px 0",
         padding: 12,
@@ -105,7 +136,8 @@ export function CoachSuggestionBanner({ runId }: Props) {
           ×
         </button>
       </div>
-    </div>
+      </div>
+    </>
   );
 }
 

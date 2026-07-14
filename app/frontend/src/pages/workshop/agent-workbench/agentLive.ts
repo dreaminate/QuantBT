@@ -19,7 +19,7 @@ import { type MilestoneKey } from "./agentMock";
  * EventSource 不可用环境（jsdom 测试）→ 调用方不挂载本 hook，保留 mock + MockBadge。
  */
 
-export type LiveEventKind =
+type LegacyLiveEventKind =
   | "user"
   | "thinking"
   | "say"
@@ -30,6 +30,51 @@ export type LiveEventKind =
   | "done"
   | "error";
 
+/** GOAL §7 durable workflow-event 全集；与后端 events.py 的顺序和拼写保持一致。 */
+export const WORKFLOW_EVENT_KINDS = [
+  "AgentPlanCreated",
+  "TodoUpdated",
+  "RoleAgentDispatched",
+  "LLMRouteSelected",
+  "LLMCallStarted",
+  "LLMCallFinished",
+  "CredentialPoolSelected",
+  "ProviderFallbackUsed",
+  "ToolCallStarted",
+  "ToolCallFinished",
+  "RagHitUsed",
+  "AssetRead",
+  "AssetDiffCreated",
+  "CanonicalCommandProposed",
+  "CanonicalCommandApplied",
+  "ValidationStarted",
+  "ValidationFinished",
+  "VerifierChallengeRaised",
+  "DeskHandoffCreated",
+  "ApprovalRequested",
+  "FailureDetected",
+  "RepairAttempted",
+  "ArtifactProduced",
+  "RunVerdictProduced",
+] as const;
+
+export type WorkflowEventKind = (typeof WORKFLOW_EVENT_KINDS)[number];
+export type LiveEventKind = LegacyLiveEventKind | WorkflowEventKind;
+
+const WORKFLOW_EVENT_SET = new Set<string>(WORKFLOW_EVENT_KINDS);
+
+interface WorkflowEventEnvelope {
+  kind: WorkflowEventKind;
+  data: Record<string, unknown>;
+  role: string;
+  desk: string;
+  node_id: string;
+  at: string;
+  event_id: string;
+  workflow_id: string;
+  sequence?: number;
+}
+
 export interface LiveCallbacks {
   /** 新增一个对话块（user/thinking/say/tool/gate）。 */
   onBlock: (block: AgentBlock) => void;
@@ -38,9 +83,11 @@ export interface LiveCallbacks {
   /** 里程碑点亮。 */
   onMilestone: (key: MilestoneKey) => void;
   /** 流结束。 */
-  onDone: (final: string, succeeded: boolean) => void;
+  onDone: (final: string, succeeded: boolean, workflowId?: string) => void;
   /** 错误（含 LLM 不可用）——诚实呈现，不假绿灯。 */
   onError: (msg: string) => void;
+  /** 主流成功但 durable workflow history 补读失败；不把补读失败伪装成主执行失败。 */
+  onHistoryError?: (msg: string) => void;
 }
 
 let _seq = 0;
@@ -75,6 +122,136 @@ function parseFrame(frame: string): { event: LiveEventKind; data: unknown } | nu
   }
 }
 
+function isRecord(value: unknown): value is Record<string, unknown> {
+  return Boolean(value) && typeof value === "object" && !Array.isArray(value);
+}
+
+function isWorkflowEventKind(value: string): value is WorkflowEventKind {
+  return WORKFLOW_EVENT_SET.has(value);
+}
+
+function normalizeWorkflowEvent(
+  kind: WorkflowEventKind,
+  payload: unknown,
+): WorkflowEventEnvelope {
+  const row = isRecord(payload) ? payload : {};
+  const eventData = isRecord(row.data) ? row.data : row;
+  return {
+    kind,
+    data: eventData,
+    role: String(row.role ?? ""),
+    desk: String(row.desk ?? ""),
+    node_id: String(row.node_id ?? ""),
+    at: String(row.at ?? ""),
+    event_id: String(row.event_id ?? ""),
+    workflow_id: String(row.workflow_id ?? ""),
+    sequence: typeof row.sequence === "number" ? row.sequence : undefined,
+  };
+}
+
+/** 只投影可审计白名单摘要；未知/原始 payload 不直接倾倒到 UI。 */
+const WORKFLOW_SUMMARY_KEYS = [
+  "status",
+  "call_id",
+  "provider",
+  "model",
+  "tool",
+  "tool_name",
+  "source",
+  "source_ref",
+  "asset_ref",
+  "rag_ref",
+  "validation_ref",
+  "verdict",
+  "failure_stage",
+  "failure_kind",
+  "error_code",
+  "next_step",
+  "artifact_ref",
+  "command_id",
+] as const;
+
+function workflowSummary(data: Record<string, unknown>): string {
+  const parts: string[] = [];
+  for (const key of WORKFLOW_SUMMARY_KEYS) {
+    const value = data[key];
+    if (
+      typeof value === "string" ||
+      typeof value === "number" ||
+      typeof value === "boolean"
+    ) {
+      parts.push(`${key}=${String(value)}`);
+    } else if (
+      Array.isArray(value) &&
+      value.length <= 8 &&
+      value.every((item) => ["string", "number", "boolean"].includes(typeof item))
+    ) {
+      parts.push(`${key}=${value.map(String).join(",")}`);
+    }
+  }
+  return parts.join(" · ").slice(0, 500);
+}
+
+function workflowEventKey(event: WorkflowEventEnvelope): string {
+  if (event.event_id) return `id:${event.event_id}`;
+  if (event.workflow_id && event.sequence !== undefined) {
+    return `seq:${event.workflow_id}:${event.sequence}`;
+  }
+  return "";
+}
+
+function emitWorkflowEvent(
+  event: WorkflowEventEnvelope,
+  cb: LiveCallbacks,
+  seen: Set<string>,
+): void {
+  const key = workflowEventKey(event);
+  if (key && seen.has(key)) return;
+  if (key) seen.add(key);
+  cb.onBlock({
+    id: event.event_id || nextId("wf"),
+    type: "workflow",
+    workflowKind: event.kind,
+    workflowRole: event.role,
+    workflowDesk: event.desk,
+    workflowAt: event.at,
+    workflowSummary: workflowSummary(event.data),
+  });
+}
+
+async function replayWorkflowHistory(
+  workflowId: string,
+  headers: Record<string, string>,
+  signal: AbortSignal,
+  cb: LiveCallbacks,
+  seen: Set<string>,
+): Promise<void> {
+  try {
+    const res = await fetch(
+      `/api/agent/workflows/${encodeURIComponent(workflowId)}/events`,
+      { headers, signal },
+    );
+    if (!res.ok) {
+      (cb.onHistoryError ?? cb.onError)(`工作流事件历史读取失败 (${res.status})`);
+      return;
+    }
+    const body: unknown = await res.json();
+    const rows = isRecord(body) && Array.isArray(body.events) ? body.events : [];
+    for (const raw of rows) {
+      if (!isRecord(raw)) continue;
+      const kind = String(raw.kind ?? "");
+      if (!isWorkflowEventKind(kind)) continue;
+      emitWorkflowEvent(normalizeWorkflowEvent(kind, raw), cb, seen);
+    }
+  } catch (error) {
+    if ((error as Error).name !== "AbortError") {
+      (cb.onHistoryError ?? cb.onError)(
+        `工作流事件历史读取失败: ${(error as Error).message}`,
+      );
+    }
+  }
+}
+
 /**
  * 启动真 SSE 流。返回 abort 函数（卸载时调用）。
  *
@@ -95,6 +272,7 @@ export function streamAgentWorkbench(
   )}&permission_mode=${encodeURIComponent(permMode)}`;
 
   (async () => {
+    const seenWorkflowEvents = new Set<string>();
     try {
       const res = await fetch(url, { headers, signal: controller.signal });
       if (!res.ok || !res.body) {
@@ -115,7 +293,27 @@ export function streamAgentWorkbench(
           const frame = buf.slice(0, idx);
           buf = buf.slice(idx + 2);
           const parsed = parseFrame(frame);
-          if (parsed) dispatch(parsed.event, parsed.data, cb);
+          if (!parsed) continue;
+          if (parsed.event === "done") {
+            const d = (parsed.data ?? {}) as Record<string, unknown>;
+            const workflowId = String(d.workflow_id ?? "");
+            if (workflowId) {
+              await replayWorkflowHistory(
+                workflowId,
+                headers,
+                controller.signal,
+                cb,
+                seenWorkflowEvents,
+              );
+            }
+            cb.onDone(
+              String(d.final_message ?? ""),
+              Boolean(d.succeeded),
+              workflowId || undefined,
+            );
+          } else {
+            dispatch(parsed.event, parsed.data, cb, seenWorkflowEvents);
+          }
         }
       }
     } catch (e) {
@@ -128,7 +326,20 @@ export function streamAgentWorkbench(
   return () => controller.abort();
 }
 
-function dispatch(event: LiveEventKind, data: unknown, cb: LiveCallbacks): void {
+function dispatch(
+  event: LiveEventKind,
+  data: unknown,
+  cb: LiveCallbacks,
+  seenWorkflowEvents: Set<string>,
+): void {
+  if (isWorkflowEventKind(event)) {
+    emitWorkflowEvent(
+      normalizeWorkflowEvent(event, data),
+      cb,
+      seenWorkflowEvents,
+    );
+    return;
+  }
   const d = (data ?? {}) as Record<string, unknown>;
   switch (event) {
     case "user":
@@ -169,7 +380,7 @@ function dispatch(event: LiveEventKind, data: unknown, cb: LiveCallbacks): void 
       break;
     }
     case "done":
-      cb.onDone(String(d.final_message ?? ""), Boolean(d.succeeded));
+      // done 需先按 workflow_id 补读 durable history；由上层 reader 分支处理。
       break;
     case "error":
       cb.onError(String(d.error ?? "未知错误"));

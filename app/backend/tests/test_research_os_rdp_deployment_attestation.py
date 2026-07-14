@@ -1,6 +1,8 @@
 from __future__ import annotations
 
 import json
+import hashlib
+from functools import partial
 from types import SimpleNamespace
 
 import pytest
@@ -17,6 +19,19 @@ from app.research_os import (
     RDPSourceFileBundler,
     RuntimeStatus,
 )
+
+RDPOpenPackageMaterializer = partial(RDPOpenPackageMaterializer, owner_user_id="u1")
+RDPSourceFileBundler = partial(RDPSourceFileBundler, owner_user_id="u1")
+PersistentRDPDeploymentAttestationStore = partial(
+    PersistentRDPDeploymentAttestationStore, owner_user_id="u1"
+)
+PersistentRDPDeploymentHealthCheckStore = partial(
+    PersistentRDPDeploymentHealthCheckStore, owner_user_id="u1"
+)
+
+
+def _owned_root(root):
+    return root / "_owners" / hashlib.sha256(b"u1").hexdigest()
 
 
 def _manifest(**overrides) -> RDPManifest:
@@ -203,7 +218,7 @@ def test_rdp_deployment_attestation_rejects_mismatched_source_bundle_index(tmp_p
     store = PersistentRDPDeploymentAttestationStore(tmp_path / "rdp_deployment_attestations.jsonl")
     manifest = _manifest()
     _materialize_and_bundle(materializer, bundler, manifest, source_root)
-    index_path = tmp_path / "rdp_packages" / manifest.package_id / "source_files_index.json"
+    index_path = _owned_root(tmp_path / "rdp_packages") / manifest.package_id / "source_files_index.json"
     index = json.loads(index_path.read_text(encoding="utf-8"))
     index["package_id"] = "rdp_other"
     index_path.write_text(json.dumps(index), encoding="utf-8")
@@ -222,7 +237,9 @@ def test_rdp_deployment_attestation_rejects_tampered_manifest_file(tmp_path):
     store = PersistentRDPDeploymentAttestationStore(tmp_path / "rdp_deployment_attestations.jsonl")
     manifest = _manifest(source_file_refs=())
     package = materializer.materialize(manifest)
-    (tmp_path / "rdp_packages" / manifest.package_id / "manifest.json").write_text("{}\n", encoding="utf-8")
+    (_owned_root(tmp_path / "rdp_packages") / manifest.package_id / "manifest.json").write_text(
+        "{}\n", encoding="utf-8"
+    )
 
     with pytest.raises(ValueError, match="manifest file does not match"):
         store.record_attestation(
@@ -241,7 +258,9 @@ def test_rdp_deployment_attestation_api_records_live_package(tmp_path, monkeypat
         tmp_path,
         monkeypatch,
     )
-    manifest = store.record_manifest(_manifest())
+    manifest = store.record_manifest(
+        _manifest(), owner_user_id="u1", recorded_by="u1"
+    )
     _materialize_and_bundle(materializer, bundler, manifest, source_root)
     try:
         response = client.post(
@@ -263,7 +282,9 @@ def test_rdp_deployment_runner_default_disabled_without_partial_record(tmp_path,
         tmp_path,
         monkeypatch,
     )
-    manifest = store.record_manifest(_manifest())
+    manifest = store.record_manifest(
+        _manifest(), owner_user_id="u1", recorded_by="u1"
+    )
     _materialize_and_bundle(materializer, bundler, manifest, source_root)
     try:
         response = client.post(
@@ -289,7 +310,9 @@ def test_rdp_deployment_runner_records_attestation_from_fake_runner(tmp_path, mo
         return _deployment_runner_result()
 
     monkeypatch.setattr(main, "RDP_DEPLOYMENT_RUNNER", fake_runner)
-    manifest = store.record_manifest(_manifest())
+    manifest = store.record_manifest(
+        _manifest(), owner_user_id="u1", recorded_by="u1"
+    )
     _materialize_and_bundle(materializer, bundler, manifest, source_root)
     try:
         response = client.post(
@@ -335,7 +358,9 @@ def test_rdp_deployment_runner_rejects_bad_result_without_partial_record(
         monkeypatch,
     )
     monkeypatch.setattr(main, "RDP_DEPLOYMENT_RUNNER", lambda _request: runner_result)
-    manifest = store.record_manifest(_manifest())
+    manifest = store.record_manifest(
+        _manifest(), owner_user_id="u1", recorded_by="u1"
+    )
     _materialize_and_bundle(materializer, bundler, manifest, source_root)
     try:
         response = client.post(
@@ -354,7 +379,9 @@ def test_rdp_deployment_health_records_post_deploy_refs(tmp_path, monkeypatch):
         tmp_path,
         monkeypatch,
     )
-    manifest = store.record_manifest(_manifest())
+    manifest = store.record_manifest(
+        _manifest(), owner_user_id="u1", recorded_by="u1"
+    )
     _materialize_and_bundle(materializer, bundler, manifest, source_root)
     attestation = attestation_store.record_attestation(
         manifest,
@@ -393,7 +420,9 @@ def test_rdp_deployment_health_rejects_unknown_attestation_without_partial_recor
         tmp_path,
         monkeypatch,
     )
-    manifest = store.record_manifest(_manifest())
+    manifest = store.record_manifest(
+        _manifest(), owner_user_id="u1", recorded_by="u1"
+    )
     _materialize_and_bundle(materializer, bundler, manifest, source_root)
     try:
         response = client.post(
@@ -428,7 +457,9 @@ def test_rdp_deployment_health_rejects_bad_payload_without_partial_record(
         tmp_path,
         monkeypatch,
     )
-    manifest = store.record_manifest(_manifest())
+    manifest = store.record_manifest(
+        _manifest(), owner_user_id="u1", recorded_by="u1"
+    )
     _materialize_and_bundle(materializer, bundler, manifest, source_root)
     attestation = attestation_store.record_attestation(
         manifest,

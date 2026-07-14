@@ -21,7 +21,7 @@ from __future__ import annotations
 from dataclasses import dataclass, field
 from typing import Any
 
-from ...governance import (
+from ...governance.spine_invariants import (
     GovernanceSpineGate,
     INV_SECRET_PLAINTEXT,
     SpineEvidence,

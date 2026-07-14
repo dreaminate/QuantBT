@@ -22,6 +22,8 @@ from datetime import UTC, datetime
 from pathlib import Path
 from typing import Any
 
+from ..lineage.ids import canonical_json, content_hash
+
 
 def _now() -> str:
     return datetime.now(UTC).isoformat()
@@ -49,7 +51,93 @@ class SharedStrategy:
     metric_dsr: float | None = None
 
     def to_dict(self) -> dict[str, Any]:
-        return asdict(self)
+        return {
+            **asdict(self),
+            "shared_asset_ref": shared_strategy_asset_ref(self),
+            "permission_ref": shared_strategy_permission(self).permission_ref,
+            "source_ref": shared_strategy_source(self).source_ref,
+            "status_ref": shared_strategy_status(self).status_ref,
+        }
+
+
+@dataclass(frozen=True)
+class SharedAssetPermissionRecord:
+    permission_ref: str
+    shared_asset_ref: str
+    owner_user_id: str
+    visibility: str
+    may_fork: bool
+
+
+@dataclass(frozen=True)
+class SharedAssetSourceRecord:
+    source_ref: str
+    shared_asset_ref: str
+    owner_user_id: str
+    run_id: str
+    fork_from_share_id: str | None
+    asset_class: str
+
+
+@dataclass(frozen=True)
+class SharedAssetStatusRecord:
+    status_ref: str
+    shared_asset_ref: str
+    owner_user_id: str
+    status: str
+
+
+def shared_strategy_asset_ref(strategy: SharedStrategy) -> str:
+    return "shared_asset:" + content_hash(
+        {
+            "share_id": strategy.share_id,
+            "run_id": strategy.run_id,
+            "author_id": strategy.author_id,
+        }
+    )
+
+
+def shared_strategy_permission(strategy: SharedStrategy) -> SharedAssetPermissionRecord:
+    asset_ref = shared_strategy_asset_ref(strategy)
+    visibility = "public" if strategy.public else "owner_only"
+    payload = {
+        "shared_asset_ref": asset_ref,
+        "owner_user_id": strategy.author_id,
+        "visibility": visibility,
+        "may_fork": bool(strategy.public),
+    }
+    return SharedAssetPermissionRecord(
+        permission_ref="permission:" + content_hash(payload),
+        **payload,
+    )
+
+
+def shared_strategy_source(strategy: SharedStrategy) -> SharedAssetSourceRecord:
+    asset_ref = shared_strategy_asset_ref(strategy)
+    payload = {
+        "shared_asset_ref": asset_ref,
+        "owner_user_id": strategy.author_id,
+        "run_id": strategy.run_id,
+        "fork_from_share_id": strategy.fork_from_share_id,
+        "asset_class": strategy.asset_class,
+    }
+    return SharedAssetSourceRecord(
+        source_ref="source:" + content_hash(payload),
+        **payload,
+    )
+
+
+def shared_strategy_status(strategy: SharedStrategy) -> SharedAssetStatusRecord:
+    asset_ref = shared_strategy_asset_ref(strategy)
+    payload = {
+        "shared_asset_ref": asset_ref,
+        "owner_user_id": strategy.author_id,
+        "status": "published_public" if strategy.public else "published_private",
+    }
+    return SharedAssetStatusRecord(
+        status_ref="status:" + content_hash(payload),
+        **payload,
+    )
 
 
 _INIT_LOCK = threading.Lock()
@@ -87,6 +175,16 @@ def init_sharing_db(db_path: Path) -> None:
             CREATE INDEX IF NOT EXISTS idx_shares_author ON s_strategies(author_id);
             CREATE INDEX IF NOT EXISTS idx_shares_public ON s_strategies(public);
             CREATE INDEX IF NOT EXISTS idx_shares_run ON s_strategies(run_id);
+
+            CREATE TABLE IF NOT EXISTS s_publish_idempotency (
+                author_id TEXT NOT NULL,
+                idempotency_key TEXT NOT NULL,
+                request_payload TEXT NOT NULL,
+                share_id TEXT NOT NULL UNIQUE,
+                created_at_utc TEXT NOT NULL,
+                PRIMARY KEY (author_id, idempotency_key),
+                FOREIGN KEY (share_id) REFERENCES s_strategies(share_id)
+            );
 
             CREATE TABLE IF NOT EXISTS s_likes (
                 user_id TEXT NOT NULL,
@@ -150,12 +248,58 @@ class SharingService:
         asset_class: str = "",
         public: bool = True,
         fork_from_share_id: str | None = None,
+        idempotency_key: str | None = None,
     ) -> SharedStrategy:
         if not (self._run_root / run_id).exists():
             raise ValueError(f"run_id 不存在: {run_id}")
+        normalized_key: str | None = None
+        if idempotency_key is not None:
+            normalized_key = str(idempotency_key).strip()
+            if not normalized_key:
+                raise ValueError("idempotency_key 不能为空")
+            if len(normalized_key) > 512:
+                raise ValueError("idempotency_key 不能超过 512 字符")
+        request_payload = canonical_json(
+            {
+                "run_id": run_id,
+                "author_id": author_id,
+                "title": title,
+                "description": description,
+                "tags": tags or [],
+                "asset_class": asset_class,
+                "public": bool(public),
+                "fork_from_share_id": fork_from_share_id,
+            }
+        )
         metrics = self._snapshot_metrics(run_id)
         conn = self._conn()
         try:
+            # Serialize the idempotency claim and the business write in one
+            # SQLite transaction.  A concurrent identical retry observes the
+            # first committed mapping instead of creating a second share.
+            conn.execute("BEGIN IMMEDIATE")
+            if normalized_key is not None:
+                claim = conn.execute(
+                    "SELECT request_payload, share_id FROM s_publish_idempotency "
+                    "WHERE author_id=? AND idempotency_key=?",
+                    (author_id, normalized_key),
+                ).fetchone()
+                if claim is not None:
+                    if claim["request_payload"] != request_payload:
+                        raise ValueError(
+                            "idempotency_key 已用于不同的策略发布请求"
+                        )
+                    existing = conn.execute(
+                        "SELECT * FROM s_strategies WHERE share_id=?",
+                        (claim["share_id"],),
+                    ).fetchone()
+                    if existing is None:
+                        raise RuntimeError(
+                            "idempotency claim references a missing shared strategy"
+                        )
+                    conn.commit()
+                    return _row_to_strategy(existing)
+
             sid = f"share-{secrets.token_hex(8)}"
             now = _now()
             conn.execute(
@@ -173,14 +317,26 @@ class SharingService:
                     metrics["metric_pbo"], metrics["metric_dsr"],
                 ),
             )
+            if normalized_key is not None:
+                conn.execute(
+                    "INSERT INTO s_publish_idempotency "
+                    "(author_id, idempotency_key, request_payload, share_id, created_at_utc) "
+                    "VALUES (?, ?, ?, ?, ?)",
+                    (author_id, normalized_key, request_payload, sid, now),
+                )
             if fork_from_share_id:
                 conn.execute("UPDATE s_strategies SET forks = forks + 1 WHERE share_id = ?", (fork_from_share_id,))
-            return SharedStrategy(
-                share_id=sid, run_id=run_id, author_id=author_id, title=title,
-                description=description, tags=tags or [], asset_class=asset_class,
-                public=public, fork_from_share_id=fork_from_share_id, created_at_utc=now,
-                **metrics,
-            )
+            row = conn.execute(
+                "SELECT * FROM s_strategies WHERE share_id=?", (sid,)
+            ).fetchone()
+            if row is None:  # pragma: no cover - same-transaction invariant
+                raise RuntimeError("shared strategy insert was not observable")
+            conn.commit()
+            return _row_to_strategy(row)
+        except Exception:
+            if conn.in_transaction:
+                conn.rollback()
+            raise
         finally:
             conn.close()
 
@@ -209,6 +365,66 @@ class SharingService:
             return _row_to_strategy(row)
         finally:
             conn.close()
+
+    def _owned_strategy_by_ref(
+        self,
+        ref: str,
+        *,
+        owner_user_id: str,
+        ref_getter: Any,
+    ) -> SharedStrategy:
+        owner = str(owner_user_id or "").strip()
+        source_ref = str(ref or "").strip()
+        if not owner or not source_ref:
+            raise KeyError("shared asset ref and owner are required")
+        matches = [
+            strategy
+            for strategy in self.list_strategies(
+                author_id=owner,
+                public_only=False,
+                limit=100_000,
+            )
+            if ref_getter(strategy) == source_ref
+        ]
+        if len(matches) != 1:
+            raise KeyError("shared asset source is missing, stale, or ambiguous")
+        return matches[0]
+
+    def shared_asset(self, ref: str, *, owner_user_id: str) -> SharedStrategy:
+        return self._owned_strategy_by_ref(
+            ref,
+            owner_user_id=owner_user_id,
+            ref_getter=shared_strategy_asset_ref,
+        )
+
+    def permission(
+        self,
+        ref: str,
+        *,
+        owner_user_id: str,
+    ) -> SharedAssetPermissionRecord:
+        strategy = self._owned_strategy_by_ref(
+            ref,
+            owner_user_id=owner_user_id,
+            ref_getter=lambda item: shared_strategy_permission(item).permission_ref,
+        )
+        return shared_strategy_permission(strategy)
+
+    def source(self, ref: str, *, owner_user_id: str) -> SharedAssetSourceRecord:
+        strategy = self._owned_strategy_by_ref(
+            ref,
+            owner_user_id=owner_user_id,
+            ref_getter=lambda item: shared_strategy_source(item).source_ref,
+        )
+        return shared_strategy_source(strategy)
+
+    def status(self, ref: str, *, owner_user_id: str) -> SharedAssetStatusRecord:
+        strategy = self._owned_strategy_by_ref(
+            ref,
+            owner_user_id=owner_user_id,
+            ref_getter=lambda item: shared_strategy_status(item).status_ref,
+        )
+        return shared_strategy_status(strategy)
 
     def list_strategies(
         self,

@@ -3,8 +3,8 @@
 GOAL §7 列了 12 个后台 role agent；本模块把它们登记为不可变 `RoleAgent`，每个绑定：
 - `home_desk`：写权限归属台（复用 research_graph 的 DESK_* 单一源，不另立台名）。
 - `permitted_tools`：该 role 在受控权限内可调的工具集（GOAL §7「工具权限按台过滤」的落点）。
-  工具名是**能力类**抽象占位（read_asset / run_validation / …）——真业务工具在 business_tools.py
-  （非本卡领地），本卡只定**权限模型**：dispatch 期按此白名单拒越权工具（governance.py 兑现）。
+  白名单同时保留能力类名称，并列出已存在真实 handler 的 canonical tool 名；dispatch 期按此
+  白名单拒越权工具（governance.py 兑现）。没有真实 handler 的能力类不会被生产调用方注册。
 - `default_difficulty / default_risk`：交给 LLM Gateway 的能力需求默认档（可被单次 dispatch 覆盖）。
 - `independence_capable`：是否 Verifier/Critic（要独立 provider/model·GOAL §7）。
 
@@ -114,82 +114,139 @@ _NORMAL = TaskDifficulty.NORMAL.value
 _RISK_NORMAL = RiskLevel.NORMAL.value
 _RISK_ELEVATED = RiskLevel.ELEVATED.value
 
+# Canonical names are limited to handlers that exist in main's current AgentRuntime
+# wiring. Stubs (for example factor.run_ic) and unregistered TOOL_SCHEMA entries are
+# intentionally absent, so role permission never upgrades a declared capability into
+# a fake live tool.
+LIVE_CANONICAL_ROLE_TOOLS: dict[str, frozenset[str]] = {
+    ROLE_COORDINATOR: frozenset({"strategy_goal.create", "hypothesis.create", "code.replicate"}),
+    ROLE_LITERATURE: frozenset(),
+    ROLE_MATH: frozenset(),
+    ROLE_DATA: frozenset({
+        "data.list_sources",
+        "data.describe_fields",
+        "data.infer_mapping",
+        "data.apply_mapping",
+    }),
+    ROLE_FACTOR: frozenset({"factor.validate_columns", "factor_set.compose"}),
+    ROLE_MODEL: frozenset({"model_registry.select"}),
+    ROLE_SIGNAL: frozenset({"signal.define"}),
+    ROLE_STRATEGYBOOK: frozenset({"portfolio.construct"}),
+    ROLE_BACKTEST: frozenset({"backtest.run", "eval.pbo"}),
+    ROLE_RISK: frozenset(),
+    ROLE_VERIFIER: frozenset(),
+    ROLE_REPORTER: frozenset({"report.generate"}),
+}
+
 # 12 role agent 登记表（GOAL §7）——每个 role 的工具白名单 = 工具权限按台过滤的落点。
 ROLE_AGENTS: dict[str, RoleAgent] = {
     ROLE_COORDINATOR: RoleAgent(
         name=ROLE_COORDINATOR,
         home_desk=DESK_RESEARCH,
-        permitted_tools=frozenset({TOOL_PROPOSE_PLAN, TOOL_OPEN_HANDOFF, TOOL_READ_ASSET}),
+        permitted_tools=(
+            frozenset({TOOL_PROPOSE_PLAN, TOOL_OPEN_HANDOFF, TOOL_READ_ASSET})
+            | LIVE_CANONICAL_ROLE_TOOLS[ROLE_COORDINATOR]
+        ),
         default_difficulty=_HARD,  # 规划/编排是硬推理（GOAL §7 Plan 形态）
         default_risk=_RISK_NORMAL,
     ),
     ROLE_LITERATURE: RoleAgent(
         name=ROLE_LITERATURE,
         home_desk=DESK_RESEARCH,
-        permitted_tools=frozenset({TOOL_RAG_SEARCH, TOOL_EXTRACT_EVIDENCE, TOOL_READ_ASSET}),
+        permitted_tools=(
+            frozenset({TOOL_RAG_SEARCH, TOOL_EXTRACT_EVIDENCE, TOOL_READ_ASSET})
+            | LIVE_CANONICAL_ROLE_TOOLS[ROLE_LITERATURE]
+        ),
         default_difficulty=_NORMAL,
         default_risk=_RISK_NORMAL,
     ),
     ROLE_MATH: RoleAgent(
         name=ROLE_MATH,
         home_desk=DESK_RESEARCH,
-        permitted_tools=frozenset({TOOL_WRITE_MATH, TOOL_CHECK_CONSISTENCY, TOOL_READ_ASSET}),
+        permitted_tools=(
+            frozenset({TOOL_WRITE_MATH, TOOL_CHECK_CONSISTENCY, TOOL_READ_ASSET})
+            | LIVE_CANONICAL_ROLE_TOOLS[ROLE_MATH]
+        ),
         default_difficulty=_HARD,  # 数学推导是硬推理（GOAL §7 Mathematical Researcher）
         default_risk=_RISK_NORMAL,
     ),
     ROLE_DATA: RoleAgent(
         name=ROLE_DATA,
         home_desk=DESK_DATA,
-        permitted_tools=frozenset({TOOL_REGISTER_DATA, TOOL_QUALITY_CHECK, TOOL_READ_ASSET}),
+        permitted_tools=(
+            frozenset({TOOL_REGISTER_DATA, TOOL_QUALITY_CHECK, TOOL_READ_ASSET})
+            | LIVE_CANONICAL_ROLE_TOOLS[ROLE_DATA]
+        ),
         default_difficulty=_NORMAL,
         default_risk=_RISK_ELEVATED,  # 数据接入触 PIT/泄露风险面
     ),
     ROLE_FACTOR: RoleAgent(
         name=ROLE_FACTOR,
         home_desk=DESK_FACTOR,
-        permitted_tools=frozenset({TOOL_DEFINE_FACTOR, TOOL_COMPUTE_IC, TOOL_READ_ASSET}),
+        permitted_tools=(
+            frozenset({TOOL_DEFINE_FACTOR, TOOL_COMPUTE_IC, TOOL_READ_ASSET})
+            | LIVE_CANONICAL_ROLE_TOOLS[ROLE_FACTOR]
+        ),
         default_difficulty=_NORMAL,
         default_risk=_RISK_NORMAL,
     ),
     ROLE_MODEL: RoleAgent(
         name=ROLE_MODEL,
         home_desk=DESK_MODEL,
-        permitted_tools=frozenset({TOOL_TRAIN_MODEL, TOOL_MODEL_CARD, TOOL_READ_ASSET}),
+        permitted_tools=(
+            frozenset({TOOL_TRAIN_MODEL, TOOL_MODEL_CARD, TOOL_READ_ASSET})
+            | LIVE_CANONICAL_ROLE_TOOLS[ROLE_MODEL]
+        ),
         default_difficulty=_HARD,  # 模型方案/训练是硬推理
         default_risk=_RISK_NORMAL,
     ),
     ROLE_SIGNAL: RoleAgent(
         name=ROLE_SIGNAL,
         home_desk=DESK_SIGNAL,
-        permitted_tools=frozenset({TOOL_DEFINE_SIGNAL, TOOL_READ_ASSET}),
+        permitted_tools=(
+            frozenset({TOOL_DEFINE_SIGNAL, TOOL_READ_ASSET})
+            | LIVE_CANONICAL_ROLE_TOOLS[ROLE_SIGNAL]
+        ),
         default_difficulty=_NORMAL,
         default_risk=_RISK_NORMAL,
     ),
     ROLE_STRATEGYBOOK: RoleAgent(
         name=ROLE_STRATEGYBOOK,
         home_desk=DESK_STRATEGY,
-        permitted_tools=frozenset({TOOL_BUILD_STRATEGYBOOK, TOOL_READ_ASSET}),
+        permitted_tools=(
+            frozenset({TOOL_BUILD_STRATEGYBOOK, TOOL_READ_ASSET})
+            | LIVE_CANONICAL_ROLE_TOOLS[ROLE_STRATEGYBOOK]
+        ),
         default_difficulty=_NORMAL,
         default_risk=_RISK_ELEVATED,  # 组合/成本/约束面
     ),
     ROLE_BACKTEST: RoleAgent(
         name=ROLE_BACKTEST,
         home_desk=DESK_BACKTEST,
-        permitted_tools=frozenset({TOOL_RUN_BACKTEST, TOOL_RUN_VALIDATION, TOOL_READ_ASSET}),
+        permitted_tools=(
+            frozenset({TOOL_RUN_BACKTEST, TOOL_RUN_VALIDATION, TOOL_READ_ASSET})
+            | LIVE_CANONICAL_ROLE_TOOLS[ROLE_BACKTEST]
+        ),
         default_difficulty=_HARD,  # 验证/反证设计是硬推理
         default_risk=_RISK_NORMAL,
     ),
     ROLE_RISK: RoleAgent(
         name=ROLE_RISK,
         home_desk=DESK_EXECUTION,
-        permitted_tools=frozenset({TOOL_RISK_CHECK, TOOL_READ_ASSET}),
+        permitted_tools=(
+            frozenset({TOOL_RISK_CHECK, TOOL_READ_ASSET})
+            | LIVE_CANONICAL_ROLE_TOOLS[ROLE_RISK]
+        ),
         default_difficulty=_NORMAL,
         default_risk=_RISK_ELEVATED,  # 风控/执行面
     ),
     ROLE_VERIFIER: RoleAgent(
         name=ROLE_VERIFIER,
         home_desk=DESK_BACKTEST,  # 验证台是其挑战落点（实验/PBO/反证）
-        permitted_tools=frozenset({TOOL_READ_ASSET, TOOL_RUN_VALIDATION, TOOL_RAISE_CHALLENGE}),
+        permitted_tools=(
+            frozenset({TOOL_READ_ASSET, TOOL_RUN_VALIDATION, TOOL_RAISE_CHALLENGE})
+            | LIVE_CANONICAL_ROLE_TOOLS[ROLE_VERIFIER]
+        ),
         default_difficulty=_HARD,  # 挑战/找反例是硬推理
         default_risk=_RISK_NORMAL,
         independence_capable=True,  # GOAL §7：Verifier/Critic 要独立 provider/model
@@ -197,7 +254,10 @@ ROLE_AGENTS: dict[str, RoleAgent] = {
     ROLE_REPORTER: RoleAgent(
         name=ROLE_REPORTER,
         home_desk=DESK_RESEARCH,
-        permitted_tools=frozenset({TOOL_READ_ASSET, TOOL_WRITE_REPORT}),
+        permitted_tools=(
+            frozenset({TOOL_READ_ASSET, TOOL_WRITE_REPORT})
+            | LIVE_CANONICAL_ROLE_TOOLS[ROLE_REPORTER]
+        ),
         default_difficulty=_NORMAL,
         default_risk=_RISK_NORMAL,
     ),
@@ -245,6 +305,7 @@ __all__ = [
     "ROLE_REPORTER",
     "ROLE_AGENTS",
     "ROLE_NAMES",
+    "LIVE_CANONICAL_ROLE_TOOLS",
     "RoleAgent",
     "UnknownRoleError",
     "get_role",

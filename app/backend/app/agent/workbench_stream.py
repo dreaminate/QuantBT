@@ -12,9 +12,12 @@ thinking/say/milestone/done 事件序列）。治理：
 from __future__ import annotations
 
 import json
-from typing import Any, Iterator
+import threading
+from dataclasses import dataclass, field
+from typing import Any, Callable, Iterator
 
 from .agent_runtime import permission_gate
+from .orchestrator.events import PersistentWorkflowEventLedger, WorkflowEvent
 
 # tool_name → 里程碑 key（策略台脊柱 7 节点；前端进度线据此点亮）。
 TOOL_MILESTONE: dict[str, str] = {
@@ -27,6 +30,75 @@ TOOL_MILESTONE: dict[str, str] = {
     "portfolio.construct": "仓位风控",
     "backtest.run": "回测",
 }
+
+
+@dataclass
+class BackgroundWorkflowRun:
+    """One in-process orchestration whose durable events can be tailed while it runs."""
+
+    done: threading.Event = field(default_factory=threading.Event)
+    result: Any = None
+    error: BaseException | None = None
+    thread: threading.Thread | None = None
+
+
+def start_background_workflow(
+    operation: Callable[[], Any],
+    *,
+    thread_name: str = "agent-workbench-orchestration",
+) -> BackgroundWorkflowRun:
+    """Start one bounded workflow without claiming that the HTTP stream can cancel it."""
+
+    run = BackgroundWorkflowRun()
+
+    def target() -> None:
+        try:
+            run.result = operation()
+        except BaseException as exc:  # noqa: BLE001 - transferred back to the request thread.
+            run.error = exc
+        finally:
+            run.done.set()
+
+    run.thread = threading.Thread(target=target, name=thread_name, daemon=True)
+    run.thread.start()
+    return run
+
+
+def iter_durable_workflow_events(
+    run: BackgroundWorkflowRun,
+    *,
+    ledger: PersistentWorkflowEventLedger,
+    owner_user_id: str,
+    workflow_id: str,
+    poll_interval_seconds: float = 0.02,
+) -> Iterator[WorkflowEvent]:
+    """Tail owner-scoped durable events until the background operation settles.
+
+    The ledger is reopened/validated on every poll by ``events()``.  After the
+    worker signals done, one additional settled read closes the race where the
+    final append completed between the preceding read and the done check.
+    """
+
+    if poll_interval_seconds <= 0:
+        raise ValueError("poll_interval_seconds must be positive")
+    last_sequence = 0
+    settled_after_done = False
+    while True:
+        rows = ledger.events(owner_user_id=owner_user_id, workflow_id=workflow_id)
+        emitted = False
+        for event in rows:
+            if event.sequence <= last_sequence:
+                continue
+            last_sequence = event.sequence
+            emitted = True
+            yield event
+        if run.done.is_set():
+            if settled_after_done and not emitted:
+                break
+            settled_after_done = True
+            continue
+        settled_after_done = False
+        run.done.wait(poll_interval_seconds)
 
 
 def _tool_name(call: dict[str, Any]) -> str:
@@ -93,4 +165,11 @@ def sse_format(event: str, data: dict[str, Any]) -> str:
     return f"event: {event}\ndata: {json.dumps(data, ensure_ascii=False, default=str)}\n\n"
 
 
-__all__ = ["TOOL_MILESTONE", "project_turn_events", "sse_format"]
+__all__ = [
+    "BackgroundWorkflowRun",
+    "TOOL_MILESTONE",
+    "iter_durable_workflow_events",
+    "project_turn_events",
+    "sse_format",
+    "start_background_workflow",
+]

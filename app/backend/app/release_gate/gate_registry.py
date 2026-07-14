@@ -22,7 +22,7 @@ producer_status=...)` 时按 producer 绿否盖章——producer 未绿（出厂
 
 from __future__ import annotations
 
-from typing import Callable
+from typing import Any, Callable
 
 from .promote_gate_chain import PromoteGateChain, default_chain
 from .section6_mathchain_gate import register_section6_mathchain_gate
@@ -56,7 +56,11 @@ _GATE_REGISTRARS: tuple[GateRegistrar, ...] = (
 )
 
 
-def register_all_gates(chain: PromoteGateChain) -> PromoteGateChain:
+def register_all_gates(
+    chain: PromoteGateChain,
+    *,
+    reproduction_receipt_store: Any = None,
+) -> PromoteGateChain:
     """把全部已落地节门注册进给定门链（纯函数·可作用于任何独立 PromoteGateChain 实例）。
 
     顺序按 `_GATE_REGISTRARS`。重复注册同名门 → 底层 `chain.register` 抛（防静默覆盖）——故本函数
@@ -64,11 +68,17 @@ def register_all_gates(chain: PromoteGateChain) -> PromoteGateChain:
     """
 
     for registrar in _GATE_REGISTRARS:
-        registrar(chain)
+        if registrar is register_section17_rdp_gate:
+            register_section17_rdp_gate(
+                chain,
+                reproduction_receipt_store=reproduction_receipt_store,
+            )
+        else:
+            registrar(chain)
     return chain
 
 
-def ensure_default_chain() -> PromoteGateChain:
+def ensure_default_chain(*, reproduction_receipt_store: Any = None) -> PromoteGateChain:
     """返回进程级共享门链 `default_chain()`，并**幂等**确保全部节门已注册其上。
 
     promote.py 的唯一入口：`ensure_default_chain().evaluate(manifest, producer_status=...)`。
@@ -78,6 +88,15 @@ def ensure_default_chain() -> PromoteGateChain:
     本函数**不**注册任何 producer 绿灯（advisory-first·门绿否全交 evaluate 期的 producer_status）。
     """
 
+    if reproduction_receipt_store is not None:
+        return register_all_gates(
+            PromoteGateChain(),
+            reproduction_receipt_store=reproduction_receipt_store,
+        )
+    # Receipt authority is request-specific and must never be retained in the
+    # process singleton.  Formal callers receive a fresh chain whose §17 check
+    # closes over the concrete trusted store; ordinary advisory callers keep
+    # the idempotent shared chain.
     chain = default_chain()
     if not chain.gate_names:
         register_all_gates(chain)

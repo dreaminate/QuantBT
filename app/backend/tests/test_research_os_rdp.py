@@ -95,9 +95,18 @@ def test_rdp_manifest_requires_market_data_use_validation_refs():
 
 
 def test_rdp_manifest_rejects_missing_unverified_residuals():
-    manifest = _manifest(unverified_residuals=())
+    manifest = _manifest(unverified_residuals=None)
     violations = validate_rdp_manifest(manifest)
     assert {v.code for v in violations} == {"missing_unverified_residuals"}
+
+
+def test_rdp_manifest_accepts_attested_explicit_zero_residuals():
+    manifest = _manifest(
+        unverified_residuals=(),
+        residual_attestation="review:all-known-residuals-resolved:v1",
+    )
+
+    assert validate_rdp_manifest(manifest) == ()
 
 
 def test_rdp_manifest_requires_compiler_spine_and_entrypoint_coverage_refs():

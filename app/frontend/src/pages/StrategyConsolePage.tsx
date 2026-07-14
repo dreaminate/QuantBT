@@ -77,7 +77,6 @@ import {
   recordResearchGraphEdge,
   deleteResearchGraphEdge,
   tombstoneResearchGraphQro,
-  applyResearchGraphPatch,
   saveResearchGraphCanvasParameterValue,
   type BackendVersion,
   type BackendLiveSnapshot,
@@ -87,12 +86,12 @@ import {
   type GraphEdgeResponse,
   type GraphEdgeDeletionResponse,
   type QROTombstoneResponse,
-  type GraphPatchApplicationResponse,
   type CanvasParameterValueResponse,
 } from "./strategy/api";
 
 /** runtime 三态（DC runtime：backtest/paper/live）。 */
 type Runtime = "backtest" | "paper" | "live";
+type CanvasSource = "research_graph" | "mock_fallback";
 
 /**
  * 策略台顶层子视图（SubTabBar）：
@@ -252,7 +251,6 @@ export function StrategyConsolePage() {
   const [verMenuOpen, setVerMenuOpen] = useState(false);
   const [diffOn, setDiffOn] = useState(false);
   const [traceId, setTraceId] = useState<string | null>(null);
-  const [killArmed, setKillArmed] = useState(true);
   const [ver, setVer] = useState("v3 草稿");
 
   // ── Undo/Redo（{nodes,edges} 快照栈，视口不进栈）──
@@ -792,42 +790,6 @@ export function StrategyConsolePage() {
       .finally(() => setGraphMutationPending(false));
   }
 
-  function firstGraphQroNode(): DomainNode | undefined {
-    return Object.values(nodes).find((node) => Boolean(graphQroId(node)));
-  }
-
-  function recordGraphCanvasPatchMutation(kind: "ghost" | "auto"): void {
-    const targetNode = firstGraphQroNode();
-    const qroId = graphQroId(targetNode);
-    if (!graphProjection || !targetNode || !qroId || graphMutationPending) return;
-    const stamp = Date.now();
-    const patchId = kind === "ghost" ? MOCK_PROPOSAL.patchId : "pt_auto";
-    setSelection({ nodeIds: [targetNode.id], edgeIds: [] });
-    setGraphMutationPending(true);
-    setGraphMutationMsg(null);
-    void applyResearchGraphPatch({
-      command_ref: `canvas_command:strategy_console_apply_${kind}:${qroId}:${stamp}`,
-      source_desk: "strategy",
-      actor_source: "user_manual",
-      target_qro_id: qroId,
-      patch_kind: kind,
-      patch_ref: `canvas_patch:${kind}:strategy_console:${qroId}:${patchId}:${stamp}`,
-      patch_hash: `hash_strategy_console_${kind}_${stamp}`,
-      canonical_command_ref: `canonical:strategy_console_apply_${kind}:${qroId}:${stamp}`,
-      audit_ref: `audit:strategy_console_apply_${kind}:${qroId}:${stamp}`,
-      evidence_refs: [`frontend:StrategyConsolePage:canvas_${kind}_patch_application`],
-    })
-      .then((result: GraphPatchApplicationResponse) => {
-        setGraphMutationMsg(`已应用 Graph patch · ${result.application_ref}`);
-        return fetchResearchGraphCanvasProjection({ limit: 24 });
-      })
-      .then((projection) => {
-        if (projection.nodes.length > 0) installGraphProjection(projection);
-      })
-      .catch((e: Error) => setGraphMutationMsg(`写入失败：${e.message}`))
-      .finally(() => setGraphMutationPending(false));
-  }
-
   function recordGraphCanvasEdgeMutation(edge: DomainEdge): void {
     const targetNode = qroNodeForGraphEdge(edge);
     const qroId = graphQroId(targetNode);
@@ -914,13 +876,10 @@ export function StrategyConsolePage() {
   // ── 接受提议（Ask）：入栈 → 应用 ops → 清提议 → 追加 patch 块 ──
   function acceptProposal(): void {
     if (canvasReadOnly) {
-      if (graphProjection) {
-        recordGraphCanvasPatchMutation("ghost");
-      }
       setProposalLive(false);
       setBlocks((prev) => [
         ...prev,
-        { id: `ro${Date.now()}`, type: "say", text: graphProjection ? "Ghost patch 已应用到 Research Graph，projection 已重拉。" : "当前画布来自 Research Graph 只读投影，未应用 Ghost patch。" },
+        { id: `ro${Date.now()}`, type: "say", text: "MOCK 提议仅用于界面预览；未写入 Research Graph。" },
       ]);
       return;
     }
@@ -971,12 +930,9 @@ export function StrategyConsolePage() {
   // ── Auto/Bypass：事务化加 DrawdownGuard，对话里可整轮撤销 ──
   function applyAuto(): void {
     if (canvasReadOnly) {
-      if (graphProjection) {
-        recordGraphCanvasPatchMutation("auto");
-      }
       setBlocks((prev) => [
         ...prev,
-        { id: `auto_ro${Date.now()}`, type: "say", text: graphProjection ? "Auto patch 已应用到 Research Graph，projection 已重拉。" : "当前画布只读，Auto 未改图。" },
+        { id: `auto_ro${Date.now()}`, type: "say", text: "MOCK Auto 仅用于界面预览；未写入 Research Graph。" },
       ]);
       return;
     }
@@ -1113,11 +1069,13 @@ export function StrategyConsolePage() {
             <Pill tone="warning" title="已发布 Live 只读（B7）">🔒 Live 只读</Pill>
             <button style={topbarGreenBtn} onClick={fork}>⑂ Fork 草稿</button>
             <button
-              style={killArmed ? topbarKillArmedBtn : topbarKillOffBtn}
-              onClick={() => setKillArmed((a) => !a)}
+              style={topbarKillUnavailableBtn}
+              disabled
               aria-label="Kill Switch"
+              title="未连接后端 Kill Switch 状态或控制命令"
+              data-kill-source="unavailable"
             >
-              {killArmed ? "● ARMED" : "○ OFF"}
+              ○ UNAVAILABLE
             </button>
           </>
         )}
@@ -1169,7 +1127,7 @@ export function StrategyConsolePage() {
           );
         })()}
         contextLabel={
-          <span style={{ display: "inline-flex", alignItems: "center", gap: 6 }}>
+          <span data-agent-source="mock_conversation" style={{ display: "inline-flex", alignItems: "center", gap: 6 }}>
             上下文 · 18.4k / 200k <MockBadge label="MOCK 对话" />
           </span>
         }
@@ -1181,6 +1139,7 @@ export function StrategyConsolePage() {
                   <span style={{ color: "var(--desk-ghost)" }}>◇</span>
                   <span style={{ color: "var(--desk-ghost)", fontWeight: 600 }}>{MOCK_PROPOSAL.title}</span>
                   <Pill tone="ghost">Ghost · {MOCK_PROPOSAL.patchId}</Pill>
+                  <MockBadge label="MOCK 提议" />
                 </div>
                 {MOCK_PROPOSAL.diff.map((d, i) => (
                   <div key={i} style={{ fontSize: 11, color: diffTone(d.sign) }}>{d.sign} {d.text}</div>
@@ -1198,7 +1157,7 @@ export function StrategyConsolePage() {
               draft={draft}
               onDraftChange={setDraft}
               onSend={sendAgent}
-              model="sonnet-4.5"
+              model="runtime LLM"
               permissionMode={agentMode}
               branch="strat/weekly-cn"
             />
@@ -1237,6 +1196,8 @@ export function StrategyConsolePage() {
   const canvasSelection: Selection = trace
     ? { nodeIds: trace.path, edgeIds: traceEdgeIds }
     : selection;
+  const canvasSource: CanvasSource = graphProjection ? "research_graph" : "mock_fallback";
+  const usingMockCanvas = canvasSource === "mock_fallback";
   const canvasSourceLabel = graphProjection
     ? `Research Graph · ${graphProjection.total} QRO · 只读`
     : graphProjectionLoading
@@ -1261,18 +1222,18 @@ export function StrategyConsolePage() {
         <span
           style={{
             fontSize: 10.5,
-            color: graphProjection ? "var(--desk-info)" : "var(--desk-text-faint)",
+            color: canvasSource === "research_graph" ? "var(--desk-info)" : "var(--desk-text-faint)",
             maxWidth: 260,
             overflow: "hidden",
             textOverflow: "ellipsis",
             whiteSpace: "nowrap",
           }}
           title={canvasSourceLabel}
-          data-canvas-source={graphProjection ? "research_graph" : "mock_fallback"}
+          data-canvas-source={canvasSource}
         >
           {canvasSourceLabel}
         </span>
-        {!graphProjection && <MockBadge />}
+        {usingMockCanvas && <MockBadge />}
         <span style={{ fontSize: 10.5, color: "var(--desk-text-dim)", marginLeft: 8 }} data-sel-count>
           {selection.nodeIds.length + selection.edgeIds.length > 0
             ? `已选 ${selection.nodeIds.length} 节点 / ${selection.edgeIds.length} 连线`
@@ -1928,14 +1889,9 @@ const purpleBtn: CSSProperties = {
   background: "transparent", border: "1px solid var(--desk-ghost)", color: "var(--desk-ghost)", cursor: "pointer",
   whiteSpace: "nowrap",
 };
-const killArmedBtn: CSSProperties = {
+const killUnavailableBtn: CSSProperties = {
   fontFamily: "inherit", fontSize: 11, padding: "4px 9px", borderRadius: "var(--desk-radius-sm)",
-  background: "transparent", border: "1px solid var(--desk-danger)", color: "var(--desk-danger)", cursor: "pointer",
-  whiteSpace: "nowrap",
-};
-const killOffBtn: CSSProperties = {
-  fontFamily: "inherit", fontSize: 11, padding: "4px 9px", borderRadius: "var(--desk-radius-sm)",
-  background: "transparent", border: "1px solid var(--desk-border)", color: "var(--desk-text-faint)", cursor: "pointer",
+  background: "transparent", border: "1px solid var(--desk-border)", color: "var(--desk-text-faint)", cursor: "not-allowed",
   whiteSpace: "nowrap",
 };
 function iconBtn(enabled: boolean): CSSProperties {
@@ -1956,8 +1912,7 @@ function errBtn(tone: "success" | "danger"): CSSProperties {
 const topbarGhostBtn: CSSProperties = { ...ghostBtn, ...topbarButton };
 const topbarGreenBtn: CSSProperties = { ...greenBtn, ...topbarButton };
 const topbarBlueBtn: CSSProperties = { ...blueBtn, marginTop: 0, ...topbarButton };
-const topbarKillArmedBtn: CSSProperties = { ...killArmedBtn, ...topbarButton };
-const topbarKillOffBtn: CSSProperties = { ...killOffBtn, ...topbarButton };
+const topbarKillUnavailableBtn: CSSProperties = { ...killUnavailableBtn, ...topbarButton };
 function topbarIconBtn(enabled: boolean): CSSProperties {
   return { ...iconBtn(enabled), ...topbarButton };
 }

@@ -34,6 +34,7 @@ from app.training.codegen import load_pit_panel, spec_to_code
 # Row2: ts=2023-12-31 f1=1.5 known_at=2024-04-15 → 重述，as_of 2024-02-01 时未知（应挡）
 # Row3: ts=2024-06-30 f1=9.0 known_at=2024-09-01 → 纯未来泄露行（应挡）
 _AS_OF = "2024-02-01"
+_OWNER_USER_ID = "test-owner"
 
 
 def _bitemporal_panel() -> pd.DataFrame:
@@ -83,6 +84,54 @@ def _req(**kw: Any) -> TrainingRequest:
     return TrainingRequest(**base)
 
 
+def test_confirmatory_train_requires_as_of_known(tmp_path: Path) -> None:
+    svc = TrainingService(root=tmp_path / "training_runs")
+
+    job = svc.train_now(
+        _req(use_context="confirmatory_validation"),
+        _bitemporal_panel(),
+        owner_user_id=_OWNER_USER_ID,
+    )
+
+    assert job.status == "failed"
+    assert "confirmatory" in (job.error or "")
+    assert "as_of_known" in (job.error or "")
+
+
+def test_confirmatory_train_requires_known_at_axis(tmp_path: Path) -> None:
+    svc = TrainingService(root=tmp_path / "training_runs")
+
+    job = svc.train_now(
+        _req(
+            use_context="confirmatory_validation",
+            as_of_known=_AS_OF,
+        ),
+        _bitemporal_panel().drop(columns=["known_at"]),
+        owner_user_id=_OWNER_USER_ID,
+    )
+
+    assert job.status == "failed"
+    assert "known_at" in (job.error or "")
+
+
+def test_confirmatory_train_uses_pit_view(tmp_path: Path, monkeypatch) -> None:
+    captured: dict[str, Any] = {}
+    monkeypatch.setattr("app.training.service.train_model", _spy_train_model(captured))
+    svc = TrainingService(root=tmp_path / "training_runs")
+
+    job = svc.train_now(
+        _req(
+            use_context="confirmatory_validation",
+            as_of_known=_AS_OF,
+        ),
+        _bitemporal_panel(),
+        owner_user_id=_OWNER_USER_ID,
+    )
+
+    assert job.status == "succeeded", job.error
+    assert captured["panel"]["f1"].tolist() == [1.0]
+
+
 # ═══════════ 准则1：train_now ML 进程内路——未来 known_at 行必被挡（look-ahead 守卫） ═══════════
 
 
@@ -95,7 +144,11 @@ def test_train_now_ml_inprocess_blocks_future_known_at(tmp_path: Path, monkeypat
     monkeypatch.setattr("app.training.service.train_model", _spy_train_model(captured))
     svc = TrainingService(root=tmp_path / "training_runs")
 
-    job = svc.train_now(_req(as_of_known=_AS_OF), _bitemporal_panel())
+    job = svc.train_now(
+        _req(as_of_known=_AS_OF),
+        _bitemporal_panel(),
+        owner_user_id=_OWNER_USER_ID,
+    )
 
     assert job.status == "succeeded", job.error
     seen = captured["panel"]
@@ -111,7 +164,11 @@ def test_submit_ml_inprocess_blocks_future_known_at(tmp_path: Path, monkeypatch)
     monkeypatch.setattr("app.training.service.train_model", _spy_train_model(captured))
     svc = TrainingService(root=tmp_path / "training_runs")
 
-    job = svc.submit(_req(as_of_known=_AS_OF), _bitemporal_panel())
+    job = svc.submit(
+        _req(as_of_known=_AS_OF),
+        _bitemporal_panel(),
+        owner_user_id=_OWNER_USER_ID,
+    )
     svc.wait_all(timeout=60)
 
     assert svc.get_job(job.job_id).status == "succeeded"
@@ -125,7 +182,11 @@ def test_train_now_ml_inprocess_latest_known_restatement(tmp_path: Path, monkeyp
     monkeypatch.setattr("app.training.service.train_model", _spy_train_model(captured))
     svc = TrainingService(root=tmp_path / "training_runs")
 
-    svc.train_now(_req(as_of_known="2024-05-01"), _bitemporal_panel())
+    svc.train_now(
+        _req(as_of_known="2024-05-01"),
+        _bitemporal_panel(),
+        owner_user_id=_OWNER_USER_ID,
+    )
 
     assert sorted(captured["panel"]["f1"].tolist()) == [1.5]
     assert 9.0 not in captured["panel"]["f1"].tolist()
@@ -143,7 +204,11 @@ def test_train_now_ml_inprocess_none_is_verbatim(tmp_path: Path, monkeypatch) ->
     monkeypatch.setattr("app.training.service.train_model", _spy_train_model(captured))
     svc = TrainingService(root=tmp_path / "training_runs")
 
-    job = svc.train_now(_req(), _bitemporal_panel())  # as_of_known 缺省
+    job = svc.train_now(
+        _req(),
+        _bitemporal_panel(),
+        owner_user_id=_OWNER_USER_ID,
+    )  # as_of_known 缺省
 
     assert job.status == "succeeded"
     seen = captured["panel"]
@@ -158,7 +223,11 @@ def test_train_now_ml_inprocess_explicit_none_is_verbatim(tmp_path: Path, monkey
     monkeypatch.setattr("app.training.service.train_model", _spy_train_model(captured))
     svc = TrainingService(root=tmp_path / "training_runs")
 
-    svc.train_now(_req(as_of_known=None), _bitemporal_panel())
+    svc.train_now(
+        _req(as_of_known=None),
+        _bitemporal_panel(),
+        owner_user_id=_OWNER_USER_ID,
+    )
 
     assert len(captured["panel"]) == 3
 
@@ -173,7 +242,11 @@ def test_train_now_ml_inprocess_missing_known_at_is_noop(tmp_path: Path, monkeyp
     svc = TrainingService(root=tmp_path / "training_runs")
     panel = _bitemporal_panel().drop(columns=["known_at"])
 
-    job = svc.train_now(_req(as_of_known=_AS_OF), panel)
+    job = svc.train_now(
+        _req(as_of_known=_AS_OF),
+        panel,
+        owner_user_id=_OWNER_USER_ID,
+    )
 
     assert job.status == "succeeded"
     assert len(captured["panel"]) == 3
@@ -195,7 +268,11 @@ def test_train_now_ml_pit_reuses_single_source(tmp_path: Path, monkeypatch) -> N
 
     for aok, expect in [("2024-02-01", [1.0]), ("2024-05-01", [1.5])]:
         captured.clear()
-        svc.train_now(_req(as_of_known=aok), panel)
+        svc.train_now(
+            _req(as_of_known=aok),
+            panel,
+            owner_user_id=_OWNER_USER_ID,
+        )
         via_service = sorted(captured["panel"]["f1"].dropna().tolist())
 
         ref_path = tmp_path / f"ref_{aok}.parquet"
@@ -271,7 +348,9 @@ def test_train_now_ml_pit_real_chain_succeeds(tmp_path: Path) -> None:
     """
     svc = TrainingService(root=tmp_path / "training_runs")
     job = svc.train_now(
-        _req(n_splits=3, as_of_known="2024-06-01"), _big_bitemporal_panel()
+        _req(n_splits=3, as_of_known="2024-06-01"),
+        _big_bitemporal_panel(),
+        owner_user_id=_OWNER_USER_ID,
     )
     assert job.status == "succeeded", job.error
     assert "r2" in job.metrics
@@ -287,13 +366,21 @@ def test_train_now_ml_pit_real_chain_filters_poison(tmp_path: Path) -> None:
     panel = _big_bitemporal_panel()
     panel.loc[panel["known_at"] == datetime(2025, 1, 1, tzinfo=UTC), "label"] = np.nan  # 未来行带毒
     svc = TrainingService(root=tmp_path / "training_runs")
-    job = svc.train_now(_req(n_splits=3, as_of_known="2024-06-01"), panel)
+    job = svc.train_now(
+        _req(n_splits=3, as_of_known="2024-06-01"),
+        panel,
+        owner_user_id=_OWNER_USER_ID,
+    )
     assert job.status == "succeeded", job.error  # 带毒未来行被 PIT 挡 → 训练干净
 
 
 def test_train_now_ml_real_no_as_of_known_unchanged(tmp_path: Path) -> None:
     """不打桩·真 xgboost·无 as_of_known：既有训练逐字不破（向后兼容·新字段缺省零侵入）。"""
     svc = TrainingService(root=tmp_path / "training_runs")
-    job = svc.train_now(_req(n_splits=3), _big_bitemporal_panel())
+    job = svc.train_now(
+        _req(n_splits=3),
+        _big_bitemporal_panel(),
+        owner_user_id=_OWNER_USER_ID,
+    )
     assert job.status == "succeeded", job.error
     assert (Path(job.artifact_dir) / "model.pkl").exists()

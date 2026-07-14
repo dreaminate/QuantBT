@@ -49,6 +49,8 @@ from ..delivery.rdp import PromotionClaim, RDPManifest
 from ..delivery.rdp_gate import validate_rdp
 from ..lineage.spine import (
     LABEL_CUSTOM_METHODOLOGY,
+    LABEL_PRODUCTION_READY,
+    PROMOTION_LABELS,
     LABEL_USER_WAIVED_THEORY,
     LABEL_USER_WAIVED_VALIDATION,
     STRONG_LABELS,
@@ -66,7 +68,12 @@ from ..llm.call_record import (
     verify_record_seal,
 )
 from ..verification.schema import VerdictRecord
-from .mock_honesty import ExecutionBlock, check_execution_blocks
+from .mock_honesty import (
+    GRADE_PRODUCTION,
+    MODE_LIVE,
+    ExecutionBlock,
+    check_execution_blocks,
+)
 
 # —— 门 id（投影/测试据此精确断言抓到哪条门·非泛绿）——
 GATE_MOCK_HONESTY = "gate_mock_honesty"
@@ -201,6 +208,12 @@ class ReleaseCandidate:
     rdp: RDPManifest | None = None
     promotion: PromotionClaim | None = None
 
+    def __post_init__(self) -> None:
+        if self.requested_label and self.requested_label not in PROMOTION_LABELS:
+            raise ValueError(
+                f"requested_label must be one of {sorted(PROMOTION_LABELS)}"
+            )
+
     @property
     def is_strong_label(self) -> bool:
         return self.requested_label in STRONG_LABELS
@@ -209,13 +222,21 @@ class ReleaseCandidate:
     def is_user_waived(self) -> bool:
         """是否走了「用户放宽/跳过严格路径」（§16 ⑥ 触发条件）。"""
 
-        return self.user_waived or self.requested_label in USER_WAIVED_LABELS
+        return (
+            self.user_waived
+            or self.requested_label in USER_WAIVED_LABELS
+            or bool(self.methodology_choice and self.methodology_choice.is_waiver)
+        )
 
 
 # ════════════════════════════════════════════════════════════════════════════
 # §16 工程标准门（逐条·收编已建门 / 新建缺口门）
 # ════════════════════════════════════════════════════════════════════════════
-def gate_mock_honesty(blocks: Sequence[ExecutionBlock]) -> ReleaseGateOutcome:
+def gate_mock_honesty(
+    blocks: Sequence[ExecutionBlock],
+    *,
+    requested_label: str = "",
+) -> ReleaseGateOutcome:
     """§16 ①② no silent mock fallback / no template false success（委派新建 mock_honesty 原语）。"""
 
     violations = check_execution_blocks(tuple(blocks))
@@ -223,6 +244,19 @@ def gate_mock_honesty(blocks: Sequence[ExecutionBlock]) -> ReleaseGateOutcome:
         missing = tuple(f"{v.block_id}:{v.code}" for v in violations)
         reason = "；".join(f"[{v.block_id}] {v.reason}" for v in violations)
         return ReleaseGateOutcome(GATE_MOCK_HONESTY, False, missing, reason)
+    if requested_label == LABEL_PRODUCTION_READY and not any(
+        block.mode == MODE_LIVE and block.result_grade == GRADE_PRODUCTION
+        for block in blocks
+    ):
+        return ReleaseGateOutcome(
+            GATE_MOCK_HONESTY,
+            False,
+            ("production_ready:live_production_execution_block",),
+            (
+                "requested_label='production_ready' requires at least one "
+                "live execution block consumed as a production result"
+            ),
+        )
     return ReleaseGateOutcome(
         GATE_MOCK_HONESTY, True, reason=f"{len(blocks)} 个执行块均过 Mock 诚实核查"
     )
@@ -488,7 +522,10 @@ def evaluate_release(candidate: ReleaseCandidate) -> ReleaseValidation:
     """
 
     outcomes = (
-        gate_mock_honesty(candidate.execution_blocks),
+        gate_mock_honesty(
+            candidate.execution_blocks,
+            requested_label=candidate.requested_label,
+        ),
         gate_dataset_version(candidate.dataset_versions),
         gate_spine_consistency(candidate),
         gate_methodology_choice(candidate),

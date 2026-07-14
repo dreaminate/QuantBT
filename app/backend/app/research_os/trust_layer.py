@@ -4,7 +4,9 @@ from __future__ import annotations
 
 import base64
 import json
+import os
 import re
+import threading
 from dataclasses import asdict, dataclass, is_dataclass
 from enum import Enum
 from pathlib import Path
@@ -15,6 +17,7 @@ from cryptography.hazmat.primitives import serialization
 from cryptography.hazmat.primitives.asymmetric.ed25519 import Ed25519PublicKey
 
 from ..lineage.ids import content_hash
+from ..cross_process_lock import acquire_exclusive_fd
 
 
 def _tuple(value: Any) -> tuple[Any, ...]:
@@ -82,6 +85,84 @@ def _contains_secret_marker(value: Any) -> bool:
 
 def _canonical_bytes(value: Any) -> bytes:
     return json.dumps(_json_value(value), ensure_ascii=False, sort_keys=True, separators=(",", ":")).encode("utf-8")
+
+
+def _stable_owner_user_id(value: Any) -> str:
+    owner = str(value or "").strip()
+    if not owner:
+        raise ValueError("owner_user_id is required")
+    return owner
+
+
+def _owner_record_key(owner_user_id: Any, record_ref: Any) -> tuple[str, str]:
+    owner = _stable_owner_user_id(owner_user_id)
+    ref = str(record_ref or "").strip()
+    if not ref:
+        raise ValueError("owner-enveloped trust record ref is required")
+    return owner, ref
+
+
+def _append_owner_enveloped_event(
+    path: Path,
+    lock_path: Path,
+    row: dict[str, Any],
+    *,
+    record_field: str,
+    ref_field: str,
+) -> bool:
+    """Append one schema-v2 event with cross-process retry/collision safety."""
+
+    if row.get("schema_version") != 2:
+        raise ValueError("owner-enveloped trust event requires schema_version=2")
+    owner = _stable_owner_user_id(row.get("owner_user_id"))
+    raw = row.get(record_field)
+    if not isinstance(raw, dict):
+        raise ValueError(f"owner-enveloped trust event missing {record_field}")
+    record_ref = str(raw.get(ref_field) or "").strip()
+    if not record_ref:
+        raise ValueError(f"owner-enveloped trust event missing {ref_field}")
+    encoded = json.dumps(row, ensure_ascii=False, sort_keys=True, separators=(",", ":"))
+    lock_path.parent.mkdir(parents=True, exist_ok=True)
+    lock_fd = os.open(lock_path, os.O_CREAT | os.O_RDWR, 0o600)
+    held = None
+    try:
+        held = acquire_exclusive_fd(lock_fd, timeout_seconds=10.0)
+        if path.exists():
+            with path.open("r", encoding="utf-8") as fh:
+                for line_no, line in enumerate(fh, start=1):
+                    if not line.strip():
+                        continue
+                    try:
+                        existing = json.loads(line)
+                    except Exception as exc:  # noqa: BLE001
+                        raise ValueError(f"invalid persisted trust row at {path}:{line_no}") from exc
+                    existing_raw = existing.get(record_field)
+                    if (
+                        existing.get("event_type") == row.get("event_type")
+                        and existing.get("owner_user_id") == owner
+                        and isinstance(existing_raw, dict)
+                        and str(existing_raw.get(ref_field) or "").strip() == record_ref
+                    ):
+                        existing_encoded = json.dumps(
+                            existing,
+                            ensure_ascii=False,
+                            sort_keys=True,
+                            separators=(",", ":"),
+                        )
+                        if existing_encoded == encoded:
+                            return False
+                        raise ValueError(
+                            f"owner-enveloped trust record collision owner={owner!r} ref={record_ref!r}"
+                        )
+        with path.open("a", encoding="utf-8") as fh:
+            fh.write(encoded + "\n")
+            fh.flush()
+            os.fsync(fh.fileno())
+        return True
+    finally:
+        if held is not None:
+            held.release()
+        os.close(lock_fd)
 
 
 def _load_ed25519_public_key(public_key_pem: str) -> Ed25519PublicKey:
@@ -1300,6 +1381,8 @@ def record_trust_release_approval(
         raise ValueError("trust_release_approval_pressure_run_gate_mismatch")
     if expert_review.release_ref != release_ref:
         raise ValueError("trust_release_approval_expert_review_release_mismatch")
+    if expert_review.artifact_ref != str(artifact_ref or ""):
+        raise ValueError("trust_release_approval_expert_review_artifact_mismatch")
 
     for decision in (
         validate_trust_release_gate(release_gate),
@@ -1633,15 +1716,17 @@ def trust_release_approval_record_from_dict(data: dict[str, Any]) -> TrustReleas
 
 
 class PersistentTrustDisclosureRegistry:
-    """Append-only JSONL store for trust claims and disclosure records."""
+    """Owner-enveloped append-only store for trust disclosures and reviews."""
 
     def __init__(self, path: str | Path) -> None:
         self._path = Path(path)
         self._path.parent.mkdir(parents=True, exist_ok=True)
-        self._claims: dict[str, TrustClaimRecord] = {}
-        self._independence_disclosures: dict[str, FunctionalIndependenceDisclosure] = {}
-        self._expert_reviews: dict[str, ExternalExpertReviewRecord] = {}
-        self._user_autonomy_records: dict[str, UserAutonomyRecord] = {}
+        self._lock_path = self._path.with_suffix(self._path.suffix + ".lock")
+        self._lock = threading.RLock()
+        self._claims: dict[tuple[str, str], TrustClaimRecord] = {}
+        self._independence_disclosures: dict[tuple[str, str], FunctionalIndependenceDisclosure] = {}
+        self._expert_reviews: dict[tuple[str, str], ExternalExpertReviewRecord] = {}
+        self._user_autonomy_records: dict[tuple[str, str], UserAutonomyRecord] = {}
         self._load_existing()
 
     @property
@@ -1661,153 +1746,210 @@ class PersistentTrustDisclosureRegistry:
                 except Exception as exc:  # noqa: BLE001
                     raise ValueError(f"invalid persisted Trust Disclosure row at {self._path}:{line_no}") from exc
 
-    def _append_event(self, row: dict[str, Any]) -> None:
-        with self._path.open("a", encoding="utf-8") as fh:
-            fh.write(json.dumps(row, ensure_ascii=False, sort_keys=True, separators=(",", ":")) + "\n")
-            fh.flush()
-
     def _apply_row(self, row: dict[str, Any], *, persist: bool) -> Any:
-        if row.get("schema_version") != 1:
-            raise ValueError("unsupported Trust Disclosure schema_version")
+        if row.get("schema_version") != 2:
+            raise ValueError("unsupported or ownerless Trust Disclosure schema_version")
+        owner = _stable_owner_user_id(row.get("owner_user_id"))
         event_type = row.get("event_type")
         if event_type == "trust_claim_recorded":
             raw = row.get("trust_claim")
             if not isinstance(raw, dict):
                 raise ValueError("Trust Disclosure event missing trust_claim")
-            return self.record_claim(trust_claim_record_from_dict(raw), persist=persist)
+            return self.record_claim(trust_claim_record_from_dict(raw), owner_user_id=owner, persist=persist)
         if event_type == "functional_independence_disclosure_recorded":
             raw = row.get("independence_disclosure")
             if not isinstance(raw, dict):
                 raise ValueError("Trust Disclosure event missing independence_disclosure")
             return self.record_independence_disclosure(
                 functional_independence_disclosure_from_dict(raw),
+                owner_user_id=owner,
                 persist=persist,
             )
         if event_type == "external_expert_review_recorded":
             raw = row.get("external_expert_review")
             if not isinstance(raw, dict):
                 raise ValueError("Trust Disclosure event missing external_expert_review")
-            return self.record_external_expert_review(external_expert_review_from_dict(raw), persist=persist)
+            return self.record_external_expert_review(
+                external_expert_review_from_dict(raw),
+                owner_user_id=owner,
+                persist=persist,
+            )
         if event_type == "user_autonomy_recorded":
             raw = row.get("user_autonomy")
             if not isinstance(raw, dict):
                 raise ValueError("Trust Disclosure event missing user_autonomy")
-            return self.record_user_autonomy(user_autonomy_record_from_dict(raw), persist=persist)
+            return self.record_user_autonomy(
+                user_autonomy_record_from_dict(raw),
+                owner_user_id=owner,
+                persist=persist,
+            )
         raise ValueError(f"unknown Trust Disclosure event_type={event_type!r}")
 
     def record_claim(
         self,
         record: TrustClaimRecord,
         *,
+        owner_user_id: str,
         persist: bool = True,
     ) -> TrustClaimRecord:
         decision = validate_trust_claim(record)
         if not decision.accepted:
             raise ValueError(_decision_message(decision))
-        self._claims[record.claim_ref] = record
-        if persist:
-            self._append_event(
-                {
-                    "schema_version": 1,
-                    "event_type": "trust_claim_recorded",
-                    "trust_claim": _json_value(record),
-                }
-            )
-        return record
+        key = _owner_record_key(owner_user_id, record.claim_ref)
+        row = {
+            "schema_version": 2,
+            "owner_user_id": key[0],
+            "event_type": "trust_claim_recorded",
+            "trust_claim": _json_value(record),
+        }
+        with self._lock:
+            existing = self._claims.get(key)
+            if existing is not None and existing != record:
+                raise ValueError(f"owner-enveloped trust record collision owner={key[0]!r} ref={key[1]!r}")
+            if persist:
+                _append_owner_enveloped_event(
+                    self._path, self._lock_path, row, record_field="trust_claim", ref_field="claim_ref"
+                )
+            self._claims[key] = record
+            return record
 
     def record_independence_disclosure(
         self,
         record: FunctionalIndependenceDisclosure,
         *,
+        owner_user_id: str,
         persist: bool = True,
     ) -> FunctionalIndependenceDisclosure:
         decision = validate_functional_independence(record)
         if not decision.accepted:
             raise ValueError(_decision_message(decision))
-        self._independence_disclosures[record.disclosure_ref] = record
-        if persist:
-            self._append_event(
-                {
-                    "schema_version": 1,
-                    "event_type": "functional_independence_disclosure_recorded",
-                    "independence_disclosure": _json_value(record),
-                }
-            )
-        return record
+        key = _owner_record_key(owner_user_id, record.disclosure_ref)
+        row = {
+            "schema_version": 2,
+            "owner_user_id": key[0],
+            "event_type": "functional_independence_disclosure_recorded",
+            "independence_disclosure": _json_value(record),
+        }
+        with self._lock:
+            existing = self._independence_disclosures.get(key)
+            if existing is not None and existing != record:
+                raise ValueError(f"owner-enveloped trust record collision owner={key[0]!r} ref={key[1]!r}")
+            if persist:
+                _append_owner_enveloped_event(
+                    self._path,
+                    self._lock_path,
+                    row,
+                    record_field="independence_disclosure",
+                    ref_field="disclosure_ref",
+                )
+            self._independence_disclosures[key] = record
+            return record
 
     def record_user_autonomy(
         self,
         record: UserAutonomyRecord,
         *,
+        owner_user_id: str,
         persist: bool = True,
     ) -> UserAutonomyRecord:
         decision = validate_user_autonomy(record)
         if not decision.accepted:
             raise ValueError(_decision_message(decision))
-        self._user_autonomy_records[record.choice_ref] = record
-        if persist:
-            self._append_event(
-                {
-                    "schema_version": 1,
-                    "event_type": "user_autonomy_recorded",
-                    "user_autonomy": _json_value(record),
-                }
-            )
-        return record
+        key = _owner_record_key(owner_user_id, record.choice_ref)
+        row = {
+            "schema_version": 2,
+            "owner_user_id": key[0],
+            "event_type": "user_autonomy_recorded",
+            "user_autonomy": _json_value(record),
+        }
+        with self._lock:
+            existing = self._user_autonomy_records.get(key)
+            if existing is not None and existing != record:
+                raise ValueError(f"owner-enveloped trust record collision owner={key[0]!r} ref={key[1]!r}")
+            if persist:
+                _append_owner_enveloped_event(
+                    self._path, self._lock_path, row, record_field="user_autonomy", ref_field="choice_ref"
+                )
+            self._user_autonomy_records[key] = record
+            return record
 
     def record_external_expert_review(
         self,
         record: ExternalExpertReviewRecord,
         *,
+        owner_user_id: str,
         persist: bool = True,
     ) -> ExternalExpertReviewRecord:
         decision = validate_external_expert_review(record)
         if not decision.accepted:
             raise ValueError(_decision_message(decision))
-        self._expert_reviews[record.review_ref] = record
-        if persist:
-            self._append_event(
-                {
-                    "schema_version": 1,
-                    "event_type": "external_expert_review_recorded",
-                    "external_expert_review": _json_value(record),
-                }
-            )
-        return record
+        key = _owner_record_key(owner_user_id, record.review_ref)
+        row = {
+            "schema_version": 2,
+            "owner_user_id": key[0],
+            "event_type": "external_expert_review_recorded",
+            "external_expert_review": _json_value(record),
+        }
+        with self._lock:
+            existing = self._expert_reviews.get(key)
+            if existing is not None and existing != record:
+                raise ValueError(f"owner-enveloped trust record collision owner={key[0]!r} ref={key[1]!r}")
+            if persist:
+                _append_owner_enveloped_event(
+                    self._path,
+                    self._lock_path,
+                    row,
+                    record_field="external_expert_review",
+                    ref_field="review_ref",
+                )
+            self._expert_reviews[key] = record
+            return record
 
-    def claim(self, claim_ref: str) -> TrustClaimRecord:
-        return self._claims[claim_ref]
+    def claim(self, claim_ref: str, *, owner_user_id: str) -> TrustClaimRecord:
+        return self._claims[_owner_record_key(owner_user_id, claim_ref)]
 
-    def independence_disclosure(self, disclosure_ref: str) -> FunctionalIndependenceDisclosure:
-        return self._independence_disclosures[disclosure_ref]
+    def independence_disclosure(
+        self, disclosure_ref: str, *, owner_user_id: str
+    ) -> FunctionalIndependenceDisclosure:
+        return self._independence_disclosures[_owner_record_key(owner_user_id, disclosure_ref)]
 
-    def external_expert_review(self, review_ref: str) -> ExternalExpertReviewRecord:
-        return self._expert_reviews[review_ref]
+    def external_expert_review(
+        self, review_ref: str, *, owner_user_id: str
+    ) -> ExternalExpertReviewRecord:
+        return self._expert_reviews[_owner_record_key(owner_user_id, review_ref)]
 
-    def user_autonomy(self, choice_ref: str) -> UserAutonomyRecord:
-        return self._user_autonomy_records[choice_ref]
+    def user_autonomy(self, choice_ref: str, *, owner_user_id: str) -> UserAutonomyRecord:
+        return self._user_autonomy_records[_owner_record_key(owner_user_id, choice_ref)]
 
-    def claims(self) -> list[TrustClaimRecord]:
-        return list(self._claims.values())
+    def claims(self, *, owner_user_id: str) -> list[TrustClaimRecord]:
+        owner = _stable_owner_user_id(owner_user_id)
+        return [record for (record_owner, _), record in self._claims.items() if record_owner == owner]
 
-    def independence_disclosures(self) -> list[FunctionalIndependenceDisclosure]:
-        return list(self._independence_disclosures.values())
+    def independence_disclosures(
+        self, *, owner_user_id: str
+    ) -> list[FunctionalIndependenceDisclosure]:
+        owner = _stable_owner_user_id(owner_user_id)
+        return [record for (record_owner, _), record in self._independence_disclosures.items() if record_owner == owner]
 
-    def external_expert_reviews(self) -> list[ExternalExpertReviewRecord]:
-        return list(self._expert_reviews.values())
+    def external_expert_reviews(self, *, owner_user_id: str) -> list[ExternalExpertReviewRecord]:
+        owner = _stable_owner_user_id(owner_user_id)
+        return [record for (record_owner, _), record in self._expert_reviews.items() if record_owner == owner]
 
-    def user_autonomy_records(self) -> list[UserAutonomyRecord]:
-        return list(self._user_autonomy_records.values())
+    def user_autonomy_records(self, *, owner_user_id: str) -> list[UserAutonomyRecord]:
+        owner = _stable_owner_user_id(owner_user_id)
+        return [record for (record_owner, _), record in self._user_autonomy_records.items() if record_owner == owner]
 
 
 class PersistentExternalExpertSignatureRegistry:
-    """Append-only JSONL store for reviewer identities and verified signatures."""
+    """Owner-enveloped store for reviewer identities and verified signatures."""
 
     def __init__(self, path: str | Path) -> None:
         self._path = Path(path)
         self._path.parent.mkdir(parents=True, exist_ok=True)
-        self._identities: dict[str, ExternalReviewerIdentityRecord] = {}
-        self._signatures: dict[str, ExternalExpertSignatureRecord] = {}
+        self._lock_path = self._path.with_suffix(self._path.suffix + ".lock")
+        self._lock = threading.RLock()
+        self._identities: dict[tuple[str, str], ExternalReviewerIdentityRecord] = {}
+        self._signatures: dict[tuple[str, str], ExternalExpertSignatureRecord] = {}
         self._load_existing()
 
     @property
@@ -1827,50 +1969,75 @@ class PersistentExternalExpertSignatureRegistry:
                 except Exception as exc:  # noqa: BLE001
                     raise ValueError(f"invalid persisted External Expert Signature row at {self._path}:{line_no}") from exc
 
-    def _append_event(self, row: dict[str, Any]) -> None:
-        with self._path.open("a", encoding="utf-8") as fh:
-            fh.write(json.dumps(row, ensure_ascii=False, sort_keys=True, separators=(",", ":")) + "\n")
-            fh.flush()
-
     def _apply_row(self, row: dict[str, Any], *, persist: bool) -> Any:
-        if row.get("schema_version") != 1:
-            raise ValueError("unsupported External Expert Signature schema_version")
+        if row.get("schema_version") != 2:
+            raise ValueError("unsupported or ownerless External Expert Signature schema_version")
+        owner = _stable_owner_user_id(row.get("owner_user_id"))
         event_type = row.get("event_type")
         if event_type == "external_reviewer_identity_recorded":
             raw = row.get("external_reviewer_identity")
             if not isinstance(raw, dict):
                 raise ValueError("External Expert Signature event missing external_reviewer_identity")
-            return self.record_identity(external_reviewer_identity_from_dict(raw), persist=persist)
+            return self.record_identity(
+                external_reviewer_identity_from_dict(raw),
+                owner_user_id=owner,
+                persist=persist,
+            )
         if event_type == "external_expert_signature_verified":
             raw = row.get("external_expert_signature")
             if not isinstance(raw, dict):
                 raise ValueError("External Expert Signature event missing external_expert_signature")
             record = external_expert_signature_from_dict(raw)
-            self._signatures[record.verified_signature_ref] = record
-            if persist:
-                self._append_event(row)
-            return record
+            key = _owner_record_key(owner, record.verified_signature_ref)
+            with self._lock:
+                existing = self._signatures.get(key)
+                if existing is not None and existing != record:
+                    raise ValueError(
+                        f"owner-enveloped trust record collision owner={key[0]!r} ref={key[1]!r}"
+                    )
+                if persist:
+                    _append_owner_enveloped_event(
+                        self._path,
+                        self._lock_path,
+                        row,
+                        record_field="external_expert_signature",
+                        ref_field="verified_signature_ref",
+                    )
+                self._signatures[key] = record
+                return record
         raise ValueError(f"unknown External Expert Signature event_type={event_type!r}")
 
     def record_identity(
         self,
         record: ExternalReviewerIdentityRecord,
         *,
+        owner_user_id: str,
         persist: bool = True,
     ) -> ExternalReviewerIdentityRecord:
         decision = validate_external_reviewer_identity(record)
         if not decision.accepted:
             raise ValueError(_decision_message(decision))
-        self._identities[record.identity_ref] = record
-        if persist:
-            self._append_event(
-                {
-                    "schema_version": 1,
-                    "event_type": "external_reviewer_identity_recorded",
-                    "external_reviewer_identity": _json_value(record),
-                }
-            )
-        return record
+        key = _owner_record_key(owner_user_id, record.identity_ref)
+        row = {
+            "schema_version": 2,
+            "owner_user_id": key[0],
+            "event_type": "external_reviewer_identity_recorded",
+            "external_reviewer_identity": _json_value(record),
+        }
+        with self._lock:
+            existing = self._identities.get(key)
+            if existing is not None and existing != record:
+                raise ValueError(f"owner-enveloped trust record collision owner={key[0]!r} ref={key[1]!r}")
+            if persist:
+                _append_owner_enveloped_event(
+                    self._path,
+                    self._lock_path,
+                    row,
+                    record_field="external_reviewer_identity",
+                    ref_field="identity_ref",
+                )
+            self._identities[key] = record
+            return record
 
     def record_signature(
         self,
@@ -1881,9 +2048,11 @@ class PersistentExternalExpertSignatureRegistry:
         attestation_ref: str | None = None,
         verified_signature_ref: str | None = None,
         verified_at: str | None = None,
+        owner_user_id: str,
         persist: bool = True,
     ) -> ExternalExpertSignatureRecord:
-        identity = self._identities[str(identity_ref or "")]
+        owner = _stable_owner_user_id(owner_user_id)
+        identity = self._identities[_owner_record_key(owner, identity_ref)]
         payload = external_expert_review_signature_payload(review)
         payload_hash = "sha16:" + content_hash({"payload": payload.decode("utf-8")})
         record = ExternalExpertSignatureRecord(
@@ -1901,37 +2070,54 @@ class PersistentExternalExpertSignatureRegistry:
         decision = validate_external_expert_signature(record, review=review, identity=identity)
         if not decision.accepted:
             raise ValueError(_decision_message(decision))
-        self._signatures[record.verified_signature_ref] = record
-        if persist:
-            self._append_event(
-                {
-                    "schema_version": 1,
-                    "event_type": "external_expert_signature_verified",
-                    "external_expert_signature": _json_value(record),
-                }
-            )
-        return record
+        key = _owner_record_key(owner, record.verified_signature_ref)
+        row = {
+            "schema_version": 2,
+            "owner_user_id": owner,
+            "event_type": "external_expert_signature_verified",
+            "external_expert_signature": _json_value(record),
+        }
+        with self._lock:
+            existing = self._signatures.get(key)
+            if existing is not None and existing != record:
+                raise ValueError(f"owner-enveloped trust record collision owner={key[0]!r} ref={key[1]!r}")
+            if persist:
+                _append_owner_enveloped_event(
+                    self._path,
+                    self._lock_path,
+                    row,
+                    record_field="external_expert_signature",
+                    ref_field="verified_signature_ref",
+                )
+            self._signatures[key] = record
+            return record
 
-    def identity(self, identity_ref: str) -> ExternalReviewerIdentityRecord:
-        return self._identities[identity_ref]
+    def identity(self, identity_ref: str, *, owner_user_id: str) -> ExternalReviewerIdentityRecord:
+        return self._identities[_owner_record_key(owner_user_id, identity_ref)]
 
-    def signature(self, verified_signature_ref: str) -> ExternalExpertSignatureRecord:
-        return self._signatures[verified_signature_ref]
+    def signature(
+        self, verified_signature_ref: str, *, owner_user_id: str
+    ) -> ExternalExpertSignatureRecord:
+        return self._signatures[_owner_record_key(owner_user_id, verified_signature_ref)]
 
-    def identities(self) -> list[ExternalReviewerIdentityRecord]:
-        return list(self._identities.values())
+    def identities(self, *, owner_user_id: str) -> list[ExternalReviewerIdentityRecord]:
+        owner = _stable_owner_user_id(owner_user_id)
+        return [record for (record_owner, _), record in self._identities.items() if record_owner == owner]
 
-    def signatures(self) -> list[ExternalExpertSignatureRecord]:
-        return list(self._signatures.values())
+    def signatures(self, *, owner_user_id: str) -> list[ExternalExpertSignatureRecord]:
+        owner = _stable_owner_user_id(owner_user_id)
+        return [record for (record_owner, _), record in self._signatures.items() if record_owner == owner]
 
 
 class PersistentTrustReleaseCheckRegistry:
-    """Append-only JSONL store for release trust check evidence."""
+    """Owner-enveloped append-only store for release trust check evidence."""
 
     def __init__(self, path: str | Path) -> None:
         self._path = Path(path)
         self._path.parent.mkdir(parents=True, exist_ok=True)
-        self._checks: dict[str, TrustReleaseCheckRecord] = {}
+        self._lock_path = self._path.with_suffix(self._path.suffix + ".lock")
+        self._lock = threading.RLock()
+        self._checks: dict[tuple[str, str], TrustReleaseCheckRecord] = {}
         self._load_existing()
 
     @property
@@ -1951,56 +2137,63 @@ class PersistentTrustReleaseCheckRegistry:
                 except Exception as exc:  # noqa: BLE001
                     raise ValueError(f"invalid persisted Trust Release Check row at {self._path}:{line_no}") from exc
 
-    def _append_event(self, row: dict[str, Any]) -> None:
-        with self._path.open("a", encoding="utf-8") as fh:
-            fh.write(json.dumps(row, ensure_ascii=False, sort_keys=True, separators=(",", ":")) + "\n")
-            fh.flush()
-
     def _apply_row(self, row: dict[str, Any], *, persist: bool) -> TrustReleaseCheckRecord:
-        if row.get("schema_version") != 1:
-            raise ValueError("unsupported Trust Release Check schema_version")
+        if row.get("schema_version") != 2:
+            raise ValueError("unsupported or ownerless Trust Release Check schema_version")
+        owner = _stable_owner_user_id(row.get("owner_user_id"))
         if row.get("event_type") != "trust_release_check_recorded":
             raise ValueError(f"unknown Trust Release Check event_type={row.get('event_type')!r}")
         raw = row.get("release_check")
         if not isinstance(raw, dict):
             raise ValueError("Trust Release Check event missing release_check")
         record = trust_release_check_record_from_dict(raw)
-        return self.record_check(record, persist=persist)
+        return self.record_check(record, owner_user_id=owner, persist=persist)
 
     def record_check(
         self,
         record: TrustReleaseCheckRecord,
         *,
+        owner_user_id: str,
         persist: bool = True,
     ) -> TrustReleaseCheckRecord:
         decision = validate_trust_release_check(record)
         if not decision.accepted:
             raise ValueError(_decision_message(decision))
-        self._checks[record.check_ref] = record
-        if persist:
-            self._append_event(
-                {
-                    "schema_version": 1,
-                    "event_type": "trust_release_check_recorded",
-                    "release_check": _json_value(record),
-                }
-            )
-        return record
+        key = _owner_record_key(owner_user_id, record.check_ref)
+        row = {
+            "schema_version": 2,
+            "owner_user_id": key[0],
+            "event_type": "trust_release_check_recorded",
+            "release_check": _json_value(record),
+        }
+        with self._lock:
+            existing = self._checks.get(key)
+            if existing is not None and existing != record:
+                raise ValueError(f"owner-enveloped trust record collision owner={key[0]!r} ref={key[1]!r}")
+            if persist:
+                _append_owner_enveloped_event(
+                    self._path, self._lock_path, row, record_field="release_check", ref_field="check_ref"
+                )
+            self._checks[key] = record
+            return record
 
-    def check(self, check_ref: str) -> TrustReleaseCheckRecord:
-        return self._checks[check_ref]
+    def check(self, check_ref: str, *, owner_user_id: str) -> TrustReleaseCheckRecord:
+        return self._checks[_owner_record_key(owner_user_id, check_ref)]
 
-    def checks(self) -> list[TrustReleaseCheckRecord]:
-        return list(self._checks.values())
+    def checks(self, *, owner_user_id: str) -> list[TrustReleaseCheckRecord]:
+        owner = _stable_owner_user_id(owner_user_id)
+        return [record for (record_owner, _), record in self._checks.items() if record_owner == owner]
 
 
 class PersistentTrustPressureRunRegistry:
-    """Append-only JSONL store for local trust pressure runner records."""
+    """Owner-enveloped append-only store for local trust pressure runs."""
 
     def __init__(self, path: str | Path) -> None:
         self._path = Path(path)
         self._path.parent.mkdir(parents=True, exist_ok=True)
-        self._runs: dict[str, TrustPressureRunRecord] = {}
+        self._lock_path = self._path.with_suffix(self._path.suffix + ".lock")
+        self._lock = threading.RLock()
+        self._runs: dict[tuple[str, str], TrustPressureRunRecord] = {}
         self._load_existing()
 
     @property
@@ -2020,56 +2213,63 @@ class PersistentTrustPressureRunRegistry:
                 except Exception as exc:  # noqa: BLE001
                     raise ValueError(f"invalid persisted Trust Pressure Run row at {self._path}:{line_no}") from exc
 
-    def _append_event(self, row: dict[str, Any]) -> None:
-        with self._path.open("a", encoding="utf-8") as fh:
-            fh.write(json.dumps(row, ensure_ascii=False, sort_keys=True, separators=(",", ":")) + "\n")
-            fh.flush()
-
     def _apply_row(self, row: dict[str, Any], *, persist: bool) -> TrustPressureRunRecord:
-        if row.get("schema_version") != 1:
-            raise ValueError("unsupported Trust Pressure Run schema_version")
+        if row.get("schema_version") != 2:
+            raise ValueError("unsupported or ownerless Trust Pressure Run schema_version")
+        owner = _stable_owner_user_id(row.get("owner_user_id"))
         if row.get("event_type") != "trust_pressure_run_recorded":
             raise ValueError(f"unknown Trust Pressure Run event_type={row.get('event_type')!r}")
         raw = row.get("pressure_run")
         if not isinstance(raw, dict):
             raise ValueError("Trust Pressure Run event missing pressure_run")
         record = trust_pressure_run_record_from_dict(raw)
-        return self.record_run(record, persist=persist)
+        return self.record_run(record, owner_user_id=owner, persist=persist)
 
     def record_run(
         self,
         record: TrustPressureRunRecord,
         *,
+        owner_user_id: str,
         persist: bool = True,
     ) -> TrustPressureRunRecord:
         decision = validate_trust_pressure_run(record)
         if not decision.accepted:
             raise ValueError(_decision_message(decision))
-        self._runs[record.runner_ref] = record
-        if persist:
-            self._append_event(
-                {
-                    "schema_version": 1,
-                    "event_type": "trust_pressure_run_recorded",
-                    "pressure_run": _json_value(record),
-                }
-            )
-        return record
+        key = _owner_record_key(owner_user_id, record.runner_ref)
+        row = {
+            "schema_version": 2,
+            "owner_user_id": key[0],
+            "event_type": "trust_pressure_run_recorded",
+            "pressure_run": _json_value(record),
+        }
+        with self._lock:
+            existing = self._runs.get(key)
+            if existing is not None and existing != record:
+                raise ValueError(f"owner-enveloped trust record collision owner={key[0]!r} ref={key[1]!r}")
+            if persist:
+                _append_owner_enveloped_event(
+                    self._path, self._lock_path, row, record_field="pressure_run", ref_field="runner_ref"
+                )
+            self._runs[key] = record
+            return record
 
-    def run(self, runner_ref: str) -> TrustPressureRunRecord:
-        return self._runs[runner_ref]
+    def run(self, runner_ref: str, *, owner_user_id: str) -> TrustPressureRunRecord:
+        return self._runs[_owner_record_key(owner_user_id, runner_ref)]
 
-    def runs(self) -> list[TrustPressureRunRecord]:
-        return list(self._runs.values())
+    def runs(self, *, owner_user_id: str) -> list[TrustPressureRunRecord]:
+        owner = _stable_owner_user_id(owner_user_id)
+        return [record for (record_owner, _), record in self._runs.items() if record_owner == owner]
 
 
 class PersistentTrustReleaseApprovalRegistry:
-    """Append-only JSONL store for trust release approval workflow records."""
+    """Owner-enveloped append-only store for trust release approvals."""
 
     def __init__(self, path: str | Path) -> None:
         self._path = Path(path)
         self._path.parent.mkdir(parents=True, exist_ok=True)
-        self._approvals: dict[str, TrustReleaseApprovalRecord] = {}
+        self._lock_path = self._path.with_suffix(self._path.suffix + ".lock")
+        self._lock = threading.RLock()
+        self._approvals: dict[tuple[str, str], TrustReleaseApprovalRecord] = {}
         self._load_existing()
 
     @property
@@ -2089,56 +2289,67 @@ class PersistentTrustReleaseApprovalRegistry:
                 except Exception as exc:  # noqa: BLE001
                     raise ValueError(f"invalid persisted Trust Release Approval row at {self._path}:{line_no}") from exc
 
-    def _append_event(self, row: dict[str, Any]) -> None:
-        with self._path.open("a", encoding="utf-8") as fh:
-            fh.write(json.dumps(row, ensure_ascii=False, sort_keys=True, separators=(",", ":")) + "\n")
-            fh.flush()
-
     def _apply_row(self, row: dict[str, Any], *, persist: bool) -> TrustReleaseApprovalRecord:
-        if row.get("schema_version") != 1:
-            raise ValueError("unsupported Trust Release Approval schema_version")
+        if row.get("schema_version") != 2:
+            raise ValueError("unsupported or ownerless Trust Release Approval schema_version")
+        owner = _stable_owner_user_id(row.get("owner_user_id"))
         if row.get("event_type") != "trust_release_approval_recorded":
             raise ValueError(f"unknown Trust Release Approval event_type={row.get('event_type')!r}")
         raw = row.get("release_approval")
         if not isinstance(raw, dict):
             raise ValueError("Trust Release Approval event missing release_approval")
         record = trust_release_approval_record_from_dict(raw)
-        return self.record_approval(record, persist=persist)
+        return self.record_approval(record, owner_user_id=owner, persist=persist)
 
     def record_approval(
         self,
         record: TrustReleaseApprovalRecord,
         *,
+        owner_user_id: str,
         persist: bool = True,
     ) -> TrustReleaseApprovalRecord:
         decision = validate_trust_release_approval(record)
         if not decision.accepted:
             raise ValueError(_decision_message(decision))
-        self._approvals[record.approval_ref] = record
-        if persist:
-            self._append_event(
-                {
-                    "schema_version": 1,
-                    "event_type": "trust_release_approval_recorded",
-                    "release_approval": _json_value(record),
-                }
-            )
-        return record
+        key = _owner_record_key(owner_user_id, record.approval_ref)
+        row = {
+            "schema_version": 2,
+            "owner_user_id": key[0],
+            "event_type": "trust_release_approval_recorded",
+            "release_approval": _json_value(record),
+        }
+        with self._lock:
+            existing = self._approvals.get(key)
+            if existing is not None and existing != record:
+                raise ValueError(f"owner-enveloped trust record collision owner={key[0]!r} ref={key[1]!r}")
+            if persist:
+                _append_owner_enveloped_event(
+                    self._path,
+                    self._lock_path,
+                    row,
+                    record_field="release_approval",
+                    ref_field="approval_ref",
+                )
+            self._approvals[key] = record
+            return record
 
-    def approval(self, approval_ref: str) -> TrustReleaseApprovalRecord:
-        return self._approvals[approval_ref]
+    def approval(self, approval_ref: str, *, owner_user_id: str) -> TrustReleaseApprovalRecord:
+        return self._approvals[_owner_record_key(owner_user_id, approval_ref)]
 
-    def approvals(self) -> list[TrustReleaseApprovalRecord]:
-        return list(self._approvals.values())
+    def approvals(self, *, owner_user_id: str) -> list[TrustReleaseApprovalRecord]:
+        owner = _stable_owner_user_id(owner_user_id)
+        return [record for (record_owner, _), record in self._approvals.items() if record_owner == owner]
 
 
 class PersistentTrustReleaseGateRegistry:
-    """Append-only JSONL store for release trust gate evidence."""
+    """Owner-enveloped append-only store for release trust gate evidence."""
 
     def __init__(self, path: str | Path) -> None:
         self._path = Path(path)
         self._path.parent.mkdir(parents=True, exist_ok=True)
-        self._gates: dict[str, TrustReleaseGateRecord] = {}
+        self._lock_path = self._path.with_suffix(self._path.suffix + ".lock")
+        self._lock = threading.RLock()
+        self._gates: dict[tuple[str, str], TrustReleaseGateRecord] = {}
         self._load_existing()
 
     @property
@@ -2158,14 +2369,10 @@ class PersistentTrustReleaseGateRegistry:
                 except Exception as exc:  # noqa: BLE001 - bad trust history must block startup.
                     raise ValueError(f"invalid persisted Trust Release Gate row at {self._path}:{line_no}") from exc
 
-    def _append_event(self, row: dict[str, Any]) -> None:
-        with self._path.open("a", encoding="utf-8") as fh:
-            fh.write(json.dumps(row, ensure_ascii=False, sort_keys=True, separators=(",", ":")) + "\n")
-            fh.flush()
-
     def _apply_row(self, row: dict[str, Any], *, persist: bool) -> TrustReleaseGateRecord:
-        if row.get("schema_version") != 1:
-            raise ValueError("unsupported Trust Release Gate schema_version")
+        if row.get("schema_version") != 2:
+            raise ValueError("unsupported or ownerless Trust Release Gate schema_version")
+        owner = _stable_owner_user_id(row.get("owner_user_id"))
         if row.get("event_type") != "trust_release_gate_recorded":
             raise ValueError(f"unknown Trust Release Gate event_type={row.get('event_type')!r}")
         raw = row.get("release_gate")
@@ -2175,32 +2382,42 @@ class PersistentTrustReleaseGateRegistry:
         decision = validate_trust_release_gate(record)
         if not decision.accepted:
             raise ValueError(_decision_message(decision))
-        self._gates[record.release_ref] = record
-        if persist:
-            self._append_event(
-                {
-                    "schema_version": 1,
-                    "event_type": "trust_release_gate_recorded",
-                    "release_gate": _json_value(record),
-                }
-            )
-        return record
+        key = _owner_record_key(owner, record.release_ref)
+        with self._lock:
+            existing = self._gates.get(key)
+            if existing is not None and existing != record:
+                raise ValueError(f"owner-enveloped trust record collision owner={key[0]!r} ref={key[1]!r}")
+            if persist:
+                _append_owner_enveloped_event(
+                    self._path,
+                    self._lock_path,
+                    row,
+                    record_field="release_gate",
+                    ref_field="release_ref",
+                )
+            self._gates[key] = record
+            return record
 
-    def record_gate(self, record: TrustReleaseGateRecord) -> TrustReleaseGateRecord:
+    def record_gate(
+        self, record: TrustReleaseGateRecord, *, owner_user_id: str
+    ) -> TrustReleaseGateRecord:
+        owner = _stable_owner_user_id(owner_user_id)
         return self._apply_row(
             {
-                "schema_version": 1,
+                "schema_version": 2,
+                "owner_user_id": owner,
                 "event_type": "trust_release_gate_recorded",
                 "release_gate": _json_value(record),
             },
             persist=True,
         )
 
-    def gate(self, release_ref: str) -> TrustReleaseGateRecord:
-        return self._gates[release_ref]
+    def gate(self, release_ref: str, *, owner_user_id: str) -> TrustReleaseGateRecord:
+        return self._gates[_owner_record_key(owner_user_id, release_ref)]
 
-    def gates(self) -> list[TrustReleaseGateRecord]:
-        return list(self._gates.values())
+    def gates(self, *, owner_user_id: str) -> list[TrustReleaseGateRecord]:
+        owner = _stable_owner_user_id(owner_user_id)
+        return [record for (record_owner, _), record in self._gates.items() if record_owner == owner]
 
 
 __all__ = [

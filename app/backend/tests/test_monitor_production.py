@@ -18,13 +18,63 @@ from app.monitor.production import (
     configure_monitor_runtime,
 )
 from app.research_os import (
-    ExecutionReconciliationRecord,
     PersistentCompilerIRStore,
     PersistentExecutionReconciliationActionRegistry,
     PersistentExecutionReconciliationRegistry,
     PersistentGoalEntrypointCoverageRegistry,
     ResearchGraphStore,
 )
+from app.research_os.entrypoint_evidence import PersistentEntrypointEvidenceRegistry
+from app.research_os.goal_proof_ledger import GoalProofLedger
+from app.research_os.goal_validation_receipts import (
+    PersistentGoalValidationReceiptRegistry,
+)
+from app.research_os.ref_resolution import build_real_ref_resolver
+
+
+def _install_goal_proof_stores(tmp_path, monkeypatch, graph):  # noqa: ANN001
+    proof_ledger = GoalProofLedger(tmp_path / "goal_proof_ledger")
+    compiler_store = PersistentCompilerIRStore(
+        tmp_path / "compiler_ir.jsonl",
+        proof_ledger=proof_ledger,
+        legacy_read_only=True,
+    )
+    validation_store = PersistentGoalValidationReceiptRegistry(
+        tmp_path / "goal_validation_receipts.jsonl",
+        proof_ledger=proof_ledger,
+        legacy_read_only=True,
+    )
+    evidence_store = PersistentEntrypointEvidenceRegistry(
+        tmp_path / "entrypoint_evidence.jsonl",
+        research_graph_store=graph,
+        compiler_store=compiler_store,
+        validation_receipt_registry=validation_store,
+        proof_ledger=proof_ledger,
+        legacy_read_only=True,
+    )
+    coverage_store = PersistentGoalEntrypointCoverageRegistry(
+        tmp_path / "goal_entrypoint_coverage.jsonl",
+        proof_ledger=proof_ledger,
+        legacy_read_only=True,
+    )
+    coverage_store.set_ref_resolver(
+        build_real_ref_resolver(
+            research_graph_store=graph,
+            lifecycle_registry=None,
+            governance_registry=None,
+            rag_index=None,
+            spine_chain_registry=None,
+            compiler_store=compiler_store,
+            goal_validation_receipt_registry=validation_store,
+            platform_source_evidence_registry=evidence_store,
+        )
+    )
+    monkeypatch.setattr(main, "RESEARCH_GRAPH_STORE", graph)
+    monkeypatch.setattr(main, "COMPILER_IR_STORE", compiler_store)
+    monkeypatch.setattr(main, "GOAL_VALIDATION_RECEIPT_REGISTRY", validation_store)
+    monkeypatch.setattr(main, "ENTRYPOINT_EVIDENCE_REGISTRY", evidence_store)
+    monkeypatch.setattr(main, "GOAL_ENTRYPOINT_COVERAGE_REGISTRY", coverage_store)
+    return compiler_store, coverage_store
 
 
 @pytest.fixture
@@ -33,16 +83,14 @@ def monitor_env(tmp_path, monkeypatch):
     manager = LifecycleManager(registry, thresholds=LifecycleThresholds(warning_persist_weeks=2))
     audit_log = ExecutionAuditLog()
     graph = ResearchGraphStore()
-    compiler_store = PersistentCompilerIRStore(tmp_path / "compiler_ir.jsonl")
-    coverage_store = PersistentGoalEntrypointCoverageRegistry(tmp_path / "goal_entrypoint_coverage.jsonl")
+    compiler_store, coverage_store = _install_goal_proof_stores(
+        tmp_path, monkeypatch, graph
+    )
     reconciliations = PersistentExecutionReconciliationRegistry(tmp_path / "execution_reconciliations.jsonl")
     reconciliation_actions = PersistentExecutionReconciliationActionRegistry(tmp_path / "execution_reconciliation_actions.jsonl")
     monkeypatch.setattr(main, "FACTOR_REGISTRY", registry)
     monkeypatch.setattr(main, "FACTOR_LIFECYCLE", manager)
     monkeypatch.setattr(main, "EXECUTION_AUDIT_LOG", audit_log)
-    monkeypatch.setattr(main, "RESEARCH_GRAPH_STORE", graph)
-    monkeypatch.setattr(main, "COMPILER_IR_STORE", compiler_store)
-    monkeypatch.setattr(main, "GOAL_ENTRYPOINT_COVERAGE_REGISTRY", coverage_store)
     monkeypatch.setattr(main, "EXECUTION_RECONCILIATIONS", reconciliations)
     monkeypatch.setattr(main, "EXECUTION_RECONCILIATION_ACTIONS", reconciliation_actions)
     main.app.dependency_overrides[require_user_dependency] = lambda: SimpleNamespace(
@@ -149,10 +197,16 @@ def test_weekly_monitor_endpoint_records_scheduler_qro_without_payload_leakage(m
     assert ir.source_qro_refs == (body["qro_id"],)
     assert ir.graph_command_refs == (body["research_graph_command_id"],)
     assert ir.permission_ref == "monitor.weekly_tick:user_manual"
-    assert ir.validation_refs == (
-        "validation:monitor.weekly_tick:input_guard:v1",
-        f"validation:monitor.weekly_tick:result_hash:{body['research_graph_result_hash']}",
+    assert len(ir.validation_refs) == 1
+    [validation_ref] = ir.validation_refs
+    assert validation_ref.startswith("goal_validation_receipt:")
+    receipt = main.GOAL_VALIDATION_RECEIPT_REGISTRY.receipt(
+        validation_ref,
+        owner_user_id="tester",
     )
+    assert receipt.subject_qro_refs == (body["qro_id"],)
+    assert receipt.graph_command_refs == (body["research_graph_command_id"],)
+    assert receipt.outcome == "passed"
     assert compiler_pass.entry_source == "scheduler"
     assert compiler_pass.actor_source == "user_manual"
     assert compiler_pass.permission_ref == "monitor.weekly_tick:user_manual"
@@ -184,42 +238,25 @@ def test_weekly_monitor_endpoint_records_scheduler_qro_without_payload_leakage(m
     assert "monitor_secret_alpha" not in str(matching[0])
 
 
-def test_weekly_monitor_endpoint_runs_execution_reconciliation_action_producer(monitor_env) -> None:
+def test_weekly_monitor_endpoint_disables_ownerless_reconciliation_action_producer(
+    monitor_env,
+) -> None:
     client, _registry, _manager, _audit_log = monitor_env
-    main.EXECUTION_RECONCILIATIONS.record_reconciliation(
-        ExecutionReconciliationRecord(
-            order_intent_ref="order_intent:monitor:001",
-            runtime_promotion_ref="runtime_promotion:monitor:001",
-            audit_record_ref="audit:reconciliation:monitor:001",
-            event_refs=("venue_event:monitor:001",),
-            status="needs_reconcile",
-            discrepancy_refs=("missing_reconcile_event",),
-            action_required=True,
-            evidence_refs=("evidence:monitor:reconcile",),
-            recorded_by="tester",
-        )
-    )
 
     first = client.post("/api/monitor/weekly_tick", json={"week": "2024-05-01"})
 
     assert first.status_code == 200, first.text
     producer = first.json()["execution_reconciliation_action_producer"]
-    assert producer["pending_total"] == 1
-    assert producer["created_count"] == 1
-    assert producer["skipped_count"] == 0
-    assert producer["api_place_order_called"] is False
-    assert producer["api_venue_call_called"] is False
-    created = producer["created"][0]
-    assert created["action_kind"] == "request_missing_reconcile"
-    qro = main.RESEARCH_GRAPH_STORE.qro(created["qro_id"])
-    assert qro.output_contract["status"] == "execution_reconciliation_action_recorded"
-    assert qro.output_contract["action_kind"] == "request_missing_reconcile"
+    assert producer == {
+        "status": "disabled_requires_explicit_owner",
+        "created_count": 0,
+        "record_only": True,
+    }
+    assert main.EXECUTION_RECONCILIATION_ACTIONS.actions() == []
 
     second = client.post("/api/monitor/weekly_tick", json={"week": "2024-05-01"})
     assert second.status_code == 200, second.text
-    second_producer = second.json()["execution_reconciliation_action_producer"]
-    assert second_producer["created_count"] == 0
-    assert second_producer["skipped_count"] == 1
+    assert second.json()["execution_reconciliation_action_producer"] == producer
 
 
 def test_weekly_monitor_rejects_gate_verdict_as_observation(monitor_env) -> None:
@@ -261,11 +298,9 @@ def test_weekly_monitor_dag_op_uses_configured_runtime(tmp_path, monkeypatch) ->
     manager = LifecycleManager(registry, thresholds=LifecycleThresholds(warning_persist_weeks=2))
     audit_log = ExecutionAuditLog()
     graph = ResearchGraphStore()
-    compiler_store = PersistentCompilerIRStore(tmp_path / "dag_compiler_ir.jsonl")
-    coverage_store = PersistentGoalEntrypointCoverageRegistry(tmp_path / "dag_goal_entrypoint_coverage.jsonl")
-    monkeypatch.setattr(main, "RESEARCH_GRAPH_STORE", graph)
-    monkeypatch.setattr(main, "COMPILER_IR_STORE", compiler_store)
-    monkeypatch.setattr(main, "GOAL_ENTRYPOINT_COVERAGE_REGISTRY", coverage_store)
+    compiler_store, coverage_store = _install_goal_proof_stores(
+        tmp_path, monkeypatch, graph
+    )
     monkeypatch.setattr(
         main,
         "EXECUTION_RECONCILIATIONS",

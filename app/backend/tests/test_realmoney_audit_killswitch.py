@@ -12,6 +12,7 @@
 from __future__ import annotations
 
 import re
+from datetime import UTC, datetime
 from pathlib import Path
 from types import SimpleNamespace
 from unittest.mock import MagicMock
@@ -22,18 +23,19 @@ from fastapi.testclient import TestClient
 import app as app_pkg
 from app.auth import AuthService, require_user_dependency
 from app.copy_trade import CopyTradeService, SignalRelayer
-from app.execution.base import Order, OrderAck
+from app.execution.base import Order, OrderAck, Position
 from app.execution.generic_trading import (
     GenericTradingConfig,
     GenericTradingVenue,
     guarded_generic_venue,
 )
 from app.main import app
-from app.risk import KillSwitch
+from app.risk import EquitySnapshot, KillSwitch, RiskLimits, RiskMonitor
 from app.security import InMemoryKeystore, KeystoreRecord, SecureKeystore
 from app.security.gate.enforcer import OrderGuard
 from app.security.gate.policy import OrderGated, PolicyGate, TrustTier
 from app.security.mainnet_guards import MainnetGuardConfig, MainnetGuardsService
+from app.security.gate.account_halt import PersistentAccountHaltBarrier
 
 APP_ROOT = Path(app_pkg.__file__).resolve().parent
 # 门后路径（唯一允许直发 venue.place_order 的文件）：
@@ -77,36 +79,116 @@ def test_audit_probe_catches_ungated_callsite(tmp_path):
 
 # ── 2/4/6. 急停控件：鉴权 + 真执行 + 幂等 ───────────────────────────────────
 class _SpyVenue:
-    name = "spy"
-
-    def __init__(self) -> None:
+    def __init__(self, *, owner_user_id: str = "tester", name: str = "spy") -> None:
+        self.owner_user_id = owner_user_id
+        self.name = name
+        self.account_ref = f"account:{name}"
         self.cancelled = 0
         self.closed: list[str] = []
+        self.positions = [Position(symbol="BTCUSDT", quantity=0.01)]
 
-    def cancel_all_open(self):
+    def emergency_cancel_all(self):
         self.cancelled += 1
-        return [{"cancelled_all": True}]
+        actions = [{"cancelled_all": True}] if self.cancelled == 1 else []
+        return {"ok": True, "verified_noop": not actions, "actions": actions, "error": None}
 
-    def get_balance(self):
-        return {"BTCUSDT": object()}
+    def list_open_positions(self):
+        return list(self.positions)
 
-    def close_position(self, symbol):
-        self.closed.append(symbol)
+    def close_open_position(self, position):
+        self.closed.append(position.symbol)
+        self.positions = [item for item in self.positions if item.symbol != position.symbol]
+        return {"closed": position.symbol, "quantity": position.quantity}
+
+    def reconcile_emergency_actions_for_halt(self, _context):
+        return ()
+
+    def close_open_position_for_halt(self, position, _context):
+        return self.close_open_position(position)
+
+    def verify_emergency_flat(self, *, close_positions=True):
+        open_positions = [
+            {"symbol": position.symbol, "quantity": position.quantity}
+            for position in self.positions
+        ]
+        return {
+            "ok": not close_positions or not open_positions,
+            "normal_open_order_refs": [],
+            "algo_open_order_refs": [],
+            "open_positions": open_positions,
+        }
 
 
 class _FailingCloseVenue:
     """平仓抛错的 venue（KILL_SWITCH fail-open 会把 error 塞进 results，不上抛）。"""
 
     name = "failspy"
+    owner_user_id = "tester"
+    account_ref = "account:failspy"
+
+    def emergency_cancel_all(self):
+        return {
+            "ok": True,
+            "verified_noop": False,
+            "actions": [{"cancelled_all": True}],
+            "error": None,
+        }
+
+    def list_open_positions(self):
+        return [Position(symbol="BTCUSDT", quantity=0.01)]
+
+    def close_open_position(self, position):
+        raise RuntimeError("exchange 5xx on close")
+
+    def reconcile_emergency_actions_for_halt(self, _context):
+        return ()
+
+    def close_open_position_for_halt(self, position, _context):
+        return self.close_open_position(position)
+
+    def verify_emergency_flat(self, *, close_positions=True):
+        return {
+            "ok": not close_positions,
+            "normal_open_order_refs": [],
+            "algo_open_order_refs": [],
+            "open_positions": [{"symbol": "BTCUSDT", "quantity": 0.01}],
+        }
+
+
+class _EmptyVenue:
+    name = "empty"
+    owner_user_id = "tester"
+    account_ref = "account:empty"
 
     def cancel_all_open(self):
-        return [{"cancelled_all": True}]
+        return []
 
     def get_balance(self):
-        return {"BTCUSDT": object()}
+        return {}
 
-    def close_position(self, symbol):
-        raise RuntimeError("exchange 5xx on close")
+
+class _RejectedFlatProofVenue(_SpyVenue):
+    def verify_emergency_flat(self, *, close_positions=True):
+        return {
+            "ok": False,
+            "normal_open_order_refs": [],
+            "algo_open_order_refs": [],
+            "open_positions": [],
+        }
+
+
+class _MalformedFlatProofVenue(_SpyVenue):
+    def __init__(self, quantity):
+        super().__init__()
+        self._proof_quantity = quantity
+
+    def verify_emergency_flat(self, *, close_positions=True):
+        return {
+            "ok": True,
+            "normal_open_order_refs": [],
+            "algo_open_order_refs": [],
+            "open_positions": [{"symbol": "BTCUSDT", "quantity": self._proof_quantity}],
+        }
 
 
 class _StubAuth:
@@ -116,12 +198,68 @@ class _StubAuth:
         return password == "pw-ok"
 
 
+class _OwnerRegistry:
+    def __init__(self, venues=()):
+        self._venues = tuple(venues)
+
+    def venues_for_user(self, user_id):
+        return tuple(venue for venue in self._venues if venue.owner_user_id == user_id)
+
+
+def _kill_service_for_venue(venue):
+    follower = SimpleNamespace(
+        follower_id=f"tester::{venue.name}",
+        user_id="tester",
+        master_id=f"master::{venue.name}",
+        status="active",
+        binance_network="mainnet",
+        account_binding_ref=venue.account_ref,
+    )
+    def begin_draining(user_id, master_id):
+        if (
+            user_id != follower.user_id
+            or master_id != follower.master_id
+            or follower.status not in {"activating", "active", "paused"}
+        ):
+            return False
+        follower.status = "draining"
+        return True
+
+    return SimpleNamespace(
+        list_subscriptions=lambda user_id: (follower,) if user_id == "tester" else (),
+        begin_draining=begin_draining,
+        list_draining_mainnet_followers=lambda: (
+            (follower,) if follower.status == "draining" else ()
+        ),
+    )
+
+
 def _setup_kill_app(tmp_path, monkeypatch, venue):
     guards = MainnetGuardsService(tmp_path / "guards.db")
     guards.upsert_config(MainnetGuardConfig(user_id="tester", trusted_ips=["1.2.3.4"],
                                             require_password_per_order=True))
     monkeypatch.setattr("app.main.MAINNET_GUARDS", guards)
-    monkeypatch.setattr("app.main.KILL_SWITCH", KillSwitch([venue]))
+    monkeypatch.setattr("app.main.KILL_SWITCH", KillSwitch())
+    halt_barrier = PersistentAccountHaltBarrier(tmp_path / "account-halt.sqlite3")
+    halt_barrier.activate(venue.account_ref, "tester")
+    monkeypatch.setattr("app.main.ACCOUNT_HALT_BARRIER", halt_barrier)
+    monkeypatch.setattr("app.main.COPY_TRADE_SERVICE", _kill_service_for_venue(venue))
+    monkeypatch.setattr(
+        "app.main.FOLLOWER_RISK_STATE",
+        SimpleNamespace(has_open_reservations=lambda *_args: False),
+    )
+    monkeypatch.setattr("app.main.ACTIVE_EMERGENCY_VENUES", _OwnerRegistry((venue,)))
+    monkeypatch.setattr(
+        "app.main.RISK_MONITOR",
+        RiskMonitor(
+            RiskLimits(),
+            get_equity=lambda: EquitySnapshot(
+                equity=1000.0,
+                observed_at_utc=datetime.now(UTC).isoformat(),
+                source_ref="account:test:equity",
+            ),
+        ),
+    )
     monkeypatch.setattr("app.main.AUTH_SERVICE", _StubAuth())
     app.dependency_overrides[require_user_dependency] = lambda: SimpleNamespace(user_id="tester")
     # source_ip 由服务端从连接派生（_client_ip）—— 用 client= 设真实来源 IP（已加白）。
@@ -135,7 +273,27 @@ def kill_client(tmp_path, monkeypatch):
                                             require_password_per_order=True))
     spy = _SpyVenue()
     monkeypatch.setattr("app.main.MAINNET_GUARDS", guards)
-    monkeypatch.setattr("app.main.KILL_SWITCH", KillSwitch([spy]))
+    monkeypatch.setattr("app.main.KILL_SWITCH", KillSwitch())
+    halt_barrier = PersistentAccountHaltBarrier(tmp_path / "account-halt.sqlite3")
+    halt_barrier.activate(spy.account_ref, "tester")
+    monkeypatch.setattr("app.main.ACCOUNT_HALT_BARRIER", halt_barrier)
+    monkeypatch.setattr("app.main.COPY_TRADE_SERVICE", _kill_service_for_venue(spy))
+    monkeypatch.setattr(
+        "app.main.FOLLOWER_RISK_STATE",
+        SimpleNamespace(has_open_reservations=lambda *_args: False),
+    )
+    monkeypatch.setattr("app.main.ACTIVE_EMERGENCY_VENUES", _OwnerRegistry((spy,)))
+    monkeypatch.setattr(
+        "app.main.RISK_MONITOR",
+        RiskMonitor(
+            RiskLimits(),
+            get_equity=lambda: EquitySnapshot(
+                equity=1000.0,
+                observed_at_utc=datetime.now(UTC).isoformat(),
+                source_ref="account:test:equity",
+            ),
+        ),
+    )
     monkeypatch.setattr("app.main.AUTH_SERVICE", _StubAuth())
     app.dependency_overrides[require_user_dependency] = lambda: SimpleNamespace(user_id="tester")
     try:
@@ -188,16 +346,122 @@ def test_kill_switch_self_attested_bool_no_longer_bypasses(kill_client):
     assert r.status_code == 403  # 自证 bool 不再被信任，必须服务端真校验密码/TOTP
 
 
+@pytest.mark.parametrize("malformed", ("false", 1, 0, None, {}, []))
+def test_kill_switch_rejects_non_boolean_close_intent_before_halt(kill_client, malformed):
+    client, spy = kill_client
+    response = client.post(
+        "/api/risk/kill_switch",
+        json={"password": "pw-ok", "close_positions": malformed},
+    )
+    assert response.status_code == 400
+    assert spy.cancelled == 0
+    assert spy.closed == []
+
+
+@pytest.mark.parametrize(
+    "path",
+    ("/api/risk/kill_switch", "/api/security/mainnet/emergency_close_all"),
+)
+def test_totp_only_kill_audit_records_the_actual_factor(path, tmp_path, monkeypatch):
+    client, guards = _setup_kill_app(tmp_path, monkeypatch, _SpyVenue())
+    monkeypatch.setattr(
+        guards,
+        "verify_totp",
+        lambda user_id, code: user_id == "tester" and code == "123456",
+    )
+    try:
+        response = client.post(path, json={"totp_code": "123456"})
+        assert response.status_code == 200
+        audit = guards.list_audit_log("tester")
+        assert audit
+        assert audit[0]["totp_verified"] == 1
+        assert audit[0]["password_verified"] == 0
+    finally:
+        app.dependency_overrides.pop(require_user_dependency, None)
+
+
 def test_kill_switch_real_execution_and_idempotent(kill_client):
     client, spy = kill_client
     body = {"password": "pw-ok"}  # 服务端真校验密码；IP 由连接派生(1.2.3.4 已加白)
     r1 = client.post("/api/risk/kill_switch", json=body)
     assert r1.status_code == 200
     assert spy.cancelled == 1 and spy.closed == ["BTCUSDT"]  # 真撤单 + 真平仓
-    assert r1.json()["ok"] is True and r1.json()["results"].get("spy")  # 全成功 → ok + 非空 log
+    assert r1.json()["ok"] is True and r1.json()["action_ok"] is True
+    assert r1.json()["results"]["spy"]["ok"] is True
     # 重放：连发第二次不报错（fail-open 幂等，门坏也要能救命平仓）。
     r2 = client.post("/api/risk/kill_switch", json=body)
     assert r2.status_code == 200
+    assert r2.json()["ok"] is True and r2.json()["action_ok"] is True
+    assert r2.json()["results"]["spy"]["cancel"]["verified_noop"] is True
+    assert r2.json()["results"]["spy"]["position_discovery"]["verified_noop"] is True
+
+
+def test_kill_switch_executes_only_authenticated_users_venues(tmp_path, monkeypatch):
+    alice = _SpyVenue(owner_user_id="tester", name="alice-venue")
+    bob = _SpyVenue(owner_user_id="other-user", name="bob-venue")
+    client, _guards = _setup_kill_app(tmp_path, monkeypatch, alice)
+    monkeypatch.setattr("app.main.ACTIVE_EMERGENCY_VENUES", _OwnerRegistry((alice, bob)))
+    try:
+        response = client.post("/api/risk/kill_switch", json={"password": "pw-ok"})
+        assert response.status_code == 200
+        assert set(response.json()["results"]) == {"alice-venue"}
+        assert alice.cancelled == 1 and alice.closed == ["BTCUSDT"]
+        assert bob.cancelled == 0 and bob.closed == []
+    finally:
+        app.dependency_overrides.pop(require_user_dependency, None)
+
+
+def test_kill_switch_empty_venue_set_never_reports_ok(tmp_path, monkeypatch):
+    client, _guards = _setup_kill_app(tmp_path, monkeypatch, _SpyVenue())
+    monkeypatch.setattr("app.main.ACTIVE_EMERGENCY_VENUES", _OwnerRegistry())
+    try:
+        response = client.post("/api/risk/kill_switch", json={"password": "pw-ok"})
+        assert response.status_code == 200
+        assert response.json()["ok"] is False
+        assert response.json()["action_ok"] is False
+        assert response.json()["status"] == "unavailable"
+    finally:
+        app.dependency_overrides.pop(require_user_dependency, None)
+
+
+def test_kill_switch_empty_action_results_never_report_ok(tmp_path, monkeypatch):
+    client, _guards = _setup_kill_app(tmp_path, monkeypatch, _EmptyVenue())
+    try:
+        response = client.post("/api/risk/kill_switch", json={"password": "pw-ok"})
+        assert response.status_code == 200
+        assert response.json()["ok"] is False
+        assert response.json()["status"] == "failed"
+    finally:
+        app.dependency_overrides.pop(require_user_dependency, None)
+
+
+def test_kill_switch_does_not_relabel_rejected_clean_proof_as_verified_noop():
+    result = KillSwitch([_RejectedFlatProofVenue()]).trigger()
+    stage = result["spy"]["flat_verification"]
+    assert stage["ok"] is False
+    assert stage["verified_noop"] is False
+    assert result["spy"]["ok"] is False
+
+
+@pytest.mark.parametrize("quantity", [True, float("nan")])
+def test_kill_switch_rejects_non_numeric_or_nonfinite_position_proof(quantity):
+    result = KillSwitch([_MalformedFlatProofVenue(quantity)]).trigger()
+    stage = result["spy"]["flat_verification"]
+    assert stage["ok"] is False
+    assert "invalid open_positions" in stage["error"]
+
+
+def test_kill_switch_inactive_monitor_never_reports_ok(tmp_path, monkeypatch):
+    client, _guards = _setup_kill_app(tmp_path, monkeypatch, _SpyVenue())
+    monkeypatch.setattr("app.main.RISK_MONITOR", RiskMonitor(RiskLimits()))
+    try:
+        response = client.post("/api/risk/kill_switch", json={"password": "pw-ok"})
+        assert response.status_code == 200
+        assert response.json()["ok"] is False
+        assert response.json()["action_ok"] is True
+        assert response.json()["status"] == "unavailable"
+    finally:
+        app.dependency_overrides.pop(require_user_dependency, None)
 
 
 def test_emergency_close_all_real_execution(kill_client):
@@ -274,7 +538,10 @@ def test_relay_backward_compat_realmoney_rejected(tmp_path):
     b = auth.register("bob", "passw0rd")
     m = ct.register_master(a.user_id, "A", asset_class="crypto_perp")
     ct.subscribe(b.user_id, m.master_id, invest_amount=1000, binance_keystore_name="follower_btc",
-                 binance_network="mainnet", per_order_max_usdt=100.0)  # mainnet=真钱→CRYPTO_LIVE
+                 binance_network="mainnet", per_order_max_usdt=100.0,
+                 account_binding_ref="exchange_account_uid_test",
+                 runtime_promotion_ref="runtime_promotion_test",
+                 user_risk_choice_ref="user_risk_choice_test")  # mainnet=真钱→CRYPTO_LIVE
     sig = ct.publish_signal(m.master_id, a.user_id, symbol="BTCUSDT", side="buy",
                             quantity=0.001, price=100, order_type="limit", leverage=1.0)
     captured: list[Order] = []
@@ -323,10 +590,27 @@ def test_guarded_generic_venue_through_orderguard_fail_closed():
     CRYPTO_LIVE 缺 nonce 台 → 同一道门 fail-closed（与 relay/lease 一致）。"""
     gate = PolicyGate(tier=TrustTier.CRYPTO_LIVE, symbol_whitelist=frozenset(),
                       max_notional_per_order_usdt=100, max_leverage=1.0, daily_turnover_cap=1000)
-    guarded = guarded_generic_venue(_generic_cfg(), gate=gate)  # 无 nonce_ledger
+    session = MagicMock()
+    permission_response = MagicMock()
+    permission_response.json.return_value = {"can_trade": True, "can_withdraw": False}
+    permission_response.raise_for_status.return_value = None
+    session.request.return_value = permission_response
+    guarded = guarded_generic_venue(
+        _generic_cfg(permission_check={"path": "/permissions", "method": "GET"}),
+        gate=gate,
+        http=session,
+    )  # 无 nonce_ledger
     assert isinstance(guarded, OrderGuard)
     assert guarded._inner._cfg.deny_by_default is True  # 接活恒 deny-by-default
     with pytest.raises(OrderGated):
         guarded.place_order(
             Order(venue="dex", symbol="BTC", side="buy", quantity=1, price=10, order_type="limit", leverage=1.0)
         )
+
+
+def test_guarded_generic_venue_rejects_missing_permission_probe_before_wrap():
+    gate = PolicyGate(tier=TrustTier.CRYPTO_LIVE, symbol_whitelist=frozenset(),
+                      max_notional_per_order_usdt=100, max_leverage=1.0, daily_turnover_cap=1000)
+
+    with pytest.raises(PermissionError, match="permission_check"):
+        guarded_generic_venue(_generic_cfg(), gate=gate)

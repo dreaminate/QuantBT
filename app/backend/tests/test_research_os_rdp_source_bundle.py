@@ -1,6 +1,8 @@
 from __future__ import annotations
 
 import json
+import hashlib
+from functools import partial
 from types import SimpleNamespace
 
 import pytest
@@ -8,6 +10,7 @@ from fastapi.testclient import TestClient
 
 from app import main
 from app.auth import require_user_dependency
+from app.ide.service import IDEService
 from app.research_os import (
     PersistentRDPStore,
     RDPOpenPackageMaterializer,
@@ -15,6 +18,13 @@ from app.research_os import (
     RDPSourceFileBundler,
     RuntimeStatus,
 )
+
+RDPOpenPackageMaterializer = partial(RDPOpenPackageMaterializer, owner_user_id="u1")
+RDPSourceFileBundler = partial(RDPSourceFileBundler, owner_user_id="u1")
+
+
+def _owned_root(root):
+    return root / "_owners" / hashlib.sha256(b"u1").hexdigest()
 
 
 def _manifest(**overrides) -> RDPManifest:
@@ -93,9 +103,10 @@ def test_rdp_source_file_bundler_copies_declared_files_without_payload_in_manife
         },
     )
 
-    index = json.loads((tmp_path / "rdp_packages" / manifest.package_id / "source_files_index.json").read_text())
-    refs = json.loads((tmp_path / "rdp_packages" / manifest.package_id / "refs.json").read_text())
-    manifest_payload = json.loads((tmp_path / "rdp_packages" / manifest.package_id / "manifest.json").read_text())
+    package_dir = _owned_root(tmp_path / "rdp_packages") / manifest.package_id
+    index = json.loads((package_dir / "source_files_index.json").read_text())
+    refs = json.loads((package_dir / "refs.json").read_text())
+    manifest_payload = json.loads((package_dir / "manifest.json").read_text())
 
     assert len(bundle.source_files) == 2
     assert index["package_id"] == manifest.package_id
@@ -108,7 +119,7 @@ def test_rdp_source_file_bundler_copies_declared_files_without_payload_in_manife
     assert "source_file_payload" not in refs
     assert "source_file_payload" not in manifest_payload
     strategy_entry = next(entry for entry in index["source_files"] if entry["source_file_ref"] == "source-file:strategy.py")
-    assert (tmp_path / "rdp_packages" / manifest.package_id / strategy_entry["bundled_path"]).read_text(
+    assert (package_dir / strategy_entry["bundled_path"]).read_text(
         encoding="utf-8"
     ).startswith("def alpha")
 
@@ -192,10 +203,105 @@ def test_rdp_source_file_bundler_rejects_oversized_and_non_utf8_files(tmp_path):
         bundler.bundle(manifest, source_map={"source-file:strategy.py": "strategy.py"})
 
 
+def test_rdp_trusted_text_bundler_copies_exact_server_resolved_source(tmp_path):
+    source = "def alpha(row):\n    return row['close']\n"
+    materializer = RDPOpenPackageMaterializer(tmp_path / "rdp_packages")
+    bundler = RDPSourceFileBundler(materializer.package_root, tmp_path / "unused_source_root")
+    manifest = _manifest(source_file_refs=("source-file:strategy.py",))
+    materializer.materialize(manifest)
+
+    bundle = bundler.bundle_trusted_text_sources(
+        manifest,
+        source_texts={"source-file:strategy.py": source},
+    )
+
+    package_dir = _owned_root(materializer.package_root) / manifest.package_id
+    index = json.loads((package_dir / "source_files_index.json").read_text(encoding="utf-8"))
+    entry = index["source_files"][0]
+    assert entry["source_path"] == "strategy.py"
+    assert entry["byte_size"] == len(source.encode("utf-8"))
+    assert entry["content_sha256"] == "sha256:" + hashlib.sha256(source.encode("utf-8")).hexdigest()
+    assert (package_dir / entry["bundled_path"]).read_text(encoding="utf-8") == source
+    assert bundle.source_files[0].content_sha256 == entry["content_sha256"]
+
+
+@pytest.mark.parametrize(
+    ("source_texts", "error"),
+    [
+        ({}, "missing source file mapping"),
+        (
+            {"source-file:strategy.py": "print(1)\n", "source-file:other.py": "print(2)\n"},
+            "source file ref not declared",
+        ),
+        ({"source-file:strategy.py": b"print(1)\n"}, "source text must be a string"),
+        (
+            {"source-file:strategy.py": "api_key = 'sk-plaintext-1234567890'\n"},
+            "plaintext secret",
+        ),
+        ({"source-file:strategy.py": "bad-surrogate-\ud800"}, "UTF-8"),
+    ],
+)
+def test_rdp_trusted_text_bundler_rejects_bad_source_payloads(tmp_path, source_texts, error):
+    materializer = RDPOpenPackageMaterializer(tmp_path / "rdp_packages")
+    bundler = RDPSourceFileBundler(materializer.package_root, tmp_path / "unused_source_root")
+    manifest = _manifest(source_file_refs=("source-file:strategy.py",))
+    materializer.materialize(manifest)
+
+    with pytest.raises(ValueError, match=error):
+        bundler.bundle_trusted_text_sources(manifest, source_texts=source_texts)
+
+
+def test_rdp_trusted_text_bundler_rejects_oversize_and_unsafe_ref_path(tmp_path):
+    materializer = RDPOpenPackageMaterializer(tmp_path / "rdp_packages")
+    small_bundler = RDPSourceFileBundler(
+        materializer.package_root,
+        tmp_path / "unused_source_root",
+        max_bytes=4,
+    )
+    manifest = _manifest(source_file_refs=("source-file:strategy.py",))
+    materializer.materialize(manifest)
+    with pytest.raises(ValueError, match="max_bytes"):
+        small_bundler.bundle_trusted_text_sources(
+            manifest,
+            source_texts={"source-file:strategy.py": "0123456789"},
+        )
+
+    unsafe_manifest = _manifest(source_file_refs=("source-file:../strategy.py",))
+    materializer.materialize(unsafe_manifest)
+    with pytest.raises(ValueError, match="escapes source root"):
+        small_bundler.bundle_trusted_text_sources(
+            unsafe_manifest,
+            source_texts={"source-file:../strategy.py": "x"},
+        )
+
+
+def test_rdp_bundle_sources_api_does_not_accept_raw_source_text(tmp_path, monkeypatch):
+    client, store, _materializer, _bundler, _source_root = _client_with_rdp_bundle(
+        tmp_path,
+        monkeypatch,
+    )
+    manifest = store.record_manifest(
+        _manifest(source_file_refs=("source-file:strategy.py",)),
+        owner_user_id="u1",
+        recorded_by="u1",
+    )
+    try:
+        response = client.post(
+            f"/api/research-os/rdp/manifests/{manifest.package_id}/bundle_sources",
+            json={"source_texts": {"source-file:strategy.py": "print('caller controlled')\n"}},
+        )
+        assert response.status_code == 422
+        assert "missing source file mapping" in response.json()["detail"]
+    finally:
+        main.app.dependency_overrides.pop(require_user_dependency, None)
+
+
 def test_rdp_bundle_sources_api_materializes_and_copies_declared_files(tmp_path, monkeypatch):
     client, store, materializer, _bundler, source_root = _client_with_rdp_bundle(tmp_path, monkeypatch)
     _write_sources(source_root)
-    manifest = store.record_manifest(_manifest())
+    manifest = store.record_manifest(
+        _manifest(), owner_user_id="u1", recorded_by="u1"
+    )
     try:
         response = client.post(
             f"/api/research-os/rdp/manifests/{manifest.package_id}/bundle_sources",
@@ -211,9 +317,99 @@ def test_rdp_bundle_sources_api_materializes_and_copies_declared_files(tmp_path,
         assert body["package_id"] == manifest.package_id
         assert body["bundled_by"] == "u1"
         assert len(body["source_files"]) == 2
-        assert (materializer.package_root / manifest.package_id / "manifest.json").exists()
-        assert (materializer.package_root / manifest.package_id / "source_files_index.json").exists()
+        assert (_owned_root(materializer.package_root) / manifest.package_id / "manifest.json").exists()
+        assert (_owned_root(materializer.package_root) / manifest.package_id / "source_files_index.json").exists()
         assert all("source_file_payload" not in item for item in body["source_files"])
+    finally:
+        main.app.dependency_overrides.pop(require_user_dependency, None)
+
+
+def test_ide_rdp_manifest_and_bundle_are_server_bound_to_frozen_run(
+    tmp_path,
+    monkeypatch,
+):
+    client, store, materializer, _bundler, _source_root = _client_with_rdp_bundle(
+        tmp_path,
+        monkeypatch,
+    )
+    ide_service = IDEService(
+        tmp_path / "ide.db",
+        run_root=tmp_path / "ide_runs",
+    )
+    monkeypatch.setattr(main, "IDE_SERVICE", ide_service)
+    frozen_source = (
+        "quantbt.emit_result({'equity_curve': ["
+        "{'t': '2026-01-01', 'equity': 1.0},"
+        "{'t': '2026-01-02', 'equity': 1.1}]})"
+    )
+    ide_service.save_strategy("u1", "server_bound", frozen_source)
+    ide_run = ide_service.run_strategy(
+        "u1",
+        "server_bound",
+        owner_user_id="u1",
+    )
+    assert ide_run.status == "ok"
+
+    raw = _manifest().to_open_dict()
+    for identity_key in ("package_id", "rdp_id"):
+        raw.pop(identity_key, None)
+    raw.update(
+        {
+            "asset_refs": [],
+            "run_refs": [],
+            "source_file_refs": [],
+            "artifact_hash": "",
+            "reproducibility_command": "",
+        }
+    )
+    user = SimpleNamespace(username="u1", user_id="u1")
+    with pytest.raises(ValueError, match="artifact_hash conflicts"):
+        main._bind_ide_rdp_manifest_payload(
+            {
+                "ide_run_id": ide_run.run_id,
+                "manifest": {**raw, "artifact_hash": "sha256:caller-forged"},
+            },
+            user,
+        )
+    with pytest.raises(ValueError, match="asset_refs conflicts"):
+        main._bind_ide_rdp_manifest_payload(
+            {
+                "ide_run_id": ide_run.run_id,
+                "manifest": {**raw, "asset_refs": ["ide_run:other"]},
+            },
+            user,
+        )
+    rebound = main._bind_ide_rdp_manifest_payload(
+        {"ide_run_id": ide_run.run_id, "manifest": raw},
+        user,
+    )
+    manifest = main._rdp_manifest_from_payload(rebound)
+    exact_ref = f"ide_run:{ide_run.run_id}"
+    assert manifest.asset_refs == (exact_ref,)
+    assert manifest.run_refs == (exact_ref,)
+    assert manifest.source_file_refs == ("source_file:strategy.py",)
+    assert manifest.reproducibility_command == main.REPOSITORY_REPRODUCTION_COMMAND
+    store.record_manifest(manifest, owner_user_id="u1", recorded_by="u1")
+
+    try:
+        rejected = client.post(
+            f"/api/research-os/rdp/manifests/{manifest.package_id}/bundle_sources",
+            json={"source_map": {"source_file:strategy.py": "attacker.py"}},
+        )
+        assert rejected.status_code == 422
+        assert "server-resolved" in rejected.json()["detail"]
+
+        bundled = client.post(
+            f"/api/research-os/rdp/manifests/{manifest.package_id}/bundle_sources",
+            json={},
+        )
+        assert bundled.status_code == 200, bundled.text
+        package_dir = _owned_root(materializer.package_root) / manifest.package_id
+        index = json.loads(
+            (package_dir / "source_files_index.json").read_text(encoding="utf-8")
+        )
+        bundled_path = package_dir / index["source_files"][0]["bundled_path"]
+        assert bundled_path.read_text(encoding="utf-8") == frozen_source
     finally:
         main.app.dependency_overrides.pop(require_user_dependency, None)
 

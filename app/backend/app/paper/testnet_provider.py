@@ -387,8 +387,10 @@ def make_binance_testnet_provider(
             "fallback_reason": "missing_testnet_key_name",
         }
     try:
-        record = keystore.fetch(key_name)
+        configured_names = set(keystore.list_names())
     except Exception:  # noqa: BLE001
+        configured_names = set()
+    if key_name not in configured_names:
         return None, {
             "requested_provider": TESTNET_REALTIME_SOURCE,
             "active_provider": TESTNET_UNAVAILABLE_SOURCE,
@@ -398,12 +400,17 @@ def make_binance_testnet_provider(
         }
     try:
         if client_factory is not None:
-            client = client_factory(record, product)
+            # Public market data needs no secret.  The compatibility seam gets
+            # no credential record so test/status code cannot accidentally
+            # retain key material.
+            client = client_factory(None, product)
         else:
             from ..execution.binance_client import BinanceClient, BinanceCredentials
 
-            client = BinanceClient(BinanceCredentials.from_record(record, network="testnet"), product=product)  # type: ignore[arg-type]
-        safety = client.assert_safe_startup()
+            client = BinanceClient(
+                BinanceCredentials(api_key="", api_secret="", network="testnet"),
+                product=product,  # type: ignore[arg-type]
+            )
         provider = BinanceTestnetBarProvider(
             symbols=[str(symbol) for symbol in symbols],
             _client=_PublicClientAdapter(client, product=product),
@@ -431,10 +438,10 @@ def make_binance_testnet_provider(
         "active_provider": TESTNET_REALTIME_SOURCE,
         "connected": True,
         "credential_configured": True,
-        "permission_checked": bool((safety or {}).get("ok")),
-        "network": (safety or {}).get("network") or "testnet",
+        "permission_checked": False,
+        "network": "testnet",
         "product": product,
-        "warnings": list((safety or {}).get("warnings") or []),
+        "warnings": ["public market-data feed does not inspect API-key permissions"],
     }
 
 

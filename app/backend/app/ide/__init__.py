@@ -12,7 +12,15 @@
 from __future__ import annotations
 
 from .ai_context import AIContext, build_ai_context
-from .promote import PromoteError, PromotedRun, promote_ide_run
+from .promote import (
+    PromoteError,
+    PromoteCommitError,
+    PromotedRun,
+    promote_ide_run,
+    quarantine_promoted_run,
+)
+from .promotion_receipt import PersistentPromotionReceiptRegistry
+from .promotion_verifier import CanonicalPromotionVerificationLoader
 from .sandbox import SandboxResult, run_user_strategy
 from .service import IDEError, IDEService, StrategyFile, StrategyVersion
 from .strategy_graph import compat, strategy_content_hash, validate_graph
@@ -22,13 +30,17 @@ __all__ = [
     "IDEError",
     "IDEService",
     "PromoteError",
+    "PromoteCommitError",
     "PromotedRun",
+    "PersistentPromotionReceiptRegistry",
+    "CanonicalPromotionVerificationLoader",
     "SandboxResult",
     "StrategyFile",
     "StrategyVersion",
     "build_ai_context",
     "compat",
     "promote_ide_run",
+    "quarantine_promoted_run",
     "run_user_strategy",
     "strategy_content_hash",
     "validate_graph",

@@ -100,13 +100,30 @@ def _good_spine() -> tuple[MathematicalArtifact, TheoryImplementationBinding, Co
 
 
 def _sealed_record(call_id: str = "call:1") -> LLMCallRecord:
+    prompt_hash = "1111111111111111"
+    response_digest = "0123456789abcdef"
     rec = LLMCallRecord(
         provider="anthropic",
         model="claude-x",
         auth_ref="secretref://anthropic/llm_anthropic",
         replay_state=ReplayState.REPLAYED.value,
+        owner_user_id="owner-test",
+        workflow_id="release-gate-test",
+        invocation_id="release-gate-test",
+        routing_policy_ref="routing:release:fixture-origin",
+        routing_policy_state="replay_origin",
         call_id=call_id,
+        prompt_digest=prompt_hash,
+        prompt_hash=prompt_hash,
+        tool_schema_hash="2222222222222222",
+        response_digest=response_digest,
+        response_ref=f"llm_response:{response_digest}",
+        latency_ms=0.0,
         usage={"input_tokens": 12, "output_tokens": 5, "cost_usd": 0.0007},
+        cost={
+            "status": "reported", "currency": "USD", "amount": 0.0007,
+            "source": "provider_usage_cost_usd", "reason": "",
+        },
     )
     rec.seal = seal_record(rec, GW_SECRET)
     return rec
@@ -228,6 +245,58 @@ def test_mock_mode_typo_fails_closed():
         ExecutionBlock(block_id="b", mode=MODE_MOCK, result_grade="prod")
 
 
+@pytest.mark.parametrize(
+    "blocks",
+    (
+        (),
+        (
+            ExecutionBlock(
+                block_id="ide_sandbox",
+                mode=MODE_MOCK,
+                result_grade=GRADE_EXPLORATORY,
+                mock_marked=True,
+            ),
+        ),
+    ),
+    ids=("missing_execution", "mock_exploratory_only"),
+)
+def test_production_ready_requires_live_production_execution(blocks):
+    verdict = evaluate_release(
+        _good_candidate(
+            requested_label="production_ready",
+            execution_blocks=blocks,
+        )
+    )
+
+    mock_gate = [
+        outcome
+        for outcome in verdict.rejections
+        if outcome.gate_id == GATE_MOCK_HONESTY
+    ]
+    assert len(mock_gate) == 1
+    assert mock_gate[0].missing == (
+        "production_ready:live_production_execution_block",
+    )
+
+
+def test_production_ready_accepts_live_production_with_marked_exploratory_probe():
+    verdict = evaluate_release(
+        _good_candidate(requested_label="production_ready")
+    )
+
+    mock_gate = [
+        outcome
+        for outcome in verdict.outcomes
+        if outcome.gate_id == GATE_MOCK_HONESTY
+    ][0]
+    assert mock_gate.passed is True
+
+
+def test_unknown_release_label_fails_closed_at_candidate_construction():
+    with pytest.raises(ValueError, match="requested_label must be one of"):
+        _good_candidate(requested_label="production-readi")
+
+
 # ════════════════════════════════════════════════════════════════════════════
 # ② proof-backed 缺 TIB → 拒；theory promotion 缺 ConsistencyCheck → 拒（委派 spine 单一源）
 # ════════════════════════════════════════════════════════════════════════════
@@ -283,6 +352,29 @@ def test_user_waived_with_valid_mcr_passes():
     assert mc.passed, mc.reason
 
 
+def test_user_waived_methodology_cannot_claim_evidence_sufficient():
+    mcr = MethodologyChoiceRecord(
+        chosen_path="user_waived_theory",
+        asset_ref="strategy:good",
+        actor="dreaminate",
+        skipped_steps=("formal_proof",),
+        responsibility_boundary="user accepts exploratory-only status",
+    )
+    verdict = evaluate_release(
+        _good_candidate(
+            requested_label="evidence_sufficient",
+            methodology_choice=mcr,
+        )
+    )
+    spine_rejections = [
+        outcome
+        for outcome in verdict.rejections
+        if outcome.gate_id == GATE_SPINE_CONSISTENCY
+    ]
+    assert spine_rejections
+    assert "strong-label-honest" in spine_rejections[0].reason
+
+
 def test_user_waived_mcr_wrong_asset_rejected():
     """张冠李戴：MCR 绑别的资产 → 拒。"""
     mcr = MethodologyChoiceRecord(
@@ -323,7 +415,9 @@ def test_llm_declared_used_but_no_record_rejected():
 def test_llm_record_missing_required_field_rejected():
     """LLMCallRecord 缺必填字段（auth_ref 空）→ 拒（复用单一源 assert_record_admissible）。"""
     bad = LLMCallRecord(provider="anthropic", model="claude-x", auth_ref="",
-                        replay_state=ReplayState.LIVE.value, call_id="bad")
+                        replay_state=ReplayState.LIVE.value, call_id="bad",
+                        owner_user_id="owner-test", workflow_id="release-gate-test",
+                        invocation_id="bad-auth", response_digest="0123456789abcdef")
     bad.seal = seal_record(bad, GW_SECRET)  # 封印有效但字段缺 → 仍拒
     v = evaluate_release(_good_candidate(llm_call_records=(bad,)))
     rej = [o for o in v.rejections if o.gate_id == GATE_LLM_GATEWAY]
@@ -334,7 +428,9 @@ def test_llm_bypassed_gateway_forged_seal_rejected():
     """未经 Gateway：账封印验不过 gateway_secret（自造账）→ 拒。"""
     forged = LLMCallRecord(provider="anthropic", model="claude-x",
                            auth_ref="secretref://anthropic/x",
-                           replay_state=ReplayState.LIVE.value, call_id="forged")
+                           replay_state=ReplayState.LIVE.value, call_id="forged",
+                           owner_user_id="owner-test", workflow_id="release-gate-test",
+                           invocation_id="forged", response_digest="0123456789abcdef")
     # 不盖封印（或盖错）——绕过 Gateway 自造账。
     v = evaluate_release(_good_candidate(llm_call_records=(forged,), gateway_secret=GW_SECRET))
     rej = [o for o in v.rejections if o.gate_id == GATE_LLM_GATEWAY]
@@ -353,11 +449,41 @@ def test_llm_cost_unlogged_is_soft_gap_not_hard_reject():
     """§16 列 cost·但单一源准入门不含——cost 未记作软披露不硬拒（不与单一源矛盾·不误伤封印真账）。"""
     rec = LLMCallRecord(provider="anthropic", model="claude-x",
                         auth_ref="secretref://anthropic/x",
-                        replay_state=ReplayState.REPLAYED.value, call_id="nocost", usage={})
+                        replay_state=ReplayState.REPLAYED.value, call_id="nocost", usage={},
+                        owner_user_id="owner-test", workflow_id="release-gate-test",
+                        invocation_id="nocost",
+                        routing_policy_ref="routing:release:fixture-origin",
+                        routing_policy_state="replay_origin",
+                        prompt_digest="1111111111111111",
+                        prompt_hash="1111111111111111",
+                        tool_schema_hash="2222222222222222",
+                        response_digest="0123456789abcdef",
+                        response_ref="llm_response:0123456789abcdef",
+                        latency_ms=0.0,
+                        cost={
+                            "status": "unavailable", "currency": "USD", "amount": None,
+                            "source": "none", "reason": "provider_cost_not_reported",
+                        })
     rec.seal = seal_record(rec, GW_SECRET)
     v = evaluate_release(_good_candidate(llm_call_records=(rec,)))
     assert v.ok, f"cost 未记不该硬拒：{v.reason_text}"
     assert any("cost_unlogged" in g for g in v.honest_gaps), v.honest_gaps
+
+
+def test_legacy_v2_record_is_rejected_by_formal_release_gate():
+    legacy = _sealed_record()
+    legacy.schema_version = 2
+    legacy.routing_policy_ref = ""
+    legacy.routing_policy_state = ""
+    legacy.prompt_hash = ""
+    legacy.tool_schema_hash = ""
+    legacy.response_ref = ""
+    legacy.cost = {}
+    legacy.seal = seal_record(legacy, GW_SECRET)
+
+    verdict = evaluate_release(_good_candidate(llm_call_records=(legacy,)))
+    rejection = [item for item in verdict.rejections if item.gate_id == GATE_LLM_GATEWAY]
+    assert rejection and any("admissible" in item for item in rejection[0].missing)
 
 
 # ════════════════════════════════════════════════════════════════════════════
@@ -391,7 +517,9 @@ def test_dataset_version_ref_shape_accepted():
 def test_plaintext_secret_in_record_raises():
     leaky = LLMCallRecord(provider="anthropic", model="claude-x",
                           auth_ref="sk-LIVE-SECRET-abcdef123456",  # 明文 key 进账（红线）
-                          replay_state=ReplayState.LIVE.value, call_id="leak")
+                          replay_state=ReplayState.LIVE.value, call_id="leak",
+                          owner_user_id="owner-test", workflow_id="release-gate-test",
+                          invocation_id="leak", response_digest="0123456789abcdef")
     leaky.seal = seal_record(leaky, GW_SECRET)
     with pytest.raises(SecretLeakError) as ei:
         evaluate_release(_good_candidate(

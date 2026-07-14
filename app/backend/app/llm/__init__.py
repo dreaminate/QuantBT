@@ -53,6 +53,10 @@ from .gateway import (
     build_agent_llm_gateway,
     make_gateway_backed_agent_llm,
 )
+from .model_identity import (
+    has_independent_model_route,
+    infer_foundation_model_family,
+)
 from .routing import (
     LLMModelProfile,
     ModelRoutingPolicy,
@@ -65,6 +69,18 @@ from .routing import (
     TaskDifficulty,
     infer_capability_tier,
     tier_rank,
+)
+from .use_binding import (
+    LLMGatewayUseBindingRecord,
+    LLMUseBindingDecision,
+    LLMUseBindingError,
+    LLMUseBindingViolation,
+    PersistentLLMUseBindingStore,
+    make_llm_gateway_use_binding,
+    seal_llm_gateway_use_binding,
+    validate_llm_gateway_use_binding_shape,
+    validate_llm_gateway_use_binding_terminal,
+    verify_llm_gateway_use_binding_seal,
 )
 
 __all__ = [
@@ -103,6 +119,9 @@ __all__ = [
     "assert_admissible_to_graph",
     "build_agent_llm_gateway",
     "make_gateway_backed_agent_llm",
+    # model identity
+    "has_independent_model_route",
+    "infer_foundation_model_family",
     # routing
     "LLMModelProfile",
     "ModelRoutingPolicy",
@@ -115,4 +134,15 @@ __all__ = [
     "TaskDifficulty",
     "infer_capability_tier",
     "tier_rank",
+    # use_binding
+    "LLMGatewayUseBindingRecord",
+    "LLMUseBindingDecision",
+    "LLMUseBindingError",
+    "LLMUseBindingViolation",
+    "PersistentLLMUseBindingStore",
+    "make_llm_gateway_use_binding",
+    "seal_llm_gateway_use_binding",
+    "validate_llm_gateway_use_binding_shape",
+    "validate_llm_gateway_use_binding_terminal",
+    "verify_llm_gateway_use_binding_seal",
 ]

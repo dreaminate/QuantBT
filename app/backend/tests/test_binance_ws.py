@@ -52,8 +52,12 @@ def test_on_message_dispatches_execution_report() -> None:
     msg = json.dumps(
         {
             "e": "ORDER_TRADE_UPDATE",
+            "E": 1_700_000_000_000,
             "o": {
                 "i": 123,
+                "c": "client-123",
+                "t": 456,
+                "T": 1_700_000_000_000,
                 "s": "BTCUSDT",
                 "S": "BUY",
                 "X": "FILLED",
@@ -73,6 +77,10 @@ def test_on_message_dispatches_execution_report() -> None:
     assert rep.side == "buy"
     assert rep.status == "filled"
     assert rep.cumulative_filled_qty == 0.5
+    assert rep.client_order_id == "client-123"
+    assert rep.source_event_ref.startswith("binance_execution_")
+    assert rep.raw_event_hash.startswith("sha256:")
+    assert rep.timestamp_utc.startswith("2023-11-14")
 
 
 def test_on_message_invalid_json_does_not_crash() -> None:

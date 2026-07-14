@@ -12,6 +12,9 @@ AssetClass / typed enums 在 `asset_class.py` 单一定义，本模块只引不�
 from __future__ import annotations
 
 import json
+import os
+import threading
+from contextlib import contextmanager
 from dataclasses import dataclass
 from datetime import UTC, datetime
 from enum import Enum
@@ -27,6 +30,7 @@ from pydantic import (
     model_validator,
 )
 
+from ..cross_process_lock import acquire_exclusive_fd
 from ..lineage.ids import content_hash
 from .asset_class import (
     AssetClass,
@@ -159,6 +163,11 @@ class InstrumentSpec(BaseModel):
     exercise_style_ref: str | None = None
     margin_ref: str | None = None
 
+    # Exact venue order symbol.  Optional for legacy research-only records, but
+    # mandatory at the live execution boundary so an ETH order cannot cite BTC
+    # instrument evidence.
+    venue_symbol: str | None = None
+
     # ---- additive typed 值字段（Optional·provided 时才 validate·JSON-native 防序列化炸）----
     expiry: str | None = None
     strike: float | None = Field(default=None, gt=0)
@@ -198,6 +207,7 @@ class InstrumentSpec(BaseModel):
         }
         # additive 值字段：仅 emit 有值的（exclude None）→ superset-stable·既有记录 hash 零漂移
         for key in (
+            "venue_symbol",
             "expiry",
             "strike",
             "contract_multiplier",
@@ -684,6 +694,7 @@ def instrument_spec_from_dict(data: dict[str, Any]) -> InstrumentSpec:
             settlement_ref=_optional_str(data, "settlement_ref"),
             exercise_style_ref=_optional_str(data, "exercise_style_ref"),
             margin_ref=_optional_str(data, "margin_ref"),
+            venue_symbol=_optional_str(data, "venue_symbol"),
             # additive 值字段：present 才读回（absent→None→不入 to_dict·零漂移）
             expiry=_optional_str(data, "expiry"),
             strike=data.get("strike"),
@@ -767,20 +778,61 @@ def market_data_use_validation_record_from_dict(data: dict[str, Any]) -> MarketD
     )
 
 
-class PersistentMarketDataRegistry:
-    """Append-only GOAL §11 metadata registry.
+def _stable_market_owner(value: Any) -> str:
+    owner = str(value or "").strip()
+    if not owner:
+        raise ValueError("owner_user_id is required")
+    return owner
 
-    This records dataset semantics, instrument specs, and capability matrices as
-    refs and metadata only. It does not store raw market data rows, provider
-    payloads, credentials, or connector results.
+
+def _market_record_key(owner_user_id: Any, record_ref: Any, *, field_name: str) -> tuple[str, str]:
+    owner = _stable_market_owner(owner_user_id)
+    ref = str(record_ref or "").strip()
+    if not ref:
+        raise ValueError(f"{field_name} is required")
+    return owner, ref
+
+
+@contextmanager
+def _market_file_lock(lock_path: Path | None):
+    if lock_path is None:
+        yield
+        return
+    lock_path.parent.mkdir(parents=True, exist_ok=True)
+    lock_fd = os.open(lock_path, os.O_CREAT | os.O_RDWR, 0o600)
+    held = None
+    try:
+        held = acquire_exclusive_fd(lock_fd, timeout_seconds=10.0)
+        yield
+    finally:
+        if held is not None:
+            held.release()
+        os.close(lock_fd)
+
+
+class PersistentMarketDataRegistry:
+    """Owner-enveloped append-only GOAL §11 metadata registry.
+
+    Dataset semantics, instrument specs, capability matrices, and use
+    validations share one owner namespace because a use validation is valid only
+    when every dependency resolves for the same stable user id. Schema-v1 rows
+    have no stable owner evidence and are quarantined rather than inferred.
     """
 
     def __init__(self, path: str | Path | None = None) -> None:
         self._path = Path(path) if path is not None else None
-        self._datasets: dict[str, DatasetSemanticsRecord] = {}
-        self._instruments: dict[str, InstrumentSpec] = {}
-        self._capability_matrices: dict[str, MarketCapabilityMatrixRecord] = {}
-        self._use_validations: dict[str, MarketDataUseValidationRecord] = {}
+        self._lock_path = (
+            self._path.with_suffix(self._path.suffix + ".lock")
+            if self._path is not None
+            else None
+        )
+        self._lock = threading.RLock()
+        self._datasets: dict[tuple[str, str], DatasetSemanticsRecord] = {}
+        self._instruments: dict[tuple[str, str], InstrumentSpec] = {}
+        self._capability_matrices: dict[tuple[str, str], MarketCapabilityMatrixRecord] = {}
+        self._use_validations: dict[tuple[str, str], MarketDataUseValidationRecord] = {}
+        self._event_rows: dict[tuple[str, str, str], str] = {}
+        self._legacy_quarantined_count = 0
         if self._path is not None:
             self._path.parent.mkdir(parents=True, exist_ok=True)
             self._load_existing()
@@ -789,200 +841,309 @@ class PersistentMarketDataRegistry:
     def path(self) -> Path | None:
         return self._path
 
-    def _load_existing(self) -> None:
-        assert self._path is not None
-        if not self._path.exists():
-            return
-        for line_no, line in enumerate(self._path.read_text(encoding="utf-8").splitlines(), start=1):
-            if not line.strip():
-                continue
-            try:
-                row = json.loads(line)
-                self._apply_row(row, persist=False)
-            except Exception as exc:  # noqa: BLE001 - corrupt market-data history must block startup.
-                raise ValueError(f"invalid persisted market data row at {self._path}:{line_no}") from exc
+    @property
+    def legacy_quarantined_count(self) -> int:
+        self._refresh_for_read()
+        return self._legacy_quarantined_count
 
-    def _append(self, row: dict[str, Any]) -> None:
+    @staticmethod
+    def _encoded_row(row: dict[str, Any]) -> str:
+        return json.dumps(row, ensure_ascii=False, sort_keys=True, separators=(",", ":"))
+
+    def _clear_replay_state(self) -> None:
+        self._datasets.clear()
+        self._instruments.clear()
+        self._capability_matrices.clear()
+        self._use_validations.clear()
+        self._event_rows.clear()
+        self._legacy_quarantined_count = 0
+
+    def _load_existing(self) -> None:
+        with self._lock, _market_file_lock(self._lock_path):
+            self._reload_from_disk_locked()
+
+    def _refresh_for_read(self) -> None:
         if self._path is None:
             return
-        with self._path.open("a", encoding="utf-8") as fh:
-            fh.write(json.dumps(row, ensure_ascii=False, sort_keys=True, separators=(",", ":")) + "\n")
+        with self._lock, _market_file_lock(self._lock_path):
+            self._reload_from_disk_locked()
 
-    def _apply_row(self, row: dict[str, Any], *, persist: bool) -> None:
-        if row.get("schema_version") != 1:
-            raise ValueError("unsupported market data schema_version")
+    def _reload_from_disk_locked(self) -> None:
+        self._clear_replay_state()
+        if self._path is None or not self._path.exists():
+            return
+        with self._path.open("r", encoding="utf-8") as fh:
+            for line_no, line in enumerate(fh, start=1):
+                if not line.strip():
+                    continue
+                try:
+                    row = json.loads(line)
+                    if row.get("schema_version") == 1:
+                        self._legacy_quarantined_count += 1
+                        continue
+                    self._replay_row(row)
+                except Exception as exc:  # noqa: BLE001 - corrupt v2 history must block use.
+                    self._clear_replay_state()
+                    raise ValueError(f"invalid persisted market data row at {self._path}:{line_no}") from exc
+
+    def _decode_validated_row(
+        self,
+        row: dict[str, Any],
+    ) -> tuple[str, str, str, Any]:
+        if row.get("schema_version") != 2:
+            raise ValueError("unsupported or ownerless market data schema_version")
+        owner = _stable_market_owner(row.get("owner_user_id"))
         event_type = str(row.get("event_type") or "")
         use_context = str(row.get("use_context") or ValidationUseContext.RESEARCH.value)
+
         if event_type == "dataset_semantics_recorded":
             payload = row.get("dataset")
             if not isinstance(payload, dict):
                 raise ValueError("market data event missing dataset")
-            self._record_dataset(dataset_semantics_record_from_dict(payload), use_context=use_context, persist=persist)
-            return
-        if event_type == "instrument_spec_recorded":
+            record = dataset_semantics_record_from_dict(payload)
+            decision = validate_dataset_semantics(record, use_context=use_context)
+            ref = record.dataset_ref
+        elif event_type == "instrument_spec_recorded":
             payload = row.get("instrument")
             if not isinstance(payload, dict):
                 raise ValueError("market data event missing instrument")
-            self._record_instrument(instrument_spec_from_dict(payload), persist=persist)
-            return
-        if event_type == "market_capability_matrix_recorded":
+            record = instrument_spec_from_dict(payload)
+            decision = validate_instrument_spec(record)
+            ref = record.instrument_ref
+        elif event_type == "market_capability_matrix_recorded":
             payload = row.get("capability_matrix")
             if not isinstance(payload, dict):
                 raise ValueError("market data event missing capability_matrix")
-            self._record_capability_matrix(
-                market_capability_matrix_record_from_dict(payload),
-                use_context=use_context,
-                persist=persist,
-            )
-            return
-        if event_type == "market_data_use_validation_recorded":
+            record = market_capability_matrix_record_from_dict(payload)
+            decision = validate_market_capability_matrix(record, use_context=use_context)
+            ref = record.matrix_ref
+        elif event_type == "market_data_use_validation_recorded":
             payload = row.get("use_validation")
             if not isinstance(payload, dict):
                 raise ValueError("market data event missing use_validation")
-            self._record_use_validation(market_data_use_validation_record_from_dict(payload), persist=persist)
-            return
-        raise ValueError(f"unknown market data event_type={event_type!r}")
+            record = market_data_use_validation_record_from_dict(payload)
+            decision = validate_market_data_use_validation_record(record)
+            ref = record.validation_ref
+            if record.recorded_by != owner:
+                raise ValueError("MarketDataUseValidation recorded_by must match owner_user_id")
+            missing_dataset_refs = [
+                item for item in record.dataset_refs if (owner, item) not in self._datasets
+            ]
+            if missing_dataset_refs:
+                raise ValueError(f"unknown same-owner dataset refs: {','.join(missing_dataset_refs)}")
+            missing_instrument_refs = [
+                item for item in record.instrument_refs if (owner, item) not in self._instruments
+            ]
+            if missing_instrument_refs:
+                raise ValueError(f"unknown same-owner instrument refs: {','.join(missing_instrument_refs)}")
+            if (owner, record.capability_matrix_ref) not in self._capability_matrices:
+                raise ValueError(
+                    f"unknown same-owner capability matrix ref: {record.capability_matrix_ref}"
+                )
+        else:
+            raise ValueError(f"unknown market data event_type={event_type!r}")
+
+        if not decision.accepted:
+            raise ValueError(_decision_message(decision))
+        ref = str(ref or "").strip()
+        if not ref:
+            raise ValueError("owner-enveloped market data record ref is required")
+        return owner, event_type, ref, record
+
+    def _insert_decoded(self, owner: str, event_type: str, ref: str, record: Any) -> None:
+        key = (owner, ref)
+        if event_type == "dataset_semantics_recorded":
+            self._datasets[key] = record
+        elif event_type == "instrument_spec_recorded":
+            self._instruments[key] = record
+        elif event_type == "market_capability_matrix_recorded":
+            self._capability_matrices[key] = record
+        else:
+            self._use_validations[key] = record
+
+    def _replay_row(self, row: dict[str, Any]) -> Any:
+        owner, event_type, ref, record = self._decode_validated_row(row)
+        event_key = (owner, event_type, ref)
+        encoded = self._encoded_row(row)
+        existing = self._event_rows.get(event_key)
+        if existing is not None:
+            if existing == encoded:
+                return record
+            raise ValueError(
+                f"owner-enveloped market data record collision owner={owner!r} ref={ref!r}"
+            )
+        self._insert_decoded(owner, event_type, ref, record)
+        self._event_rows[event_key] = encoded
+        return record
+
+    def _write_row(self, row: dict[str, Any]) -> Any:
+        with self._lock, _market_file_lock(self._lock_path):
+            if self._path is not None:
+                self._reload_from_disk_locked()
+            owner, event_type, ref, record = self._decode_validated_row(row)
+            event_key = (owner, event_type, ref)
+            encoded = self._encoded_row(row)
+            existing = self._event_rows.get(event_key)
+            if existing is not None:
+                if existing == encoded:
+                    return record
+                raise ValueError(
+                    f"owner-enveloped market data record collision owner={owner!r} ref={ref!r}"
+                )
+            if self._path is not None:
+                with self._path.open("a", encoding="utf-8") as fh:
+                    fh.write(encoded + "\n")
+                    fh.flush()
+                    os.fsync(fh.fileno())
+            self._insert_decoded(owner, event_type, ref, record)
+            self._event_rows[event_key] = encoded
+            return record
 
     def record_dataset(
         self,
         record: DatasetSemanticsRecord,
         *,
+        owner_user_id: str,
         use_context: ValidationUseContext | RuntimeStatus | str = ValidationUseContext.RESEARCH,
     ) -> DatasetSemanticsRecord:
-        return self._record_dataset(record, use_context=use_context, persist=True)
+        owner = _stable_market_owner(owner_user_id)
+        return self._write_row(
+            {
+                "schema_version": 2,
+                "event_type": "dataset_semantics_recorded",
+                "owner_user_id": owner,
+                "use_context": _value(use_context),
+                "dataset": record.to_dict(),
+            }
+        )
 
-    def _record_dataset(
+    def record_instrument(
         self,
-        record: DatasetSemanticsRecord,
+        record: InstrumentSpec,
         *,
-        use_context: ValidationUseContext | RuntimeStatus | str,
-        persist: bool,
-    ) -> DatasetSemanticsRecord:
-        decision = validate_dataset_semantics(record, use_context=use_context)
-        if not decision.accepted:
-            raise ValueError(_decision_message(decision))
-        self._datasets[record.dataset_ref] = record
-        if persist:
-            self._append(
-                {
-                    "schema_version": 1,
-                    "event_type": "dataset_semantics_recorded",
-                    "use_context": _value(use_context),
-                    "dataset": record.to_dict(),
-                }
-            )
-        return record
-
-    def record_instrument(self, record: InstrumentSpec) -> InstrumentSpec:
-        return self._record_instrument(record, persist=True)
-
-    def _record_instrument(self, record: InstrumentSpec, *, persist: bool) -> InstrumentSpec:
-        decision = validate_instrument_spec(record)
-        if not decision.accepted:
-            raise ValueError(_decision_message(decision))
-        self._instruments[record.instrument_ref] = record
-        if persist:
-            self._append(
-                {
-                    "schema_version": 1,
-                    "event_type": "instrument_spec_recorded",
-                    "instrument": record.to_dict(),
-                }
-            )
-        return record
+        owner_user_id: str,
+    ) -> InstrumentSpec:
+        owner = _stable_market_owner(owner_user_id)
+        return self._write_row(
+            {
+                "schema_version": 2,
+                "event_type": "instrument_spec_recorded",
+                "owner_user_id": owner,
+                "instrument": record.to_dict(),
+            }
+        )
 
     def record_capability_matrix(
         self,
         record: MarketCapabilityMatrixRecord,
         *,
+        owner_user_id: str,
         use_context: ValidationUseContext | RuntimeStatus | str = ValidationUseContext.RESEARCH,
     ) -> MarketCapabilityMatrixRecord:
-        return self._record_capability_matrix(record, use_context=use_context, persist=True)
+        owner = _stable_market_owner(owner_user_id)
+        return self._write_row(
+            {
+                "schema_version": 2,
+                "event_type": "market_capability_matrix_recorded",
+                "owner_user_id": owner,
+                "use_context": _value(use_context),
+                "capability_matrix": record.to_dict(),
+            }
+        )
 
-    def _record_capability_matrix(
-        self,
-        record: MarketCapabilityMatrixRecord,
-        *,
-        use_context: ValidationUseContext | RuntimeStatus | str,
-        persist: bool,
-    ) -> MarketCapabilityMatrixRecord:
-        decision = validate_market_capability_matrix(record, use_context=use_context)
-        if not decision.accepted:
-            raise ValueError(_decision_message(decision))
-        self._capability_matrices[record.matrix_ref] = record
-        if persist:
-            self._append(
-                {
-                    "schema_version": 1,
-                    "event_type": "market_capability_matrix_recorded",
-                    "use_context": _value(use_context),
-                    "capability_matrix": record.to_dict(),
-                }
-            )
-        return record
-
-    def record_use_validation(self, record: MarketDataUseValidationRecord) -> MarketDataUseValidationRecord:
-        return self._record_use_validation(record, persist=True)
-
-    def _record_use_validation(
+    def record_use_validation(
         self,
         record: MarketDataUseValidationRecord,
         *,
-        persist: bool,
+        owner_user_id: str,
     ) -> MarketDataUseValidationRecord:
-        decision = validate_market_data_use_validation_record(record)
-        if not decision.accepted:
-            raise ValueError(_decision_message(decision))
-        missing_dataset_refs = [ref for ref in record.dataset_refs if ref not in self._datasets]
-        if missing_dataset_refs:
-            raise ValueError(f"unknown dataset refs: {','.join(missing_dataset_refs)}")
-        missing_instrument_refs = [ref for ref in record.instrument_refs if ref not in self._instruments]
-        if missing_instrument_refs:
-            raise ValueError(f"unknown instrument refs: {','.join(missing_instrument_refs)}")
-        if record.capability_matrix_ref not in self._capability_matrices:
-            raise ValueError(f"unknown capability matrix ref: {record.capability_matrix_ref}")
-        self._use_validations[record.validation_ref] = record
-        if persist:
-            self._append(
-                {
-                    "schema_version": 1,
-                    "event_type": "market_data_use_validation_recorded",
-                    "use_validation": record.to_dict(),
-                }
-            )
-        return record
+        owner = _stable_market_owner(owner_user_id)
+        return self._write_row(
+            {
+                "schema_version": 2,
+                "event_type": "market_data_use_validation_recorded",
+                "owner_user_id": owner,
+                "use_validation": record.to_dict(),
+            }
+        )
 
-    def dataset(self, dataset_ref: str) -> DatasetSemanticsRecord:
-        if dataset_ref not in self._datasets:
+    def dataset(self, dataset_ref: str, *, owner_user_id: str) -> DatasetSemanticsRecord:
+        self._refresh_for_read()
+        key = _market_record_key(owner_user_id, dataset_ref, field_name="dataset_ref")
+        if key not in self._datasets:
             raise KeyError(f"unknown dataset semantics record: {dataset_ref}")
-        return self._datasets[dataset_ref]
+        return self._datasets[key]
 
-    def instrument(self, instrument_ref: str) -> InstrumentSpec:
-        if instrument_ref not in self._instruments:
+    def instrument(self, instrument_ref: str, *, owner_user_id: str) -> InstrumentSpec:
+        self._refresh_for_read()
+        key = _market_record_key(owner_user_id, instrument_ref, field_name="instrument_ref")
+        if key not in self._instruments:
             raise KeyError(f"unknown instrument spec: {instrument_ref}")
-        return self._instruments[instrument_ref]
+        return self._instruments[key]
 
-    def capability_matrix(self, matrix_ref: str) -> MarketCapabilityMatrixRecord:
-        if matrix_ref not in self._capability_matrices:
+    def capability_matrix(
+        self,
+        matrix_ref: str,
+        *,
+        owner_user_id: str,
+    ) -> MarketCapabilityMatrixRecord:
+        self._refresh_for_read()
+        key = _market_record_key(owner_user_id, matrix_ref, field_name="matrix_ref")
+        if key not in self._capability_matrices:
             raise KeyError(f"unknown market capability matrix: {matrix_ref}")
-        return self._capability_matrices[matrix_ref]
+        return self._capability_matrices[key]
 
-    def use_validation(self, validation_ref: str) -> MarketDataUseValidationRecord:
-        if validation_ref not in self._use_validations:
+    def use_validation(
+        self,
+        validation_ref: str,
+        *,
+        owner_user_id: str,
+    ) -> MarketDataUseValidationRecord:
+        self._refresh_for_read()
+        key = _market_record_key(owner_user_id, validation_ref, field_name="validation_ref")
+        if key not in self._use_validations:
             raise KeyError(f"unknown market data use validation: {validation_ref}")
-        return self._use_validations[validation_ref]
+        return self._use_validations[key]
 
-    def datasets(self) -> list[DatasetSemanticsRecord]:
-        return sorted(self._datasets.values(), key=lambda record: record.dataset_ref)
+    def datasets(self, *, owner_user_id: str) -> list[DatasetSemanticsRecord]:
+        self._refresh_for_read()
+        owner = _stable_market_owner(owner_user_id)
+        return sorted(
+            (record for (record_owner, _), record in self._datasets.items() if record_owner == owner),
+            key=lambda record: record.dataset_ref,
+        )
 
-    def instruments(self) -> list[InstrumentSpec]:
-        return sorted(self._instruments.values(), key=lambda record: record.instrument_ref)
+    def instruments(self, *, owner_user_id: str) -> list[InstrumentSpec]:
+        self._refresh_for_read()
+        owner = _stable_market_owner(owner_user_id)
+        return sorted(
+            (record for (record_owner, _), record in self._instruments.items() if record_owner == owner),
+            key=lambda record: record.instrument_ref,
+        )
 
-    def capability_matrices(self) -> list[MarketCapabilityMatrixRecord]:
-        return sorted(self._capability_matrices.values(), key=lambda record: record.matrix_ref)
+    def capability_matrices(self, *, owner_user_id: str) -> list[MarketCapabilityMatrixRecord]:
+        self._refresh_for_read()
+        owner = _stable_market_owner(owner_user_id)
+        return sorted(
+            (
+                record
+                for (record_owner, _), record in self._capability_matrices.items()
+                if record_owner == owner
+            ),
+            key=lambda record: record.matrix_ref,
+        )
 
-    def use_validations(self) -> list[MarketDataUseValidationRecord]:
-        return sorted(self._use_validations.values(), key=lambda record: record.validation_ref)
+    def use_validations(self, *, owner_user_id: str) -> list[MarketDataUseValidationRecord]:
+        self._refresh_for_read()
+        owner = _stable_market_owner(owner_user_id)
+        return sorted(
+            (
+                record
+                for (record_owner, _), record in self._use_validations.items()
+                if record_owner == owner
+            ),
+            key=lambda record: record.validation_ref,
+        )
 
 
 # ════════════════════════════════════════════════════════════════════════════════════════════

@@ -904,10 +904,12 @@ function RunOverviewTab({
   run,
   overviewRows,
   benchmarkLabel,
+  dataReady,
 }: {
   run: RunDetail;
   overviewRows: OverviewRow[];
   benchmarkLabel: string;
+  dataReady: boolean;
 }) {
   const dateList = useMemo(() => overviewRows.map((r) => r.date), [overviewRows]);
   const dateListRef = useRef(dateList);
@@ -919,6 +921,7 @@ function RunOverviewTab({
     showExcess: true,
     showBenchmark: true,
   });
+  const [chartRendered, setChartRendered] = useState(false);
   const chartRef = useRef<InstanceType<typeof ReactECharts> | null>(null);
   const chartWrapRef = useRef<HTMLDivElement | null>(null);
   const syncingFromDispatch = useRef(false);
@@ -959,6 +962,10 @@ function RunOverviewTab({
   );
 
   const chartHeightPx = chartLayout.totalChartPx;
+
+  useEffect(() => {
+    setChartRendered(false);
+  }, [option, run.run_id]);
 
   /** 容器尺寸变化时 ECharts resize（图总高由 getFixedOverviewChartLayout 固定常量决定） */
   useEffect(() => {
@@ -1156,6 +1163,8 @@ function RunOverviewTab({
             ref={chartWrapRef}
             className="jq-run-overview-chart-resize-wrap"
             style={{ width: "100%", minHeight: chartHeightPx }}
+            data-run-first-screen-ready={chartRendered && dataReady ? "true" : "false"}
+            data-run-id={run.run_id}
           >
             <ReactECharts
               ref={chartRef}
@@ -1166,6 +1175,7 @@ function RunOverviewTab({
               onEvents={{
                 dataZoom: onDataZoomEvent,
                 datazoom: onDataZoomEvent,
+                finished: () => setChartRendered(true),
               }}
             />
           </div>
@@ -1348,6 +1358,11 @@ export function RunDetailPage() {
     ],
   );
   const benchmarkLabel = run?.benchmark?.trim() || "基准收益";
+  const overviewQueriesReady =
+    strategySeriesQuery.isSuccess &&
+    benchmarkSeriesQuery.isSuccess &&
+    dailyBuySeriesQuery.isSuccess &&
+    dailySellSeriesQuery.isSuccess;
   const filteredLogs = (logsQuery.data?.entries ?? []).filter((entry) =>
     logTab === "errors" ? /error|failed|traceback/i.test(`${entry.level} ${entry.message}`) : true,
   );
@@ -1364,7 +1379,14 @@ export function RunDetailPage() {
 
   const renderMainContent = () => {
     if (detailContentTab === "overview") {
-      return <RunOverviewTab run={run} overviewRows={overviewRows} benchmarkLabel={benchmarkLabel} />;
+      return (
+        <RunOverviewTab
+          run={run}
+          overviewRows={overviewRows}
+          benchmarkLabel={benchmarkLabel}
+          dataReady={overviewQueriesReady}
+        />
+      );
     }
 
     if (detailContentTab === "trade_detail") {

@@ -67,6 +67,10 @@ def load_training_panel(dataset_id: str) -> pd.DataFrame:
     df = pd.DataFrame(feats, columns=FEATURES)
     df.insert(0, "symbol", symbol)
     df.insert(0, "ts", ts)
+    # Deterministic synthetic observations are known when emitted.  Keeping an
+    # explicit knowledge-time axis lets confirmatory consumers exercise the
+    # same fail-closed PIT path as real datasets without inventing later revisions.
+    df.insert(1, "known_at", ts)
     df["label"] = label
     df["label_cls"] = (label > 0).astype(int)
     # close 价格列：每标的随机游走，日收益随 label 轻微倾斜，让"训练→回测"有真实可学信号。

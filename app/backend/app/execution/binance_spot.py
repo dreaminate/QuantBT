@@ -92,7 +92,7 @@ class BinanceSpotVenue(ExecutionVenue):
                     f.min_notional = float(flt.get("minNotional", flt.get("notional", 0)))
             self._filters[symbol["symbol"].upper()] = f
 
-    def place_order(self, order: Order) -> OrderAck:
+    def place_order(self, order: Order, *, before_order_request: Any = None) -> OrderAck:
         binance_type = _BINANCE_TYPE_MAP.get(order.order_type)
         if binance_type is None:
             raise NotImplementedError(f"binance_spot 不支持 {order.order_type}")
@@ -120,6 +120,8 @@ class BinanceSpotVenue(ExecutionVenue):
         if binance_type in {"LIMIT", "LIMIT_MAKER", "STOP_LOSS_LIMIT", "TAKE_PROFIT_LIMIT"}:
             params["timeInForce"] = order.time_in_force or "GTC"
         endpoint = "/api/v3/order/oco" if binance_type == "OCO" else "/api/v3/order"
+        if before_order_request is not None:
+            before_order_request()
         resp = self._client.signed("POST", endpoint, params)
         ack = OrderAck(
             order_id=str(resp.get("orderId") or resp.get("orderListId") or params["newClientOrderId"]),
@@ -150,6 +152,16 @@ class BinanceSpotVenue(ExecutionVenue):
                 results.append({"error": str(exc), "order_id": o.get("orderId")})
         self._audit.log("binance_spot_cancel_all", {"count": len(results)})
         return results
+
+    def emergency_cancel_all(self) -> dict[str, Any]:
+        actions = self.cancel_all_open()
+        errors = [item for item in actions if item.get("error")]
+        return {
+            "ok": not errors,
+            "verified_noop": not actions,
+            "actions": actions,
+            "error": "; ".join(str(item.get("error")) for item in errors) or None,
+        }
 
     def get_position(self, symbol: str) -> Position:
         balances = self.get_balance()

@@ -1,7 +1,11 @@
 from __future__ import annotations
 
+import json
+import subprocess
+import sys
 from dataclasses import replace
 from datetime import UTC, datetime
+from pathlib import Path
 from types import SimpleNamespace
 
 import polars as pl
@@ -30,7 +34,9 @@ from app.research_os import (
     SecretRefStatus,
     PersistentAssetLifecycleRegistry,
     PersistentCompilerIRStore,
+    PersistentEntrypointEvidenceRegistry,
     PersistentGoalEntrypointCoverageRegistry,
+    PersistentGoalValidationReceiptRegistry,
     PersistentMarketDataRegistry,
     PersistentOnboardingRegistry,
     PersistentResearchGraphStore,
@@ -48,6 +54,8 @@ from app.research_os import (
     validate_model_routing_policy,
     validate_secret_ref,
 )
+from app.research_os.goal_proof_ledger import GoalProofLedger
+from app.research_os.ref_resolution import build_real_ref_resolver
 from app.security import InMemoryKeystore, SecureKeystore
 
 
@@ -488,16 +496,56 @@ def _payload(record) -> dict:
     return record.__dict__.copy()
 
 
+def _patch_goal_proof_stores(tmp_path, monkeypatch):  # noqa: ANN001
+    graph = PersistentResearchGraphStore(tmp_path / "research_graph.jsonl")
+    proof_ledger = GoalProofLedger(tmp_path / "goal_proof_ledger")
+    compiler = PersistentCompilerIRStore(
+        tmp_path / "compiler_ir.jsonl",
+        proof_ledger=proof_ledger,
+        legacy_read_only=True,
+    )
+    validations = PersistentGoalValidationReceiptRegistry(
+        tmp_path / "goal_validation_receipts.jsonl",
+        proof_ledger=proof_ledger,
+        legacy_read_only=True,
+    )
+    evidence = PersistentEntrypointEvidenceRegistry(
+        tmp_path / "entrypoint_evidence.jsonl",
+        research_graph_store=graph,
+        compiler_store=compiler,
+        validation_receipt_registry=validations,
+        proof_ledger=proof_ledger,
+        legacy_read_only=True,
+    )
+    coverage = PersistentGoalEntrypointCoverageRegistry(
+        tmp_path / "goal_entrypoint_coverage.jsonl",
+        proof_ledger=proof_ledger,
+        legacy_read_only=True,
+    )
+    coverage.set_ref_resolver(
+        build_real_ref_resolver(
+            research_graph_store=graph,
+            lifecycle_registry=None,
+            governance_registry=None,
+            rag_index=None,
+            spine_chain_registry=None,
+            compiler_store=compiler,
+            goal_validation_receipt_registry=validations,
+            platform_source_evidence_registry=evidence,
+        )
+    )
+    monkeypatch.setattr(main, "RESEARCH_GRAPH_STORE", graph)
+    monkeypatch.setattr(main, "COMPILER_IR_STORE", compiler)
+    monkeypatch.setattr(main, "GOAL_VALIDATION_RECEIPT_REGISTRY", validations)
+    monkeypatch.setattr(main, "ENTRYPOINT_EVIDENCE_REGISTRY", evidence)
+    monkeypatch.setattr(main, "GOAL_ENTRYPOINT_COVERAGE_REGISTRY", coverage)
+
+
 def _client_with_onboarding_registry(tmp_path, monkeypatch):
+    monkeypatch.setenv("QUANTBT_LLM_ADMIN_USER_IDS", "u1")
     registry = PersistentOnboardingRegistry(tmp_path / "onboarding_settings.jsonl")
     monkeypatch.setattr(main, "ONBOARDING_REGISTRY", registry)
-    monkeypatch.setattr(main, "RESEARCH_GRAPH_STORE", PersistentResearchGraphStore(tmp_path / "research_graph.jsonl"))
-    monkeypatch.setattr(main, "COMPILER_IR_STORE", PersistentCompilerIRStore(tmp_path / "compiler_ir.jsonl"))
-    monkeypatch.setattr(
-        main,
-        "GOAL_ENTRYPOINT_COVERAGE_REGISTRY",
-        PersistentGoalEntrypointCoverageRegistry(tmp_path / "goal_entrypoint_coverage.jsonl"),
-    )
+    _patch_goal_proof_stores(tmp_path, monkeypatch)
     main.app.dependency_overrides[require_user_dependency] = lambda: SimpleNamespace(
         username="u1",
         user_id="u1",
@@ -538,6 +586,84 @@ def _install_lifecycle_and_dataset_registries(tmp_path, monkeypatch):
     return lifecycle, datasets
 
 
+def _install_readiness_llm_chain(tmp_path, monkeypatch, registry, *, suffix: str):
+    from app.agent import LLMMessage, LLMResponse, ensure_settings_managed_llm_provider
+    from app.llm import (
+        GatewayBackedLLMClient,
+        PersistentLLMUseBindingStore,
+        build_agent_llm_gateway,
+    )
+    from app.llm.call_record_store import LLMCallRecordStore
+    from app.research_os import PersistentOnboardingReadinessRegistry
+    from app.security import KeystoreRecord
+
+    service_owner = main._LLM_SERVICE_PRINCIPAL
+    now = datetime.now(UTC).isoformat()
+    ensure_settings_managed_llm_provider(
+        registry=registry,
+        provider="openai",
+        owner=service_owner,
+        created_at=now,
+    )
+    registry.record_llm_provider_health_snapshot(
+        _provider_health_snapshot(
+            snapshot_ref=f"llm_health:openai:{suffix}",
+            auth_ref="secretref:llm:openai",
+            checked_at=now,
+            recorded_by=service_owner,
+        ),
+        owner_user_id=service_owner,
+    )
+    call_store = LLMCallRecordStore(tmp_path / f"llm_call_records_{suffix}.jsonl")
+    binding_store = PersistentLLMUseBindingStore(
+        tmp_path / f"llm_gateway_use_bindings_{suffix}.jsonl",
+        seal_secret=call_store.seal_secret,
+        terminal_record_resolver=call_store.resolve_terminal_record,
+    )
+    keystore = SecureKeystore(InMemoryKeystore())
+    keystore.store(
+        KeystoreRecord(
+            name="llm_openai",
+            api_key="sk-test-only-readiness-key-0123456789",
+            api_secret="sk-test-only-readiness-key-0123456789",
+        )
+    )
+
+    class ReadinessLLM:
+        def chat(self, messages, *, tools=None, model=None, temperature=0.2):
+            return LLMResponse(content="readiness-ok")
+
+    gateway = build_agent_llm_gateway(
+        keystore,
+        client_factory=lambda _credential: ReadinessLLM(),
+        seal_secret=call_store.seal_secret,
+        use_binding_sink=binding_store.append,
+        service_principal_ref=service_owner,
+        credential_pool_refs={"openai": "pool:llm:openai:default"},
+        routing_policy_refs={"openai": "routing:llm:openai:default"},
+    )
+    workflow_ref = f"readiness-workflow-{suffix}"
+    llm_client = GatewayBackedLLMClient(
+        gateway,
+        session_id=workflow_ref,
+        owner_user_id="u1",
+        workflow_id=workflow_ref,
+        invocation_id_factory=lambda: f"readiness-invocation-{suffix}",
+        record_sink=call_store.append,
+    )
+    assert llm_client.chat([LLMMessage(role="user", content="readiness check")]).content == (
+        "readiness-ok"
+    )
+    monkeypatch.setattr(main, "LLM_CALL_RECORD_STORE", call_store)
+    monkeypatch.setattr(main, "LLM_USE_BINDING_STORE", binding_store)
+    readiness_registry = PersistentOnboardingReadinessRegistry(
+        tmp_path / f"onboarding_readiness_{suffix}.jsonl",
+        resolve_snapshot=main._resolve_onboarding_readiness_snapshot,
+    )
+    monkeypatch.setattr(main, "ONBOARDING_READINESS_REGISTRY", readiness_registry)
+    return llm_client.last_record.call_id, readiness_registry
+
+
 def _register_dataset_version(registry: DatasetRegistry, *, checksum: str | None = None):
     frame = pl.DataFrame({"ts": ["2026-06-26", "2026-06-27"], "close": [1.0, 1.1]})
     result = make_wide_fetch_result(frame, "tushare")
@@ -559,7 +685,10 @@ def _dataset_version_ref(version) -> str:
 
 
 def _seed_ok_connector_check(registry: PersistentOnboardingRegistry, **overrides):
-    return registry.record_data_connector_check(_connector_check(**overrides))
+    return registry.record_data_connector_check(
+        _connector_check(**overrides),
+        owner_user_id="u1",
+    )
 
 
 def _runner_fetch_result(frame: pl.DataFrame | None = None):
@@ -869,46 +998,60 @@ def test_persistent_onboarding_registry_replays_settings_records(tmp_path):
     path = tmp_path / "onboarding_settings.jsonl"
     registry = PersistentOnboardingRegistry(path)
     secret = _secret(secret_ref="secretref:openai:project", scope="llm:openai")
-    registry.record_secret_ref(secret)
-    registry.record_llm_provider(_provider())
-    registry.record_llm_provider_health_snapshot(_provider_health_snapshot())
-    registry.record_credential_pool(_pool())
-    registry.record_routing_policy(_policy())
+    registry.record_secret_ref(secret, owner_user_id="u1")
+    registry.record_llm_provider(_provider(), owner_user_id="u1")
+    registry.record_llm_provider_health_snapshot(
+        _provider_health_snapshot(recorded_by="u1"), owner_user_id="u1"
+    )
+    registry.record_credential_pool(_pool(), owner_user_id="u1")
+    registry.record_routing_policy(_policy(), owner_user_id="u1")
 
     reloaded = PersistentOnboardingRegistry(path)
-    assert reloaded.secret_ref("secretref:openai:project").scope == "llm:openai"
-    assert reloaded.llm_provider("openai").auth_refs == ("secretref:openai:project",)
-    assert reloaded.llm_provider_health_snapshot("llm_health:openai:001").snapshot_hash.startswith("sha16:")
-    assert reloaded.llm_provider_health_snapshots("openai")[0].quota_status == "ok"
-    assert reloaded.credential_pool("pool:openai:research").provider_id == "openai"
-    assert reloaded.routing_policy("routing:researcher:strategy").allowed_models == ("gpt-5.5",)
+    assert reloaded.secret_ref("secretref:openai:project", owner_user_id="u1").scope == "llm:openai"
+    assert reloaded.llm_provider("openai", owner_user_id="u1").auth_refs == ("secretref:openai:project",)
+    assert reloaded.llm_provider_health_snapshot(
+        "llm_health:openai:001", owner_user_id="u1"
+    ).snapshot_hash.startswith("sha16:")
+    assert reloaded.llm_provider_health_snapshots("openai", owner_user_id="u1")[0].quota_status == "ok"
+    assert reloaded.credential_pool("pool:openai:research", owner_user_id="u1").provider_id == "openai"
+    assert reloaded.routing_policy(
+        "routing:researcher:strategy", owner_user_id="u1"
+    ).allowed_models == ("gpt-5.5",)
 
 
 def test_persistent_onboarding_registry_replays_data_connector_records(tmp_path):
     path = tmp_path / "onboarding_settings.jsonl"
     registry = PersistentOnboardingRegistry(path)
-    registry.record_secret_ref(_secret())
-    registry.record_data_source_asset(_data_source())
-    registry.record_ingestion_skill(_skill())
-    registry.record_data_connector_check(_connector_check())
-    registry.record_data_connector_schema_probe(_schema_probe())
-    registry.record_data_connector_field_mapping(_field_mapping())
-    registry.record_data_connector_pit_bitemporal_rule(_pit_rule())
+    registry.record_secret_ref(_secret(), owner_user_id="u1")
+    registry.record_data_source_asset(_data_source(), owner_user_id="u1")
+    registry.record_ingestion_skill(_skill(), owner_user_id="u1")
+    registry.record_data_connector_check(_connector_check(), owner_user_id="u1")
+    registry.record_data_connector_schema_probe(_schema_probe(), owner_user_id="u1")
+    registry.record_data_connector_field_mapping(_field_mapping(), owner_user_id="u1")
+    registry.record_data_connector_pit_bitemporal_rule(_pit_rule(), owner_user_id="u1")
 
     reloaded = PersistentOnboardingRegistry(path)
-    assert reloaded.data_source("datasource:tushare").license == "commercial:user-provided"
-    assert reloaded.ingestion_skill("ingest:tushare:daily").secret_refs == ("secretref:tushare:read",)
-    assert reloaded.data_connector_check("connector_check:tushare:001").health_status == "ok"
-    assert reloaded.data_connector_schema_probe("schema_probe:tushare:daily:001").columns == ("ts", "symbol", "close")
-    assert reloaded.data_connector_field_mapping("schema_map:tushare:daily").source_to_canonical["close"] == "close"
-    assert reloaded.data_connector_pit_bitemporal_rule("pit:tushare:daily").asof_join_policy == "known_at_lte_decision_time_latest"
+    assert reloaded.data_source("datasource:tushare", owner_user_id="u1").license == "commercial:user-provided"
+    assert reloaded.ingestion_skill("ingest:tushare:daily", owner_user_id="u1").secret_refs == ("secretref:tushare:read",)
+    assert reloaded.data_connector_check(
+        "connector_check:tushare:001", owner_user_id="u1"
+    ).health_status == "ok"
+    assert reloaded.data_connector_schema_probe(
+        "schema_probe:tushare:daily:001", owner_user_id="u1"
+    ).columns == ("ts", "symbol", "close")
+    assert reloaded.data_connector_field_mapping(
+        "schema_map:tushare:daily", owner_user_id="u1"
+    ).source_to_canonical["close"] == "close"
+    assert reloaded.data_connector_pit_bitemporal_rule(
+        "pit:tushare:daily", owner_user_id="u1"
+    ).asof_join_policy == "known_at_lte_decision_time_latest"
 
 
 def test_persistent_onboarding_registry_rejects_provider_for_unrecorded_secret(tmp_path):
     registry = PersistentOnboardingRegistry(tmp_path / "onboarding_settings.jsonl")
 
     with pytest.raises(ValueError, match="auth_ref"):
-        registry.record_llm_provider(_provider())
+        registry.record_llm_provider(_provider(), owner_user_id="u1")
 
     assert not registry.path.exists()
 
@@ -931,14 +1074,252 @@ def test_llm_provider_health_snapshot_rejects_bad_status_and_plaintext_secret():
 
 def test_persistent_onboarding_registry_rejects_health_snapshot_for_unknown_or_wrong_provider(tmp_path):
     registry = PersistentOnboardingRegistry(tmp_path / "onboarding_settings.jsonl")
-    registry.record_secret_ref(_secret(secret_ref="secretref:openai:project", scope="llm:openai"))
+    registry.record_secret_ref(
+        _secret(secret_ref="secretref:openai:project", scope="llm:openai"),
+        owner_user_id="u1",
+    )
 
     with pytest.raises(ValueError, match="provider_id"):
-        registry.record_llm_provider_health_snapshot(_provider_health_snapshot())
+        registry.record_llm_provider_health_snapshot(
+            _provider_health_snapshot(recorded_by="u1"), owner_user_id="u1"
+        )
 
-    registry.record_llm_provider(_provider())
+    registry.record_llm_provider(_provider(), owner_user_id="u1")
     with pytest.raises(ValueError, match="not recorded for provider"):
-        registry.record_llm_provider_health_snapshot(_provider_health_snapshot(auth_ref="secretref:anthropic:project"))
+        registry.record_llm_provider_health_snapshot(
+            _provider_health_snapshot(
+                auth_ref="secretref:anthropic:project", recorded_by="u1"
+            ),
+            owner_user_id="u1",
+        )
+
+
+def _record_all_onboarding_registry_families(
+    registry: PersistentOnboardingRegistry,
+    *,
+    owner_user_id: str,
+) -> None:
+    registry.record_secret_ref(_secret(), owner_user_id=owner_user_id)
+    registry.record_data_source_asset(_data_source(), owner_user_id=owner_user_id)
+    registry.record_ingestion_skill(_skill(), owner_user_id=owner_user_id)
+    registry.record_data_connector_check(
+        _connector_check(recorded_by=owner_user_id),
+        owner_user_id=owner_user_id,
+    )
+    registry.record_data_connector_schema_probe(
+        _schema_probe(recorded_by=owner_user_id),
+        owner_user_id=owner_user_id,
+    )
+    registry.record_data_connector_field_mapping(
+        _field_mapping(recorded_by=owner_user_id),
+        owner_user_id=owner_user_id,
+    )
+    registry.record_data_connector_pit_bitemporal_rule(
+        _pit_rule(recorded_by=owner_user_id),
+        owner_user_id=owner_user_id,
+    )
+    registry.record_secret_ref(
+        _secret(secret_ref="secretref:openai:project", scope="llm:openai"),
+        owner_user_id=owner_user_id,
+    )
+    registry.record_llm_provider(_provider(), owner_user_id=owner_user_id)
+    registry.record_llm_provider_health_snapshot(
+        _provider_health_snapshot(recorded_by=owner_user_id),
+        owner_user_id=owner_user_id,
+    )
+    registry.record_credential_pool(_pool(), owner_user_id=owner_user_id)
+    registry.record_routing_policy(_policy(), owner_user_id=owner_user_id)
+
+
+def test_persistent_onboarding_registry_v2_scopes_all_families_by_owner_and_replays(tmp_path):
+    path = tmp_path / "onboarding_settings.jsonl"
+    registry = PersistentOnboardingRegistry(path)
+    _record_all_onboarding_registry_families(registry, owner_user_id="u1")
+    _record_all_onboarding_registry_families(registry, owner_user_id="u2")
+
+    reloaded = PersistentOnboardingRegistry(path)
+    for owner_user_id in ("u1", "u2"):
+        assert len(reloaded.secret_refs(owner_user_id=owner_user_id)) == 2
+        assert len(reloaded.data_sources(owner_user_id=owner_user_id)) == 1
+        assert len(reloaded.ingestion_skills(owner_user_id=owner_user_id)) == 1
+        assert len(reloaded.data_connector_checks(owner_user_id=owner_user_id)) == 1
+        assert len(reloaded.data_connector_schema_probes(owner_user_id=owner_user_id)) == 1
+        assert len(reloaded.data_connector_field_mappings(owner_user_id=owner_user_id)) == 1
+        assert len(reloaded.data_connector_pit_bitemporal_rules(owner_user_id=owner_user_id)) == 1
+        assert len(reloaded.llm_providers(owner_user_id=owner_user_id)) == 1
+        assert len(reloaded.llm_provider_health_snapshots(owner_user_id=owner_user_id)) == 1
+        assert len(reloaded.credential_pools(owner_user_id=owner_user_id)) == 1
+        assert len(reloaded.routing_policies(owner_user_id=owner_user_id)) == 1
+        assert reloaded.secret_ref(
+            "secretref:tushare:read", owner_user_id=owner_user_id
+        ).scope == "market_data:read"
+
+    rows = [json.loads(line) for line in path.read_text(encoding="utf-8").splitlines()]
+    assert len(rows) == 24
+    assert {row["schema_version"] for row in rows} == {2}
+    assert {row["owner_user_id"] for row in rows} == {"u1", "u2"}
+    assert all(row["record_revision"] == 1 for row in rows)
+    assert all(row["previous_record_hash"] is None for row in rows)
+    assert all(row["record_hash"].startswith("sha256:") for row in rows)
+    assert all(set(row) == {
+        "schema_version",
+        "owner_user_id",
+        "event_type",
+        "record_revision",
+        "previous_record_hash",
+        "record_hash",
+        "payload",
+    } for row in rows)
+
+
+def test_persistent_onboarding_registry_v2_exact_retry_and_explicit_cas_are_atomic(tmp_path):
+    path = tmp_path / "onboarding_settings.jsonl"
+    registry = PersistentOnboardingRegistry(path)
+    original = _secret(last_used=None)
+    registry.record_secret_ref(original, owner_user_id="u1")
+    first_bytes = path.read_bytes()
+
+    registry.record_secret_ref(original, owner_user_id="u1")
+    assert path.read_bytes() == first_bytes
+
+    changed = replace(original, last_used="2026-07-12T01:00:00Z")
+    with pytest.raises(ValueError, match="matching previous revision and hash"):
+        registry.record_secret_ref(changed, owner_user_id="u1")
+    assert path.read_bytes() == first_bytes
+
+    revision, record_hash = registry.record_state(
+        "secret_ref_recorded", original.secret_ref, owner_user_id="u1"
+    )
+    registry.record_secret_ref(
+        changed,
+        owner_user_id="u1",
+        expected_previous_revision=revision,
+        expected_previous_hash=record_hash,
+    )
+    second_bytes = path.read_bytes()
+    rows = [json.loads(line) for line in second_bytes.decode().splitlines()]
+    assert rows[-1]["record_revision"] == 2
+    assert rows[-1]["previous_record_hash"] == rows[0]["record_hash"]
+
+    with pytest.raises(ValueError, match="matching previous revision and hash"):
+        registry.record_secret_ref(
+            replace(changed, last_used="2026-07-12T02:00:00Z"),
+            owner_user_id="u1",
+            expected_previous_revision=revision,
+            expected_previous_hash=record_hash,
+        )
+    assert path.read_bytes() == second_bytes
+
+
+def test_persistent_onboarding_registry_v2_rejects_spoofed_recorded_by_without_write(tmp_path):
+    path = tmp_path / "onboarding_settings.jsonl"
+    registry = PersistentOnboardingRegistry(path)
+    registry.record_secret_ref(_secret(), owner_user_id="u1")
+    registry.record_data_source_asset(_data_source(), owner_user_id="u1")
+    registry.record_ingestion_skill(_skill(), owner_user_id="u1")
+    before = path.read_bytes()
+
+    with pytest.raises(ValueError, match="recorded_by must exactly match owner_user_id"):
+        registry.record_data_connector_check(
+            _connector_check(recorded_by="u2"),
+            owner_user_id="u1",
+        )
+    assert path.read_bytes() == before
+    assert registry.data_connector_checks(owner_user_id="u1") == []
+
+
+def test_persistent_onboarding_registry_v2_rejects_cross_owner_dependencies_without_write(tmp_path):
+    path = tmp_path / "onboarding_settings.jsonl"
+    registry = PersistentOnboardingRegistry(path)
+    registry.record_secret_ref(_secret(), owner_user_id="u1")
+    registry.record_data_source_asset(_data_source(), owner_user_id="u1")
+    before = path.read_bytes()
+
+    with pytest.raises(ValueError, match="not recorded for owner"):
+        registry.record_ingestion_skill(_skill(), owner_user_id="u2")
+    assert path.read_bytes() == before
+    assert registry.ingestion_skills(owner_user_id="u1") == []
+    assert registry.ingestion_skills(owner_user_id="u2") == []
+
+
+def test_persistent_onboarding_registry_v2_quarantines_legacy_rows_without_assigning_owner(tmp_path):
+    path = tmp_path / "onboarding_settings.jsonl"
+    legacy = {
+        "schema_version": 1,
+        "event_type": "secret_ref_recorded",
+        "secret_ref": {"secret_ref": "secretref:legacy:unowned"},
+    }
+    path.write_text(json.dumps(legacy) + "\n", encoding="utf-8")
+
+    registry = PersistentOnboardingRegistry(path)
+    assert registry.legacy_quarantined_count == 1
+    assert registry.secret_refs(owner_user_id="u1") == []
+    registry.record_secret_ref(_secret(), owner_user_id="u1")
+
+    rows = path.read_text(encoding="utf-8").splitlines()
+    assert json.loads(rows[0]) == legacy
+    assert json.loads(rows[1])["schema_version"] == 2
+    assert PersistentOnboardingRegistry(path).legacy_quarantined_count == 1
+
+
+@pytest.mark.parametrize("corruption", ["hash", "partial"])
+def test_persistent_onboarding_registry_v2_corrupt_history_fails_closed(tmp_path, corruption):
+    path = tmp_path / "onboarding_settings.jsonl"
+    registry = PersistentOnboardingRegistry(path)
+    registry.record_secret_ref(_secret(), owner_user_id="u1")
+    if corruption == "hash":
+        row = json.loads(path.read_text(encoding="utf-8"))
+        row["payload"]["scope"] = "tampered"
+        path.write_text(json.dumps(row) + "\n", encoding="utf-8")
+    else:
+        with path.open("a", encoding="utf-8") as fh:
+            fh.write("{")
+
+    with pytest.raises(ValueError, match="invalid persisted onboarding settings row"):
+        PersistentOnboardingRegistry(path)
+
+
+def test_persistent_onboarding_registry_v2_serializes_cross_process_writers(tmp_path):
+    path = tmp_path / "onboarding_settings.jsonl"
+    watcher = PersistentOnboardingRegistry(path)
+    backend_dir = Path(__file__).resolve().parents[1]
+    script = """
+import sys
+from app.research_os.onboarding_gateway import PersistentOnboardingRegistry, SecretRefRecord
+
+path, owner_user_id, secret_ref = sys.argv[1:4]
+registry = PersistentOnboardingRegistry(path)
+registry.record_secret_ref(
+    SecretRefRecord(
+        secret_ref=secret_ref,
+        scope="market_data:read",
+        status="active",
+        created_at="2026-07-12T00:00:00Z",
+        last_test="ok",
+    ),
+    owner_user_id=owner_user_id,
+)
+"""
+    refs = ["secretref:shared"] * 2 + [f"secretref:worker:{index}" for index in range(6)]
+    processes = [
+        subprocess.Popen(
+            [sys.executable, "-c", script, str(path), "u1", ref],
+            cwd=backend_dir,
+            stdout=subprocess.PIPE,
+            stderr=subprocess.PIPE,
+            text=True,
+        )
+        for ref in refs
+    ]
+    results = [process.communicate(timeout=30) for process in processes]
+    assert [process.returncode for process in processes] == [0] * len(processes), results
+
+    assert len(watcher.secret_refs(owner_user_id="u1")) == 7
+    reloaded = PersistentOnboardingRegistry(path)
+    assert reloaded.secret_refs(owner_user_id="u1") == watcher.secret_refs(owner_user_id="u1")
+    rows = [json.loads(line) for line in path.read_text(encoding="utf-8").splitlines()]
+    assert len(rows) == 7
+    assert len({(row["owner_user_id"], row["payload"]["secret_ref"]) for row in rows}) == 7
 
 
 def test_settings_api_records_llm_routing_summary_without_plaintext_secret(tmp_path, monkeypatch):
@@ -949,7 +1330,10 @@ def test_settings_api_records_llm_routing_summary_without_plaintext_secret(tmp_p
             json=_payload(_secret(secret_ref="secretref:openai:project", scope="llm:openai")),
         )
         assert secret.status_code == 200, secret.text
-        assert secret.json() == {"secret_ref": "secretref:openai:project", "recorded_by": "u1"}
+        assert secret.json() == {
+            "secret_ref": "secretref:openai:project",
+            "recorded_by": main._LLM_SERVICE_PRINCIPAL,
+        }
 
         provider = client.post("/api/research-os/settings/llm_providers", json=_payload(_provider()))
         assert provider.status_code == 200, provider.text
@@ -1018,7 +1402,9 @@ def test_settings_api_rejects_bad_llm_provider_health_snapshot_without_partial_w
         assert unknown_provider.status_code == 422
         assert "provider_id" in unknown_provider.json()["detail"]
 
-        assert registry.llm_provider_health_snapshots() == []
+        assert registry.llm_provider_health_snapshots(
+            owner_user_id=main._LLM_SERVICE_PRINCIPAL
+        ) == []
     finally:
         main.app.dependency_overrides.pop(require_user_dependency, None)
 
@@ -1038,7 +1424,7 @@ def test_settings_api_rejects_plaintext_payload_without_partial_write(tmp_path, 
         )
         assert rejected.status_code == 422
         assert "plaintext credential" in rejected.json()["detail"]
-        assert registry.secret_refs() == []
+        assert registry.secret_refs(owner_user_id="u1") == []
         assert not registry.path.exists()
     finally:
         main.app.dependency_overrides.pop(require_user_dependency, None)
@@ -1066,16 +1452,21 @@ def test_settings_api_stores_secret_value_in_keystore_without_summary_echo(tmp_p
             "secret_ref": "secretref:tushare:read",
             "scope": "market_data:read",
             "status": "active",
-            "keystore_ref": "tushare",
+            "keystore_ref": "user_c2624fc1593b530f_secretref_tushare_read",
             "keystore_backend": "memory",
             "secret_value_stored": True,
             "recorded_by": "u1",
         }
         assert secret_value not in stored.text
-        assert keystore.fetch("tushare").api_key == secret_value
-        assert keystore.fetch("tushare").api_secret == secret_value
-        recorded = registry.secret_ref("secretref:tushare:read")
-        assert recorded.access_audit == ("keystore:tushare",)
+        assert keystore.fetch(body["keystore_ref"]).api_key == secret_value
+        assert keystore.fetch(body["keystore_ref"]).api_secret == secret_value
+        recorded = registry.secret_ref(
+            "secretref:tushare:read",
+            owner_user_id="u1",
+        )
+        assert recorded.access_audit == (
+            "keystore:user_c2624fc1593b530f_secretref_tushare_read",
+        )
         assert recorded.affected_skills == ("ingest:tushare:daily",)
 
         summary = client.get("/api/research-os/settings/summary")
@@ -1083,7 +1474,9 @@ def test_settings_api_stores_secret_value_in_keystore_without_summary_echo(tmp_p
         summary_body = summary.json()
         assert summary_body["secret_ref_total"] == 1
         assert summary_body["secret_refs"][0]["secret_ref"] == "secretref:tushare:read"
-        assert summary_body["secret_refs"][0]["keystore_refs"] == ["tushare"]
+        assert summary_body["secret_refs"][0]["keystore_refs"] == [
+            "user_c2624fc1593b530f_secretref_tushare_read"
+        ]
         assert summary_body["secret_refs"][0]["keystore_backend"] == "memory"
         assert summary_body["secret_refs"][0]["secret_value_stored"] is True
         assert secret_value not in summary.text
@@ -1170,8 +1563,15 @@ def test_settings_connector_check_can_dereference_stored_secret_without_response
         assert body["ok"] is True
         assert body["check_ref"] == "connector_check:tushare:keystore"
         assert secret_value not in checked.text
-        assert checker.calls == [("ingest:tushare:daily", "datasource:tushare", "tushare", "u1")]
-        assert len(registry.data_connector_checks()) == 1
+        assert checker.calls == [
+            (
+                "ingest:tushare:daily",
+                "datasource:tushare",
+                "user_c2624fc1593b530f_secretref_tushare_read",
+                "u1",
+            )
+        ]
+        assert len(registry.data_connector_checks(owner_user_id="u1")) == 1
     finally:
         main.app.dependency_overrides.pop(require_user_dependency, None)
 
@@ -1210,7 +1610,7 @@ def test_settings_connector_check_requires_declared_keystore_value_before_checke
         assert checked.status_code == 422
         assert "secret value is missing" in checked.json()["detail"]
         assert checker.calls == 0
-        assert registry.data_connector_checks() == []
+        assert registry.data_connector_checks(owner_user_id="u1") == []
     finally:
         main.app.dependency_overrides.pop(require_user_dependency, None)
 
@@ -1351,7 +1751,7 @@ def test_settings_default_ingestion_runner_fetches_tushare_dataset_without_secre
         assert body["row_count"] == 2
         assert body["schema_probe_ref"].startswith("schema_probe:")
         assert body["update_ref"].startswith("ingestion_update:")
-        assert len(registry.data_connector_schema_probes()) == 1
+        assert len(registry.data_connector_schema_probes(owner_user_id="u1")) == 1
         assert datasets.latest("dataset:cn_equity_daily").row_count == 2
         assert secret_value not in run.text
     finally:
@@ -1388,7 +1788,7 @@ def test_settings_default_connector_adapter_supports_binance_public_check_withou
         assert body["secret_refs"] == []
         assert body["capability_refs"] == ["connector_capability:binance_rest_spot"]
         assert calls == ["binance_spot"]
-        assert registry.data_connector_checks()[0].secret_refs == ()
+        assert registry.data_connector_checks(owner_user_id="u1")[0].secret_refs == ()
     finally:
         main.app.dependency_overrides.pop(require_user_dependency, None)
 
@@ -1452,8 +1852,8 @@ def test_settings_default_ingestion_runner_fetches_binance_public_dataset_withou
         assert body["dataset_id"] == "dataset:binance_spot_btcusdt_1m"
         assert body["row_count"] == 2
         assert datasets.latest("dataset:binance_spot_btcusdt_1m").row_count == 2
-        assert len(registry.data_connector_schema_probes()) == 1
-        updates = lifecycle.ingestion_skill_updates()
+        assert len(registry.data_connector_schema_probes(owner_user_id="u1")) == 1
+        updates = lifecycle.ingestion_skill_updates(owner_user_id="u1")
         assert len(updates) == 1
         assert updates[0].secret_ref == "secret:none:binance_rest_spot"
         assert "api_key" not in run.text
@@ -1533,10 +1933,96 @@ def test_settings_default_connector_adapter_supports_stooq_public_check_without_
         assert body["secret_refs"] == []
         assert body["capability_refs"] == ["connector_capability:stooq"]
         assert calls == ["stooq"]
-        assert registry.data_connector_checks()[0].secret_refs == ()
+        assert registry.data_connector_checks(owner_user_id="u1")[0].secret_refs == ()
         assert "api_key" not in checked.text
         assert "token=" not in checked.text.lower()
         assert "sk-live" not in checked.text
+    finally:
+        main.app.dependency_overrides.pop(require_user_dependency, None)
+
+
+def test_settings_api_records_and_revokes_explicit_no_secret_policy(tmp_path, monkeypatch):
+    client, registry = _client_with_onboarding_registry(tmp_path, monkeypatch)
+    try:
+        source = client.post(
+            "/api/research-os/settings/data_sources",
+            json=_payload(_stooq_source()),
+        )
+        assert source.status_code == 200, source.text
+        created = client.post(
+            "/api/research-os/settings/no_secret_data_source_policies",
+            json={
+                "policy_ref": "no_secret_policy:stooq:public",
+                "source_ref": "datasource:stooq:public",
+                "source_type": "public_csv",
+                "connector_type": "public_csv_no_auth",
+                "external_credential_required": False,
+                "permission_scope": "market_data:read",
+                "approved_at": "2026-07-12T20:00:00Z",
+                "approval_ref": "approval:no-secret:stooq",
+                "evidence_refs": [
+                    "evidence:stooq:public-docs",
+                    "evidence:stooq:anonymous-health-check",
+                ],
+                "reason": "Stooq daily CSV is a documented anonymous read-only source.",
+            },
+        )
+        assert created.status_code == 200, created.text
+        body = created.json()
+        assert body["actor_ref"] == "u1"
+        assert body["status"] == "active"
+        assert body["record_revision"] == 1
+        assert body["record_hash"].startswith("sha256:")
+
+        skill = client.post(
+            "/api/research-os/settings/ingestion_skills",
+            json=_payload(_stooq_skill()),
+        )
+        assert skill.status_code == 200, skill.text
+        assert registry.no_secret_data_source_policies(
+            owner_user_id="u1",
+            source_ref="datasource:stooq:public",
+            status="active",
+        )[0].policy_ref == body["policy_ref"]
+
+        summary = client.get("/api/research-os/settings/summary")
+        assert summary.status_code == 200
+        assert summary.json()["no_secret_data_source_policy_total"] == 1
+        assert summary.json()["no_secret_data_source_policies"][0]["status"] == "active"
+
+        stale = client.post(
+            "/api/research-os/settings/no_secret_data_source_policies/"
+            "no_secret_policy:stooq:public/revoke",
+            json={
+                "expected_previous_revision": 1,
+                "expected_previous_hash": "sha256:" + "0" * 64,
+                "revoked_at": "2026-07-12T21:00:00Z",
+                "revocation_reason": "Anonymous access contract changed.",
+                "revocation_evidence_refs": ["evidence:stooq:auth-change"],
+            },
+        )
+        assert stale.status_code == 422
+        assert registry.no_secret_data_source_policy(
+            body["policy_ref"], owner_user_id="u1"
+        ).status == "active"
+
+        revoked = client.post(
+            "/api/research-os/settings/no_secret_data_source_policies/"
+            "no_secret_policy:stooq:public/revoke",
+            json={
+                "expected_previous_revision": body["record_revision"],
+                "expected_previous_hash": body["record_hash"],
+                "revoked_at": "2026-07-12T21:00:00Z",
+                "revocation_reason": "Anonymous access contract changed.",
+                "revocation_evidence_refs": ["evidence:stooq:auth-change"],
+            },
+        )
+        assert revoked.status_code == 200, revoked.text
+        assert revoked.json()["status"] == "revoked"
+        assert revoked.json()["record_revision"] == 2
+        assert registry.no_secret_data_source_policies(
+            owner_user_id="u1", status="active"
+        ) == []
     finally:
         main.app.dependency_overrides.pop(require_user_dependency, None)
 
@@ -1600,8 +2086,8 @@ def test_settings_default_ingestion_runner_fetches_stooq_public_dataset_without_
         assert body["dataset_id"] == "dataset:stooq_aapl_daily"
         assert body["row_count"] == 2
         assert datasets.latest("dataset:stooq_aapl_daily").row_count == 2
-        assert len(registry.data_connector_schema_probes()) == 1
-        updates = lifecycle.ingestion_skill_updates()
+        assert len(registry.data_connector_schema_probes(owner_user_id="u1")) == 1
+        updates = lifecycle.ingestion_skill_updates(owner_user_id="u1")
         assert len(updates) == 1
         assert updates[0].secret_ref == "secret:none:stooq"
         assert "api_key" not in run.text
@@ -1669,7 +2155,7 @@ def test_settings_default_connector_adapter_supports_generic_rest_yaml_check_and
         assert check_body["checker_ref"] == "settings_connector_registry_checker"
         assert check_body["secret_refs"] == []
         assert check_body["capability_refs"] == ["connector_capability:custom_bars"]
-        assert registry.data_connector_checks()[0].secret_refs == ()
+        assert registry.data_connector_checks(owner_user_id="u1")[0].secret_refs == ()
 
         run = client.post(
             "/api/research-os/settings/ingestion_skill_runs",
@@ -1680,8 +2166,8 @@ def test_settings_default_connector_adapter_supports_generic_rest_yaml_check_and
         assert body["dataset_id"] == "dataset:custom_bars"
         assert body["row_count"] == 2
         assert datasets.latest("dataset:custom_bars").row_count == 2
-        assert len(registry.data_connector_schema_probes()) == 1
-        updates = lifecycle.ingestion_skill_updates()
+        assert len(registry.data_connector_schema_probes(owner_user_id="u1")) == 1
+        updates = lifecycle.ingestion_skill_updates(owner_user_id="u1")
         assert len(updates) == 1
         assert updates[0].secret_ref == "secret:none:custom_bars"
         assert "api_key" not in run.text
@@ -1725,7 +2211,7 @@ def test_settings_generic_rest_connector_requires_yaml_or_config_as_failed_check
         assert "api_key" not in checked.text
         assert "sk-live" not in checked.text
         assert "static_value" not in checked.text
-        assert len(registry.data_connector_checks()) == 1
+        assert len(registry.data_connector_checks(owner_user_id="u1")) == 1
     finally:
         main.app.dependency_overrides.pop(require_user_dependency, None)
 
@@ -1783,7 +2269,7 @@ def test_settings_api_records_data_connector_check_without_plaintext_secret(tmp_
         assert summary_body["data_connector_check_total"] == 1
         assert summary_body["data_connector_checks"][0]["health_status"] == "ok"
         assert "sk-" not in summary.text
-        assert len(registry.data_connector_checks()) == 1
+        assert len(registry.data_connector_checks(owner_user_id="u1")) == 1
     finally:
         main.app.dependency_overrides.pop(require_user_dependency, None)
 
@@ -1792,8 +2278,14 @@ def test_settings_api_records_field_mapping_after_schema_probe_without_partial_w
     client, registry = _client_with_onboarding_registry(tmp_path, monkeypatch)
     try:
         _seed_data_connector_settings(client)
-        registry.record_data_connector_check(_connector_check())
-        registry.record_data_connector_schema_probe(_schema_probe())
+        registry.record_data_connector_check(
+            _connector_check(),
+            owner_user_id="u1",
+        )
+        registry.record_data_connector_schema_probe(
+            _schema_probe(),
+            owner_user_id="u1",
+        )
 
         recorded = client.post(
             "/api/research-os/settings/data_connector_field_mappings",
@@ -1849,7 +2341,9 @@ def test_settings_api_records_field_mapping_after_schema_probe_without_partial_w
         )
         assert rejected_pit.status_code == 422
         assert "pit_rule_asof_policy_not_pit_safe" in rejected_pit.json()["detail"]
-        assert len(registry.data_connector_pit_bitemporal_rules()) == 1
+        assert len(
+            registry.data_connector_pit_bitemporal_rules(owner_user_id="u1")
+        ) == 1
 
         rejected = client.post(
             "/api/research-os/settings/data_connector_field_mappings",
@@ -1867,7 +2361,7 @@ def test_settings_api_records_field_mapping_after_schema_probe_without_partial_w
         )
         assert rejected.status_code == 422
         assert "field_mapping_unknown_source_column" in rejected.json()["detail"]
-        assert len(registry.data_connector_field_mappings()) == 1
+        assert len(registry.data_connector_field_mappings(owner_user_id="u1")) == 1
 
         summary = client.get("/api/research-os/settings/summary")
         assert summary.status_code == 200
@@ -1896,7 +2390,7 @@ def test_settings_api_default_data_connector_checker_records_disabled_failure(tm
         assert body["status"] == "disabled"
         assert body["health_status"] == "disabled"
         assert body["error_code"] == "checker_disabled"
-        assert len(registry.data_connector_checks()) == 1
+        assert len(registry.data_connector_checks(owner_user_id="u1")) == 1
     finally:
         main.app.dependency_overrides.pop(require_user_dependency, None)
 
@@ -1937,7 +2431,7 @@ def test_settings_api_rejects_revoked_secret_before_data_connector_checker_call(
         assert checked.status_code == 422
         assert "revoked SecretRef" in checked.json()["detail"]
         assert checker.calls == 0
-        assert registry.data_connector_checks() == []
+        assert registry.data_connector_checks(owner_user_id="u1") == []
     finally:
         main.app.dependency_overrides.pop(require_user_dependency, None)
 
@@ -1957,7 +2451,7 @@ def test_settings_api_rejects_plaintext_data_connector_payload_without_partial_w
         )
         assert rejected.status_code == 422
         assert "plaintext credential" in rejected.json()["detail"]
-        assert registry.data_sources() == []
+        assert registry.data_sources(owner_user_id="u1") == []
         assert not registry.path.exists()
     finally:
         main.app.dependency_overrides.pop(require_user_dependency, None)
@@ -1987,7 +2481,7 @@ def test_settings_api_rejects_plaintext_checker_result_without_partial_write(tmp
         )
         assert checked.status_code == 422
         assert "plaintext credential" in checked.json()["detail"]
-        assert registry.data_connector_checks() == []
+        assert registry.data_connector_checks(owner_user_id="u1") == []
     finally:
         main.app.dependency_overrides.pop(require_user_dependency, None)
 
@@ -2022,19 +2516,20 @@ def test_settings_api_records_ingestion_skill_update_against_dataset_version(tmp
         _seed_data_connector_settings(client)
         recorded = client.post(
             "/api/research-os/settings/ingestion_skill_updates",
-            json=_ingestion_update_payload(version),
+            json=_ingestion_update_payload(version, recorded_by="spoofed-owner"),
         )
         assert recorded.status_code == 200, recorded.text
         body = recorded.json()
         assert body["update_ref"] == "ingestion_update:tushare:daily:001"
         assert body["dataset_version_ref"] == _dataset_version_ref(version)
         assert body["checksum"] == version.sha256
+        assert body["recorded_by"] == "u1"
 
         summary = client.get("/api/research-os/settings/summary")
         assert summary.status_code == 200
         assert summary.json()["ingestion_skill_update_total"] == 1
         assert summary.json()["ingestion_skill_updates"][0]["known_at_ref"] == "known_at:ingest_time"
-        assert len(lifecycle.ingestion_skill_updates()) == 1
+        assert len(lifecycle.ingestion_skill_updates(owner_user_id="u1")) == 1
         assert "sk-" not in summary.text
     finally:
         main.app.dependency_overrides.pop(require_user_dependency, None)
@@ -2052,7 +2547,7 @@ def test_settings_api_rejects_ingestion_skill_update_unknown_dataset_version_wit
         )
         assert rejected.status_code == 422
         assert "not recorded" in rejected.json()["detail"]
-        assert lifecycle.ingestion_skill_updates() == []
+        assert lifecycle.ingestion_skill_updates(owner_user_id="u1") == []
     finally:
         main.app.dependency_overrides.pop(require_user_dependency, None)
 
@@ -2069,7 +2564,7 @@ def test_settings_api_rejects_ingestion_skill_update_checksum_mismatch_without_w
         )
         assert rejected.status_code == 422
         assert "checksum" in rejected.json()["detail"]
-        assert lifecycle.ingestion_skill_updates() == []
+        assert lifecycle.ingestion_skill_updates(owner_user_id="u1") == []
     finally:
         main.app.dependency_overrides.pop(require_user_dependency, None)
 
@@ -2078,9 +2573,8 @@ def test_settings_api_runs_ingestion_skill_into_dataset_version_and_update(tmp_p
     client, registry = _client_with_onboarding_registry(tmp_path, monkeypatch)
     lifecycle, datasets = _install_lifecycle_and_dataset_registries(tmp_path, monkeypatch)
     market_data = PersistentMarketDataRegistry(tmp_path / "market_data_assets.jsonl")
-    graph = PersistentResearchGraphStore(tmp_path / "research_graph.jsonl")
+    graph = main.RESEARCH_GRAPH_STORE
     monkeypatch.setattr(main, "MARKET_DATA_REGISTRY", market_data)
-    monkeypatch.setattr(main, "RESEARCH_GRAPH_STORE", graph)
 
     class FakeRunner:
         runner_ref = "fake_ingestion_runner"
@@ -2135,14 +2629,14 @@ def test_settings_api_runs_ingestion_skill_into_dataset_version_and_update(tmp_p
         assert versions[0].file_paths[0].endswith(".parquet")
         assert pl.read_parquet(versions[0].file_paths[0]).height == 2
 
-        probes = registry.data_connector_schema_probes()
+        probes = registry.data_connector_schema_probes(owner_user_id="u1")
         assert len(probes) == 1
         assert probes[0].probe_ref == "schema_probe:tushare:daily:run"
         assert probes[0].dataset_version_ref == body["dataset_version_ref"]
         assert probes[0].schema_signature_hash.startswith("schema_signature:")
         assert probes[0].drift_status == "none"
 
-        updates = lifecycle.ingestion_skill_updates()
+        updates = lifecycle.ingestion_skill_updates(owner_user_id="u1")
         assert len(updates) == 1
         assert updates[0].dataset_version_ref == body["dataset_version_ref"]
         assert updates[0].checksum == body["checksum"]
@@ -2162,13 +2656,13 @@ def test_settings_api_runs_ingestion_skill_into_dataset_version_and_update(tmp_p
             json={"skill_id": "ingest:tushare:daily", "update_ref": updates[0].update_ref},
         )
         assert missing_rule.status_code == 422
-        assert market_data.datasets() == []
+        assert market_data.datasets(owner_user_id="u1") == []
         missing_dataset_instrument = client.post(
             "/api/research-os/settings/instrument_specs",
             json={"skill_id": "ingest:tushare:daily"},
         )
         assert missing_dataset_instrument.status_code == 422
-        assert market_data.instruments() == []
+        assert market_data.instruments(owner_user_id="u1") == []
         assert graph.commands() == []
 
         mapping = client.post(
@@ -2206,8 +2700,8 @@ def test_settings_api_runs_ingestion_skill_into_dataset_version_and_update(tmp_p
         assert semantics_body["use_context"] == "confirmatory_validation"
         assert semantics_body["raw_data_stored"] is False
         assert semantics_body["connector_called"] is False
-        assert len(market_data.datasets()) == 1
-        dataset = market_data.datasets()[0]
+        assert len(market_data.datasets(owner_user_id="u1")) == 1
+        dataset = market_data.datasets(owner_user_id="u1")[0]
         assert dataset.known_at_ref == "known_at:ingest_time"
         assert dataset.effective_at_ref == "effective_at:trade_date"
         assert dataset.pit_bitemporal_rules_ref == "pit:tushare:daily"
@@ -2215,7 +2709,8 @@ def test_settings_api_runs_ingestion_skill_into_dataset_version_and_update(tmp_p
         assert graph.commands()
         assert semantics_body["qro_id"].startswith("qro_")
         assert graph.commands()[-1].command_type == "upsert_qro"
-        assert graph.commands()[-1].payload["qro"].qro_type.value == "Dataset"
+        qro_type = graph.commands()[-1].payload["qro"].qro_type
+        assert getattr(qro_type, "value", qro_type) == "Dataset"
         _assert_compiler_coverage(
             semantics_body,
             entrypoint_ref="api:research_os.settings.dataset_semantics",
@@ -2235,10 +2730,11 @@ def test_settings_api_runs_ingestion_skill_into_dataset_version_and_update(tmp_p
         assert instrument_body["raw_data_stored"] is False
         assert instrument_body["connector_called"] is False
         assert instrument_body["venue_called"] is False
-        assert len(market_data.instruments()) == 1
-        assert market_data.instruments()[0].exchange_calendar_ref == "calendar:datasource:tushare:default"
-        assert market_data.instruments()[0].symbol_mapping_ref == "schema_map:tushare:daily"
-        assert graph.commands()[-1].payload["qro"].qro_type.value == "DataSourceAsset"
+        assert len(market_data.instruments(owner_user_id="u1")) == 1
+        assert market_data.instruments(owner_user_id="u1")[0].exchange_calendar_ref == "calendar:datasource:tushare:default"
+        assert market_data.instruments(owner_user_id="u1")[0].symbol_mapping_ref == "schema_map:tushare:daily"
+        qro_type = graph.commands()[-1].payload["qro"].qro_type
+        assert getattr(qro_type, "value", qro_type) == "DataSourceAsset"
         _assert_compiler_coverage(
             instrument_body,
             entrypoint_ref="api:research_os.settings.instrument_specs",
@@ -2255,7 +2751,7 @@ def test_settings_api_runs_ingestion_skill_into_dataset_version_and_update(tmp_p
             },
         )
         assert live_capability.status_code == 422
-        assert market_data.capability_matrices() == []
+        assert market_data.capability_matrices(owner_user_id="u1") == []
         missing_capability_use = client.post(
             "/api/research-os/settings/market_data_use_validations",
             json={
@@ -2265,7 +2761,7 @@ def test_settings_api_runs_ingestion_skill_into_dataset_version_and_update(tmp_p
             },
         )
         assert missing_capability_use.status_code == 422
-        assert market_data.use_validations() == []
+        assert market_data.use_validations(owner_user_id="u1") == []
 
         capability = client.post(
             "/api/research-os/settings/capability_matrices",
@@ -2284,10 +2780,11 @@ def test_settings_api_runs_ingestion_skill_into_dataset_version_and_update(tmp_p
         assert capability_body["raw_data_stored"] is False
         assert capability_body["connector_called"] is False
         assert capability_body["venue_called"] is False
-        assert len(market_data.capability_matrices()) == 1
-        assert market_data.capability_matrices()[0].data_availability == semantics_body["dataset_ref"]
-        assert market_data.capability_matrices()[0].live is False
-        assert graph.commands()[-1].payload["qro"].qro_type.value == "MarketCapabilityMatrix"
+        assert len(market_data.capability_matrices(owner_user_id="u1")) == 1
+        assert market_data.capability_matrices(owner_user_id="u1")[0].data_availability == semantics_body["dataset_ref"]
+        assert market_data.capability_matrices(owner_user_id="u1")[0].live is False
+        qro_type = graph.commands()[-1].payload["qro"].qro_type
+        assert getattr(qro_type, "value", qro_type) == "MarketCapabilityMatrix"
         _assert_compiler_coverage(
             capability_body,
             entrypoint_ref="api:research_os.settings.capability_matrices",
@@ -2311,12 +2808,13 @@ def test_settings_api_runs_ingestion_skill_into_dataset_version_and_update(tmp_p
         assert use_body["connector_called"] is False
         assert use_body["strategy_builder_called"] is False
         assert use_body["venue_called"] is False
-        assert len(market_data.use_validations()) == 1
-        recorded_use = market_data.use_validations()[0]
+        assert len(market_data.use_validations(owner_user_id="u1")) == 1
+        recorded_use = market_data.use_validations(owner_user_id="u1")[0]
         assert recorded_use.dataset_refs == (semantics_body["dataset_ref"],)
         assert recorded_use.instrument_refs == (instrument_body["instrument_ref"],)
         assert recorded_use.capability_matrix_ref == capability_body["matrix_ref"]
-        assert graph.commands()[-1].payload["qro"].qro_type.value == "MarketCapabilityMatrix"
+        qro_type = graph.commands()[-1].payload["qro"].qro_type
+        assert getattr(qro_type, "value", qro_type) == "MarketCapabilityMatrix"
         assert graph.commands()[-1].payload["qro"].output_contract["status"] == "market_data_use_validated"
         assert use_body["compiler_ir_ref"].startswith("compiler_ir:")
         assert use_body["compiler_pass_ref"].startswith("compiler_pass:")
@@ -2341,10 +2839,10 @@ def test_settings_api_runs_ingestion_skill_into_dataset_version_and_update(tmp_p
             json={"skill_id": "ingest:tushare:daily", "update_ref": "ingestion_update:missing"},
         )
         assert bad_semantics.status_code == 422
-        assert len(market_data.datasets()) == 1
-        assert len(market_data.instruments()) == 1
-        assert len(market_data.capability_matrices()) == 1
-        assert len(market_data.use_validations()) == 1
+        assert len(market_data.datasets(owner_user_id="u1")) == 1
+        assert len(market_data.instruments(owner_user_id="u1")) == 1
+        assert len(market_data.capability_matrices(owner_user_id="u1")) == 1
+        assert len(market_data.use_validations(owner_user_id="u1")) == 1
 
         summary = client.get("/api/research-os/settings/summary")
         assert summary.status_code == 200
@@ -2364,9 +2862,8 @@ def test_settings_api_runs_one_shot_data_connector_onboarding_into_market_data_u
     client, registry = _client_with_onboarding_registry(tmp_path, monkeypatch)
     lifecycle, datasets = _install_lifecycle_and_dataset_registries(tmp_path, monkeypatch)
     market_data = PersistentMarketDataRegistry(tmp_path / "market_data_assets.jsonl")
-    graph = PersistentResearchGraphStore(tmp_path / "research_graph.jsonl")
+    graph = main.RESEARCH_GRAPH_STORE
     monkeypatch.setattr(main, "MARKET_DATA_REGISTRY", market_data)
-    monkeypatch.setattr(main, "RESEARCH_GRAPH_STORE", graph)
 
     class FakeChecker:
         checker_ref = "fake_data_connector_checker"
@@ -2446,7 +2943,12 @@ def test_settings_api_runs_one_shot_data_connector_onboarding_into_market_data_u
         assert body["compiler_ir_ref"].startswith("compiler_ir:")
         assert body["compiler_pass_ref"].startswith("compiler_pass:")
         assert body["entrypoint_coverage_ref"].startswith("goal_entrypoint_coverage:")
-        assert body["step_outputs"]["market_data_use"]["entrypoint_coverage_ref"] != body["entrypoint_coverage_ref"]
+        assert body["step_outputs"]["market_data_use"]["entrypoint_coverage_ref"] == body["entrypoint_coverage_ref"]
+        assert body["step_outputs"]["compiler_coverage"] == {
+            "compiler_ir_ref": body["compiler_ir_ref"],
+            "compiler_pass_ref": body["compiler_pass_ref"],
+            "entrypoint_coverage_ref": body["entrypoint_coverage_ref"],
+        }
         assert "sk-" not in response.text
 
         assert checker.calls == [("ingest:tushare:daily", "datasource:tushare", ("secretref:tushare:read",), "u1")]
@@ -2454,40 +2956,321 @@ def test_settings_api_runs_one_shot_data_connector_onboarding_into_market_data_u
             ("ingest:tushare:daily", "datasource:tushare", "connector_check:tushare:ok", "ingest:tushare:daily", "u1")
         ]
         assert datasets.latest("dataset:cn_equity_daily").row_count == 2
-        assert len(lifecycle.ingestion_skill_updates()) == 1
-        assert len(registry.data_connector_schema_probes()) == 1
-        assert registry.data_connector_field_mappings()[0].mapping_method == "agent_suggested"
-        assert registry.data_connector_field_mappings()[0].source_to_canonical == {
+        assert len(lifecycle.ingestion_skill_updates(owner_user_id="u1")) == 1
+        assert len(registry.data_connector_schema_probes(owner_user_id="u1")) == 1
+        assert registry.data_connector_field_mappings(owner_user_id="u1")[0].mapping_method == "agent_suggested"
+        assert registry.data_connector_field_mappings(owner_user_id="u1")[0].source_to_canonical == {
             "ts": "event_time",
             "symbol": "instrument_id",
             "close": "close",
         }
-        assert registry.data_connector_pit_bitemporal_rules()[0].field_mapping_ref == "schema_map:tushare:daily"
-        assert len(market_data.datasets()) == 1
-        assert len(market_data.instruments()) == 1
-        assert len(market_data.capability_matrices()) == 1
-        assert len(market_data.use_validations()) == 1
-        assert market_data.use_validations()[0].accepted is True
+        assert registry.data_connector_pit_bitemporal_rules(
+            owner_user_id="u1"
+        )[0].field_mapping_ref == "schema_map:tushare:daily"
+        assert len(market_data.datasets(owner_user_id="u1")) == 1
+        assert len(market_data.instruments(owner_user_id="u1")) == 1
+        assert len(market_data.capability_matrices(owner_user_id="u1")) == 1
+        assert len(market_data.use_validations(owner_user_id="u1")) == 1
+        assert market_data.use_validations(owner_user_id="u1")[0].accepted is True
         assert graph.commands()[-1].payload["qro"].output_contract["status"] == "market_data_use_validated"
         qro_id = body["step_outputs"]["market_data_use"]["qro_id"]
         graph_command_id = body["step_outputs"]["market_data_use"]["research_graph_command_id"]
         direct_coverage = main.GOAL_ENTRYPOINT_COVERAGE_REGISTRY.coverage(
             body["step_outputs"]["market_data_use"]["entrypoint_coverage_ref"]
         )
-        onboarding_coverage = main.GOAL_ENTRYPOINT_COVERAGE_REGISTRY.coverage(body["entrypoint_coverage_ref"])
+        reused_coverage = main.GOAL_ENTRYPOINT_COVERAGE_REGISTRY.coverage(body["entrypoint_coverage_ref"])
         assert direct_coverage.entrypoint_ref == "api:research_os.settings.market_data_use_validations"
-        assert onboarding_coverage.entrypoint_ref == "api:research_os.settings.data_connector_onboarding_runs"
+        assert reused_coverage == direct_coverage
         assert direct_coverage.qro_refs == (qro_id,)
-        assert onboarding_coverage.qro_refs == (qro_id,)
-        assert onboarding_coverage.research_graph_command_refs == (graph_command_id,)
+        assert reused_coverage.research_graph_command_refs == (graph_command_id,)
+        subject_coverages = tuple(
+            coverage
+            for coverage in main.GOAL_ENTRYPOINT_COVERAGE_REGISTRY.canonical_records(
+                owner="u1"
+            )
+            if coverage.qro_refs == (qro_id,)
+            and coverage.research_graph_command_refs == (graph_command_id,)
+        )
+        assert subject_coverages == (direct_coverage,)
         top_ir = main.COMPILER_IR_STORE.ir(body["compiler_ir_ref"])
         top_pass = main.COMPILER_IR_STORE.compiler_pass(body["compiler_pass_ref"])
         assert top_ir.source_qro_refs == (qro_id,)
         assert top_pass.input_qro_refs == (qro_id,)
-        compiled_text = f"{top_ir.__dict__} {top_pass.__dict__} {onboarding_coverage.__dict__}"
+        proof_ledger = main._registry_goal_proof_ledger(main.COMPILER_IR_STORE)
+        assert proof_ledger is not None
+        required_refs = {
+            direct_coverage.validation_refs[0],
+            direct_coverage.evidence_refs[0],
+            top_ir.ir_ref,
+            top_pass.pass_ref,
+            direct_coverage.coverage_ref,
+        }
+        subject_heads = tuple(
+            head
+            for head in proof_ledger.current(owner="u1").heads
+            if head.logical_ref in required_refs
+        )
+        assert {head.logical_ref for head in subject_heads} == required_refs
+        assert len({head.bundle_id for head in subject_heads}) == 1
+        compiled_text = f"{top_ir.__dict__} {top_pass.__dict__} {reused_coverage.__dict__}"
         assert "000001.SZ" not in compiled_text
         assert "10.5" not in compiled_text
         assert "sk-" not in compiled_text
+
+        from app.agent import LLMMessage, LLMResponse, ensure_settings_managed_llm_provider
+        from app.llm import (
+            GatewayBackedLLMClient,
+            PersistentLLMUseBindingStore,
+            build_agent_llm_gateway,
+        )
+        from app.llm.call_record_store import LLMCallRecordStore
+        from app.research_os import PersistentOnboardingReadinessRegistry
+        from app.security import KeystoreRecord
+
+        service_owner = main._LLM_SERVICE_PRINCIPAL
+        now = datetime.now(UTC).isoformat()
+        ensure_settings_managed_llm_provider(
+            registry=registry,
+            provider="openai",
+            owner=service_owner,
+            created_at=now,
+        )
+        registry.record_llm_provider_health_snapshot(
+            _provider_health_snapshot(
+                snapshot_ref="llm_health:openai:readiness",
+                auth_ref="secretref:llm:openai",
+                checked_at=now,
+                recorded_by=service_owner,
+            ),
+            owner_user_id=service_owner,
+        )
+        call_store = LLMCallRecordStore(tmp_path / "llm_call_records.jsonl")
+        binding_store = PersistentLLMUseBindingStore(
+            tmp_path / "llm_gateway_use_bindings.jsonl",
+            seal_secret=call_store.seal_secret,
+            terminal_record_resolver=call_store.resolve_terminal_record,
+        )
+        keystore = SecureKeystore(InMemoryKeystore())
+        keystore.store(
+            KeystoreRecord(
+                name="llm_openai",
+                api_key="sk-test-only-readiness-key-0123456789",
+                api_secret="sk-test-only-readiness-key-0123456789",
+            )
+        )
+
+        class ReadinessLLM:
+            def chat(self, messages, *, tools=None, model=None, temperature=0.2):
+                return LLMResponse(content="readiness-ok")
+
+        gateway = build_agent_llm_gateway(
+            keystore,
+            client_factory=lambda _credential: ReadinessLLM(),
+            seal_secret=call_store.seal_secret,
+            use_binding_sink=binding_store.append,
+            service_principal_ref=service_owner,
+            credential_pool_refs={"openai": "pool:llm:openai:default"},
+            routing_policy_refs={"openai": "routing:llm:openai:default"},
+        )
+        llm_client = GatewayBackedLLMClient(
+            gateway,
+            session_id="readiness-workflow",
+            owner_user_id="u1",
+            workflow_id="readiness-workflow",
+            invocation_id_factory=lambda: "readiness-invocation-1",
+            record_sink=call_store.append,
+        )
+        assert llm_client.chat([LLMMessage(role="user", content="readiness check")]).content == "readiness-ok"
+        terminal_call_ref = llm_client.last_record.call_id
+        monkeypatch.setattr(main, "LLM_CALL_RECORD_STORE", call_store)
+        monkeypatch.setattr(main, "LLM_USE_BINDING_STORE", binding_store)
+        readiness_registry = PersistentOnboardingReadinessRegistry(
+            tmp_path / "onboarding_readiness.jsonl",
+            resolve_snapshot=main._resolve_onboarding_readiness_snapshot,
+        )
+        monkeypatch.setattr(main, "ONBOARDING_READINESS_REGISTRY", readiness_registry)
+
+        readiness = client.post(
+            "/api/research-os/goal/onboarding/readiness/current",
+            json={
+                "data_source_ref": "datasource:tushare",
+                "routing_policy_ref": "routing:llm:openai:default",
+                "terminal_call_ref": terminal_call_ref,
+            },
+        )
+        assert readiness.status_code == 200, readiness.text
+        readiness_body = readiness.json()
+        assert readiness_body["receipt_ref"].startswith("onboarding_readiness_receipt:")
+        assert readiness_body["component_count"] == 18
+        assert readiness_body["terminal_call_ref"] == terminal_call_ref
+        assert readiness_body["entrypoint_coverage_ref"].startswith("goal_entrypoint_coverage:")
+        receipt = readiness_registry.receipt(
+            readiness_body["receipt_ref"],
+            owner_user_id="u1",
+        )
+        assert readiness_registry.validate_current(
+            receipt.receipt_ref,
+            owner_user_id="u1",
+        ).accepted
+        readiness_coverage = main.GOAL_ENTRYPOINT_COVERAGE_REGISTRY.coverage(
+            readiness_body["entrypoint_coverage_ref"]
+        )
+        assert readiness_coverage.entrypoint_ref == "api:goal.onboarding.readiness"
+        assert readiness_coverage.goal_sections == ("§4",)
+        assert len(readiness_coverage.validation_refs) == 1
+        goal_receipt = main.GOAL_VALIDATION_RECEIPT_REGISTRY.receipt(
+            readiness_coverage.validation_refs[0],
+            owner_user_id="u1",
+        )
+        assert goal_receipt.subject_qro_refs == (readiness_body["qro_id"],)
+        assert receipt.receipt_ref in goal_receipt.evidence_refs
+
+        extra_field = client.post(
+            "/api/research-os/goal/onboarding/readiness/current",
+            json={
+                "data_source_ref": "datasource:tushare",
+                "routing_policy_ref": "routing:llm:openai:default",
+                "terminal_call_ref": terminal_call_ref,
+                "caller_evidence": "must-not-be-accepted",
+            },
+        )
+        assert extra_field.status_code == 422
+    finally:
+        main.app.dependency_overrides.pop(require_user_dependency, None)
+
+
+def test_no_secret_policy_drives_current_onboarding_readiness_and_revocation_stales_it(
+    tmp_path,
+    monkeypatch,
+):
+    client, registry = _client_with_onboarding_registry(tmp_path, monkeypatch)
+    _lifecycle, _datasets = _install_lifecycle_and_dataset_registries(
+        tmp_path, monkeypatch
+    )
+    market_data = PersistentMarketDataRegistry(tmp_path / "market_data_assets.jsonl")
+    graph = main.RESEARCH_GRAPH_STORE
+    monkeypatch.setattr(main, "MARKET_DATA_REGISTRY", market_data)
+
+    class FakeChecker:
+        checker_ref = "fake_public_csv_checker"
+
+        def check_connection(self, *, skill, source, secrets, actor):
+            assert secrets == ()
+            return {
+                "check_ref": "connector_check:stooq:ok",
+                "status": "ok",
+                "health_status": "ok",
+                "quota_status": "ok",
+                "capability_refs": ["capability:daily_bar"],
+                "schema_probe_ref": "schema_probe:stooq:daily:check",
+                "response_hash": "sha256:sanitized-public-check",
+            }
+
+    class FakeRunner:
+        runner_ref = "fake_public_csv_runner"
+
+        def run_ingestion(
+            self, *, skill, source, secrets, connector_check, request, actor
+        ):
+            assert secrets == ()
+            return {
+                "fetch_result": _runner_fetch_result(),
+                "connector_name": "stooq",
+                "schema_probe_ref": "schema_probe:stooq:daily:run",
+                "lineage_ref": "lineage:stooq:daily:run",
+                "quality_verdict_ref": "quality:stooq:daily:pass",
+                "known_at_ref": "known_at:stooq:ingest-time",
+                "effective_at_ref": "effective_at:stooq:trade-date",
+                "freshness_status": "fresh",
+                "evidence_refs": ["runner:evidence:stooq:001"],
+            }
+
+    monkeypatch.setattr(main, "DATA_CONNECTOR_CONNECTION_CHECKER", FakeChecker())
+    monkeypatch.setattr(main, "DATA_CONNECTOR_INGESTION_RUNNER", FakeRunner())
+    try:
+        source = client.post(
+            "/api/research-os/settings/data_sources",
+            json=_payload(_stooq_source()),
+        )
+        assert source.status_code == 200, source.text
+        policy = client.post(
+            "/api/research-os/settings/no_secret_data_source_policies",
+            json={
+                "policy_ref": "no_secret_policy:stooq:readiness",
+                "source_ref": "datasource:stooq:public",
+                "source_type": "public_csv",
+                "connector_type": "public_csv_no_auth",
+                "external_credential_required": False,
+                "permission_scope": "market_data:read",
+                "approved_at": "2026-07-12T20:00:00Z",
+                "approval_ref": "approval:no-secret:stooq:readiness",
+                "evidence_refs": [
+                    "evidence:stooq:public-docs",
+                    "evidence:stooq:anonymous-health-check",
+                ],
+                "reason": "Public daily CSV is explicitly approved for anonymous read-only use.",
+            },
+        )
+        assert policy.status_code == 200, policy.text
+        skill = client.post(
+            "/api/research-os/settings/ingestion_skills",
+            json=_payload(_stooq_skill()),
+        )
+        assert skill.status_code == 200, skill.text
+
+        onboarding = client.post(
+            "/api/research-os/settings/data_connector_onboarding_runs",
+            json={"skill_id": "ingest:stooq:aapl:daily"},
+        )
+        assert onboarding.status_code == 200, onboarding.text
+        assert onboarding.json()["accepted"] is True
+
+        terminal_call_ref, readiness_registry = _install_readiness_llm_chain(
+            tmp_path,
+            monkeypatch,
+            registry,
+            suffix="no-secret",
+        )
+        readiness = client.post(
+            "/api/research-os/goal/onboarding/readiness/current",
+            json={
+                "data_source_ref": "datasource:stooq:public",
+                "routing_policy_ref": "routing:llm:openai:default",
+                "terminal_call_ref": terminal_call_ref,
+            },
+        )
+        assert readiness.status_code == 200, readiness.text
+        receipt = readiness_registry.receipt(
+            readiness.json()["receipt_ref"],
+            owner_user_id="u1",
+        )
+        assert receipt.snapshot.credential_mode == "no_secret_policy"
+        assert (
+            receipt.snapshot.secret_or_no_secret_policy.component_ref
+            == "no_secret_policy:stooq:readiness"
+        )
+        assert readiness_registry.validate_current(
+            receipt.receipt_ref,
+            owner_user_id="u1",
+        ).accepted
+
+        policy_body = policy.json()
+        revoked = client.post(
+            "/api/research-os/settings/no_secret_data_source_policies/"
+            "no_secret_policy:stooq:readiness/revoke",
+            json={
+                "expected_previous_revision": policy_body["record_revision"],
+                "expected_previous_hash": policy_body["record_hash"],
+                "revoked_at": "2026-07-12T21:00:00Z",
+                "revocation_reason": "Provider documentation now requires authentication.",
+                "revocation_evidence_refs": ["evidence:stooq:auth-change"],
+            },
+        )
+        assert revoked.status_code == 200, revoked.text
+        assert not readiness_registry.validate_current(
+            receipt.receipt_ref,
+            owner_user_id="u1",
+        ).accepted
     finally:
         main.app.dependency_overrides.pop(require_user_dependency, None)
 
@@ -2499,9 +3282,8 @@ def test_settings_one_shot_data_connector_onboarding_stops_before_market_data_re
     client, registry = _client_with_onboarding_registry(tmp_path, monkeypatch)
     lifecycle, datasets = _install_lifecycle_and_dataset_registries(tmp_path, monkeypatch)
     market_data = PersistentMarketDataRegistry(tmp_path / "market_data_assets.jsonl")
-    graph = PersistentResearchGraphStore(tmp_path / "research_graph.jsonl")
+    graph = main.RESEARCH_GRAPH_STORE
     monkeypatch.setattr(main, "MARKET_DATA_REGISTRY", market_data)
-    monkeypatch.setattr(main, "RESEARCH_GRAPH_STORE", graph)
 
     class FakeChecker:
         checker_ref = "fake_data_connector_checker"
@@ -2552,16 +3334,16 @@ def test_settings_one_shot_data_connector_onboarding_stops_before_market_data_re
         assert "field_mapping_unknown_source_column" in str(detail["error"])
         assert "sk-" not in response.text
 
-        assert len(registry.data_connector_checks()) == 1
-        assert len(registry.data_connector_schema_probes()) == 1
-        assert len(lifecycle.ingestion_skill_updates()) == 1
+        assert len(registry.data_connector_checks(owner_user_id="u1")) == 1
+        assert len(registry.data_connector_schema_probes(owner_user_id="u1")) == 1
+        assert len(lifecycle.ingestion_skill_updates(owner_user_id="u1")) == 1
         assert datasets.latest("dataset:cn_equity_daily").row_count == 2
-        assert registry.data_connector_field_mappings() == []
-        assert registry.data_connector_pit_bitemporal_rules() == []
-        assert market_data.datasets() == []
-        assert market_data.instruments() == []
-        assert market_data.capability_matrices() == []
-        assert market_data.use_validations() == []
+        assert registry.data_connector_field_mappings(owner_user_id="u1") == []
+        assert registry.data_connector_pit_bitemporal_rules(owner_user_id="u1") == []
+        assert market_data.datasets(owner_user_id="u1") == []
+        assert market_data.instruments(owner_user_id="u1") == []
+        assert market_data.capability_matrices(owner_user_id="u1") == []
+        assert market_data.use_validations(owner_user_id="u1") == []
         assert graph.commands() == []
     finally:
         main.app.dependency_overrides.pop(require_user_dependency, None)
@@ -2591,8 +3373,8 @@ def test_settings_api_ingestion_run_requires_ok_connector_check_before_runner_ca
         assert "ok DataConnectorConnectionCheck" in rejected.json()["detail"]
         assert runner.calls == 0
         assert datasets.list_versions() == []
-        assert lifecycle.ingestion_skill_updates() == []
-        assert registry.data_connector_checks() == []
+        assert lifecycle.ingestion_skill_updates(owner_user_id="u1") == []
+        assert registry.data_connector_checks(owner_user_id="u1") == []
     finally:
         main.app.dependency_overrides.pop(require_user_dependency, None)
 
@@ -2612,7 +3394,7 @@ def test_settings_api_default_ingestion_runner_does_not_write_dataset_or_update(
         assert rejected.status_code == 422
         assert "ingestion runner disabled" in rejected.json()["detail"]
         assert datasets.list_versions() == []
-        assert lifecycle.ingestion_skill_updates() == []
+        assert lifecycle.ingestion_skill_updates(owner_user_id="u1") == []
         assert not (tmp_path / "datasets" / "ingestion").exists()
     finally:
         main.app.dependency_overrides.pop(require_user_dependency, None)
@@ -2639,7 +3421,7 @@ def test_settings_api_rejects_ingestion_runner_checksum_mismatch_without_write(t
         assert rejected.status_code == 422
         assert "sha256" in rejected.json()["detail"]
         assert datasets.list_versions() == []
-        assert lifecycle.ingestion_skill_updates() == []
+        assert lifecycle.ingestion_skill_updates(owner_user_id="u1") == []
         assert not (tmp_path / "datasets" / "ingestion").exists()
     finally:
         main.app.dependency_overrides.pop(require_user_dependency, None)
@@ -2674,7 +3456,7 @@ def test_settings_api_rejects_ingestion_runner_plaintext_frame_without_write(tmp
         assert rejected.status_code == 422
         assert "plaintext credential" in rejected.json()["detail"]
         assert datasets.list_versions() == []
-        assert lifecycle.ingestion_skill_updates() == []
+        assert lifecycle.ingestion_skill_updates(owner_user_id="u1") == []
         assert not (tmp_path / "datasets" / "ingestion").exists()
     finally:
         main.app.dependency_overrides.pop(require_user_dependency, None)
@@ -2728,8 +3510,8 @@ def test_settings_api_ingestion_run_blocks_schema_drift_without_event_or_impact_
         assert second.status_code == 422
         assert "schema_drift_missing_event_or_impact" in second.json()["detail"]
         assert len(datasets.list_versions("dataset:cn_equity_daily")) == 1
-        assert len(lifecycle.ingestion_skill_updates()) == 1
-        assert len(registry.data_connector_schema_probes()) == 1
+        assert len(lifecycle.ingestion_skill_updates(owner_user_id="u1")) == 1
+        assert len(registry.data_connector_schema_probes(owner_user_id="u1")) == 1
         assert not (tmp_path / "datasets" / "ingestion" / "dataset_cn_equity_daily").joinpath(
             "schema_probe_tushare_daily_v2.parquet"
         ).exists()

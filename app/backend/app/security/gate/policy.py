@@ -7,6 +7,7 @@
 
 from __future__ import annotations
 
+import math
 from enum import Enum
 from typing import Any, Literal
 
@@ -104,7 +105,12 @@ def _order_notional(order: Any, tier: TrustTier, *, ref_price: float | None = No
     两者皆无 → 返 -1（不可核），实盘 deny-by-default 不放无法证伪名义额的单。
     """
 
-    qty = abs(float(getattr(order, "quantity", 0) or 0))
+    try:
+        qty = abs(float(getattr(order, "quantity", 0) or 0))
+    except (TypeError, ValueError):
+        return -1.0
+    if not math.isfinite(qty) or qty <= 0:
+        return -1.0
     px = getattr(order, "price", None)
     extra = getattr(order, "extra", None) or {}
     if tier == TrustTier.PAPER:
@@ -118,14 +124,16 @@ def _order_notional(order: Any, tier: TrustTier, *, ref_price: float | None = No
         if px is None:
             px = ref_price
         try:
-            return abs(qty * float(px)) if px else 0.0
+            value = abs(qty * float(px)) if px else 0.0
+            return value if math.isfinite(value) else -1.0
         except (TypeError, ValueError):
             return 0.0
     # 非 PAPER：认 order.price（撮合价）或可信 ref_price；都无 → 不可核（-1），实盘不放无法证伪的单。
     if px is None:
         px = ref_price
     try:
-        return abs(qty * float(px)) if px is not None else -1.0
+        value = abs(qty * float(px)) if px is not None else -1.0
+        return value if math.isfinite(value) and value > 0 else -1.0
     except (TypeError, ValueError):
         return -1.0
 
@@ -184,6 +192,10 @@ def evaluate(
     lev = getattr(order, "leverage", None)
     if is_live and lev is None:
         violations.append("leverage_unspecified")
+    elif lev is not None and (
+        not math.isfinite(float(lev)) or float(lev) <= 0
+    ):
+        violations.append("leverage_invalid")
     elif lev is not None and float(lev) > gate.max_leverage:
         violations.append(f"max_leverage_exceeded:{lev}>{gate.max_leverage}")
     else:

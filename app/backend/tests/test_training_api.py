@@ -3,11 +3,13 @@
 from __future__ import annotations
 
 import time
+from types import SimpleNamespace
 
 import pytest
 from fastapi.testclient import TestClient
 
 from app import main as app_main
+from app.auth import require_user_dependency
 from app.experiments import ExperimentStore, ModelRegistry, RunStore
 from app.main import app
 from app.research_os import (
@@ -16,9 +18,27 @@ from app.research_os import (
     PersistentModelGovernanceRegistry,
     ResearchGraphStore,
 )
+from app.research_os.entrypoint_evidence import PersistentEntrypointEvidenceRegistry
+from app.research_os.goal_proof_ledger import GoalProofLedger
+from app.research_os.goal_validation_receipts import (
+    PersistentGoalValidationReceiptRegistry,
+)
+from app.research_os.ref_resolution import build_real_ref_resolver
 from app.training import TrainingService
 
 client = TestClient(app)
+
+
+@pytest.fixture(autouse=True)
+def _authenticated_training_user():
+    app.dependency_overrides[require_user_dependency] = lambda: SimpleNamespace(
+        user_id="pytest",
+        username="pytest",
+    )
+    try:
+        yield
+    finally:
+        app.dependency_overrides.pop(require_user_dependency, None)
 
 
 def test_training_models_endpoint() -> None:
@@ -111,14 +131,72 @@ def test_training_submit_requires_market_data_use_validation_refs() -> None:
     assert "market_data_use_validation_refs is required" in response.text
 
 
+@pytest.mark.parametrize("as_of_known", [None, "", "not-an-iso-time"])
+def test_confirmatory_training_rejects_invalid_pit_cutoff_before_queue(
+    as_of_known,
+) -> None:
+    before = {job.job_id for job in app_main.TRAINING_SERVICE.list_jobs()}
+    payload = {
+        "name": "confirmatory-without-valid-pit-cutoff",
+        "model": "xgboost",
+        "task": "regression",
+        "dataset_id": "demo_ashare_xsec",
+        "feature_cols": ["f_mom5", "f_mom20"],
+        "label_col": "label",
+        "use_context": "confirmatory_validation",
+    }
+    if as_of_known is not None:
+        payload["as_of_known"] = as_of_known
+
+    response = client.post("/api/training/jobs", json=payload)
+
+    assert response.status_code == 422
+    assert "as_of_known" in response.text
+    assert {job.job_id for job in app_main.TRAINING_SERVICE.list_jobs()} == before
+
+
 def test_training_success_records_model_qro_without_metrics_or_artifact_payload(
     tmp_path,
     monkeypatch,
     training_market_data_use_validation_ref,
 ) -> None:
     graph = ResearchGraphStore()
-    compiler_store = PersistentCompilerIRStore(tmp_path / "compiler_ir.jsonl")
-    coverage_store = PersistentGoalEntrypointCoverageRegistry(tmp_path / "goal_entrypoint_coverage.jsonl")
+    proof_ledger = GoalProofLedger(tmp_path / "goal_proof_ledger")
+    compiler_store = PersistentCompilerIRStore(
+        tmp_path / "compiler_ir.jsonl",
+        proof_ledger=proof_ledger,
+        legacy_read_only=True,
+    )
+    validation_store = PersistentGoalValidationReceiptRegistry(
+        tmp_path / "goal_validation_receipts.jsonl",
+        proof_ledger=proof_ledger,
+        legacy_read_only=True,
+    )
+    evidence_store = PersistentEntrypointEvidenceRegistry(
+        tmp_path / "entrypoint_evidence.jsonl",
+        research_graph_store=graph,
+        compiler_store=compiler_store,
+        validation_receipt_registry=validation_store,
+        proof_ledger=proof_ledger,
+        legacy_read_only=True,
+    )
+    coverage_store = PersistentGoalEntrypointCoverageRegistry(
+        tmp_path / "goal_entrypoint_coverage.jsonl",
+        proof_ledger=proof_ledger,
+        legacy_read_only=True,
+    )
+    coverage_store.set_ref_resolver(
+        build_real_ref_resolver(
+            research_graph_store=graph,
+            lifecycle_registry=None,
+            governance_registry=None,
+            rag_index=None,
+            spine_chain_registry=None,
+            compiler_store=compiler_store,
+            goal_validation_receipt_registry=validation_store,
+            platform_source_evidence_registry=evidence_store,
+        )
+    )
     experiments_root = tmp_path / "experiments"
     governance = PersistentModelGovernanceRegistry(tmp_path / "model_governance.jsonl")
     service = TrainingService(
@@ -133,6 +211,8 @@ def test_training_success_records_model_qro_without_metrics_or_artifact_payload(
     monkeypatch.setattr(app_main, "TRAINING_SERVICE", service)
     monkeypatch.setattr(app_main, "RESEARCH_GRAPH_STORE", graph)
     monkeypatch.setattr(app_main, "COMPILER_IR_STORE", compiler_store)
+    monkeypatch.setattr(app_main, "GOAL_VALIDATION_RECEIPT_REGISTRY", validation_store)
+    monkeypatch.setattr(app_main, "ENTRYPOINT_EVIDENCE_REGISTRY", evidence_store)
     monkeypatch.setattr(app_main, "GOAL_ENTRYPOINT_COVERAGE_REGISTRY", coverage_store)
     isolated = TestClient(app_main.app)
 
@@ -186,9 +266,16 @@ def test_training_success_records_model_qro_without_metrics_or_artifact_payload(
     assert ir.source_qro_refs == (final["qro_id"],)
     assert ir.graph_command_refs == (final["research_graph_command_id"],)
     assert ir.permission_ref == "training.job:service"
-    assert final["validation_dossier_ref"] in ir.validation_refs
-    assert final["model_passport_ref"] in ir.validation_refs
-    assert training_market_data_use_validation_ref in ir.validation_refs
+    assert len(ir.validation_refs) == 1
+    [validation_ref] = ir.validation_refs
+    assert validation_ref.startswith("goal_validation_receipt:")
+    receipt = validation_store.receipt(validation_ref, owner_user_id="pytest")
+    assert receipt.subject_qro_refs == (final["qro_id"],)
+    assert receipt.graph_command_refs == (final["research_graph_command_id"],)
+    assert receipt.outcome == "passed"
+    assert final["validation_dossier_ref"] in receipt.evidence_refs
+    assert final["model_passport_ref"] in receipt.evidence_refs
+    assert training_market_data_use_validation_ref in receipt.evidence_refs
     assert compiler_pass.entry_source == "api"
     assert compiler_pass.actor_source == "agent"
     assert compiler_pass.permission_ref == "training.job:service"

@@ -11,6 +11,8 @@ binding.
 from __future__ import annotations
 
 import json
+import os
+import threading
 from dataclasses import asdict, dataclass, field, is_dataclass
 from datetime import UTC, datetime
 from enum import Enum
@@ -18,6 +20,7 @@ from pathlib import Path, PurePosixPath
 from typing import Any
 
 from ..lineage.ids import content_hash as qbt_content_hash
+from ..cross_process_lock import acquire_exclusive_fd
 from .market_data_contract import MarketDataUseValidationRecord, validate_market_data_use_validation_record
 
 
@@ -190,24 +193,28 @@ class SignalPerformanceValidationRecord:
         verdict = _value(self.verdict) or SignalValidationVerdict.CHALLENGED.value
         object.__setattr__(self, "verdict", verdict)
         if not self.validation_id:
-            object.__setattr__(
-                self,
-                "validation_id",
-                "signal_validation_"
-                + qbt_content_hash(
-                    {
-                        "signal_ref": self.signal_ref,
-                        "validation_dataset_ref": self.validation_dataset_ref,
-                        "evaluation_window_ref": self.evaluation_window_ref,
-                        "methodology_ref": self.methodology_ref,
-                        "metric_refs": self.metric_refs,
-                        "performance_summary_ref": self.performance_summary_ref,
-                        "leakage_check_ref": self.leakage_check_ref,
-                        "evidence_refs": self.evidence_refs,
-                        "verdict": verdict,
-                    }
-                ),
-            )
+            object.__setattr__(self, "validation_id", self.canonical_validation_id)
+
+    @property
+    def canonical_validation_id(self) -> str:
+        return "signal_validation_" + qbt_content_hash(
+            {
+                "signal_ref": self.signal_ref,
+                "validation_dataset_ref": self.validation_dataset_ref,
+                "evaluation_window_ref": self.evaluation_window_ref,
+                "methodology_ref": self.methodology_ref,
+                "metric_refs": self.metric_refs,
+                "performance_summary_ref": self.performance_summary_ref,
+                "leakage_check_ref": self.leakage_check_ref,
+                "evidence_refs": self.evidence_refs,
+                "verdict": _value(self.verdict),
+                "regime_check_ref": self.regime_check_ref,
+                "capacity_check_ref": self.capacity_check_ref,
+                "known_limits_refs": self.known_limits_refs,
+                "recorded_by": self.recorded_by,
+                "created_at_utc": self.created_at_utc,
+            }
+        )
 
     def to_dict(self) -> dict[str, Any]:
         return _stable(self)
@@ -379,6 +386,15 @@ def validate_signal_performance_validation(
     known_signal_refs: set[str] | None = None,
 ) -> BoundaryDecision:
     violations: list[BoundaryViolation] = []
+    if record.validation_id != record.canonical_validation_id:
+        violations.append(
+            BoundaryViolation(
+                "signal_validation_identity_mismatch",
+                "validation_id must content-bind the complete signal validation record",
+                field="validation_id",
+                ref=record.validation_id,
+            )
+        )
     if not _present(record.signal_ref):
         violations.append(
             BoundaryViolation(
@@ -452,7 +468,7 @@ def validate_signal_performance_validation(
 
 
 class PersistentSignalValidationRegistry:
-    """Append-only signal validation registry.
+    """Owner-scoped append-only signal validation registry.
 
     This stores refs and verdicts only. It does not store raw prediction
     series, returns, or metric payloads.
@@ -460,7 +476,14 @@ class PersistentSignalValidationRegistry:
 
     def __init__(self, path: str | Path | None = None) -> None:
         self._path = Path(path) if path is not None else None
-        self._records: dict[str, SignalPerformanceValidationRecord] = {}
+        self._lock = threading.RLock()
+        self._lock_path = (
+            self._path.with_name(f".{self._path.name}.lock")
+            if self._path is not None
+            else None
+        )
+        self._records: dict[tuple[str, str], SignalPerformanceValidationRecord] = {}
+        self._legacy_quarantined_count = 0
         if self._path is not None:
             self._path.parent.mkdir(parents=True, exist_ok=True)
             self._load_existing()
@@ -474,62 +497,167 @@ class PersistentSignalValidationRegistry:
                 continue
             try:
                 row = json.loads(line)
-                if row.get("schema_version") != 1:
-                    raise ValueError("unsupported signal validation schema_version")
+                if row.get("schema_version") != 2:
+                    self._legacy_quarantined_count += 1
+                    continue
                 if row.get("event_type") != "signal_performance_validation_recorded":
                     raise ValueError("unsupported signal validation event_type")
                 payload = row.get("signal_validation")
                 if not isinstance(payload, dict):
                     raise ValueError("missing signal_validation")
                 record = signal_validation_record_from_dict(payload)
+                owner = self._owner(row.get("owner_user_id"))
                 decision = validate_signal_performance_validation(record)
                 if not decision.accepted:
                     codes = ",".join(v.code for v in decision.violations)
                     raise ValueError(f"invalid signal validation record: {codes}")
-                self._records[record.validation_id] = record
+                if record.recorded_by != owner:
+                    raise ValueError("signal validation owner envelope mismatch")
+                key = (owner, record.validation_id)
+                existing = self._records.get(key)
+                if existing is not None and existing != record:
+                    raise ValueError("signal validation identity collision in persisted history")
+                self._records[key] = record
             except Exception as exc:  # noqa: BLE001 - corrupt governance history must be visible.
                 raise ValueError(f"invalid persisted signal validation row at {self._path}:{line_no}") from exc
 
-    def _append(self, record: SignalPerformanceValidationRecord) -> None:
+    @property
+    def legacy_quarantined_count(self) -> int:
+        return self._legacy_quarantined_count
+
+    def refresh(self) -> None:
         if self._path is None:
             return
-        row = {
-            "schema_version": 1,
-            "event_type": "signal_performance_validation_recorded",
-            "signal_validation": record.to_dict(),
-        }
-        with self._path.open("a", encoding="utf-8") as fh:
-            fh.write(json.dumps(row, ensure_ascii=False, sort_keys=True, separators=(",", ":")) + "\n")
+        with self._lock:
+            self._records = {}
+            self._legacy_quarantined_count = 0
+            self._load_existing()
+
+    @staticmethod
+    def _owner(value: Any) -> str:
+        owner = str(value or "").strip()
+        if not owner:
+            raise ValueError("signal validation owner_user_id is required")
+        return owner
+
+    def _append(self, row: dict[str, Any], *, validation_id: str) -> None:
+        if self._path is None:
+            return
+        assert self._lock_path is not None
+        fd = os.open(self._lock_path, os.O_RDWR | os.O_CREAT, 0o600)
+        held = None
+        try:
+            os.chmod(self._lock_path, 0o600)
+            held = acquire_exclusive_fd(fd, timeout_seconds=30.0)
+            if self._path.exists():
+                for line_no, line in enumerate(
+                    self._path.read_text(encoding="utf-8").splitlines(),
+                    start=1,
+                ):
+                    if not line.strip():
+                        continue
+                    existing = json.loads(line)
+                    payload = existing.get("signal_validation")
+                    if (
+                        existing.get("schema_version") == 2
+                        and existing.get("owner_user_id") == row.get("owner_user_id")
+                        and isinstance(payload, dict)
+                        and str(payload.get("validation_id") or "") == validation_id
+                    ):
+                        if existing == row:
+                            return
+                        raise ValueError(
+                            f"signal validation identity collision at {self._path}:{line_no}"
+                        )
+            with self._path.open("a", encoding="utf-8") as fh:
+                fh.write(
+                    json.dumps(row, ensure_ascii=False, sort_keys=True, separators=(",", ":"))
+                    + "\n"
+                )
+                fh.flush()
+                os.fsync(fh.fileno())
+        finally:
+            if held is not None:
+                held.release()
+            os.close(fd)
 
     def record_validation(
         self,
         record: SignalPerformanceValidationRecord,
         *,
+        owner_user_id: str,
         known_signal_refs: set[str] | None = None,
     ) -> SignalPerformanceValidationRecord:
+        owner = self._owner(owner_user_id)
+        if record.recorded_by != owner:
+            raise ValueError("signal validation recorded_by must match authenticated owner")
         decision = validate_signal_performance_validation(record, known_signal_refs=known_signal_refs)
         if not decision.accepted:
             codes = ",".join(v.code for v in decision.violations)
             raise ValueError(codes)
-        self._records[record.validation_id] = record
-        self._append(record)
-        return record
+        key = (owner, record.validation_id)
+        row = {
+            "schema_version": 2,
+            "event_type": "signal_performance_validation_recorded",
+            "owner_user_id": owner,
+            "signal_validation": record.to_dict(),
+        }
+        with self._lock:
+            existing = self._records.get(key)
+            if existing is not None:
+                if existing != record:
+                    raise ValueError("signal validation identity collision with different content")
+                return existing
+            self._append(row, validation_id=record.validation_id)
+            self._records[key] = record
+            return record
 
-    def validation(self, validation_id: str) -> SignalPerformanceValidationRecord:
-        if validation_id not in self._records:
+    def validation(
+        self,
+        validation_id: str,
+        *,
+        owner_user_id: str,
+    ) -> SignalPerformanceValidationRecord:
+        key = (self._owner(owner_user_id), validation_id)
+        if key not in self._records:
             raise KeyError(f"unknown signal validation: {validation_id}")
-        return self._records[validation_id]
+        return self._records[key]
 
-    def validations(self) -> list[SignalPerformanceValidationRecord]:
-        return sorted(self._records.values(), key=lambda item: (item.signal_ref, item.created_at_utc))
+    def validations(self, *, owner_user_id: str) -> list[SignalPerformanceValidationRecord]:
+        owner = self._owner(owner_user_id)
+        return sorted(
+            (
+                record
+                for (record_owner, _ref), record in self._records.items()
+                if record_owner == owner
+            ),
+            key=lambda item: (item.signal_ref, item.created_at_utc),
+        )
 
-    def validations_for_signal(self, signal_ref: str) -> list[SignalPerformanceValidationRecord]:
-        return [record for record in self.validations() if record.signal_ref == signal_ref]
-
-    def accepted_for_signal(self, signal_ref: str) -> list[SignalPerformanceValidationRecord]:
+    def validations_for_signal(
+        self,
+        signal_ref: str,
+        *,
+        owner_user_id: str,
+    ) -> list[SignalPerformanceValidationRecord]:
         return [
             record
-            for record in self.validations_for_signal(signal_ref)
+            for record in self.validations(owner_user_id=owner_user_id)
+            if record.signal_ref == signal_ref
+        ]
+
+    def accepted_for_signal(
+        self,
+        signal_ref: str,
+        *,
+        owner_user_id: str,
+    ) -> list[SignalPerformanceValidationRecord]:
+        return [
+            record
+            for record in self.validations_for_signal(
+                signal_ref,
+                owner_user_id=owner_user_id,
+            )
             if _value(record.verdict) == SignalValidationVerdict.ACCEPTED.value
         ]
 

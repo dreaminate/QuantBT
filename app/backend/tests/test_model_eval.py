@@ -3,14 +3,29 @@
 from __future__ import annotations
 
 import time
+from types import SimpleNamespace
 
 import numpy as np
+import pytest
 from fastapi.testclient import TestClient
 
+from app.auth import require_user_dependency
 from app.eval.model_eval import build_eval_charts, summarize_metrics
 from app.main import app
 
 client = TestClient(app)
+
+
+@pytest.fixture(autouse=True)
+def _authenticated_training_user():
+    app.dependency_overrides[require_user_dependency] = lambda: SimpleNamespace(
+        user_id="pytest",
+        username="pytest",
+    )
+    try:
+        yield
+    finally:
+        app.dependency_overrides.pop(require_user_dependency, None)
 
 
 def test_build_charts_regression() -> None:
@@ -76,14 +91,16 @@ def test_eval_endpoint_after_training(training_market_data_use_validation_ref) -
         },
     )
     job_id = r.json()["job_id"]
+    job = {}
     for _ in range(60):
-        if client.get(f"/api/training/jobs/{job_id}").json()["status"] in ("succeeded", "failed"):
+        job = client.get(f"/api/training/jobs/{job_id}").json()
+        if job["status"] in ("succeeded", "failed"):
             break
         time.sleep(0.5)
     ev = client.get(f"/api/training/jobs/{job_id}/eval")
     assert ev.status_code == 200
     body = ev.json()
-    assert body["status"] == "succeeded"
+    assert body["status"] == "succeeded", job.get("error")
     ids = {c["id"] for c in body["charts"]}
     assert "feature_importance" in ids  # xgboost 有重要度
     assert "r2" in body["metrics"]

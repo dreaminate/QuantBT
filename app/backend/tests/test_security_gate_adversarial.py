@@ -168,6 +168,60 @@ def test_invalid_capability_refused():
         broker.issue(forged)
 
 
+def test_broker_rejects_cross_owner_capability_before_key_fetch():
+    keystore = _FakeKeystore()
+    broker = KeyBroker(
+        keystore,
+        credential_owner_validator=lambda owner, name: owner == "alice" and name == "alice-key",
+    )
+    with pytest.raises(PermissionError, match="owned"):
+        broker.issue_capability(
+            action="request_live_order",
+            gate_ref="g",
+            keystore_name="alice-key",
+            owner_user_id="bob",
+        )
+    assert keystore.fetched == 0
+
+    cap = broker.issue_capability(
+        action="emergency_reduce_risk",
+        gate_ref="g",
+        keystore_name="alice-key",
+        owner_user_id="alice",
+    )
+    lease = broker.issue(cap)
+    assert keystore.fetched == 1
+    broker.revoke(lease)
+
+
+def test_draining_account_blocks_order_key_fetch_but_keeps_emergency_capability() -> None:
+    ks = _FakeKeystore()
+
+    def active(cap):
+        return cap.action == "emergency_reduce_risk"
+
+    broker = KeyBroker(ks, active_account_validator=active)
+    order_cap = broker.issue_capability(
+        action="request_live_order",
+        gate_ref="g",
+        keystore_name="binance",
+        account_identity_ref="exchange_account_uid_test",
+    )
+    with pytest.raises(PermissionError, match="lifecycle"):
+        broker.issue(order_cap)
+    assert ks.fetched == 0
+
+    emergency_cap = broker.issue_capability(
+        action="emergency_reduce_risk",
+        gate_ref="g",
+        keystore_name="binance",
+        account_identity_ref="exchange_account_uid_test",
+    )
+    lease = broker.issue(emergency_cap)
+    assert ks.fetched == 1
+    broker.revoke(lease)
+
+
 # ── 复核 #3 · capability 必须绑定本门：用别门签的 cap 取不到 key ──────────────────
 def test_capability_must_match_gate(tmp_path):
     ks = _FakeKeystore()

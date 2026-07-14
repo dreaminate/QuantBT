@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 from pathlib import Path
+import threading
 from unittest.mock import MagicMock
 
 import pytest
@@ -111,6 +112,62 @@ def test_subscribe_basic(auth: AuthService, ct: CopyTradeService) -> None:
     assert f.status == "active"
     refreshed = ct.get_master(m.master_id)
     assert refreshed and refreshed.follower_count == 1
+
+
+def test_execution_owner_scope_uses_follower_join_and_omits_orphans(
+    auth: AuthService,
+    ct: CopyTradeService,
+) -> None:
+    master_user = auth.register("owner-master", "passw0rd")
+    alice = auth.register("execution-alice", "passw0rd")
+    bob = auth.register("execution-bob", "passw0rd")
+    master = ct.register_master(master_user.user_id, "Execution master")
+    alice_follower = ct.subscribe(
+        alice.user_id,
+        master.master_id,
+        invest_amount=100,
+        binance_keystore_name="alice-key",
+    )
+    bob_follower = ct.subscribe(
+        bob.user_id,
+        master.master_id,
+        invest_amount=100,
+        binance_keystore_name="bob-key",
+    )
+    alice_execution = ct.record_execution(
+        "signal-alice",
+        alice_follower.follower_id,
+        "failed",
+        error="sensitive exchange rejection",
+    )
+    ct.record_execution("signal-bob", bob_follower.follower_id, "filled")
+    conn = ct._conn()
+    try:
+        conn.execute(
+            """
+            INSERT INTO ct_executions (
+                exec_id,signal_id,follower_id,status,created_at_utc
+            ) VALUES (?,?,?,?,?)
+            """,
+            (
+                "malicious-prefix-row",
+                "signal-orphan",
+                f"{alice.user_id}::forged-master",
+                "filled",
+                "2026-01-01T00:00:00+00:00",
+            ),
+        )
+    finally:
+        conn.close()
+
+    visible = ct.list_executions_for_user(alice.user_id)
+    assert [item.exec_id for item in visible] == [alice_execution.exec_id]
+    assert ct.list_executions_for_user(
+        alice.user_id,
+        follower_id=bob_follower.follower_id,
+    ) == []
+    with pytest.raises(ValueError, match=r"\[1, 200\]"):
+        ct.list_executions_for_user(alice.user_id, limit=-1)
 
 
 def test_subscribe_self_rejected(auth: AuthService, ct: CopyTradeService) -> None:
@@ -233,11 +290,12 @@ def test_relay_signal_dispatches_to_active_followers(auth: AuthService, ct: Copy
     results = relayer.relay(sig)
     assert len(results) == 1  # 只有 bob (active)，carol 已 paused
     assert results[0]["follower_id"] == f"{b.user_id}::{m.master_id}"
-    assert results[0]["status"] == "filled"
+    # OrderAck is venue acknowledgement, not fill evidence.
+    assert results[0]["status"] == "placed"
     assert placed == [b.user_id]
     # execution record
     execs = ct.list_executions(signal_id=sig.signal_id)
-    assert len(execs) == 1 and execs[0].status == "filled"
+    assert len(execs) == 1 and execs[0].status == "placed"
 
 
 def test_relay_skips_when_keystore_missing(auth: AuthService, ct: CopyTradeService, keystore: SecureKeystore) -> None:
@@ -326,7 +384,7 @@ def test_idempotency_blocks_duplicate(
 
     relayer = SignalRelayer(ct, keystore, mock_factory, beta=beta)
     r1 = relayer.relay(sig)
-    assert r1[0]["status"] == "filled"
+    assert r1[0]["status"] == "placed"
 
     r2 = relayer.relay(sig)
     assert r2[0]["status"] == "skipped"
@@ -336,9 +394,9 @@ def test_idempotency_blocks_duplicate(
     assert sum(pm.call_count for pm in place_mocks) == 1
     # dispatch 幂等表只有一条
     assert len(beta.list_dispatches(f"{b.user_id}::{m.master_id}")) == 1
-    # 真实成交 execution 只有一条；第二次是 skipped
+    # venue ack 只能证明已提交；第二次是 skipped。
     execs = ct.list_executions(signal_id=sig.signal_id)
-    assert len([e for e in execs if e.status == "filled"]) == 1
+    assert len([e for e in execs if e.status == "placed"]) == 1
     assert any(e.status == "skipped" and "duplicate" in (e.error or "") for e in execs)
 
 
@@ -370,7 +428,7 @@ def test_leverage_cap_enforced(
 
     relayer = SignalRelayer(ct, keystore, mock_factory, beta=beta)
     results = relayer.relay(sig)
-    assert results[0]["status"] == "filled"
+    assert results[0]["status"] == "placed"
 
     # 实际下单参数被截断到 follower 上限，而非 master 的 10x
     assert captured["leverage"] == 2.0
@@ -382,3 +440,97 @@ def test_leverage_cap_enforced(
     assert disp[0].master_leverage == 10.0
     assert disp[0].follower_applied_leverage == 2.0
     assert disp[0].clamped is True
+
+
+def test_mainnet_account_history_survives_testnet_resubscribe(
+    auth: AuthService,
+    ct: CopyTradeService,
+) -> None:
+    owner = auth.register("history-owner", "passw0rd")
+    follower_user = auth.register("history-follower", "passw0rd")
+    master = ct.register_master(owner.user_id, "History")
+    follower = ct.subscribe(
+        follower_user.user_id,
+        master.master_id,
+        invest_amount=100,
+        binance_keystore_name="mainnet-key",
+        binance_network="mainnet",
+        account_binding_ref="exchange_account_uid_history_a",
+        runtime_promotion_ref="promotion-a",
+        user_risk_choice_ref="choice-a",
+    )
+    assert ct.unsubscribe(follower_user.user_id, master.master_id)
+    ct.subscribe(
+        follower_user.user_id,
+        master.master_id,
+        invest_amount=100,
+        binance_keystore_name="testnet-key",
+        binance_network="testnet",
+    )
+    assert ct.unsubscribe(follower_user.user_id, master.master_id)
+
+    with pytest.raises(CopyTradeError, match="binding is immutable"):
+        ct.subscribe(
+            follower_user.user_id,
+            master.master_id,
+            invest_amount=100,
+            binance_keystore_name="mainnet-key-b",
+            binance_network="mainnet",
+            account_binding_ref="exchange_account_uid_history_b",
+            runtime_promotion_ref="promotion-b",
+            user_risk_choice_ref="choice-b",
+        )
+
+    restored = ct.subscribe(
+        follower_user.user_id,
+        master.master_id,
+        invest_amount=100,
+        binance_keystore_name="mainnet-key-a",
+        binance_network="mainnet",
+        account_binding_ref="exchange_account_uid_history_a",
+        runtime_promotion_ref="promotion-a2",
+        user_risk_choice_ref="choice-a2",
+    )
+    assert restored.account_binding_ref == follower.account_binding_ref
+
+
+def test_mainnet_account_binding_is_unique_across_concurrent_service_instances(
+    tmp_path: Path,
+) -> None:
+    path = tmp_path / "copy-trade.sqlite3"
+    first = CopyTradeService(path)
+    second = CopyTradeService(path)
+    master_a = first.register_master("master-owner-a", "A")
+    master_b = first.register_master("master-owner-b", "B")
+    start = threading.Barrier(2)
+    outcomes: list[str] = []
+
+    def subscribe(service: CopyTradeService, user_id: str, master_id: str, suffix: str) -> None:
+        start.wait(timeout=5)
+        try:
+            service.subscribe(
+                user_id,
+                master_id,
+                invest_amount=100,
+                binance_keystore_name=f"mainnet-key-{suffix}",
+                binance_network="mainnet",
+                account_binding_ref="exchange_account_uid_shared",
+                runtime_promotion_ref=f"promotion-{suffix}",
+                user_risk_choice_ref=f"choice-{suffix}",
+            )
+        except CopyTradeError:
+            outcomes.append("rejected")
+        else:
+            outcomes.append("accepted")
+
+    threads = (
+        threading.Thread(target=subscribe, args=(first, "follower-a", master_a.master_id, "a")),
+        threading.Thread(target=subscribe, args=(second, "follower-b", master_b.master_id, "b")),
+    )
+    for thread in threads:
+        thread.start()
+    for thread in threads:
+        thread.join(timeout=5)
+
+    assert all(not thread.is_alive() for thread in threads)
+    assert sorted(outcomes) == ["accepted", "rejected"]

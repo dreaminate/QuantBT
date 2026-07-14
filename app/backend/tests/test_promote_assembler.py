@@ -29,7 +29,14 @@ from app.lineage.spine import (
     TheoryImplementationBinding,
 )
 from app.lineage.spine_ledger import _binding_payload, _check_payload, _choice_payload
-from app.llm.call_record import LLMCallRecord, ReplayState, seal_record
+from app.llm.call_record import (
+    CallRecordKind,
+    LLMCallRecord,
+    ReplayState,
+    make_call_id,
+    seal_record,
+)
+from app.llm.call_record_store import LLMCallRecordStore
 from app.release_gate import (
     GATE_DATASET_VERSION,
     GATE_METHODOLOGY_CHOICE,
@@ -115,16 +122,88 @@ def _good_spine():
 
 
 def _sealed_record(call_id: str = "call:1") -> LLMCallRecord:
+    response_digest = "0123456789abcdef"
     rec = LLMCallRecord(
         provider="anthropic",
         model="claude-x",
         auth_ref="secretref://anthropic/llm_anthropic",
         replay_state=ReplayState.REPLAYED.value,
+        owner_user_id="owner-alice",
+        workflow_id="ide_alice_momentum_aB3x",
+        invocation_id="release-gate-test",
+        routing_policy_ref="routing:promote:fixture-origin",
+        routing_policy_state="replay_origin",
         call_id=call_id,
+        prompt_digest="1111111111111111",
+        prompt_hash="1111111111111111",
+        tool_schema_hash="2222222222222222",
+        response_digest=response_digest,
+        response_ref=f"llm_response:{response_digest}",
+        latency_ms=0.0,
         usage={"input_tokens": 12, "output_tokens": 5, "cost_usd": 0.0007},
+        cost={
+            "status": "reported", "currency": "USD", "amount": 0.0007,
+            "source": "provider_usage_cost_usd", "reason": "",
+        },
     )
     rec.seal = seal_record(rec, GW_SECRET)
     return rec
+
+
+def _append_store_invocation(
+    store: LLMCallRecordStore,
+    *,
+    owner_user_id: str,
+    workflow_id: str,
+    invocation_id: str,
+) -> tuple[LLMCallRecord, LLMCallRecord]:
+    common = dict(
+        provider="anthropic",
+        model="claude-x",
+        auth_ref="secretref://anthropic/llm_anthropic",
+        replay_state=ReplayState.LIVE.value,
+        owner_user_id=owner_user_id,
+        workflow_id=workflow_id,
+        invocation_id=invocation_id,
+        attempt_no=1,
+        routing_policy_ref="routing:promote:test",
+        routing_policy_state="configured_ref",
+        prompt_digest="0123456789abcdef",
+        prompt_hash="0123456789abcdef",
+        tool_schema_hash="1111111111111111",
+        response_digest="fedcba9876543210",
+        response_ref="llm_response:fedcba9876543210",
+        started_at="2026-07-12T00:00:00+00:00",
+        finished_at="2026-07-12T00:00:01+00:00",
+        latency_ms=1000.0,
+        cost={
+            "status": "unavailable", "currency": "USD", "amount": None,
+            "source": "none", "reason": "provider_cost_not_reported",
+        },
+    )
+    rows: list[LLMCallRecord] = []
+    for kind in (CallRecordKind.ATTEMPT.value, CallRecordKind.TERMINAL.value):
+        row = LLMCallRecord(
+            **common,
+            record_kind=kind,
+            call_id=make_call_id(
+                prompt_digest="",
+                provider="",
+                model="",
+                role="",
+                session_id="",
+                seq=1,
+                owner_user_id=owner_user_id,
+                workflow_id=workflow_id,
+                invocation_id=invocation_id,
+                record_kind=kind,
+                attempt_no=1,
+            ),
+        )
+        row.seal = seal_record(row, store.seal_secret)
+        store.append(row)
+        rows.append(row)
+    return rows[0], rows[1]
 
 
 def _good_evidence() -> dict:
@@ -187,6 +266,34 @@ def test_default_label_is_weak_exploratory():
     assert asm.candidate.requested_label == DEFAULT_REQUESTED_LABEL == LABEL_EXPLORATORY
     assert not asm.candidate.is_strong_label
     assert not asm.candidate.is_user_waived  # exploratory ∉ USER_WAIVED_LABELS → MCR 门不触发
+
+
+@pytest.mark.parametrize(
+    "bad_label",
+    [[], {}, True, 1],
+    ids=["list", "dict", "bool", "int"],
+)
+def test_explicit_requested_label_wrong_type_fails_closed(bad_label):
+    """显式畸形标签不得经 _clean 静默降级为 exploratory。"""
+    with pytest.raises(AssemblyError, match="requested_label parameter"):
+        assemble(_run_manifest(), requested_label=bad_label)
+
+
+@pytest.mark.parametrize(
+    "bad_label",
+    [[], {}, True, 1],
+    ids=["list", "dict", "bool", "int"],
+)
+def test_manifest_requested_label_wrong_type_fails_closed(bad_label):
+    """manifest 畸形标签不得被当成未声明而静默放过。"""
+    with pytest.raises(AssemblyError, match="run_manifest.requested_label"):
+        assemble(_run_manifest(requested_label=bad_label))
+
+
+def test_blank_explicit_label_preserves_manifest_fallback():
+    """空白显式标签沿用既有优先级：回退到 manifest 中的合法标签。"""
+    asm = assemble(_run_manifest(requested_label="proof_backed"), requested_label="  ")
+    assert asm.candidate.requested_label == "proof_backed"
 
 
 # ════════════════════════════════════════════════════════════════════════════
@@ -304,6 +411,46 @@ def test_declared_block_missing_mode_fails_closed():
         assemble(_run_manifest(execution_blocks=[{"block_id": "b", "result_grade": GRADE_PRODUCTION}]))
 
 
+@pytest.mark.parametrize(
+    "bad_container",
+    [None, "mock", {"mode": MODE_MOCK}, 7, True],
+    ids=["none", "string", "mapping", "int", "bool"],
+)
+def test_declared_execution_blocks_container_fails_closed(bad_container):
+    """声明了 execution_blocks 就必须是块序列，畸形容器不能退化成“未声明”。"""
+    with pytest.raises(AssemblyError, match="run_manifest.execution_blocks"):
+        assemble(_run_manifest(execution_blocks=bad_container))
+
+
+@pytest.mark.parametrize(
+    "bad_block",
+    [None, "drop-me", 7, True],
+    ids=["none", "string", "int", "bool"],
+)
+def test_declared_non_mapping_block_fails_closed_instead_of_dropped(bad_block):
+    """序列中的任一非 Mapping 条目都必须拒绝，不能过滤后让剩余块继续过门。"""
+    manifest = _run_manifest(execution_blocks=[
+        {"block_id": "live", "mode": MODE_LIVE, "live_source_ref": "feed://live"},
+        bad_block,
+    ])
+    with pytest.raises(AssemblyError, match=r"execution_blocks\[1\] 须为 Mapping"):
+        assemble(manifest)
+
+
+@pytest.mark.parametrize(
+    "bad_marker",
+    ["false", 0, 1, None],
+    ids=["string-false", "zero", "one", "none"],
+)
+def test_declared_mock_marked_requires_actual_bool(bad_marker):
+    """truthiness 不能代替布尔声明；尤其字符串 'false' 不得被 bool(...) 改写成 True。"""
+    manifest = _run_manifest(execution_blocks=[
+        {"block_id": "mock", "mode": MODE_MOCK, "mock_marked": bad_marker},
+    ])
+    with pytest.raises(AssemblyError, match=r"execution_blocks\[0\]\.mock_marked 须为 bool"):
+        assemble(manifest)
+
+
 def test_execution_absent_surfaced_as_honest_gap():
     """run.json 无执行诚实标识 → 留空 + 软披露（不假装'已核 live'）。"""
     asm = assemble(_run_manifest())
@@ -358,6 +505,65 @@ def test_bare_weak_run_releasable_with_soft_gaps():
     assert v.ok, v.reason_text
     assert any("dataset:identity_unrecorded" in g for g in v.honest_gaps)
     assert any("execution:honesty_undeclared" in g for g in v.honest_gaps)
+
+
+def test_llm_ledger_probe_reads_only_explicit_owner_real_rows(tmp_path):
+    store = LLMCallRecordStore(tmp_path / "llm_call_records.jsonl")
+    expected = _append_store_invocation(
+        store,
+        owner_user_id="owner-alice",
+        workflow_id="ide_alice_momentum_aB3x",
+        invocation_id="invocation-alice",
+    )
+
+    asm = assemble(
+        _run_manifest(),
+        ledger=store,
+        owner_user_id="owner-alice",
+        llm_used=True,
+        gateway_secret=store.seal_secret,
+    )
+
+    assert asm.candidate.llm_call_records == expected
+    assert evaluate_release(asm.candidate).ok
+
+
+def test_llm_ledger_probe_wrong_owner_isolated(tmp_path):
+    store = LLMCallRecordStore(tmp_path / "llm_call_records.jsonl")
+    _append_store_invocation(
+        store,
+        owner_user_id="owner-alice",
+        workflow_id="ide_alice_momentum_aB3x",
+        invocation_id="invocation-alice",
+    )
+
+    asm = assemble(
+        _run_manifest(),
+        ledger=store,
+        owner_user_id="owner-bob",
+    )
+
+    assert asm.candidate.llm_call_records == ()
+    assert "llm_call_records" in asm.absent_fields
+
+
+def test_llm_ledger_probe_requires_owner_and_does_not_swallow_errors(tmp_path):
+    store = LLMCallRecordStore(tmp_path / "llm_call_records.jsonl")
+    manifest_with_owner_metadata = _run_manifest()
+    manifest_with_owner_metadata["source"]["owner_user_id"] = "owner-alice"
+    with pytest.raises(AssemblyError, match="owner_user_id is required"):
+        assemble(manifest_with_owner_metadata, ledger=store)
+
+    class BrokenOwnerScopedStore:
+        def llm_records_for(self, asset_ref, *, owner_user_id):
+            raise RuntimeError("owner-scoped read failed")
+
+    with pytest.raises(RuntimeError, match="owner-scoped read failed"):
+        assemble(
+            _run_manifest(),
+            ledger=BrokenOwnerScopedStore(),
+            owner_user_id="owner-alice",
+        )
 
 
 # ════════════════════════════════════════════════════════════════════════════

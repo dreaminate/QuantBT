@@ -179,4 +179,14 @@ export interface PaperBoardData {
     turnover: string;
     ddHalt: string;
   };
+  /** Backend cards must provide this evidence; absence renders unavailable, never green. */
+  runtimeEvidence?: {
+    status: PaperRunStatus | "unavailable";
+    label: string;
+  };
+  /** Risk green requires an intact backend chain and an explicit zero count. */
+  riskEvidence?: {
+    violationCount: number | null;
+    chainIntact: boolean | null;
+  };
 }

@@ -77,7 +77,8 @@ curl -X POST http://127.0.0.1:8000/api/llm/configure \
 |---|---|---|
 | 真实流对话报「流启动失败 / 连接失败」 | 代理没起 / 端口或 `/v1` 路径不对 | 先 `curl .../v1/models` 自检，再核对 Base URL |
 | 测试连接报 401 / 鉴权失败 | 代理侧 OAuth 过期或没登录 | 在代理侧重新登录授权 |
-| 回的内容明显是占位/兜底 | 没配任何 provider，落到了 DevLocalLLM | 确认 `/settings/llm` 状态里 `custom` 显示「已配置」 |
+| 真实流报 `NoLLMConfigured` | 没有可用的 Settings-managed provider / model / SecretRef / route | 确认 `/settings/llm` 状态里 `custom` 显示「已配置」，再做一次连接测试 |
+| 页面显示 `MOCK` 或脚本化占位内容 | 当前显式进入了演示模式 | 切回 **LIVE · 真实流**；生产真实流不会静默落到 DevLocalLLM |
 | 模型名报不存在 | Model 别名和代理给的不一致 | 用 `/v1/models` 列出的名字 |
 
 代理本身的安装、OAuth、限流以其官方文档为准；QuantBT 这侧只负责把它当 OpenAI 兼容端点接进来。

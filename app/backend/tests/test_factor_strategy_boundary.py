@@ -1,5 +1,9 @@
 from __future__ import annotations
 
+from dataclasses import replace
+
+import pytest
+
 from app.research_os import (
     FactorAssetKind,
     FactorGeneratorSpec,
@@ -217,12 +221,40 @@ def test_signal_validation_requires_refs_metrics_and_evidence():
 def test_signal_validation_registry_persists_and_replays(tmp_path):
     path = tmp_path / "signal_validations.jsonl"
     registry = PersistentSignalValidationRegistry(path)
-    record = registry.record_validation(_signal_validation(), known_signal_refs={"sig::gbdt_momentum"})
+    record = registry.record_validation(
+        _signal_validation(),
+        owner_user_id="tester",
+        known_signal_refs={"sig::gbdt_momentum"},
+    )
 
     reloaded = PersistentSignalValidationRegistry(path)
 
-    assert reloaded.validation(record.validation_id).signal_ref == "sig::gbdt_momentum"
-    assert reloaded.accepted_for_signal("sig::gbdt_momentum")[0].validation_id == record.validation_id
+    assert (
+        reloaded.validation(record.validation_id, owner_user_id="tester").signal_ref
+        == "sig::gbdt_momentum"
+    )
+    assert (
+        reloaded.accepted_for_signal(
+            "sig::gbdt_momentum",
+            owner_user_id="tester",
+        )[0].validation_id
+        == record.validation_id
+    )
+    with pytest.raises(KeyError):
+        reloaded.validation(record.validation_id, owner_user_id="other-user")
+
+    with pytest.raises(ValueError, match="recorded_by"):
+        registry.record_validation(
+            _signal_validation(),
+            owner_user_id="other-user",
+            known_signal_refs={"sig::gbdt_momentum"},
+        )
+    with pytest.raises(ValueError, match="identity_mismatch"):
+        registry.record_validation(
+            replace(_signal_validation(), validation_id="signal_validation_forged"),
+            owner_user_id="tester",
+            known_signal_refs={"sig::gbdt_momentum"},
+        )
 
 
 def test_strategy_book_requires_accepted_signal_validation_when_enabled():

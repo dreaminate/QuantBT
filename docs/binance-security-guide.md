@@ -30,10 +30,10 @@ curl -X POST http://127.0.0.1:8000/api/security/keystore \
   -d '{"name":"binance_mainnet","api_key":"<KEY>","api_secret":"<SECRET>"}'
 ```
 
-QuantBT 自动选择 backend：
-- 优先 **macOS Keychain / Win Credential Manager / Linux libsecret**（`keyring`）
-- 退到 **Fernet 加密文件**（`cryptography` + 用户主密码，PBKDF2 200k 迭代）
-- CI/测试退到 **内存**
+QuantBT 不会自动降级 backend：
+- `QUANTBT_KEYSTORE_BACKEND=keyring` 要求真实可用的系统 keychain
+- `QUANTBT_KEYSTORE_BACKEND=fernet_file` 要求 `QUANTBT_MASTER_KEY`，并使用私有加密文件
+- `memory` 只允许显式 test/development runtime，不能承载生产真钱凭证
 
 ---
 
@@ -41,9 +41,9 @@ QuantBT 自动选择 backend：
 
 | 边界 | 检查 | 失败时的行为 |
 |---|---|---|
-| 启动前 | `GET /sapi/v1/account/apiRestrictions` 或 `/fapi/v1/apiKey/permissions` 必须返回 withdraw=false | `BinanceWithdrawPermissionError` 抛出，进程不接管 |
-| 启动前 | `/api/v3/time` 或 `/fapi/v1/time` 校时 + 缓存时差 | 失败仅 warning（不拦截，但下单时签名会失败让你修） |
-| 启动前 | `exchangeInfo` 拉一次 LOT_SIZE / PRICE_FILTER / MIN_NOTIONAL 缓存 | 缺则下单时按交易所拒绝 |
+| mainnet 激活 | 认证权限证明必须显示交易权限、IP 限制开启且无 withdraw/transfer 能力 | 激活 fail closed，不创建 active follower |
+| mainnet 激活 | 认证账户 UID、one-way position mode、非 multi-assets margin 与正净值/行情快照必须完整 | 激活 fail closed |
+| 下单预检 | `exchangeInfo` 的 LOT_SIZE / PRICE_FILTER / MIN_NOTIONAL 必须可解析并严格量化 | 缺失、畸形或量化为零都在 POST 前拒绝 |
 | 下单前 | 单笔名义上限 (`per_order_max_usdt`，默认 100) | `PreTradeError` |
 | 下单前 | 黑名单 symbol | `PreTradeError` |
 | 下单前 | 肥手指：限价偏离 mark > `fat_finger_pct`（默认 2%） | `PreTradeError` |
@@ -52,7 +52,7 @@ QuantBT 自动选择 backend：
 | 运行中 | 单日下单笔数上限（默认 200） | 触达后 RiskMonitor 自动 `pause`，新单全部拒 |
 | 运行中 | 单日亏损上限（默认 -5%） | 同上，且写入 audit log |
 | 运行中 | 持仓集中度（单 symbol < 30% 净值） | warning 级别告警 |
-| 一键 | **Kill Switch** (`POST /api/risk/kill_switch`) | 撤销所有挂单 + 市价平所有仓位 |
+| 一键 | **Kill Switch** (`POST /api/risk/kill_switch`) | 先持久 HALT epoch 并排空旧 lease，再撤单/平仓；仅新鲜 flat proof 可记为 halted |
 
 ---
 
@@ -61,20 +61,9 @@ QuantBT 自动选择 backend：
 **强烈建议**：先在 Binance testnet（`https://testnet.binance.vision` /
 `https://testnet.binancefuture.com`）跑通一周完整策略再上 mainnet。
 
-切换在 BinanceCredentials 上做：
-
-```python
-from app.execution.binance_client import BinanceCredentials, BinanceClient
-from app.security import SecureKeystore
-
-ks = SecureKeystore.open()
-rec = ks.fetch("binance_mainnet")
-cred = BinanceCredentials.from_record(rec, network="mainnet")  # ← 显式 mainnet
-client = BinanceClient(cred, product="spot")
-client.assert_safe_startup()   # 此处会撞 withdraw 校验，若没关会抛
-```
-
-UI 上 mainnet 切换需要**二次确认弹窗** + 写入 audit log（`/data/audit/`）。
+testnet 与 mainnet 使用不同的 versioned credential；不能复用 alias 偷换物理 key。mainnet 激活必须经过
+可信 IP、服务端密码/TOTP、账户 UID/权限/仓位模式安全证明、testnet promotion 与独立审批，之后才写入
+active follower。重启时持久 credential binding 或安全句柄不匹配会 fail closed。
 
 ---
 
@@ -84,7 +73,7 @@ UI 上 mainnet 切换需要**二次确认弹窗** + 写入 audit log（`/data/au
 如果你配了 **Binance testnet** key，可让 crypto paper run 自动切到喂**交易所 testnet 真实时行情**
 （公共 K 线 / mark），更贴近真盘——这一档**仍是模拟撮合、永不下真单、不动真钱**。
 
-### 怎么配（走 keyring，不进 git）
+### 怎么配（走持久加密 keystore，不进 git）
 
 把 testnet key 以名字 **`binance_testnet`** 写入 keystore（与第 2 节同一接口；切勿落 YAML/环境变量/代码）：
 
@@ -137,5 +126,5 @@ curl -X POST http://127.0.0.1:8000/api/paper/runs \
 ## 6. 紧急情况
 
 - **Kill Switch 不响应**：直接登 Binance 网页 → 取消所有挂单 → 转为现货 / 平仓
-- **API key 疑似泄露**：立即在 Binance 网页删除 key，重新创建 + IP 白名单 + 关 withdraw，QuantBT 这边走 `DELETE /api/security/keystore/{name}` 删本地。
+- **API key 疑似泄露**：立即在 Binance 网页删除 key，重新创建 + IP 白名单 + 关 withdraw，再通过 UI/API 写入一个新 credential version；active 版本不能原地覆盖。
 - **数据被改**：`data/datasets/registry.jsonl` 是 append-only，新写不能改旧版本；用 sha256 校验。

@@ -77,6 +77,8 @@ describe("LLMSettingsPage · 配置流程", () => {
 
     await waitFor(() => {
       expect(container.textContent).toContain("Gateway 管理");
+      expect(container.textContent).toContain("NoLLMConfigured");
+      expect(container.textContent).not.toContain("后端回退到开发期本地模型");
       expect(container.textContent).toContain("secret:llm:anthropic");
       expect(container.textContent).toContain("llm_pool:anthropic");
       expect(container.textContent).toContain("llm_route:anthropic");

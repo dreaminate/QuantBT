@@ -61,15 +61,16 @@ docker compose up -d
 
 ---
 
-## 上线最后一公里（demo→生产：需你提供的凭据 / 真金）
+## 上线最后一公里（仍有外部授权门，不能写成“插上一跑即真”）
 
-> demo 与加密研究/回测链路**零凭据即开即用**。下面 4 项是 §9 交付总闸里**代码与文档已就绪、只等你插凭据/真金验收**的部分——这几项软件无法替你验（要真账号/真金/真 key），但码路与对抗测试已绿，**插上一跑即真**。
+> 本地 demo 与研究/回测能力不等于外部数据、双 provider Review、testnet、mainnet 或生产已经验证。下面各项都要单独授权和留证；仅填写 token/key 不会自动把 GAP 变成通过。
 
 | 要解锁 | 你提供 | 插哪里 | 文档 |
 |---|---|---|---|
-| A股真数据回测 | `TUSHARE_TOKEN` | `~/.quantbt/secrets.yaml` 的 `tushare.token`，或 `export TUSHARE_TOKEN=` | [secrets-guide](docs/secrets-guide.md) |
-| 真 LLM 多轮 Agent | OpenAI / Anthropic / Qwen API key | `secrets.yaml` 对应字段（无 key 自动回退 DevLocalLLM，不假装） | [user-manual](docs/user-manual.md) |
-| 加密 testnet 真喂 paper | Binance **testnet** key（名 `binance_testnet`） | `/api/security/keystore`（走 keyring 不入 git；无 key 诚实回退样本回放） | [binance-security-guide §4.5](docs/binance-security-guide.md) |
+| A股真数据与 HS300 性能证据 | `TUSHARE_TOKEN`、真实 10 年日频数据、权威成分股快照和外部信任根 | token 进 Secrets；数据/registry/universe/receipt 走 perf harness 的显式参数。仓库默认没有生产 authority root，因此不能自签转绿 | [secrets-guide](docs/secrets-guide.md) |
+| 真 LLM 多轮 Agent / Review | 至少两条真正不同的 Settings-managed provider/model 能力（或经确认的独立本地端点） | 每条都登记 provider、model、SecretRef 与路由；未配置时报 `NoLLMConfigured`。单 provider 或同一客户端换标签不能关闭 Review GAP | [user-manual](docs/user-manual.md) |
+| Paper 晋级验证人 | 由机器运维指定、与 run owner 不同的稳定 user ID | `QUANTBT_PAPER_VERIFIER_USER_IDS`；普通请求不能修改。空列表时晋级明确不可用 | [secrets-guide §7](docs/secrets-guide.md) |
+| 加密 testnet 真喂 paper | Binance **testnet** key（名 `binance_testnet`） | `/api/security/keystore`（走持久加密 keystore、不入 git；无 key 诚实回退样本回放） | [binance-security-guide §4.5](docs/binance-security-guide.md) |
 | 加密小额实盘验证 | Binance **mainnet** key（关提币 + IP 白名单）+ 真金 100 USDT + 一周 | SafeKey wizard → Live Ladder（不可跳级，killswitch 兜底） | [binance-security-guide](docs/binance-security-guide.md) |
 
 > A股**永不实盘**（硬约束）；加密实盘走 backtest→testnet→小额 ladder 不可跳级。详见 [`dev/GOAL.md`](dev/GOAL.md) §5/§9。
@@ -79,7 +80,7 @@ docker compose up -d
 ## 立即看到的产物
 
 - **5 个 demo run** 入仓可在 RunDetail 直接打开：
-  - http://localhost:5173/runs/a_share_real_demo （真 Tushare hs300）
+  - http://localhost:5173/runs/a_share_real_demo （历史 A 股 artifact；当前 `run.json` 未绑定 DatasetVersion/source provenance，不能作为“真 Tushare 已验证”证据）
   - http://localhost:5173/runs/a_share_ml_demo （合成）
   - http://localhost:5173/runs/crypto_perp_demo （加密永续）
   - http://localhost:5173/runs/quant1-demo
@@ -94,7 +95,7 @@ docker compose up -d
 
 1. **`frontend-run-detail/src/pages/RunDetailPage.tsx` 冻结** — 仅排版 / 显示逻辑 / 加字段
 2. **A股不接券商** — 禁止 `import vnpy / easytrader / ths_trader` 等
-3. **Binance API key keyring 加密 + 启动校验无 withdraw 权限**
+3. **Binance API key 只经认证 UI/API 写入持久 keystore；禁止 YAML/静默内存降级**
 
 ---
 

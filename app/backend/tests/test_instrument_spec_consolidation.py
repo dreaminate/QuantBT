@@ -109,7 +109,8 @@ def test_persisted_history_with_narrow_outside_tokens_replays_without_raise(tmp_
     # 以过 perpetual margin gate），故 replay 唯一可能炸点 = asset_class/instrument_type 被收紧成 Literal。
     path = tmp_path / "market_data_assets.jsonl"
     row = {
-        "schema_version": 1,
+        "schema_version": 2,
+        "owner_user_id": "owner-a",
         "event_type": "instrument_spec_recorded",
         "instrument": {
             "instrument_ref": "instrument:legacy_perp",
@@ -124,7 +125,7 @@ def test_persisted_history_with_narrow_outside_tokens_replays_without_raise(tmp_
 
     # replay 不 raise（MUT 把 asset_class/instrument_type 收紧成 Literal → 此处 ValueError 红）。
     replayed = PersistentMarketDataRegistry(path)
-    got = replayed.instrument("instrument:legacy_perp")
+    got = replayed.instrument("instrument:legacy_perp", owner_user_id="owner-a")
     assert got.asset_class == "cn_equity"
     assert got.instrument_type == "perpetual"
 
@@ -163,18 +164,21 @@ def test_to_dict_superset_stable_excludes_none_additive_fields():
 
 # ═══════════════ spec_id additive · 非 PK（instrument_ref 仍是身份）═══════════════
 def test_spec_id_additive_non_pk_registry_keys_on_instrument_ref(tmp_path):
-    rec = _flat()
+    rec = _flat(venue_symbol="BTCUSDT")
     # spec_id 内容寻址 additive，但**不入 to_dict**（不扰 record_hash）。
     assert rec.spec_id.startswith("instr_")
     assert "spec_id" not in rec.to_dict()
     # 改 instrument_ref → spec_id 变（内容寻址）；但 registry 身份恒为 instrument_ref。
     assert _flat(instrument_ref="instrument:OTHER").spec_id != rec.spec_id
     registry = PersistentMarketDataRegistry(tmp_path / "md.jsonl")
-    registry.record_instrument(rec)
+    registry.record_instrument(rec, owner_user_id="owner-a")
     # registry key = instrument_ref（绝不 swap 成 spec_id）。
-    assert registry.instrument("instrument:BTCUSDT").instrument_ref == "instrument:BTCUSDT"
+    replayed = PersistentMarketDataRegistry(registry.path)
+    persisted = replayed.instrument("instrument:BTCUSDT", owner_user_id="owner-a")
+    assert persisted.instrument_ref == "instrument:BTCUSDT"
+    assert persisted.venue_symbol == "BTCUSDT"
     with pytest.raises(KeyError):
-        registry.instrument(rec.spec_id)
+        registry.instrument(rec.spec_id, owner_user_id="owner-a")
 
 
 # ═══════════════ 门① · ref-presence gate 不削弱（保现有 validate_instrument_spec）═══════════════

@@ -99,6 +99,7 @@ def test_service_dl_gru_via_generic_harness(tmp_path: Path, monkeypatch: pytest.
             hyperparams={"max_epochs": 2, "lookback": 8, "hidden_size": 8, "batch_size": 32},
         ),
         _panel(400),
+        owner_user_id="test-owner",
     )
     assert job.status == "succeeded", job.error
     import json
@@ -165,6 +166,7 @@ def test_service_advanced_dl_trains(tmp_path: Path, monkeypatch: pytest.MonkeyPa
             hyperparams={"max_epochs": 2, "lookback": 8, "hidden_size": 8, "batch_size": 32},
         ),
         _panel(400),
+        owner_user_id="test-owner",
     )
     assert job.status == "succeeded", job.error
     import json

@@ -64,10 +64,13 @@ npm run dev
 
 > 我想做一个 A股 周频 选股策略，回撤 15%，单标的 5%
 
-研究执行流（DevLocalLLM 模板驱动）会：
+配置真实 LLM provider 后，研究执行流会：
 1. 返回一份建议（IR 目标 / 池子建议 / 数据范围）
 2. 触发 `strategy_goal.create` 工具，给你 StrategyGoal JSON
-3. （连上 Anthropic/OpenAI 后）生成候选实现，并按流程继续跑因子 IC → 训模型 → 回测
+3. 生成候选实现，并按流程继续跑因子 IC → 训模型 → 回测
+
+未配置 provider 时，真实流会明确返回 `NoLLMConfigured`，不会静默落到 DevLocalLLM。
+如需查看脚本演示，必须在界面显式选择带 `MOCK` 标识的演示模式。
 
 ### 路线 B：直接看现有 demo run
 

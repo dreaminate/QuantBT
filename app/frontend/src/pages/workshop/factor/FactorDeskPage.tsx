@@ -273,17 +273,10 @@ export function FactorDeskPage() {
 
   function bdRegister(): void {
     setBdGateOpen(false);
-    // 双保险：注册按钮已按 canRegister disable，但若真实后端校验未过仍被触发，绝不假报注册成功。
-    if (buildLive && !buildLive.valid) {
-      setBdChat((c) => [
-        ...c,
-        { role: "say", text: "✗ 未通过校验门（前视/编译未过），不能注册。请先修正表达式并重新校验。" },
-      ]);
-      return;
-    }
+    // 防御性兜底：即使被程序化调用，也绝不在没有 registry 端点时报告成功。
     setBdChat((c) => [
       ...c,
-      { role: "say", text: "✓ 已注册到因子库，初始状态 NEW，等待 IC 评估自动迁移。" },
+      { role: "say", text: "DEMO 校验完成；未提交后端，registry 未改变。" },
     ]);
   }
 

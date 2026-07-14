@@ -4,10 +4,13 @@ from __future__ import annotations
 
 import json
 import math
+import os
+import threading
 from dataclasses import asdict, dataclass, is_dataclass
 from pathlib import Path
 from typing import Any
 
+from ..cross_process_lock import acquire_exclusive_fd
 from ..lineage.ids import content_hash
 
 
@@ -148,6 +151,14 @@ class ValidationDepthRecord:
             "validation_result_refs",
         ):
             object.__setattr__(self, field_name, tuple(str(v) for v in _tuple(getattr(self, field_name))))
+
+
+@dataclass(frozen=True)
+class ValidationEvidenceBinding:
+    owner_user_id: str
+    recorded_by: str
+    source_run_ref: str
+    backtest_run_ref: str
 
 
 @dataclass(frozen=True)
@@ -916,6 +927,28 @@ def _decision_message(decision: MethodologyDecision) -> str:
     return "; ".join(f"{v.code}:{v.field}" for v in decision.violations) or "methodology record rejected"
 
 
+def validation_methodology_record_from_dict(data: dict[str, Any]) -> ValidationMethodologyRecord:
+    return ValidationMethodologyRecord(
+        validation_ref=str(data.get("validation_ref") or ""),
+        claim_label=str(data.get("claim_label") or ""),
+        sample_size=int(data.get("sample_size") or 0),
+        pbo_ref=data.get("pbo_ref"),
+        dsr_ref=data.get("dsr_ref"),
+        bootstrap_ci_ref=data.get("bootstrap_ci_ref"),
+        cpcv_ref=data.get("cpcv_ref"),
+        walk_forward_ref=data.get("walk_forward_ref"),
+        purge_embargo_ref=data.get("purge_embargo_ref"),
+        honest_n_ref=data.get("honest_n_ref"),
+        multiple_testing_ref=data.get("multiple_testing_ref"),
+        cost_model_refs=_tuple(data.get("cost_model_refs")),
+        tca_ref=data.get("tca_ref"),
+        methodology_choice_ref=data.get("methodology_choice_ref"),
+        responsibility_boundary_ref=data.get("responsibility_boundary_ref"),
+        user_waived_path=bool(data.get("user_waived_path", False)),
+        target_environment=str(data.get("target_environment") or "research"),
+    )
+
+
 def validation_depth_record_from_dict(data: dict[str, Any]) -> ValidationDepthRecord:
     return ValidationDepthRecord(
         depth_ref=str(data.get("depth_ref") or ""),
@@ -943,18 +976,43 @@ def validation_depth_record_from_dict(data: dict[str, Any]) -> ValidationDepthRe
     )
 
 
-class PersistentValidationDepthRegistry:
-    """Append-only JSONL registry for GOAL §10 validation-depth evidence."""
+class _OwnerMethodologyRegistry:
+    """Shared append-only owner envelope mechanics for §10 evidence."""
+
+    event_type = ""
+    payload_key = ""
+    ref_field = ""
 
     def __init__(self, path: str | Path) -> None:
         self._path = Path(path)
         self._path.parent.mkdir(parents=True, exist_ok=True)
-        self._records: dict[str, ValidationDepthRecord] = {}
+        self._lock_path = self._path.with_name(f".{self._path.name}.lock")
+        self._lock = threading.RLock()
+        self._records: dict[tuple[str, str], Any] = {}
+        self._bindings: dict[tuple[str, str], ValidationEvidenceBinding] = {}
+        self._legacy_quarantined_count = 0
         self._load_existing()
 
     @property
     def path(self) -> Path:
         return self._path
+
+    @property
+    def legacy_quarantined_count(self) -> int:
+        return self._legacy_quarantined_count
+
+    @staticmethod
+    def _required(value: Any, field_name: str) -> str:
+        normalized = str(value or "").strip()
+        if not normalized:
+            raise ValueError(f"{field_name} is required")
+        return normalized
+
+    def _parse(self, raw: dict[str, Any]) -> Any:
+        raise NotImplementedError
+
+    def _validate(self, record: Any) -> MethodologyDecision:
+        raise NotImplementedError
 
     def _load_existing(self) -> None:
         if not self._path.exists():
@@ -965,48 +1023,212 @@ class PersistentValidationDepthRegistry:
                     continue
                 try:
                     row = json.loads(line)
+                    if row.get("schema_version") != 2:
+                        self._legacy_quarantined_count += 1
+                        continue
                     self._apply_row(row, persist=False)
-                except Exception as exc:  # noqa: BLE001 - bad validation history must block startup.
-                    raise ValueError(f"invalid persisted Methodology Validation row at {self._path}:{line_no}") from exc
+                except Exception as exc:  # noqa: BLE001
+                    raise ValueError(
+                        f"invalid persisted Methodology Validation row at {self._path}:{line_no}"
+                    ) from exc
 
-    def _append_event(self, row: dict[str, Any]) -> None:
-        with self._path.open("a", encoding="utf-8") as fh:
-            fh.write(json.dumps(row, ensure_ascii=False, sort_keys=True, separators=(",", ":")) + "\n")
-            fh.flush()
+    def _append_event(self, row: dict[str, Any], *, record_ref: str) -> None:
+        fd = os.open(self._lock_path, os.O_RDWR | os.O_CREAT, 0o600)
+        held = None
+        try:
+            os.chmod(self._lock_path, 0o600)
+            held = acquire_exclusive_fd(fd, timeout_seconds=30.0)
+            if self._path.exists():
+                with self._path.open("r", encoding="utf-8") as existing_fh:
+                    for line_no, line in enumerate(existing_fh, start=1):
+                        if not line.strip():
+                            continue
+                        existing = json.loads(line)
+                        payload = existing.get(self.payload_key)
+                        if (
+                            existing.get("schema_version") == 2
+                            and existing.get("owner_user_id") == row.get("owner_user_id")
+                            and isinstance(payload, dict)
+                            and str(payload.get(self.ref_field) or "") == record_ref
+                        ):
+                            if existing == row:
+                                return
+                            raise ValueError(
+                                f"Methodology Validation identity collision at {self._path}:{line_no}"
+                            )
+            with self._path.open("a", encoding="utf-8") as fh:
+                fh.write(
+                    json.dumps(row, ensure_ascii=False, sort_keys=True, separators=(",", ":"))
+                    + "\n"
+                )
+                fh.flush()
+                os.fsync(fh.fileno())
+        finally:
+            if held is not None:
+                held.release()
+            os.close(fd)
 
-    def _apply_row(self, row: dict[str, Any], *, persist: bool) -> None:
-        if row.get("schema_version") != 1:
-            raise ValueError("unsupported Methodology Validation schema_version")
-        if row.get("event_type") != "validation_depth_recorded":
+    def _apply_row(self, row: dict[str, Any], *, persist: bool) -> Any:
+        if row.get("schema_version") != 2:
+            raise ValueError("Methodology Validation owner envelope schema_version=2 is required")
+        if row.get("event_type") != self.event_type:
             raise ValueError(f"unknown Methodology Validation event_type={row.get('event_type')!r}")
-        raw = row.get("validation_depth")
+        raw = row.get(self.payload_key)
         if not isinstance(raw, dict):
-            raise ValueError("Methodology Validation event missing validation_depth")
-        self._record_depth(validation_depth_record_from_dict(raw), persist=persist)
-
-    def record_depth(self, record: ValidationDepthRecord) -> ValidationDepthRecord:
-        return self._record_depth(record, persist=True)
-
-    def _record_depth(self, record: ValidationDepthRecord, *, persist: bool) -> ValidationDepthRecord:
-        decision = validate_validation_depth(record)
+            raise ValueError(f"Methodology Validation event missing {self.payload_key}")
+        owner = self._required(row.get("owner_user_id"), "owner_user_id")
+        binding = ValidationEvidenceBinding(
+            owner_user_id=owner,
+            recorded_by=self._required(row.get("recorded_by"), "recorded_by"),
+            source_run_ref=self._required(row.get("source_run_ref"), "source_run_ref"),
+            backtest_run_ref=self._required(row.get("backtest_run_ref"), "backtest_run_ref"),
+        )
+        record = self._parse(raw)
+        decision = self._validate(record)
         if not decision.accepted:
             raise ValueError(_decision_message(decision))
-        self._records[record.depth_ref] = record
-        if persist:
-            self._append_event(
-                {
-                    "schema_version": 1,
-                    "event_type": "validation_depth_recorded",
-                    "validation_depth": _json_value(record),
-                }
-            )
-        return record
+        record_ref = self._required(getattr(record, self.ref_field, ""), self.ref_field)
+        key = (owner, record_ref)
+        with self._lock:
+            existing = self._records.get(key)
+            existing_binding = self._bindings.get(key)
+            if existing is not None:
+                if existing != record or existing_binding != binding:
+                    raise ValueError("Methodology Validation identity collision with different content")
+                return existing
+            if persist:
+                self._append_event(row, record_ref=record_ref)
+            self._records[key] = record
+            self._bindings[key] = binding
+            return record
 
-    def depth(self, depth_ref: str) -> ValidationDepthRecord:
-        return self._records[depth_ref]
+    def _record(
+        self,
+        record: Any,
+        *,
+        owner_user_id: str,
+        recorded_by: str,
+        source_run_ref: str,
+        backtest_run_ref: str,
+    ) -> Any:
+        return self._apply_row(
+            {
+                "schema_version": 2,
+                "event_type": self.event_type,
+                "owner_user_id": self._required(owner_user_id, "owner_user_id"),
+                "recorded_by": self._required(recorded_by, "recorded_by"),
+                "source_run_ref": self._required(source_run_ref, "source_run_ref"),
+                "backtest_run_ref": self._required(backtest_run_ref, "backtest_run_ref"),
+                self.payload_key: _json_value(record),
+            },
+            persist=True,
+        )
 
-    def depths(self) -> list[ValidationDepthRecord]:
-        return list(self._records.values())
+    def _get(self, record_ref: str, *, owner_user_id: str) -> Any:
+        return self._records[
+            (self._required(owner_user_id, "owner_user_id"), str(record_ref))
+        ]
+
+    def _binding(self, record_ref: str, *, owner_user_id: str) -> ValidationEvidenceBinding:
+        return self._bindings[
+            (self._required(owner_user_id, "owner_user_id"), str(record_ref))
+        ]
+
+    def _all(self, *, owner_user_id: str) -> list[Any]:
+        owner = self._required(owner_user_id, "owner_user_id")
+        return [
+            record
+            for (record_owner, _ref), record in self._records.items()
+            if record_owner == owner
+        ]
+
+
+class PersistentValidationMethodologyRegistry(_OwnerMethodologyRegistry):
+    event_type = "validation_methodology_recorded"
+    payload_key = "validation_methodology"
+    ref_field = "validation_ref"
+
+    def _parse(self, raw: dict[str, Any]) -> ValidationMethodologyRecord:
+        return validation_methodology_record_from_dict(raw)
+
+    def _validate(self, record: ValidationMethodologyRecord) -> MethodologyDecision:
+        return validate_validation_methodology(record)
+
+    def record_methodology(
+        self,
+        record: ValidationMethodologyRecord,
+        *,
+        owner_user_id: str,
+        recorded_by: str,
+        source_run_ref: str,
+        backtest_run_ref: str,
+    ) -> ValidationMethodologyRecord:
+        return self._record(
+            record,
+            owner_user_id=owner_user_id,
+            recorded_by=recorded_by,
+            source_run_ref=source_run_ref,
+            backtest_run_ref=backtest_run_ref,
+        )
+
+    def methodology(self, validation_ref: str, *, owner_user_id: str) -> ValidationMethodologyRecord:
+        return self._get(validation_ref, owner_user_id=owner_user_id)
+
+    def methodology_binding(
+        self,
+        validation_ref: str,
+        *,
+        owner_user_id: str,
+    ) -> ValidationEvidenceBinding:
+        return self._binding(validation_ref, owner_user_id=owner_user_id)
+
+    def methodologies(self, *, owner_user_id: str) -> list[ValidationMethodologyRecord]:
+        return self._all(owner_user_id=owner_user_id)
+
+
+class PersistentValidationDepthRegistry(_OwnerMethodologyRegistry):
+    """Owner-scoped append-only registry for GOAL §10 validation-depth evidence."""
+
+    event_type = "validation_depth_recorded"
+    payload_key = "validation_depth"
+    ref_field = "depth_ref"
+
+    def _parse(self, raw: dict[str, Any]) -> ValidationDepthRecord:
+        return validation_depth_record_from_dict(raw)
+
+    def _validate(self, record: ValidationDepthRecord) -> MethodologyDecision:
+        return validate_validation_depth(record)
+
+    def record_depth(
+        self,
+        record: ValidationDepthRecord,
+        *,
+        owner_user_id: str,
+        recorded_by: str,
+        source_run_ref: str,
+        backtest_run_ref: str,
+    ) -> ValidationDepthRecord:
+        return self._record(
+            record,
+            owner_user_id=owner_user_id,
+            recorded_by=recorded_by,
+            source_run_ref=source_run_ref,
+            backtest_run_ref=backtest_run_ref,
+        )
+
+    def depth(self, depth_ref: str, *, owner_user_id: str) -> ValidationDepthRecord:
+        return self._get(depth_ref, owner_user_id=owner_user_id)
+
+    def depth_binding(
+        self,
+        depth_ref: str,
+        *,
+        owner_user_id: str,
+    ) -> ValidationEvidenceBinding:
+        return self._binding(depth_ref, owner_user_id=owner_user_id)
+
+    def depths(self, *, owner_user_id: str) -> list[ValidationDepthRecord]:
+        return self._all(owner_user_id=owner_user_id)
 
 
 def cpcv_calculator_record_from_dict(data: dict[str, Any]) -> CPCVCalculatorRecord:
@@ -1081,88 +1303,119 @@ def runtime_drill_record_from_dict(data: dict[str, Any]) -> RuntimeDrillRecord:
     )
 
 
-class PersistentMethodologyRuntimeDrillRegistry:
-    """Append-only JSONL registry for methodology runtime drill outputs."""
+class PersistentMethodologyRuntimeDrillRegistry(_OwnerMethodologyRegistry):
+    """Owner-scoped append-only registry for methodology runtime drills."""
+
+    event_type = "methodology_runtime_drill_recorded"
+    payload_key = "runtime_drill"
+    ref_field = "runtime_drill_ref"
 
     def __init__(self, path: str | Path) -> None:
-        self._path = Path(path)
-        self._path.parent.mkdir(parents=True, exist_ok=True)
-        self._records: dict[str, RuntimeDrillRecord] = {}
-        self._load_existing()
+        self._by_fault_ref: dict[tuple[str, str], RuntimeDrillRecord] = {}
+        self._by_recovery_ref: dict[tuple[str, str], RuntimeDrillRecord] = {}
+        super().__init__(path)
 
-    @property
-    def path(self) -> Path:
-        return self._path
+    def _parse(self, raw: dict[str, Any]) -> RuntimeDrillRecord:
+        return runtime_drill_record_from_dict(raw)
 
-    def _load_existing(self) -> None:
-        if not self._path.exists():
-            return
-        with self._path.open("r", encoding="utf-8") as fh:
-            for line_no, line in enumerate(fh, start=1):
-                if not line.strip():
-                    continue
-                try:
-                    row = json.loads(line)
-                    self._apply_row(row, persist=False)
-                except Exception as exc:  # noqa: BLE001
-                    raise ValueError(f"invalid persisted Methodology Runtime Drill row at {self._path}:{line_no}") from exc
+    def _validate(self, record: RuntimeDrillRecord) -> MethodologyDecision:
+        return validate_runtime_drill(record)
 
-    def _append_event(self, row: dict[str, Any]) -> None:
-        with self._path.open("a", encoding="utf-8") as fh:
-            fh.write(json.dumps(row, ensure_ascii=False, sort_keys=True, separators=(",", ":")) + "\n")
-            fh.flush()
-
-    def _apply_row(self, row: dict[str, Any], *, persist: bool) -> None:
-        if row.get("schema_version") != 1:
-            raise ValueError("unsupported Methodology Runtime Drill schema_version")
-        if row.get("event_type") != "methodology_runtime_drill_recorded":
-            raise ValueError(f"unknown Methodology Runtime Drill event_type={row.get('event_type')!r}")
-        raw = row.get("runtime_drill")
-        if not isinstance(raw, dict):
-            raise ValueError("Methodology Runtime Drill event missing runtime_drill")
-        self.record_runtime_drill(runtime_drill_record_from_dict(raw), persist=persist)
+    def _apply_row(self, row: dict[str, Any], *, persist: bool) -> RuntimeDrillRecord:
+        record = super()._apply_row(row, persist=persist)
+        owner = self._required(row.get("owner_user_id"), "owner_user_id")
+        for mapping, nested_ref in (
+            (self._by_fault_ref, record.fault_injection_ref),
+            (self._by_recovery_ref, record.recovery_drill_ref),
+        ):
+            key = (owner, str(nested_ref))
+            existing = mapping.get(key)
+            if existing is not None and existing != record:
+                raise ValueError("Methodology Runtime Drill nested ref collision")
+            mapping[key] = record
+        return record
 
     def record_runtime_drill(
         self,
         record: RuntimeDrillRecord,
         *,
-        persist: bool = True,
+        owner_user_id: str,
+        recorded_by: str,
+        source_run_ref: str,
+        backtest_run_ref: str,
     ) -> RuntimeDrillRecord:
-        decision = validate_runtime_drill(record)
-        if not decision.accepted:
-            raise ValueError(_decision_message(decision))
-        self._records[record.runtime_drill_ref] = record
-        if persist:
-            self._append_event(
-                {
-                    "schema_version": 1,
-                    "event_type": "methodology_runtime_drill_recorded",
-                    "runtime_drill": _json_value(record),
-                }
-            )
-        return record
+        return self._record(
+            record,
+            owner_user_id=owner_user_id,
+            recorded_by=recorded_by,
+            source_run_ref=source_run_ref,
+            backtest_run_ref=backtest_run_ref,
+        )
 
-    def runtime_drill(self, runtime_drill_ref: str) -> RuntimeDrillRecord:
-        return self._records[runtime_drill_ref]
+    def runtime_drill(self, runtime_drill_ref: str, *, owner_user_id: str) -> RuntimeDrillRecord:
+        return self._get(runtime_drill_ref, owner_user_id=owner_user_id)
 
-    def runtime_drills(self) -> list[RuntimeDrillRecord]:
-        return list(self._records.values())
+    def runtime_drill_binding(
+        self,
+        runtime_drill_ref: str,
+        *,
+        owner_user_id: str,
+    ) -> ValidationEvidenceBinding:
+        return self._binding(runtime_drill_ref, owner_user_id=owner_user_id)
+
+    def runtime_drills(self, *, owner_user_id: str) -> list[RuntimeDrillRecord]:
+        return self._all(owner_user_id=owner_user_id)
+
+    def by_fault_injection_ref(
+        self,
+        fault_injection_ref: str,
+        *,
+        owner_user_id: str,
+    ) -> RuntimeDrillRecord:
+        return self._by_fault_ref[
+            (self._required(owner_user_id, "owner_user_id"), str(fault_injection_ref))
+        ]
+
+    def by_recovery_drill_ref(
+        self,
+        recovery_drill_ref: str,
+        *,
+        owner_user_id: str,
+    ) -> RuntimeDrillRecord:
+        return self._by_recovery_ref[
+            (self._required(owner_user_id, "owner_user_id"), str(recovery_drill_ref))
+        ]
 
 
 class PersistentMethodologyCalculatorRegistry:
-    """Append-only JSONL registry for methodology calculator outputs."""
+    """Owner-scoped append-only registry for methodology calculator outputs."""
 
     def __init__(self, path: str | Path) -> None:
         self._path = Path(path)
         self._path.parent.mkdir(parents=True, exist_ok=True)
-        self._cpcv: dict[str, CPCVCalculatorRecord] = {}
-        self._conformal: dict[str, ConformalCalculatorRecord] = {}
-        self._tca: dict[str, TCACalculatorRecord] = {}
+        self._lock_path = self._path.with_name(f".{self._path.name}.lock")
+        self._lock = threading.RLock()
+        self._cpcv: dict[tuple[str, str], CPCVCalculatorRecord] = {}
+        self._conformal: dict[tuple[str, str], ConformalCalculatorRecord] = {}
+        self._tca: dict[tuple[str, str], TCACalculatorRecord] = {}
+        self._bindings: dict[tuple[str, str, str], ValidationEvidenceBinding] = {}
+        self._legacy_quarantined_count = 0
         self._load_existing()
 
     @property
     def path(self) -> Path:
         return self._path
+
+    @property
+    def legacy_quarantined_count(self) -> int:
+        return self._legacy_quarantined_count
+
+    @staticmethod
+    def _required(value: Any, field_name: str) -> str:
+        value = str(value or "").strip()
+        if not value:
+            raise ValueError(f"{field_name} is required")
+        return value
 
     def _load_existing(self) -> None:
         if not self._path.exists():
@@ -1173,103 +1426,181 @@ class PersistentMethodologyCalculatorRegistry:
                     continue
                 try:
                     row = json.loads(line)
+                    if row.get("schema_version") != 2:
+                        self._legacy_quarantined_count += 1
+                        continue
                     self._apply_row(row, persist=False)
                 except Exception as exc:  # noqa: BLE001
                     raise ValueError(f"invalid persisted Methodology Calculator row at {self._path}:{line_no}") from exc
 
-    def _append_event(self, row: dict[str, Any]) -> None:
-        with self._path.open("a", encoding="utf-8") as fh:
-            fh.write(json.dumps(row, ensure_ascii=False, sort_keys=True, separators=(",", ":")) + "\n")
-            fh.flush()
+    def _append_event(self, row: dict[str, Any], *, kind: str, record_ref: str) -> None:
+        fd = os.open(self._lock_path, os.O_RDWR | os.O_CREAT, 0o600)
+        held = None
+        try:
+            os.chmod(self._lock_path, 0o600)
+            held = acquire_exclusive_fd(fd, timeout_seconds=30.0)
+            if self._path.exists():
+                with self._path.open("r", encoding="utf-8") as existing_fh:
+                    for line_no, line in enumerate(existing_fh, start=1):
+                        if not line.strip():
+                            continue
+                        existing = json.loads(line)
+                        raw = existing.get("calculator_record")
+                        ref_field = {"cpcv": "cpcv_ref", "conformal": "conformal_ref", "tca": "tca_ref"}[kind]
+                        if (
+                            existing.get("schema_version") == 2
+                            and existing.get("owner_user_id") == row.get("owner_user_id")
+                            and existing.get("calculator_kind") == kind
+                            and isinstance(raw, dict)
+                            and str(raw.get(ref_field) or "") == record_ref
+                        ):
+                            if existing == row:
+                                return
+                            raise ValueError(
+                                f"Methodology Calculator identity collision at {self._path}:{line_no}"
+                            )
+            with self._path.open("a", encoding="utf-8") as fh:
+                fh.write(
+                    json.dumps(row, ensure_ascii=False, sort_keys=True, separators=(",", ":"))
+                    + "\n"
+                )
+                fh.flush()
+                os.fsync(fh.fileno())
+        finally:
+            if held is not None:
+                held.release()
+            os.close(fd)
 
     def _apply_row(self, row: dict[str, Any], *, persist: bool) -> None:
-        if row.get("schema_version") != 1:
-            raise ValueError("unsupported Methodology Calculator schema_version")
+        if row.get("schema_version") != 2:
+            raise ValueError("Methodology Calculator owner envelope schema_version=2 is required")
         if row.get("event_type") != "methodology_calculator_recorded":
             raise ValueError(f"unknown Methodology Calculator event_type={row.get('event_type')!r}")
         kind = str(row.get("calculator_kind") or "")
         raw = row.get("calculator_record")
         if not isinstance(raw, dict):
             raise ValueError("Methodology Calculator event missing calculator_record")
+        binding = ValidationEvidenceBinding(
+            owner_user_id=self._required(row.get("owner_user_id"), "owner_user_id"),
+            recorded_by=self._required(row.get("recorded_by"), "recorded_by"),
+            source_run_ref=self._required(row.get("source_run_ref"), "source_run_ref"),
+            backtest_run_ref=self._required(row.get("backtest_run_ref"), "backtest_run_ref"),
+        )
         if kind == "cpcv":
-            self.record_cpcv(cpcv_calculator_record_from_dict(raw), persist=persist)
+            record = cpcv_calculator_record_from_dict(raw)
         elif kind == "conformal":
-            self.record_conformal(conformal_calculator_record_from_dict(raw), persist=persist)
+            record = conformal_calculator_record_from_dict(raw)
         elif kind == "tca":
-            self.record_tca(tca_calculator_record_from_dict(raw), persist=persist)
+            record = tca_calculator_record_from_dict(raw)
         else:
             raise ValueError(f"unknown methodology calculator kind={kind!r}")
+        return self._record(record, kind=kind, binding=binding, persist=persist, row=row)
 
-    def record_cpcv(self, record: CPCVCalculatorRecord, *, persist: bool = True) -> CPCVCalculatorRecord:
-        decision = validate_cpcv_calculator(record)
+    @staticmethod
+    def _kind_contract(record: Any) -> tuple[str, str, Any, Any]:
+        if isinstance(record, CPCVCalculatorRecord):
+            return "cpcv", record.cpcv_ref, validate_cpcv_calculator, "_cpcv"
+        if isinstance(record, ConformalCalculatorRecord):
+            return "conformal", record.conformal_ref, validate_conformal_calculator, "_conformal"
+        if isinstance(record, TCACalculatorRecord):
+            return "tca", record.tca_ref, validate_tca_calculator, "_tca"
+        raise TypeError("unsupported methodology calculator record")
+
+    def _record(
+        self,
+        record: Any,
+        *,
+        kind: str,
+        binding: ValidationEvidenceBinding,
+        persist: bool,
+        row: dict[str, Any],
+    ) -> Any:
+        actual_kind, record_ref, validator, mapping_name = self._kind_contract(record)
+        if actual_kind != kind:
+            raise ValueError("methodology calculator kind mismatch")
+        decision = validator(record)
         if not decision.accepted:
             raise ValueError(_decision_message(decision))
-        self._cpcv[record.cpcv_ref] = record
-        if persist:
-            self._append_event(
-                {
-                    "schema_version": 1,
-                    "event_type": "methodology_calculator_recorded",
-                    "calculator_kind": "cpcv",
-                    "calculator_record": _json_value(record),
-                }
-            )
-        return record
+        key = (binding.owner_user_id, record_ref)
+        binding_key = (binding.owner_user_id, kind, record_ref)
+        mapping = getattr(self, mapping_name)
+        with self._lock:
+            existing = mapping.get(key)
+            existing_binding = self._bindings.get(binding_key)
+            if existing is not None:
+                if existing != record or existing_binding != binding:
+                    raise ValueError("Methodology Calculator identity collision with different content")
+                return existing
+            if persist:
+                self._append_event(row, kind=kind, record_ref=record_ref)
+            mapping[key] = record
+            self._bindings[binding_key] = binding
+            return record
+
+    def _record_public(
+        self,
+        record: Any,
+        *,
+        owner_user_id: str,
+        recorded_by: str,
+        source_run_ref: str,
+        backtest_run_ref: str,
+    ) -> Any:
+        kind, _record_ref, _validator, _mapping = self._kind_contract(record)
+        binding = ValidationEvidenceBinding(
+            owner_user_id=self._required(owner_user_id, "owner_user_id"),
+            recorded_by=self._required(recorded_by, "recorded_by"),
+            source_run_ref=self._required(source_run_ref, "source_run_ref"),
+            backtest_run_ref=self._required(backtest_run_ref, "backtest_run_ref"),
+        )
+        row = {
+            "schema_version": 2,
+            "event_type": "methodology_calculator_recorded",
+            "calculator_kind": kind,
+            "owner_user_id": binding.owner_user_id,
+            "recorded_by": binding.recorded_by,
+            "source_run_ref": binding.source_run_ref,
+            "backtest_run_ref": binding.backtest_run_ref,
+            "calculator_record": _json_value(record),
+        }
+        return self._record(record, kind=kind, binding=binding, persist=True, row=row)
+
+    def record_cpcv(self, record: CPCVCalculatorRecord, **binding: str) -> CPCVCalculatorRecord:
+        return self._record_public(record, **binding)
 
     def record_conformal(
         self,
         record: ConformalCalculatorRecord,
-        *,
-        persist: bool = True,
+        **binding: str,
     ) -> ConformalCalculatorRecord:
-        decision = validate_conformal_calculator(record)
-        if not decision.accepted:
-            raise ValueError(_decision_message(decision))
-        self._conformal[record.conformal_ref] = record
-        if persist:
-            self._append_event(
-                {
-                    "schema_version": 1,
-                    "event_type": "methodology_calculator_recorded",
-                    "calculator_kind": "conformal",
-                    "calculator_record": _json_value(record),
-                }
-            )
-        return record
+        return self._record_public(record, **binding)
 
-    def record_tca(self, record: TCACalculatorRecord, *, persist: bool = True) -> TCACalculatorRecord:
-        decision = validate_tca_calculator(record)
-        if not decision.accepted:
-            raise ValueError(_decision_message(decision))
-        self._tca[record.tca_ref] = record
-        if persist:
-            self._append_event(
-                {
-                    "schema_version": 1,
-                    "event_type": "methodology_calculator_recorded",
-                    "calculator_kind": "tca",
-                    "calculator_record": _json_value(record),
-                }
-            )
-        return record
+    def record_tca(self, record: TCACalculatorRecord, **binding: str) -> TCACalculatorRecord:
+        return self._record_public(record, **binding)
 
-    def cpcv(self, cpcv_ref: str) -> CPCVCalculatorRecord:
-        return self._cpcv[cpcv_ref]
+    def cpcv(self, cpcv_ref: str, *, owner_user_id: str) -> CPCVCalculatorRecord:
+        return self._cpcv[(self._required(owner_user_id, "owner_user_id"), cpcv_ref)]
 
-    def conformal(self, conformal_ref: str) -> ConformalCalculatorRecord:
-        return self._conformal[conformal_ref]
+    def conformal(self, conformal_ref: str, *, owner_user_id: str) -> ConformalCalculatorRecord:
+        return self._conformal[(self._required(owner_user_id, "owner_user_id"), conformal_ref)]
 
-    def tca(self, tca_ref: str) -> TCACalculatorRecord:
-        return self._tca[tca_ref]
+    def tca(self, tca_ref: str, *, owner_user_id: str) -> TCACalculatorRecord:
+        return self._tca[(self._required(owner_user_id, "owner_user_id"), tca_ref)]
 
-    def cpcv_records(self) -> list[CPCVCalculatorRecord]:
-        return list(self._cpcv.values())
+    def binding(self, kind: str, record_ref: str, *, owner_user_id: str) -> ValidationEvidenceBinding:
+        return self._bindings[(self._required(owner_user_id, "owner_user_id"), kind, record_ref)]
 
-    def conformal_records(self) -> list[ConformalCalculatorRecord]:
-        return list(self._conformal.values())
+    def cpcv_records(self, *, owner_user_id: str) -> list[CPCVCalculatorRecord]:
+        owner = self._required(owner_user_id, "owner_user_id")
+        return [record for (record_owner, _ref), record in self._cpcv.items() if record_owner == owner]
 
-    def tca_records(self) -> list[TCACalculatorRecord]:
-        return list(self._tca.values())
+    def conformal_records(self, *, owner_user_id: str) -> list[ConformalCalculatorRecord]:
+        owner = self._required(owner_user_id, "owner_user_id")
+        return [record for (record_owner, _ref), record in self._conformal.items() if record_owner == owner]
+
+    def tca_records(self, *, owner_user_id: str) -> list[TCACalculatorRecord]:
+        owner = self._required(owner_user_id, "owner_user_id")
+        return [record for (record_owner, _ref), record in self._tca.items() if record_owner == owner]
 
 
 __all__ = [
@@ -1281,10 +1612,12 @@ __all__ = [
     "MethodologyViolation",
     "PersistentMethodologyCalculatorRegistry",
     "PersistentMethodologyRuntimeDrillRegistry",
+    "PersistentValidationMethodologyRegistry",
     "PersistentValidationDepthRegistry",
     "RuntimeDrillRecord",
     "TCACalculatorRecord",
     "ValidationDepthRecord",
+    "ValidationEvidenceBinding",
     "ValidationMethodologyRecord",
     "calculate_conformal",
     "calculate_cpcv",
@@ -1297,6 +1630,7 @@ __all__ = [
     "validate_conformal_calculator",
     "validate_cpcv_calculator",
     "validation_depth_record_from_dict",
+    "validation_methodology_record_from_dict",
     "validate_live_monitoring_alert",
     "validate_methodology_choice_coverage",
     "validate_methodology_contract",

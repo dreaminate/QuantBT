@@ -148,7 +148,12 @@ export function HomePage() {
           </div>
           <div className="cc-prompt-line">
             <span className="cc-prompt-output">
-              ✅ a_share_real_demo done · sharpe=5.84 · pbo=0.00 · dsr=0.999
+              # 结果以本次生成的 run.json 为准；首页不缓存历史绩效数字
+            </span>
+          </div>
+          <div className="cc-prompt-line">
+            <span className="cc-prompt-output">
+              # bundled historical artifact 未绑定 DatasetVersion/source provenance，不能作为真 Tushare 验证证据
             </span>
           </div>
           <div className="cc-prompt-line">

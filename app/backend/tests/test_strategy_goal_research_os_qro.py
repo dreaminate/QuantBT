@@ -25,10 +25,17 @@ from app.research_os import (
     PersistentGoalEntrypointCoverageRegistry,
     ResearchGraphStore,
 )
+from app.research_os.entrypoint_evidence import PersistentEntrypointEvidenceRegistry
+from app.research_os.goal_proof_ledger import GoalProofLedger
+from app.research_os.goal_validation_receipts import (
+    PersistentGoalValidationReceiptRegistry,
+)
+from app.research_os.ref_resolution import build_real_ref_resolver
 from app.strategy_goal_store import StrategyGoalStore
 
 MARKET_DATA_USE_REFS = ["market_data_use:ds2_chain:accepted"]
 MARKET_DATASET_REF = "dataset:btc_daily"
+TEST_OWNER_USER_ID = "test:strategy-goal-qro"
 
 
 class _DatasetSemantics:
@@ -52,16 +59,22 @@ class _MarketDataUseRegistry:
             accepted=True,
             violation_codes=(),
             evidence_refs=("evidence:ds2_chain_market_data_use",),
-            recorded_by="test",
+            recorded_by=TEST_OWNER_USER_ID,
             created_at_utc="2026-06-27T00:00:00Z",
         )
 
-    def use_validation(self, validation_ref: str) -> MarketDataUseValidationRecord:
+    def use_validation(
+        self, validation_ref: str, *, owner_user_id: str,
+    ) -> MarketDataUseValidationRecord:
+        if owner_user_id != TEST_OWNER_USER_ID:
+            raise PermissionError(owner_user_id)
         if validation_ref != self._record.validation_ref:
             raise KeyError(validation_ref)
         return self._record
 
-    def dataset(self, dataset_ref: str) -> _DatasetSemantics:
+    def dataset(self, dataset_ref: str, *, owner_user_id: str) -> _DatasetSemantics:
+        if owner_user_id != TEST_OWNER_USER_ID:
+            raise PermissionError(owner_user_id)
         if dataset_ref != _DatasetSemantics.dataset_ref:
             raise KeyError(dataset_ref)
         return _DatasetSemantics()
@@ -139,13 +152,48 @@ def test_strategy_goal_api_create_records_quant_intent_qro_without_prompt_plaint
     import app.main as main
 
     monkeypatch.setattr(main, "STRATEGY_GOAL_STORE", StrategyGoalStore(tmp_path / "goals"))
-    monkeypatch.setattr(main, "RESEARCH_GRAPH_STORE", ResearchGraphStore())
-    monkeypatch.setattr(main, "COMPILER_IR_STORE", PersistentCompilerIRStore(tmp_path / "compiler_ir.jsonl"))
-    monkeypatch.setattr(
-        main,
-        "GOAL_ENTRYPOINT_COVERAGE_REGISTRY",
-        PersistentGoalEntrypointCoverageRegistry(tmp_path / "goal_entrypoint_coverage.jsonl"),
+    graph = ResearchGraphStore()
+    proof_ledger = GoalProofLedger(tmp_path / "goal_proof_ledger")
+    compiler = PersistentCompilerIRStore(
+        tmp_path / "compiler_ir.jsonl",
+        proof_ledger=proof_ledger,
+        legacy_read_only=True,
     )
+    validations = PersistentGoalValidationReceiptRegistry(
+        tmp_path / "goal_validation_receipts.jsonl",
+        proof_ledger=proof_ledger,
+        legacy_read_only=True,
+    )
+    evidence = PersistentEntrypointEvidenceRegistry(
+        tmp_path / "entrypoint_evidence.jsonl",
+        research_graph_store=graph,
+        compiler_store=compiler,
+        validation_receipt_registry=validations,
+        proof_ledger=proof_ledger,
+        legacy_read_only=True,
+    )
+    coverage_store = PersistentGoalEntrypointCoverageRegistry(
+        tmp_path / "goal_entrypoint_coverage.jsonl",
+        proof_ledger=proof_ledger,
+        legacy_read_only=True,
+    )
+    coverage_store.set_ref_resolver(
+        build_real_ref_resolver(
+            research_graph_store=graph,
+            lifecycle_registry=None,
+            governance_registry=None,
+            rag_index=None,
+            spine_chain_registry=None,
+            compiler_store=compiler,
+            goal_validation_receipt_registry=validations,
+            platform_source_evidence_registry=evidence,
+        )
+    )
+    monkeypatch.setattr(main, "RESEARCH_GRAPH_STORE", graph)
+    monkeypatch.setattr(main, "COMPILER_IR_STORE", compiler)
+    monkeypatch.setattr(main, "GOAL_VALIDATION_RECEIPT_REGISTRY", validations)
+    monkeypatch.setattr(main, "ENTRYPOINT_EVIDENCE_REGISTRY", evidence)
+    monkeypatch.setattr(main, "GOAL_ENTRYPOINT_COVERAGE_REGISTRY", coverage_store)
     before = len(main.RESEARCH_GRAPH_STORE.commands())
     secret = "SHOULD_NOT_ENTER_STRATEGY_GOAL_API_AUDIT"
     client = TestClient(main.app)
@@ -240,6 +288,7 @@ def test_goal_id_flows_into_backtest_chat_to_backtest_chain(tmp_path, monkeypatc
         ledger=Ledger(tmp_path / "lineage"), returns_store=None, data_root=tmp_path,
         verdict_store=None, verifier=None, llm_client=None,
         market_data_registry=_MarketDataUseRegistry(),
+        owner_user_id=TEST_OWNER_USER_ID,
     )
     assert out.get("error") is None, out
     assert out["run_id"], "chat 产的 goal_id 必须能驱动 DS-1 backtest 产真 run"

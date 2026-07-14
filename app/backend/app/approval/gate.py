@@ -167,7 +167,8 @@ class ApprovalGateService:
                 self_approve: bool = False, acknowledged: bool = False, cooling_seconds: int = 0,
                 execute_fn: Callable[[ApprovalGate], str] | None = None,
                 rdp: RDPManifest | None = None, promotion_claim: PromotionClaim | None = None,
-                require_rdp: bool = False) -> ApprovalGate:
+                require_rdp: bool = False,
+                authorization_evidence: dict[str, Any] | None = None) -> ApprovalGate:
         gate = self._store.get(gate_id)
         if gate.decision != "pending":
             raise GateStateError(f"非 pending 不可批准: {gate.decision}")
@@ -197,6 +198,11 @@ class ApprovalGateService:
             gate.self_approved = True  # 诚实标注（审计可查），绝不伪装成双人
         if gate.channel == "confirmatory" and not _is_substantive(reason):
             raise EmptyReason("confirmatory 审批理由不可空/不可纯套话")
+        if authorization_evidence:
+            gate.evidence = {
+                **(gate.evidence if isinstance(gate.evidence, dict) else {}),
+                **dict(authorization_evidence),
+            }
         gate.approver = approver
         gate.decision_reason = reason
         gate.risk_restated = risk_restated

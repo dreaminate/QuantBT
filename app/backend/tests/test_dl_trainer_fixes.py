@@ -17,6 +17,9 @@ pytest.importorskip("torch")
 from app.models.dl.trainer import _build_sequences, _temporal_val_mask, train_dl
 
 
+_OWNER_USER_ID = "test-owner"
+
+
 def _multi_symbol_panel(n_syms: int = 4, n_days: int = 60, seed: int = 0, sym_col: str = "ts_code") -> pd.DataFrame:
     rng = np.random.default_rng(seed)
     base = datetime(2024, 1, 1, tzinfo=UTC)
@@ -157,6 +160,7 @@ def test_service_compose_dl_then_ml(tmp_path: Path, monkeypatch: pytest.MonkeyPa
             hyperparams={"max_epochs": 1, "lookback": 8, "hidden_size": 8, "batch_size": 16},
         ),
         panel,
+        owner_user_id=_OWNER_USER_ID,
     )
     assert dl.status == "succeeded", dl.error
     pt = str(Path(dl.artifact_dir) / "model.pt")
@@ -168,6 +172,7 @@ def test_service_compose_dl_then_ml(tmp_path: Path, monkeypatch: pytest.MonkeyPa
             input_models=[{"artifact_path": pt, "feature_cols": ["f1", "f2"], "as_col": "lstm_pred"}],
         ),
         panel,
+        owner_user_id=_OWNER_USER_ID,
     )
     assert b.status == "succeeded", b.error  # 不再因 .pt 报 ValueError
 

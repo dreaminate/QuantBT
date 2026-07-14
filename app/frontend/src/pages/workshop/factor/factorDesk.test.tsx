@@ -169,15 +169,15 @@ describe("F1 · 交互：构建台校验 + 注册 + 算子插入", () => {
     expect(isBalanced("ts_mean(close, 20")).toBe(false);
   });
 
-  it("点算子插入到表达式 + gate 注册写回对话", () => {
+  it("注册预检无后端端点时 fail closed，不报告写入成功", () => {
     renderWithDesk(<FactorDeskPage />);
     fireEvent.click(screen.getByText(/构建台/));
-    // 打开 gate
-    fireEvent.click(screen.getByText(/注册到因子库/));
+    fireEvent.click(screen.getByText(/注册预检/));
     expect(screen.getByRole("dialog", { name: /注册因子/ })).toBeInTheDocument();
-    // 确认注册 → 对话追加成功消息
-    fireEvent.click(screen.getByText(/✓ 注册/));
-    expect(screen.getByText(/已注册到因子库/)).toBeInTheDocument();
+    const register = screen.getByRole("button", { name: /未连接 · 不注册/ });
+    expect(register).toBeDisabled();
+    expect(screen.getByText(/当前未连接 registry 写入端点/)).toBeInTheDocument();
+    expect(screen.queryByText(/已注册到因子库/)).toBeNull();
   });
 });
 

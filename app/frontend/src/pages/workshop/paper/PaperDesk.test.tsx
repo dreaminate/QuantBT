@@ -6,6 +6,7 @@ import { screen, fireEvent, within } from "@testing-library/react";
 import { renderWithDesk, assertNoFrozenPageImport } from "../../../test/harness";
 import { PaperDeskPage } from "../PaperDeskPage";
 import { PaperBoardCard } from "../../../components/PaperBoardCard";
+import { defaultBoardData } from "./mock";
 
 const here = dirname(fileURLToPath(import.meta.url));
 const viewsDir = join(here, "views");
@@ -73,9 +74,28 @@ describe("PaperBoardCard（可复用嵌入卡）", () => {
     expect(screen.getByText("MOCK 数据")).toBeInTheDocument();
   });
 
-  it("接入真实后端后可关角标：mock=false 不渲染 MOCK 角标", () => {
-    renderWithDesk(<PaperBoardCard mock={false} />);
+  it("backend 来源必须显式给完整 board，且不会静默合入默认 MOCK", () => {
+    const board = { ...defaultBoardData(), strategy: "BACKEND_BOARD_ONLY", positions: [] };
+    renderWithDesk(<PaperBoardCard source="backend" board={board} />);
     expect(screen.queryByText("MOCK 数据")).toBeNull();
+    expect(screen.getByText(/BACKEND_BOARD_ONLY/)).toBeInTheDocument();
+    expect(screen.queryByText("贵州茅台")).toBeNull();
+  });
+
+  it("backend 缺运行/风险证据时显示不可用，绝不硬编码绿灯", () => {
+    const board = {
+      ...defaultBoardData(),
+      strategy: "BACKEND_WITHOUT_STATUS_EVIDENCE",
+      runtimeEvidence: undefined,
+      riskEvidence: undefined,
+    };
+    renderWithDesk(<PaperBoardCard source="backend" board={board} />);
+    expect(screen.getByTestId("paper-board-unavailable")).toHaveTextContent(
+      "未渲染收益、净值与全绿状态",
+    );
+    expect(screen.queryByText("今日盈亏")).toBeNull();
+    expect(screen.queryByLabelText("净值缩略图")).toBeNull();
+    expect(screen.queryByText("全绿 · 0 违规")).toBeNull();
   });
 });
 

@@ -3,7 +3,9 @@
 from __future__ import annotations
 
 import json
+from concurrent.futures import ThreadPoolExecutor
 from pathlib import Path
+from threading import Barrier
 
 import pytest
 
@@ -176,6 +178,159 @@ def test_sharing_publish_snapshots_metrics(auth: AuthService, sharing: SharingSe
     assert s.metric_total_return == 0.42
     assert s.metric_pbo == 0.3
     assert s.metric_dsr == 0.8
+
+
+def test_sharing_publish_explicit_idempotency_key_reuses_exact_business_row(
+    auth: AuthService,
+    sharing: SharingService,
+) -> None:
+    owner = auth.register("alice", "passw0rd")
+    request = {
+        "run_id": "demo-run",
+        "author_id": owner.user_id,
+        "title": "Idempotent share",
+        "description": "same authenticated request",
+        "tags": ["proof"],
+        "asset_class": "equity_cn",
+        "idempotency_key": "publish-request-1",
+    }
+
+    first = sharing.publish_strategy(**request)
+    restarted = SharingService(sharing._db_path, sharing._run_root)  # noqa: SLF001
+    retried = restarted.publish_strategy(**request)
+
+    assert retried == first
+    rows = restarted.list_strategies(
+        author_id=owner.user_id,
+        public_only=False,
+        limit=100,
+    )
+    assert [row.share_id for row in rows] == [first.share_id]
+
+
+def test_sharing_publish_explicit_idempotency_key_serializes_concurrent_retries(
+    auth: AuthService,
+    sharing: SharingService,
+) -> None:
+    owner = auth.register("alice", "passw0rd")
+    workers = 8
+    barrier = Barrier(workers)
+
+    def publish() -> SharedStrategy:
+        barrier.wait()
+        return sharing.publish_strategy(
+            run_id="demo-run",
+            author_id=owner.user_id,
+            title="Concurrent idempotent share",
+            idempotency_key="concurrent-publish-request",
+        )
+
+    with ThreadPoolExecutor(max_workers=workers) as pool:
+        results = list(pool.map(lambda _index: publish(), range(workers)))
+
+    assert len({result.share_id for result in results}) == 1
+    rows = sharing.list_strategies(
+        author_id=owner.user_id,
+        public_only=False,
+        limit=100,
+    )
+    assert len(rows) == 1
+
+
+def test_sharing_publish_idempotency_scope_and_payload_collision(
+    auth: AuthService,
+    sharing: SharingService,
+) -> None:
+    alice = auth.register("alice", "passw0rd")
+    bob = auth.register("bob", "passw0rd")
+    first = sharing.publish_strategy(
+        run_id="demo-run",
+        author_id=alice.user_id,
+        title="First action",
+        idempotency_key="request-1",
+    )
+    distinct_key = sharing.publish_strategy(
+        run_id="demo-run",
+        author_id=alice.user_id,
+        title="First action",
+        idempotency_key="request-2",
+    )
+    other_owner = sharing.publish_strategy(
+        run_id="demo-run",
+        author_id=bob.user_id,
+        title="First action",
+        idempotency_key="request-1",
+    )
+
+    assert len({first.share_id, distinct_key.share_id, other_owner.share_id}) == 3
+    with pytest.raises(ValueError, match="用于不同"):
+        sharing.publish_strategy(
+            run_id="demo-run",
+            author_id=alice.user_id,
+            title="Changed intent",
+            idempotency_key="request-1",
+        )
+    alice_rows = sharing.list_strategies(
+        author_id=alice.user_id,
+        public_only=False,
+        limit=100,
+    )
+    assert len(alice_rows) == 2
+
+
+def test_sharing_publish_without_idempotency_key_keeps_distinct_action_semantics(
+    auth: AuthService,
+    sharing: SharingService,
+) -> None:
+    owner = auth.register("alice", "passw0rd")
+
+    first = sharing.publish_strategy(
+        run_id="demo-run", author_id=owner.user_id, title="Repeated title"
+    )
+    second = sharing.publish_strategy(
+        run_id="demo-run", author_id=owner.user_id, title="Repeated title"
+    )
+
+    assert first.share_id != second.share_id
+    assert len(
+        sharing.list_strategies(
+            author_id=owner.user_id,
+            public_only=False,
+            limit=100,
+        )
+    ) == 2
+
+
+def test_sharing_exposes_exact_owner_scoped_permission_source_and_status_records(
+    auth: AuthService,
+    sharing: SharingService,
+) -> None:
+    owner = auth.register("alice", "passw0rd")
+    foreign = auth.register("bob", "passw0rd")
+    strategy = sharing.publish_strategy(
+        run_id="demo-run",
+        author_id=owner.user_id,
+        title="Governed share",
+        public=False,
+    )
+    refs = strategy.to_dict()
+
+    assert sharing.shared_asset(
+        refs["shared_asset_ref"], owner_user_id=owner.user_id
+    ).share_id == strategy.share_id
+    assert sharing.permission(
+        refs["permission_ref"], owner_user_id=owner.user_id
+    ).visibility == "owner_only"
+    assert sharing.source(
+        refs["source_ref"], owner_user_id=owner.user_id
+    ).run_id == "demo-run"
+    assert sharing.status(
+        refs["status_ref"], owner_user_id=owner.user_id
+    ).status == "published_private"
+    with pytest.raises(KeyError):
+        sharing.shared_asset(
+            refs["shared_asset_ref"], owner_user_id=foreign.user_id
+        )
 
 
 def test_sharing_publish_requires_existing_run(auth: AuthService, sharing: SharingService) -> None:

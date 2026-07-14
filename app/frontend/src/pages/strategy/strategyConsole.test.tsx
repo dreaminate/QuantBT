@@ -344,7 +344,10 @@ describe("S1 对抗③：runtime==='live' 时画布只读 + 参数 disabled + �
     expect(screen.getByText("🔒 Live 只读")).toBeInTheDocument();
     expect(screen.getByText(/Live 只读 · 画布与参数已锁定/)).toBeInTheDocument();
     expect(screen.getByText("⑂ Fork 草稿")).toBeInTheDocument();
-    expect(screen.getByLabelText("Kill Switch")).toBeInTheDocument();
+    const killSwitch = screen.getByLabelText("Kill Switch");
+    expect(killSwitch).toBeDisabled();
+    expect(killSwitch).toHaveTextContent("UNAVAILABLE");
+    expect(killSwitch).not.toHaveTextContent("ARMED");
   });
 
   it("Live 下选中节点 → Inspector 参数 input 全 disabled", () => {
@@ -398,6 +401,9 @@ describe("S1 对抗⑤：mock 区块带 MockBadge（B9 诚实，不假绿灯）"
     const { container } = renderPage();
     // 工具条 MOCK 数据角标
     expect(screen.getAllByText(/MOCK/).length).toBeGreaterThan(0);
+    expect(within(container.querySelector("[data-proposal]") as HTMLElement).getByText("MOCK 提议")).toBeInTheDocument();
+    expect(screen.getByText(/runtime LLM/)).toBeInTheDocument();
+    expect(screen.queryByText(/sonnet-4\.5/)).toBeNull();
     // 选中有贡献的节点 → 切版本/血缘 tab → 贡献卡带 MockBadge
     fireEvent.click(screen.getByText("信号 Signal"));
     fireEvent.click(screen.getByRole("tab", { name: "版本/血缘" }));
@@ -417,6 +423,7 @@ describe("S2 Research Graph → GraphCanvas 只读投影", () => {
     await waitFor(() => expect(screen.getByText(/Research Graph · 1 QRO/)).toBeInTheDocument());
     expect(String(fetchMock.mock.calls[0][0])).toBe("/api/research-os/graph/canvas_projection?limit=24");
     expect(document.querySelector("[data-canvas-source]")).toHaveAttribute("data-canvas-source", "research_graph");
+    expect(screen.queryByText(/MOCK fallback/)).toBeNull();
     expect(document.querySelector("[data-graph-projection-banner]")).toHaveTextContent("无 raw payload");
     expect(container.querySelectorAll("[data-node-id]").length).toBe(2);
     expect(container.querySelector("[data-node-id='canvas_node:qro:qro_policy_1']")).not.toBeNull();
@@ -705,33 +712,10 @@ describe("S2 Research Graph → GraphCanvas 只读投影", () => {
     await waitFor(() => expect(container.querySelector(edgeSelector)).toBeNull());
   });
 
-  it("真实投影下接受 Ghost proposal 会应用 Graph patch，且不提交 raw ops", async () => {
-    let applied = false;
-    const fetchMock = vi.fn((input: RequestInfo | URL, _init?: RequestInit) => {
-      const url = String(input);
-      if (url === "/api/research-os/graph/patch_applications") {
-        applied = true;
-        return Promise.resolve(
-          jsonResponse({
-            accepted: true,
-            command_type: "apply_graph_patch",
-            patch_application_command_id: "rgcmd_apply_ghost",
-            patch_qro_command_id: "rgcmd_patch_qro",
-            graph_edge_command_id: "rgcmd_patch_edge",
-            application_ref: "rgpatch_ghost",
-            patch_qro_id: "qro_patch_ghost",
-            target_qro_id: "qro_policy_1",
-            patch_kind: "ghost",
-            projection_node_id: "canvas_node:qro:qro_patch_ghost",
-            projection_edge_id: "canvas_edge:graph:rgedge_patch_ghost",
-            recorded_by: "tester",
-          }),
-        );
-      }
-      return Promise.resolve(jsonResponse(researchGraphProjectionBody({
-        includePatchApplication: applied ? "ghost" : undefined,
-      })));
-    });
+  it("真实投影下接受 MOCK Ghost proposal 只关闭预览，不提交 Graph patch", async () => {
+    const fetchMock = vi.fn((_input: RequestInfo | URL, _init?: RequestInit) =>
+      Promise.resolve(jsonResponse(researchGraphProjectionBody())),
+    );
     vi.stubGlobal("fetch", fetchMock);
     const { container } = renderPage();
 
@@ -741,49 +725,17 @@ describe("S2 Research Graph → GraphCanvas 只读投影", () => {
     await waitFor(() => expect(container.querySelector("[data-proposal]")).not.toBeNull());
     fireEvent.click(screen.getByText(/接受 Patch/));
 
-    await waitFor(() => expect(screen.getByText(/Ghost patch 已应用到 Research Graph/)).toBeInTheDocument());
+    await waitFor(() => expect(screen.getByText(/MOCK 提议仅用于界面预览；未写入 Research Graph/)).toBeInTheDocument());
     expect(container.querySelector("[data-node-id='varcvar']")).toBeNull();
-    await waitFor(() => expect(container.querySelector("[data-node-id='canvas_node:qro:qro_patch_ghost']")).not.toBeNull());
-    const postCall = fetchMock.mock.calls.find((call) => String(call[0]) === "/api/research-os/graph/patch_applications");
-    expect(postCall).toBeTruthy();
-    const body = String((postCall![1] as RequestInit).body);
-    expect(body).toContain('"target_qro_id":"qro_policy_1"');
-    expect(body).toContain('"patch_kind":"ghost"');
-    expect(body).toContain("canvas_patch:ghost:strategy_console:qro_policy_1:pt_4f1a");
-    expect(body).toContain("hash_strategy_console_ghost_");
-    expect(body).not.toContain("raw_value");
-    expect(body).not.toContain("ops");
-    expect(body).not.toContain("varcvar");
-    expect(fetchMock.mock.calls.filter((call) => String(call[0]).startsWith("/api/research-os/graph/canvas_projection")).length).toBe(2);
+    expect(container.querySelector("[data-node-id='canvas_node:qro:qro_patch_ghost']")).toBeNull();
+    expect(fetchMock.mock.calls.some((call) => String(call[0]) === "/api/research-os/graph/patch_applications")).toBe(false);
+    expect(fetchMock.mock.calls.filter((call) => String(call[0]).startsWith("/api/research-os/graph/canvas_projection"))).toHaveLength(1);
   });
 
-  it("真实投影下 Auto 会应用 Graph patch，且不提交 raw generated patch", async () => {
-    let applied = false;
-    const fetchMock = vi.fn((input: RequestInfo | URL, _init?: RequestInit) => {
-      const url = String(input);
-      if (url === "/api/research-os/graph/patch_applications") {
-        applied = true;
-        return Promise.resolve(
-          jsonResponse({
-            accepted: true,
-            command_type: "apply_graph_patch",
-            patch_application_command_id: "rgcmd_apply_auto",
-            patch_qro_command_id: "rgcmd_patch_auto_qro",
-            graph_edge_command_id: "rgcmd_patch_auto_edge",
-            application_ref: "rgpatch_auto",
-            patch_qro_id: "qro_patch_auto",
-            target_qro_id: "qro_policy_1",
-            patch_kind: "auto",
-            projection_node_id: "canvas_node:qro:qro_patch_auto",
-            projection_edge_id: "canvas_edge:graph:rgedge_patch_auto",
-            recorded_by: "tester",
-          }),
-        );
-      }
-      return Promise.resolve(jsonResponse(researchGraphProjectionBody({
-        includePatchApplication: applied ? "auto" : undefined,
-      })));
-    });
+  it("真实投影下 MOCK Auto 只报告未写入，不提交 Graph patch", async () => {
+    const fetchMock = vi.fn((_input: RequestInfo | URL, _init?: RequestInit) =>
+      Promise.resolve(jsonResponse(researchGraphProjectionBody())),
+    );
     vi.stubGlobal("fetch", fetchMock);
     const { container } = renderPage();
 
@@ -792,19 +744,11 @@ describe("S2 Research Graph → GraphCanvas 只读投影", () => {
     fireEvent.change(screen.getByPlaceholderText("> 输入研究任务…"), { target: { value: "add guard" } });
     fireEvent.click(screen.getByText("↵ 发送"));
 
-    await waitFor(() => expect(screen.getByText(/Auto patch 已应用到 Research Graph/)).toBeInTheDocument());
+    await waitFor(() => expect(screen.getByText(/MOCK Auto 仅用于界面预览；未写入 Research Graph/)).toBeInTheDocument());
     expect(container.querySelector("[data-node-id='ddguard']")).toBeNull();
-    await waitFor(() => expect(container.querySelector("[data-node-id='canvas_node:qro:qro_patch_auto']")).not.toBeNull());
-    const postCall = fetchMock.mock.calls.find((call) => String(call[0]) === "/api/research-os/graph/patch_applications");
-    expect(postCall).toBeTruthy();
-    const body = String((postCall![1] as RequestInit).body);
-    expect(body).toContain('"target_qro_id":"qro_policy_1"');
-    expect(body).toContain('"patch_kind":"auto"');
-    expect(body).toContain("canvas_patch:auto:strategy_console:qro_policy_1:pt_auto");
-    expect(body).toContain("hash_strategy_console_auto_");
-    expect(body).not.toContain("raw_value");
-    expect(body).not.toContain("DrawdownGuard");
-    expect(fetchMock.mock.calls.filter((call) => String(call[0]).startsWith("/api/research-os/graph/canvas_projection")).length).toBe(2);
+    expect(container.querySelector("[data-node-id='canvas_node:qro:qro_patch_auto']")).toBeNull();
+    expect(fetchMock.mock.calls.some((call) => String(call[0]) === "/api/research-os/graph/patch_applications")).toBe(false);
+    expect(fetchMock.mock.calls.filter((call) => String(call[0]).startsWith("/api/research-os/graph/canvas_projection"))).toHaveLength(1);
   });
 
   it("选中真实投影连线后可记录 canonical edge relation，且不提交 raw edge payload", async () => {

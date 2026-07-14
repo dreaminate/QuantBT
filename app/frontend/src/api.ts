@@ -24,16 +24,34 @@
   TableName,
   TableOrder,
 } from "./types";
+import { authFetch } from "./lib/auth";
 
 
-async function apiFetch<T>(path: string, init?: RequestInit): Promise<T> {
-  const response = await fetch(path, {
-    headers: {
-      "Content-Type": "application/json",
-      ...(init?.headers ?? {}),
-    },
-    ...init,
-  });
+function isSameOriginApiPath(path: string): boolean {
+  if (path === "/api" || path.startsWith("/api/")) {
+    return true;
+  }
+  if (typeof window === "undefined") {
+    return false;
+  }
+  try {
+    const url = new URL(path, window.location.origin);
+    return url.origin === window.location.origin && (url.pathname === "/api" || url.pathname.startsWith("/api/"));
+  } catch {
+    return false;
+  }
+}
+
+
+export async function apiFetch<T>(path: string, init?: RequestInit): Promise<T> {
+  const headers = new Headers(init?.headers);
+  if (!headers.has("content-type")) {
+    headers.set("content-type", "application/json");
+  }
+  const requestInit = { ...init, headers };
+  const response = isSameOriginApiPath(path)
+    ? await authFetch(path, requestInit)
+    : await fetch(path, requestInit);
   if (!response.ok) {
     const contentType = response.headers.get("content-type") ?? "";
     const detail = contentType.includes("application/json") ? await response.json() : await response.text();

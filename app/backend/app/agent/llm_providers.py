@@ -469,13 +469,34 @@ def _effective_model(provider: ProviderName, model: str | None) -> str:
     return _DEFAULT_MODELS.get(provider, "")
 
 
-def _record_if_missing(callable_obj, lookup, key: str, record: Any, *, replace: bool) -> Any:
-    if not replace:
-        try:
-            return lookup(key)
-        except KeyError:
-            pass
-    return callable_obj(record)
+def _record_settings_value(
+    *,
+    registry: PersistentOnboardingRegistry,
+    record_method,
+    lookup,
+    event_type: str,
+    key: str,
+    record: Any,
+    owner_user_id: str,
+    replace_existing: bool,
+) -> Any:
+    try:
+        existing = lookup(key, owner_user_id=owner_user_id)
+    except KeyError:
+        return record_method(record, owner_user_id=owner_user_id)
+    if not replace_existing or existing == record:
+        return existing
+    revision, previous_hash = registry.record_state(
+        event_type,
+        key,
+        owner_user_id=owner_user_id,
+    )
+    return record_method(
+        record,
+        owner_user_id=owner_user_id,
+        expected_previous_revision=revision,
+        expected_previous_hash=previous_hash,
+    )
 
 
 def ensure_settings_managed_llm_provider(
@@ -484,7 +505,7 @@ def ensure_settings_managed_llm_provider(
     provider: ProviderName,
     base_url: str | None = None,
     model: str | None = None,
-    owner: str = "settings",
+    owner: str,
     created_at: str | None = None,
     replace_secret: bool = False,
 ) -> dict[str, str]:
@@ -513,7 +534,16 @@ def ensure_settings_managed_llm_provider(
         access_audit=(f"keystore:{KEYSTORE_NAMES[provider]}",),
         connector_scope_review=f"provider:{provider}",
     )
-    _record_if_missing(registry.record_secret_ref, registry.secret_ref, secret_ref, secret, replace=replace_secret)
+    _record_settings_value(
+        registry=registry,
+        record_method=registry.record_secret_ref,
+        lookup=registry.secret_ref,
+        event_type="secret_ref_recorded",
+        key=secret_ref,
+        record=secret,
+        owner_user_id=owner,
+        replace_existing=replace_secret,
+    )
     provider_record = LLMProviderRecord(
         provider_id=provider,
         provider_type=_PROVIDER_TYPES[provider],
@@ -534,7 +564,16 @@ def ensure_settings_managed_llm_provider(
         quota_status="unknown",
         auth_refs=(secret_ref,),
     )
-    _record_if_missing(registry.record_llm_provider, registry.llm_provider, provider, provider_record, replace=True)
+    _record_settings_value(
+        registry=registry,
+        record_method=registry.record_llm_provider,
+        lookup=registry.llm_provider,
+        event_type="llm_provider_recorded",
+        key=provider,
+        record=provider_record,
+        owner_user_id=owner,
+        replace_existing=True,
+    )
     pool_record = LLMCredentialPoolRecord(
         pool_id=pool_ref,
         provider_id=provider,
@@ -546,7 +585,16 @@ def ensure_settings_managed_llm_provider(
         quota_policy="stop-at-budget",
         owner=owner,
     )
-    _record_if_missing(registry.record_credential_pool, registry.credential_pool, pool_ref, pool_record, replace=True)
+    _record_settings_value(
+        registry=registry,
+        record_method=registry.record_credential_pool,
+        lookup=registry.credential_pool,
+        event_type="llm_credential_pool_recorded",
+        key=pool_ref,
+        record=pool_record,
+        owner_user_id=owner,
+        replace_existing=True,
+    )
     policy_record = ModelRoutingPolicyRecord(
         routing_policy_id=policy_ref,
         role_agent="role_agent",
@@ -563,7 +611,16 @@ def ensure_settings_managed_llm_provider(
         independence_requirement="record-if-verifier",
         replay_requirement="decision-level",
     )
-    _record_if_missing(registry.record_routing_policy, registry.routing_policy, policy_ref, policy_record, replace=True)
+    _record_settings_value(
+        registry=registry,
+        record_method=registry.record_routing_policy,
+        lookup=registry.routing_policy,
+        event_type="model_routing_policy_recorded",
+        key=policy_ref,
+        record=policy_record,
+        owner_user_id=owner,
+        replace_existing=True,
+    )
     return {
         "secret_ref": secret_ref,
         "credential_pool_ref": pool_ref,
@@ -577,15 +634,16 @@ def _registered_gateway_records(
     *,
     registry: PersistentOnboardingRegistry,
     provider: ProviderName,
+    owner_user_id: str,
 ) -> tuple[SecretRefRecord, LLMProviderRecord, LLMCredentialPoolRecord, ModelRoutingPolicyRecord]:
     secret_ref = llm_secret_ref(provider)
     pool_ref = llm_credential_pool_ref(provider)
     policy_ref = llm_routing_policy_ref(provider)
     return (
-        registry.secret_ref(secret_ref),
-        registry.llm_provider(provider),
-        registry.credential_pool(pool_ref),
-        registry.routing_policy(policy_ref),
+        registry.secret_ref(secret_ref, owner_user_id=owner_user_id),
+        registry.llm_provider(provider, owner_user_id=owner_user_id),
+        registry.credential_pool(pool_ref, owner_user_id=owner_user_id),
+        registry.routing_policy(policy_ref, owner_user_id=owner_user_id),
     )
 
 
@@ -677,6 +735,7 @@ def make_settings_managed_llm_client(
     task_type: str = "llm_chat",
     model: str | None = None,
     replay_record_ref: str | None = None,
+    owner_user_id: str,
 ) -> LLMClient:
     """Resolve a role-agent LLM client through Settings metadata and LLM Gateway.
 
@@ -708,10 +767,14 @@ def make_settings_managed_llm_client(
                 provider=cand,
                 base_url=extras.get("base_url"),
                 model=selected_model,
-                owner="runtime-bootstrap",
+                owner=owner_user_id,
                 replace_secret=False,
             )
-            secret, provider_record, pool, policy = _registered_gateway_records(registry=registry, provider=cand)
+            secret, provider_record, pool, policy = _registered_gateway_records(
+                registry=registry,
+                provider=cand,
+                owner_user_id=owner_user_id,
+            )
         except (KeyError, ValueError, NoLLMConfigured) as exc:
             rejection = str(exc)
             if explicit:
@@ -764,6 +827,8 @@ def make_settings_managed_llm_client(
 def list_llm_status(
     keystore: SecureKeystore | None,
     onboarding_registry: PersistentOnboardingRegistry | None = None,
+    *,
+    owner_user_id: str | None = None,
 ) -> list[dict[str, Any]]:
     """供 UI 系统设置页用：列出每个 provider 当前是否就绪（不回显 key）。"""
 
@@ -787,6 +852,8 @@ def list_llm_status(
             except KeystoreError:
                 pass
         if onboarding_registry is not None:
+            if not str(owner_user_id or "").strip():
+                raise ValueError("owner_user_id is required with onboarding_registry")
             secret_ref = llm_secret_ref(cand)  # type: ignore[arg-type]
             pool_ref = llm_credential_pool_ref(cand)  # type: ignore[arg-type]
             policy_ref = llm_routing_policy_ref(cand)  # type: ignore[arg-type]
@@ -795,10 +862,22 @@ def list_llm_status(
             info["credential_pool_ref"] = pool_ref
             info["routing_policy_ref"] = policy_ref
             try:
-                secret = onboarding_registry.secret_ref(secret_ref)
-                onboarding_registry.llm_provider(cand)
-                onboarding_registry.credential_pool(pool_ref)
-                onboarding_registry.routing_policy(policy_ref)
+                secret = onboarding_registry.secret_ref(
+                    secret_ref,
+                    owner_user_id=owner_user_id,
+                )
+                onboarding_registry.llm_provider(
+                    cand,
+                    owner_user_id=owner_user_id,
+                )
+                onboarding_registry.credential_pool(
+                    pool_ref,
+                    owner_user_id=owner_user_id,
+                )
+                onboarding_registry.routing_policy(
+                    policy_ref,
+                    owner_user_id=owner_user_id,
+                )
                 info["settings_managed"] = True
                 info["auth_status"] = secret.status.value if hasattr(secret.status, "value") else str(secret.status)
             except KeyError:

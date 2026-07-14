@@ -47,12 +47,53 @@ AgentRAGContextProvider = Callable[[str], "AgentRAGContext | None"]
 class AgentRAGContextHit:
     source_id: str
     version: str
+    timestamp: str
+    permission: dict[str, tuple[str, ...]]
+    applicability: str
     asset_ref: str
     projection: str
     title: str
     evidence_label: str
     context_role: str
     score: float
+
+    def __post_init__(self) -> None:
+        for field_name in (
+            "source_id",
+            "version",
+            "timestamp",
+            "applicability",
+            "asset_ref",
+            "projection",
+        ):
+            if not str(getattr(self, field_name) or "").strip():
+                raise ValueError(f"Agent RAG hit {field_name} is required")
+        try:
+            parsed_at = datetime.fromisoformat(self.timestamp.replace("Z", "+00:00"))
+        except ValueError as exc:
+            raise ValueError("Agent RAG hit timestamp must be ISO-8601") from exc
+        if parsed_at.tzinfo is None:
+            raise ValueError("Agent RAG hit timestamp must be timezone-aware")
+        if self.context_role != "candidate_context":
+            raise ValueError("Agent RAG hit must remain candidate_context")
+        if not isinstance(self.permission, dict):
+            raise ValueError("Agent RAG hit permission snapshot is required")
+        permission_keys = {
+            "allowed_users",
+            "allowed_desks",
+            "allowed_assets",
+            "permission_tags",
+        }
+        if set(self.permission) != permission_keys:
+            raise ValueError("Agent RAG hit permission snapshot is incomplete")
+        object.__setattr__(
+            self,
+            "permission",
+            {
+                key: tuple(str(value) for value in self.permission[key])
+                for key in sorted(permission_keys)
+            },
+        )
 
     @property
     def evidence_ref(self) -> str:
@@ -142,6 +183,7 @@ class AgentRuntime:
         actor: str = "agent_runtime",
         owner: str = "agent_runtime",
         rag_context_provider: AgentRAGContextProvider | None = None,
+        tool_schema: list[dict[str, Any]] | tuple[dict[str, Any], ...] | None = None,
     ) -> None:
         self._llm = llm
         self._tools = tools or {}
@@ -157,6 +199,10 @@ class AgentRuntime:
         self._actor = actor
         self._owner = owner
         self._rag_context_provider = rag_context_provider
+        # Orchestrator role nodes must advertise only the role-authorized tools
+        # that have real handlers. The default preserves the standalone runtime
+        # contract; an explicit empty list means no tool surface.
+        self._tool_schema = list(TOOL_SCHEMA if tool_schema is None else tool_schema)
 
     def register_tool(self, name: str, handler: ToolHandler, side_effect: ToolSideEffect = "none") -> None:
         self._tools[name] = handler
@@ -248,7 +294,7 @@ class AgentRuntime:
                 evidence_refs=rag_evidence_refs,
             )
         for _ in range(self._max_steps):
-            response = self._llm.chat(messages, tools=TOOL_SCHEMA)
+            response = self._llm.chat(messages, tools=self._tool_schema)
             messages.append(
                 LLMMessage(role="assistant", content=response.content, tool_calls=response.tool_calls)
             )

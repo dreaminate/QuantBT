@@ -329,7 +329,11 @@ def test_orchestrator_advise_governance_good_evidence_not_flagged():
 
 def test_existing_dispatch_unaffected_by_governance_advisory(tmp_path):
     gw = _gateway(factory=lambda c: _ReadAssetThenFinal())
-    orch = AgentOrchestrator(gateway=gw)
+    orch = AgentOrchestrator(
+        gateway=gw,
+        owner_user_id="owner-governance-advisory",
+        workflow_id="workflow-governance-dispatch",
+    )
     plan = _ready_orch_plan(orch, [("t1", "factor_engineer")], {"t1": []})
     executor = make_executor(tmp_path)
 

@@ -16,6 +16,7 @@ import json
 
 import pytest
 from fastapi.testclient import TestClient
+from conftest import build_test_agent_gateway
 
 from app.agent.agent_runtime import AgentRuntime, permission_gate
 from app.agent.business_tools import register_business_tools
@@ -25,10 +26,18 @@ from app.main import app
 from app.research_os import (
     AssetRAGDocument,
     MarketDataUseValidationRecord,
+    PersistentCompilerIRStore,
+    PersistentGoalEntrypointCoverageRegistry,
     PersistentResearchAssetRAGIndex,
     RAGPermission,
     ResearchGraphStore,
 )
+from app.research_os.entrypoint_evidence import PersistentEntrypointEvidenceRegistry
+from app.research_os.goal_proof_ledger import GoalProofLedger
+from app.research_os.goal_validation_receipts import (
+    PersistentGoalValidationReceiptRegistry,
+)
+from app.research_os.ref_resolution import build_real_ref_resolver
 
 
 # ── 测试替身：最小 store 接口（真实 store 契约，不打真盘） ───────────────────
@@ -64,10 +73,12 @@ class _FakeMV:
 
 
 class _FakeModelRegistry:
-    def list_models(self):
+    def list_models(self, *, owner_user_id):
+        assert owner_user_id == "test"
         return ["lgbm_rank_6f"]
 
-    def list_versions(self, model_id):
+    def list_versions(self, model_id, *, owner_user_id):
+        assert owner_user_id == "test"
         return [_FakeMV(1, "dev"), _FakeMV(2, "staging")]
 
 
@@ -118,20 +129,37 @@ class _FakeMarketDataRegistry:
         source = [_report_market_data_use()] if records is None else records
         self._records = {record.validation_ref: record for record in source}
         self._datasets = {REPORT_DATASET_REF: _FakeDatasetSemantics()} if datasets is None else datasets
+        self.owner_lookups: list[tuple[str, str]] = []
 
-    def use_validation(self, validation_ref: str) -> MarketDataUseValidationRecord:
+    def use_validation(
+        self,
+        validation_ref: str,
+        *,
+        owner_user_id: str,
+    ) -> MarketDataUseValidationRecord:
+        self.owner_lookups.append(("use_validation", owner_user_id))
         if validation_ref not in self._records:
             raise KeyError(validation_ref)
-        return self._records[validation_ref]
+        record = self._records[validation_ref]
+        if record.recorded_by != owner_user_id:
+            raise KeyError(validation_ref)
+        return record
 
-    def dataset(self, dataset_ref: str) -> _FakeDatasetSemantics:
+    def dataset(self, dataset_ref: str, *, owner_user_id: str) -> _FakeDatasetSemantics:
+        self.owner_lookups.append(("dataset", owner_user_id))
         if dataset_ref not in self._datasets:
             raise KeyError(dataset_ref)
         return self._datasets[dataset_ref]
 
 
-def _make_runtime(*, market_data_registry=None, verdict_store=None, verifier=None):
-    rt = AgentRuntime(_DummyLLM(), permission_mode="auto")
+def _make_runtime(
+    *,
+    market_data_registry=None,
+    verdict_store=None,
+    verifier=None,
+    owner_user_id: str = "test",
+):
+    rt = AgentRuntime(_DummyLLM(), permission_mode="auto", owner=owner_user_id)
     register_business_tools(
         rt,
         hypothesis_store=_FakeHypStore(),
@@ -140,6 +168,7 @@ def _make_runtime(*, market_data_registry=None, verdict_store=None, verifier=Non
         verdict_store=verdict_store,
         verifier=verifier,
         market_data_registry=market_data_registry,
+        owner_user_id=owner_user_id,
     )
     return rt
 
@@ -162,7 +191,7 @@ class _CapturingLLM:
         return LLMResponse(content="workbench grounded answer")
 
 
-def _rag_doc():
+def _rag_doc(*, allowed_users: tuple[str, ...] = ()):
     return AssetRAGDocument(
         source_id="doc:workbench-risk",
         version="v1",
@@ -171,6 +200,7 @@ def _rag_doc():
         projection="ResearchRAG",
         asset_ref="qro:workbench-risk",
         permission=RAGPermission(
+            allowed_users=allowed_users,
             allowed_desks=("research",),
             allowed_assets=("qro:workbench-risk",),
             permission_tags=("research.read",),
@@ -290,6 +320,58 @@ def test_backtest_run_existing_run_includes_market_data_use_refs_after_gate(monk
     assert out["source"] == "projected_existing_run"
     assert out["market_data_use_validation_refs"] == [REPORT_MARKET_DATA_USE_REF]
     assert calls == ["verdict", "overfit"]
+
+
+def test_agent_market_data_owner_comes_from_authenticated_runtime_not_tool_args(monkeypatch):
+    calls = _patch_report_projection(monkeypatch)
+    registry = _FakeMarketDataRegistry()
+    rt = _make_runtime(
+        market_data_registry=registry,
+        verdict_store=object(),
+        verifier=object(),
+        owner_user_id="test",
+    )
+
+    out = rt._tools["backtest.run"](  # noqa: SLF001
+        "backtest.run",
+        {
+            "run_id": "run_report_1",
+            "market_data_use_validation_refs": [REPORT_MARKET_DATA_USE_REF],
+            "owner": "foreign-client-owner",
+            "owner_user_id": "foreign-client-owner",
+        },
+    )
+
+    assert out.get("error") is None, out
+    assert registry.owner_lookups == [
+        ("use_validation", "test"),
+        ("dataset", "test"),
+    ]
+    assert calls == ["verdict", "overfit"]
+
+
+def test_agent_market_data_ref_from_foreign_owner_fails_before_projection(monkeypatch):
+    calls = _patch_report_projection(monkeypatch)
+    registry = _FakeMarketDataRegistry()
+    rt = _make_runtime(
+        market_data_registry=registry,
+        verdict_store=object(),
+        verifier=object(),
+        owner_user_id="foreign-owner",
+    )
+
+    out = rt._tools["backtest.run"](  # noqa: SLF001
+        "backtest.run",
+        {
+            "run_id": "run_report_1",
+            "market_data_use_validation_refs": [REPORT_MARKET_DATA_USE_REF],
+        },
+    )
+
+    assert "unknown MarketDataUse validation ref" in (out.get("error") or "")
+    assert out.get("no_write") is True
+    assert registry.owner_lookups == [("use_validation", "foreign-owner")]
+    assert calls == []
 
 
 def test_report_generate_requires_market_data_use_refs_before_projection(monkeypatch):
@@ -423,6 +505,7 @@ def _login_client():
     client.post("/api/auth/register", json={"username": uname, "password": "pw123456", "display_name": "a4"})
     r = client.post("/api/auth/login", json={"username": uname, "password": "pw123456"})
     token = r.json().get("token")
+    client.a4_user_id = r.json()["user"]["user_id"]
     client.headers.update({"Authorization": f"Bearer {token}"})
     return client
 
@@ -568,15 +651,64 @@ def test_workbench_stream_emits_structured_events():
 def test_workbench_stream_auto_retrieves_research_asset_rag(tmp_path, monkeypatch):
     import app.main as main
 
+    client = _login_client()
     index = PersistentResearchAssetRAGIndex(tmp_path / "research_asset_rag.jsonl")
-    index.add(_rag_doc())
+    index.add_for_owner(
+        _rag_doc(allowed_users=(client.a4_user_id,)),
+        owner_user_id=client.a4_user_id,
+    )
     store = ResearchGraphStore()
     llm = _CapturingLLM()
     monkeypatch.setattr(main, "RESEARCH_ASSET_RAG_INDEX", index)
     monkeypatch.setattr(main, "RESEARCH_GRAPH_STORE", store)
-    monkeypatch.setattr(main, "_current_agent_llm", lambda run_id=None: llm)
+    proof_ledger = GoalProofLedger(tmp_path / "goal_proof_ledger")
+    compiler_store = PersistentCompilerIRStore(
+        tmp_path / "compiler_ir.jsonl",
+        proof_ledger=proof_ledger,
+        legacy_read_only=True,
+    )
+    validation_store = PersistentGoalValidationReceiptRegistry(
+        tmp_path / "goal_validation_receipts.jsonl",
+        proof_ledger=proof_ledger,
+        legacy_read_only=True,
+    )
+    evidence_store = PersistentEntrypointEvidenceRegistry(
+        tmp_path / "entrypoint_evidence.jsonl",
+        research_graph_store=store,
+        compiler_store=compiler_store,
+        validation_receipt_registry=validation_store,
+        proof_ledger=proof_ledger,
+        legacy_read_only=True,
+    )
+    coverage_store = PersistentGoalEntrypointCoverageRegistry(
+        tmp_path / "goal_entrypoint_coverage.jsonl",
+        proof_ledger=proof_ledger,
+        legacy_read_only=True,
+        resolver=build_real_ref_resolver(
+            research_graph_store=store,
+            lifecycle_registry=main.ASSET_LIFECYCLE_REGISTRY,
+            governance_registry=main.MODEL_GOVERNANCE_REGISTRY,
+            rag_index=index,
+            spine_chain_registry=main.MATHEMATICAL_SPINE_CHAIN_REGISTRY,
+            compiler_store=compiler_store,
+            document_store=main.DOCUMENT_INTELLIGENCE_STORE,
+            goal_validation_receipt_registry=validation_store,
+            platform_source_evidence_registry=evidence_store,
+        ),
+    )
+    monkeypatch.setattr(main, "COMPILER_IR_STORE", compiler_store)
+    monkeypatch.setattr(main, "GOAL_VALIDATION_RECEIPT_REGISTRY", validation_store)
+    monkeypatch.setattr(main, "ENTRYPOINT_EVIDENCE_REGISTRY", evidence_store)
+    monkeypatch.setattr(main, "GOAL_ENTRYPOINT_COVERAGE_REGISTRY", coverage_store)
+    monkeypatch.setattr(
+        main,
+        "_current_agent_gateway",
+        lambda run_id=None: build_test_agent_gateway(
+            llm,
+            seal_secret=main.LLM_CALL_RECORD_STORE.seal_secret,
+        ),
+    )
 
-    client = _login_client()
     with client.stream(
         "GET",
         "/api/agent/workbench/stream",
@@ -598,7 +730,7 @@ def test_workbench_stream_auto_retrieves_research_asset_rag(tmp_path, monkeypatc
     assert "event: done" in raw
     assert "rag:doc:workbench-risk@v1:qro:workbench-risk" in raw
     assert "rag_usage_ids" in raw
-    assert index.agent_usage(source_id="doc:workbench-risk")
+    assert index.strict_usage_records(owner_user_id=client.a4_user_id)
     prompt_text = "\n".join(message.content for message in llm.messages)
     assert "Research Asset RAG candidate context" in prompt_text
     assert "covariance covariance shrinkage" in prompt_text

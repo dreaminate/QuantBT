@@ -23,6 +23,7 @@ from ...llm.call_record import LLMRecordError
 from ...llm.gateway import (
     GatewaySealedResult,
     LLMGateway,
+    LLMGatewayEvent,
     LLMRequest,
     assert_admissible_to_graph,
 )
@@ -51,6 +52,10 @@ class GatewayLLMAdapter(LLMClient):
         replay_mode: str = "live",
         temperature: float = 0.2,
         on_sealed: Callable[[GatewaySealedResult], None] | None = None,
+        owner_user_id: str,
+        workflow_id: str,
+        invocation_id_factory: Callable[[], str],
+        record_sink: Callable[[Any], None] | None = None,
     ) -> None:
         self._gateway = gateway
         self._capability = capability
@@ -58,7 +63,17 @@ class GatewayLLMAdapter(LLMClient):
         self._replay_mode = replay_mode
         self._temperature = temperature
         self._on_sealed = on_sealed
+        self._owner_user_id = str(owner_user_id or "").strip()
+        self._workflow_id = str(workflow_id or "").strip()
+        self._invocation_id_factory = invocation_id_factory
+        self._record_sink = record_sink
+        if not self._owner_user_id or not self._workflow_id:
+            raise LLMRecordError(
+                "GatewayLLMAdapter requires explicit owner_user_id and workflow_id"
+            )
         self._sealed_results: list[GatewaySealedResult] = []
+        self._failure_events: list[LLMGatewayEvent] = []
+        self._failure_records: list[Any] = []
 
     def chat(
         self,
@@ -74,15 +89,37 @@ class GatewayLLMAdapter(LLMClient):
         任务不降档），role agent 不在此越过路由钦点模型。
         """
 
+        invocation_id = str(self._invocation_id_factory() or "").strip()
+        if not invocation_id:
+            raise LLMRecordError("GatewayLLMAdapter invocation_id_factory returned empty id")
         req = LLMRequest(
             messages=list(messages),
             capability=self._capability,
             tools=tools,
             temperature=self._temperature if temperature is None else temperature,
             session_id=self._session_id,
+            owner_user_id=self._owner_user_id,
+            workflow_id=self._workflow_id,
+            invocation_id=invocation_id,
             replay_mode=self._replay_mode,
         )
-        sealed = self._gateway.complete(req)
+        try:
+            sealed = self._gateway.complete(req, record_sink=self._record_sink)
+        except Exception as exc:
+            # Gateway persists sanitized failure records before attaching these
+            # events. Keep them available to the orchestrator even though there
+            # is no successful GatewaySealedResult to return.
+            self._failure_events.extend(
+                event
+                for event in tuple(getattr(exc, "events", ()) or ())
+                if isinstance(event, LLMGatewayEvent)
+            )
+            failure_records = tuple(getattr(exc, "records", ()) or ())
+            self._failure_records.extend(failure_records)
+            record = getattr(exc, "record", None)
+            if record is not None and not failure_records:
+                self._failure_records.append(record)
+            raise
         # 自证：本路径产的结果永远经本 gateway 封印（绕过路径产的结果验不过这一步）。
         if not self._gateway.verify(sealed):
             raise GatewayBypassError(
@@ -99,6 +136,14 @@ class GatewayLLMAdapter(LLMClient):
 
     def last_record(self):
         return self._sealed_results[-1].record if self._sealed_results else None
+
+    @property
+    def failure_events(self) -> tuple[LLMGatewayEvent, ...]:
+        return tuple(self._failure_events)
+
+    @property
+    def last_failure_record(self):
+        return self._failure_records[-1] if self._failure_records else None
 
 
 def assert_llm_admissible(sealed: GatewaySealedResult, gateway: LLMGateway) -> None:

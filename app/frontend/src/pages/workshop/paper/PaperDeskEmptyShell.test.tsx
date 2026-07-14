@@ -1,9 +1,9 @@
 import { describe, it, expect, vi, beforeEach, afterEach } from "vitest";
-import { screen } from "@testing-library/react";
+import { screen, waitFor } from "@testing-library/react";
 import { renderWithDesk } from "../../../test/harness";
 
 /**
- * DS-4 §3 对抗：空壳（bars_fed=0）run 的 run tab 绝不挂「LIVE 真实数据」角标——
+ * DS-4 §3 对抗：空壳（bars_fed=0）run 的 run tab 绝不挂后端数据源角标——
  * 后端在场但未喂数据（未真跑）时不假绿灯。LIVE 角标硬绑真实 bars_fed>0。
  */
 const { equityEmpty } = vi.hoisted(() => ({ equityEmpty: vi.fn(async () => ({ equity_log: [] })) }));
@@ -45,11 +45,11 @@ describe("模拟台空壳（bars_fed=0）不假绿灯", () => {
 
   it("run tab：bars_fed=0 时不挂 LIVE 角标（空壳必红，§3）", async () => {
     renderWithDesk(<PaperDeskPage />);
-    // 先正向断言 live 数据已 resolve（独特标记只在 live.sched 就位后渲染）——
-    // 确保我们真在考核 barsFed>0 这道门，而非首帧 live=null 的退化通过。
-    await screen.findByText("SHELL-LOADED-MARKER");
-    // live 已就位但 bars_fed=0：run tab 绝不出现「LIVE 真实数据」——退回 MOCK 角标（诚实）
-    expect(screen.queryByText("LIVE 真实数据")).toBeNull();
+    // 正向证明空壳请求确已完成，不是首帧 live=null 的退化通过。
+    await waitFor(() => expect(equityEmpty).toHaveBeenCalled());
+    // live 请求已就位但 bars_fed=0：整页保持 MOCK，连 scheduler 也不混入后端值。
+    expect(screen.queryByTestId("paper-source-badge")).toBeNull();
     expect(screen.getByText("MOCK 数据")).toBeInTheDocument();
+    expect(screen.queryByText("SHELL-LOADED-MARKER")).toBeNull();
   });
 });

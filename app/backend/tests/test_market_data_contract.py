@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+import json
+import multiprocessing as mp
 from types import SimpleNamespace
 
 import pytest
@@ -14,8 +16,11 @@ from app.research_os import (
     InstrumentSpec,
     MarketCapabilityMatrixRecord,
     MarketDataUseRequest,
+    MarketDataUseValidationRecord,
     PersistentCompilerIRStore,
+    PersistentEntrypointEvidenceRegistry,
     PersistentGoalEntrypointCoverageRegistry,
+    PersistentGoalValidationReceiptRegistry,
     PersistentMarketDataRegistry,
     PersistentResearchGraphStore,
     QROType,
@@ -24,6 +29,55 @@ from app.research_os import (
     validate_dataset_semantics,
     validate_market_data_use,
 )
+from app.research_os.goal_proof_ledger import GoalProofLedger
+from app.research_os.ref_resolution import build_real_ref_resolver
+
+
+_OWNER = "market_user"
+
+
+def _patch_goal_proof_stores(tmp_path, monkeypatch, *, graph):  # noqa: ANN001
+    proof_ledger = GoalProofLedger(tmp_path / "goal_proof_ledger")
+    compiler = PersistentCompilerIRStore(
+        tmp_path / "compiler_ir.jsonl",
+        proof_ledger=proof_ledger,
+        legacy_read_only=True,
+    )
+    validations = PersistentGoalValidationReceiptRegistry(
+        tmp_path / "goal_validation_receipts.jsonl",
+        proof_ledger=proof_ledger,
+        legacy_read_only=True,
+    )
+    evidence = PersistentEntrypointEvidenceRegistry(
+        tmp_path / "entrypoint_evidence.jsonl",
+        research_graph_store=graph,
+        compiler_store=compiler,
+        validation_receipt_registry=validations,
+        proof_ledger=proof_ledger,
+        legacy_read_only=True,
+    )
+    coverage = PersistentGoalEntrypointCoverageRegistry(
+        tmp_path / "goal_entrypoint_coverage.jsonl",
+        proof_ledger=proof_ledger,
+        legacy_read_only=True,
+    )
+    coverage.set_ref_resolver(
+        build_real_ref_resolver(
+            research_graph_store=graph,
+            lifecycle_registry=None,
+            governance_registry=None,
+            rag_index=None,
+            spine_chain_registry=None,
+            compiler_store=compiler,
+            goal_validation_receipt_registry=validations,
+            platform_source_evidence_registry=evidence,
+        )
+    )
+    monkeypatch.setattr(main, "RESEARCH_GRAPH_STORE", graph)
+    monkeypatch.setattr(main, "COMPILER_IR_STORE", compiler)
+    monkeypatch.setattr(main, "GOAL_VALIDATION_RECEIPT_REGISTRY", validations)
+    monkeypatch.setattr(main, "ENTRYPOINT_EVIDENCE_REGISTRY", evidence)
+    monkeypatch.setattr(main, "GOAL_ENTRYPOINT_COVERAGE_REGISTRY", coverage)
 
 
 def _codes(decision) -> set[str]:
@@ -97,18 +151,60 @@ def _transform(**overrides) -> dict:
     return data
 
 
+def _use_validation(*, owner: str = _OWNER, **overrides) -> MarketDataUseValidationRecord:
+    data = {
+        "validation_ref": "market_data_use:btc_daily:paper",
+        "request_ref": "strategy:crypto_paper",
+        "use_context": ValidationUseContext.PAPER.value,
+        "dataset_refs": ("dataset:btc_daily:v1",),
+        "instrument_refs": ("instrument:BTCUSDT",),
+        "capability_matrix_ref": "capability:crypto_spot",
+        "capital_record_ref": "capital:usdt_book",
+        "transformation_refs": ("transform:daily_close",),
+        "accepted": True,
+        "violation_codes": (),
+        "evidence_refs": ("evidence:btc_daily:paper",),
+        "recorded_by": owner,
+        "created_at_utc": "2026-07-12T00:00:00+00:00",
+    }
+    data.update(overrides)
+    return MarketDataUseValidationRecord(**data)
+
+
+def _record_market_bundle(registry: PersistentMarketDataRegistry, *, owner: str = _OWNER) -> None:
+    registry.record_dataset(
+        _dataset(),
+        owner_user_id=owner,
+        use_context=ValidationUseContext.CONFIRMATORY_VALIDATION,
+    )
+    registry.record_instrument(_instrument(), owner_user_id=owner)
+    registry.record_capability_matrix(
+        _matrix(),
+        owner_user_id=owner,
+        use_context=ValidationUseContext.PAPER,
+    )
+
+
+def _race_record_instrument(path: str, currency: str, start, results) -> None:
+    registry = PersistentMarketDataRegistry(path)
+    start.wait(timeout=10)
+    try:
+        registry.record_instrument(
+            _instrument(currency=currency),
+            owner_user_id="race-owner",
+        )
+    except Exception as exc:  # noqa: BLE001 - child reports the exact collision outcome.
+        results.put((type(exc).__name__, str(exc)))
+    else:
+        results.put(("ok", ""))
+
+
 @pytest.fixture()
 def market_data_client(tmp_path, monkeypatch):
     registry = PersistentMarketDataRegistry(tmp_path / "market_data_assets.jsonl")
     graph = PersistentResearchGraphStore(tmp_path / "research_graph.jsonl")
     monkeypatch.setattr(main, "MARKET_DATA_REGISTRY", registry)
-    monkeypatch.setattr(main, "RESEARCH_GRAPH_STORE", graph)
-    monkeypatch.setattr(main, "COMPILER_IR_STORE", PersistentCompilerIRStore(tmp_path / "compiler_ir.jsonl"))
-    monkeypatch.setattr(
-        main,
-        "GOAL_ENTRYPOINT_COVERAGE_REGISTRY",
-        PersistentGoalEntrypointCoverageRegistry(tmp_path / "goal_entrypoint_coverage.jsonl"),
-    )
+    _patch_goal_proof_stores(tmp_path, monkeypatch, graph=graph)
     main.app.dependency_overrides[require_user_dependency] = lambda: SimpleNamespace(
         username="market_user",
         user_id="market_user",
@@ -298,26 +394,195 @@ def test_complete_market_data_use_contract_accepts_crypto_paper():
 def test_market_data_registry_replays_append_only_records(tmp_path):
     path = tmp_path / "market_data_assets.jsonl"
     registry = PersistentMarketDataRegistry(path)
-    registry.record_dataset(_dataset(), use_context=ValidationUseContext.CONFIRMATORY_VALIDATION)
-    registry.record_instrument(_instrument())
-    registry.record_capability_matrix(_matrix(), use_context=ValidationUseContext.PAPER)
+    _record_market_bundle(registry)
+    registry.record_use_validation(_use_validation(), owner_user_id=_OWNER)
 
     replayed = PersistentMarketDataRegistry(path)
 
-    assert replayed.dataset("dataset:btc_daily:v1").source_ref == "source:binance_vision"
-    assert replayed.instrument("instrument:BTCUSDT").exchange_calendar_ref == "calendar:crypto_24_7"
-    assert replayed.capability_matrix("capability:crypto_spot").paper is True
+    assert replayed.dataset("dataset:btc_daily:v1", owner_user_id=_OWNER).source_ref == "source:binance_vision"
+    assert replayed.instrument("instrument:BTCUSDT", owner_user_id=_OWNER).exchange_calendar_ref == "calendar:crypto_24_7"
+    assert replayed.capability_matrix("capability:crypto_spot", owner_user_id=_OWNER).paper is True
+    assert replayed.use_validation(
+        "market_data_use:btc_daily:paper",
+        owner_user_id=_OWNER,
+    ).recorded_by == _OWNER
+    rows = [json.loads(line) for line in path.read_text(encoding="utf-8").splitlines()]
+    assert len(rows) == 4
+    assert {row["schema_version"] for row in rows} == {2}
+    assert {row["owner_user_id"] for row in rows} == {_OWNER}
+
+
+def test_market_data_registry_quarantines_ownerless_v1_without_inference(tmp_path):
+    path = tmp_path / "market_data_assets.jsonl"
+    path.write_text(
+        json.dumps(
+            {
+                "schema_version": 1,
+                "event_type": "instrument_spec_recorded",
+                "instrument": _instrument().to_dict(),
+            }
+        )
+        + "\n",
+        encoding="utf-8",
+    )
+
+    registry = PersistentMarketDataRegistry(path)
+
+    assert registry.legacy_quarantined_count == 1
+    assert registry.instruments(owner_user_id=_OWNER) == []
+    with pytest.raises(KeyError, match="unknown instrument spec"):
+        registry.instrument("instrument:BTCUSDT", owner_user_id=_OWNER)
+
+
+def test_market_data_registry_allows_same_ref_for_distinct_owners(tmp_path):
+    registry = PersistentMarketDataRegistry(tmp_path / "market_data_assets.jsonl")
+    registry.record_instrument(_instrument(currency="USDT"), owner_user_id="owner-a")
+    registry.record_instrument(_instrument(currency="USD"), owner_user_id="owner-b")
+
+    assert registry.instrument("instrument:BTCUSDT", owner_user_id="owner-a").currency == "USDT"
+    assert registry.instrument("instrument:BTCUSDT", owner_user_id="owner-b").currency == "USD"
+    assert len(registry.instruments(owner_user_id="owner-a")) == 1
+    assert len(registry.instruments(owner_user_id="owner-b")) == 1
+    with pytest.raises(KeyError, match="unknown instrument spec"):
+        registry.instrument("instrument:BTCUSDT", owner_user_id="owner-c")
+
+
+def test_market_data_use_validation_rejects_foreign_dependencies_without_write(tmp_path):
+    path = tmp_path / "market_data_assets.jsonl"
+    registry = PersistentMarketDataRegistry(path)
+    _record_market_bundle(registry, owner="owner-a")
+    before = path.read_text(encoding="utf-8")
+
+    with pytest.raises(ValueError, match="same-owner dataset"):
+        registry.record_use_validation(
+            _use_validation(owner="owner-b"),
+            owner_user_id="owner-b",
+        )
+
+    assert path.read_text(encoding="utf-8") == before
+    assert registry.use_validations(owner_user_id="owner-b") == []
+
+
+def test_market_data_use_validation_rejects_recorded_by_owner_mismatch(tmp_path):
+    path = tmp_path / "market_data_assets.jsonl"
+    registry = PersistentMarketDataRegistry(path)
+    _record_market_bundle(registry, owner="owner-a")
+    before = path.read_text(encoding="utf-8")
+
+    with pytest.raises(ValueError, match="recorded_by must match owner_user_id"):
+        registry.record_use_validation(
+            _use_validation(owner="owner-b"),
+            owner_user_id="owner-a",
+        )
+
+    assert path.read_text(encoding="utf-8") == before
+
+
+def test_market_data_registry_exact_retry_is_idempotent_and_collision_rejects(tmp_path):
+    path = tmp_path / "market_data_assets.jsonl"
+    first = PersistentMarketDataRegistry(path)
+    second = PersistentMarketDataRegistry(path)
+    record = _instrument(currency="USDT")
+
+    first.record_instrument(record, owner_user_id="owner-a")
+    second.record_instrument(record, owner_user_id="owner-a")
+    assert len(path.read_text(encoding="utf-8").splitlines()) == 1
+
+    with pytest.raises(ValueError, match="record collision"):
+        second.record_instrument(
+            _instrument(currency="USD"),
+            owner_user_id="owner-a",
+        )
+    assert len(path.read_text(encoding="utf-8").splitlines()) == 1
+    assert PersistentMarketDataRegistry(path).instrument(
+        "instrument:BTCUSDT",
+        owner_user_id="owner-a",
+    ).currency == "USDT"
+
+
+def test_market_data_registry_peer_append_is_visible_to_existing_reader(tmp_path):
+    path = tmp_path / "market_data_assets.jsonl"
+    reader = PersistentMarketDataRegistry(path)
+    writer = PersistentMarketDataRegistry(path)
+
+    writer.record_instrument(_instrument(), owner_user_id="owner-a")
+
+    assert reader.instrument(
+        "instrument:BTCUSDT",
+        owner_user_id="owner-a",
+    ).currency == "USDT"
+
+
+def test_market_data_registry_read_after_external_corruption_fails_closed(tmp_path):
+    path = tmp_path / "market_data_assets.jsonl"
+    reader = PersistentMarketDataRegistry(path)
+    writer = PersistentMarketDataRegistry(path)
+    writer.record_instrument(_instrument(), owner_user_id="owner-a")
+    assert reader.instruments(owner_user_id="owner-a")
+
+    with path.open("a", encoding="utf-8") as fh:
+        fh.write(
+            '{"schema_version":2,"owner_user_id":"owner-a","event_type":"broken"}\n'
+        )
+
+    with pytest.raises(ValueError, match="invalid persisted market data row"):
+        reader.instruments(owner_user_id="owner-a")
+
+
+def test_market_data_registry_two_process_collision_is_atomic(tmp_path):
+    path = tmp_path / "market_data_assets.jsonl"
+    ctx = mp.get_context("spawn")
+    start = ctx.Event()
+    results = ctx.Queue()
+    processes = [
+        ctx.Process(target=_race_record_instrument, args=(str(path), currency, start, results))
+        for currency in ("USDT", "USD")
+    ]
+    for process in processes:
+        process.start()
+    start.set()
+    outcomes = [results.get(timeout=20) for _ in processes]
+    for process in processes:
+        process.join(timeout=20)
+        assert process.exitcode == 0
+
+    assert sorted(kind for kind, _ in outcomes) == ["ValueError", "ok"]
+    assert any("record collision" in message for kind, message in outcomes if kind == "ValueError")
+    assert len(path.read_text(encoding="utf-8").splitlines()) == 1
+    persisted = PersistentMarketDataRegistry(path).instrument(
+        "instrument:BTCUSDT",
+        owner_user_id="race-owner",
+    )
+    assert persisted.currency in {"USDT", "USD"}
 
 
 def test_market_data_registry_malformed_history_fails_closed(tmp_path):
     path = tmp_path / "market_data_assets.jsonl"
     path.write_text(
-        '{"schema_version":1,"event_type":"dataset_semantics_recorded","dataset":{"dataset_ref":"dataset:bad"}}\n',
+        '{"schema_version":2,"owner_user_id":"owner-a","event_type":"dataset_semantics_recorded","dataset":{"dataset_ref":"dataset:bad"}}\n',
         encoding="utf-8",
     )
 
     with pytest.raises(ValueError, match="invalid persisted market data row"):
         PersistentMarketDataRegistry(path)
+
+
+def test_market_data_registry_external_corruption_clears_live_replay_state(tmp_path):
+    path = tmp_path / "market_data_assets.jsonl"
+    registry = PersistentMarketDataRegistry(path)
+    registry.record_instrument(_instrument(), owner_user_id=_OWNER)
+    with path.open("a", encoding="utf-8") as fh:
+        fh.write('{"schema_version":2,"owner_user_id":"market_user","event_type":"broken"}\n')
+
+    with pytest.raises(ValueError, match="invalid persisted market data row"):
+        registry.record_instrument(
+            _instrument(instrument_ref="instrument:ETHUSDT"),
+            owner_user_id=_OWNER,
+        )
+
+    with pytest.raises(ValueError, match="invalid persisted market data row"):
+        registry.instruments(owner_user_id=_OWNER)
+    assert registry._instruments == {}
 
 
 def test_market_data_api_records_assets_and_qros(market_data_client):
@@ -345,9 +610,9 @@ def test_market_data_api_records_assets_and_qros(market_data_client):
     assert dataset.json()["raw_data_stored"] is False
     assert instrument.json()["connector_called"] is False
     assert capability.json()["venue_called"] is False
-    assert registry.dataset("dataset:btc_daily:v1").version == "v1"
-    assert registry.instrument("instrument:BTCUSDT").asset_class == "crypto_spot"
-    assert registry.capability_matrix("capability:crypto_spot").testnet is True
+    assert registry.dataset("dataset:btc_daily:v1", owner_user_id=_OWNER).version == "v1"
+    assert registry.instrument("instrument:BTCUSDT", owner_user_id=_OWNER).asset_class == "crypto_spot"
+    assert registry.capability_matrix("capability:crypto_spot", owner_user_id=_OWNER).testnet is True
     qro_types = {
         str(command.payload["qro"].qro_type.value if hasattr(command.payload["qro"].qro_type, "value") else command.payload["qro"].qro_type)
         for command in graph.commands()
@@ -364,6 +629,50 @@ def test_market_data_api_records_assets_and_qros(market_data_client):
     assert summary.json()["instrument_total"] == 1
     assert summary.json()["capability_matrix_total"] == 1
     assert summary.json()["use_validation_total"] == 0
+
+
+def test_market_data_api_isolates_same_refs_by_authenticated_user(market_data_client):
+    client, registry, _graph = market_data_client
+    _post_market_data_assets(client)
+
+    main.app.dependency_overrides[require_user_dependency] = lambda: SimpleNamespace(
+        username="second_user",
+        user_id="second_user",
+    )
+
+    summary = client.get("/api/research-os/market_data/summary")
+    assert summary.status_code == 200
+    assert summary.json()["dataset_total"] == 0
+    assert summary.json()["instrument_total"] == 0
+
+    foreign_use = client.post(
+        "/api/research-os/market_data/use_requests",
+        json={
+            "market_data_use": {
+                "request_ref": "strategy:foreign_refs",
+                "use_context": "paper",
+                "dataset_refs": ["dataset:btc_daily:v1"],
+                "instrument_refs": ["instrument:BTCUSDT"],
+                "capability_matrix_ref": "capability:crypto_spot",
+            }
+        },
+    )
+    assert foreign_use.status_code == 422
+    assert "unknown dataset semantics record" in foreign_use.text
+
+    second_instrument = client.post(
+        "/api/research-os/market_data/instruments",
+        json={"instrument": _instrument(currency="USD").to_dict()},
+    )
+    assert second_instrument.status_code == 200, second_instrument.text
+    assert registry.instrument(
+        "instrument:BTCUSDT",
+        owner_user_id="market_user",
+    ).currency == "USDT"
+    assert registry.instrument(
+        "instrument:BTCUSDT",
+        owner_user_id="second_user",
+    ).currency == "USD"
 
 
 def test_market_data_api_rejects_invalid_records_without_partial_write(market_data_client):
@@ -405,9 +714,9 @@ def test_market_data_api_rejects_invalid_records_without_partial_write(market_da
     assert "option_semantics_incomplete" in bad_option.text
     assert bad_live_matrix.status_code == 422
     assert "live_capability_missing" in bad_live_matrix.text
-    assert registry.datasets() == []
-    assert registry.instruments() == []
-    assert registry.capability_matrices() == []
+    assert registry.datasets(owner_user_id=_OWNER) == []
+    assert registry.instruments(owner_user_id=_OWNER) == []
+    assert registry.capability_matrices(owner_user_id=_OWNER) == []
     assert graph.commands() == []
 
 
@@ -426,7 +735,7 @@ def test_market_data_api_rejects_raw_payload_and_plaintext_secret_without_write(
     assert "raw market-data" in raw_payload.text
     assert secret_payload.status_code == 422
     assert "plaintext secret" in secret_payload.text
-    assert registry.datasets() == []
+    assert registry.datasets(owner_user_id=_OWNER) == []
     assert graph.commands() == []
 
 
@@ -469,7 +778,7 @@ def test_market_data_use_gate_records_accepted_refs_and_qro(market_data_client):
     assert body["accepted"] is True
     assert body["raw_data_stored"] is False
     assert body["strategy_builder_called"] is False
-    recorded = registry.use_validation(body["validation_ref"])
+    recorded = registry.use_validation(body["validation_ref"], owner_user_id=_OWNER)
     assert recorded.dataset_refs == ("dataset:btc_daily:v1",)
     assert recorded.capability_matrix_ref == "capability:crypto_spot"
     assert len(graph.commands()) == 4
@@ -500,7 +809,7 @@ def test_market_data_use_gate_rejects_unrecorded_refs_without_write(market_data_
 
     assert response.status_code == 422
     assert "unknown dataset semantics record" in response.text
-    assert registry.use_validations() == []
+    assert registry.use_validations(owner_user_id=_OWNER) == []
     assert graph.commands() == []
 
 
@@ -537,7 +846,7 @@ def test_market_data_use_gate_rejects_cross_currency_without_capital_no_partial(
 
     assert response.status_code == 422
     assert "cross_currency_capital_missing" in response.text
-    assert registry.use_validations() == []
+    assert registry.use_validations(owner_user_id=_OWNER) == []
     assert len(graph.commands()) == before_commands
 
 
@@ -561,7 +870,7 @@ def test_market_data_use_gate_rejects_live_unavailable_matrix_no_partial(market_
 
     assert response.status_code == 422
     assert "live_capability_missing" in response.text
-    assert registry.use_validations() == []
+    assert registry.use_validations(owner_user_id=_OWNER) == []
     assert len(graph.commands()) == before_commands
 
 
@@ -586,5 +895,5 @@ def test_market_data_use_gate_rejects_raw_rows_without_write(market_data_client)
 
     assert response.status_code == 422
     assert "raw market-data" in response.text
-    assert registry.use_validations() == []
+    assert registry.use_validations(owner_user_id=_OWNER) == []
     assert len(graph.commands()) == before_commands

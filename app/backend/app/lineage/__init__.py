@@ -35,9 +35,16 @@ from .ledger import (
 )
 from .spine import (
     ConsistencyCheck,
+    ImplementationSpec,
+    MathematicalSpineChainRecord,
     MathematicalArtifact,
     MethodologyChoiceRecord,
+    ResponsibilityDisclosureRecord,
+    TheorySpec,
     TheoryImplementationBinding,
+    canonical_mathematical_spine_chain_ref,
+    canonical_spine_record_identity,
+    mathematical_spine_chain_from_dict,
 )
 from .spine_binder import (
     code_fingerprint,
@@ -45,7 +52,11 @@ from .spine_binder import (
     property_consistency_check,
 )
 from .spine_gate import SpineDecision, evaluate_promotion
-from .spine_ledger import SpineLedger
+from .spine_ledger import (
+    CanonicalSpinePackage,
+    SpineLedger,
+    SpinePackageRecordRefs,
+)
 
 __all__ = [
     "CONFIG_HASH_PREFIX",
@@ -71,12 +82,21 @@ __all__ = [
     "trace_dataset_to_factors",
     # Mathematical Spine（数学贯穿 + 理论实现一致性硬门 · 决策 D-MATH-SPINE）
     "MathematicalArtifact",
+    "MathematicalSpineChainRecord",
+    "TheorySpec",
+    "ImplementationSpec",
     "TheoryImplementationBinding",
     "ConsistencyCheck",
     "MethodologyChoiceRecord",
+    "ResponsibilityDisclosureRecord",
+    "canonical_spine_record_identity",
+    "canonical_mathematical_spine_chain_ref",
+    "mathematical_spine_chain_from_dict",
     "SpineDecision",
     "evaluate_promotion",
     "SpineLedger",
+    "CanonicalSpinePackage",
+    "SpinePackageRecordRefs",
     "code_fingerprint",
     "numerical_consistency_check",
     "property_consistency_check",

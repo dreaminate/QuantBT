@@ -14,6 +14,8 @@ from __future__ import annotations
 from dataclasses import dataclass, field
 from enum import Enum
 
+from .model_identity import has_independent_model_route
+
 
 class TaskDifficulty(str, Enum):
     HARD = "hard"            # 架构 / 数学 / 难调试 / 不可逆决策推理
@@ -75,7 +77,7 @@ class RoleCapabilityRequest:
     role: str = ""
     difficulty: str = TaskDifficulty.NORMAL.value
     risk: str = RiskLevel.NORMAL.value
-    independence_required: bool = False     # Verifier/Critic 要独立 provider/model
+    independence_required: bool = False     # Verifier/Critic 要 provider + model family 双重异源
     replay_required: bool = False
     prefer_provider: str | None = None      # 软偏好——绝不压过「不可逆/难任务不降档」
     prefer_model: str | None = None
@@ -90,7 +92,7 @@ class RoutingDecision:
     degraded: bool = False
     degrade_reason: str = ""
     independence_required: bool = False
-    independence_distinct: bool = False     # 是否相对 builder 换了 provider/model
+    independence_distinct: bool = False     # 是否证明 provider + model family 双重异源
     fallback_candidates: list[LLMModelProfile] = field(default_factory=list)
     rationale: str = ""
 
@@ -180,7 +182,8 @@ class ModelRoutingPolicy:
 
         - `unavailable_providers`：provider 不健康/配额耗尽/无可用凭据 → 排除。
         - `exclude_signatures`：本轮 fallback 已试过的 (provider,model)。
-        - `builder_signature` + req.independence_required：Verifier 要相对 builder 换 provider/model。
+        - `builder_signature` + req.independence_required：Verifier 要相对 builder 换 provider，
+          且换到可识别的不同 foundation-model family；未知家族 fail closed。
         """
 
         unavailable = unavailable_providers or set()
@@ -191,8 +194,25 @@ class ModelRoutingPolicy:
             p for p in self._profiles
             if p.provider not in unavailable and p.signature not in excluded
         ]
-        # 软偏好排序：独立性优先（同 builder 的排最后）→ 命中 prefer → tier 贴近 required。
-        # 独立性是【软】偏好而非硬排除：只剩 builder 同一 provider 时仍会调它，但由
+        # If a route that can actually satisfy the requested independence is
+        # available, non-independent routes are not candidates for this
+        # decision.  This must happen before tier partitioning: an exact-tier
+        # alias must not outrank a higher-tier independent model.
+        if req.independence_required and builder_signature is not None:
+            independent_usable = [
+                p
+                for p in usable
+                if has_independent_model_route(
+                    builder_provider=builder_signature[0],
+                    builder_model=builder_signature[1],
+                    verifier_provider=p.provider,
+                    verifier_model=p.model,
+                )
+            ]
+            if independent_usable:
+                usable = independent_usable
+        # 软偏好排序：可证明的双重异源优先 → 命中 prefer → tier 贴近 required。
+        # 独立性是【软】偏好而非硬排除：只剩不可证明的 route 时仍会调它，但由
         # IndependenceRecord 如实标 satisfied=False（绝不假报独立），而不是直接路由失败。
         usable.sort(key=lambda p: self._pref_key(p, req, required, builder_signature))
 
@@ -224,7 +244,12 @@ class ModelRoutingPolicy:
 
         independence_distinct = False
         if req.independence_required and builder_signature is not None:
-            independence_distinct = chosen.signature != builder_signature
+            independence_distinct = has_independent_model_route(
+                builder_provider=builder_signature[0],
+                builder_model=builder_signature[1],
+                verifier_provider=chosen.provider,
+                verifier_model=chosen.model,
+            )
 
         fallback_candidates = [p for p in usable if p.signature != chosen.signature]
         rationale = self._rationale(req, required, chosen)
@@ -250,10 +275,15 @@ class ModelRoutingPolicy:
         required: ModelTier,
         builder_signature: tuple[str, str] | None,
     ) -> tuple:
-        # 独立性优先：要独立挑战时，与 builder 同签名的候选排最后（1），其余在前（0）。
+        # 独立性优先：只有 provider + model family 双重异源的候选排在前面。
         indep_penalty = 0
-        if req.independence_required and builder_signature is not None and p.signature == builder_signature:
-            indep_penalty = 1
+        if req.independence_required and builder_signature is not None:
+            indep_penalty = 0 if has_independent_model_route(
+                builder_provider=builder_signature[0],
+                builder_model=builder_signature[1],
+                verifier_provider=p.provider,
+                verifier_model=p.model,
+            ) else 1
         # 命中 prefer 的优先（0 在前）；同优先级里 tier 更贴近 required 的优先。
         pref_hit = 0
         if req.prefer_provider and p.provider == req.prefer_provider:

@@ -16,7 +16,8 @@ export type ChatBlockType =
   | "patch"
   | "todos"
   | "tool"
-  | "gate";
+  | "gate"
+  | "workflow";
 
 /** todo 三态：done ☑ / doing ◐ / todo ☐。 */
 export type TodoState = "done" | "doing" | "todo";
@@ -65,6 +66,12 @@ export interface ChatBubbleProps {
   onReject?: () => void;
   /** patch 整轮撤销回调。 */
   onRevert?: () => void;
+  /** GOAL §7 durable workflow event；只展示客户端白名单摘要，不展开任意原始 payload。 */
+  workflowKind?: string;
+  workflowRole?: string;
+  workflowDesk?: string;
+  workflowAt?: string;
+  workflowSummary?: string;
 }
 
 /** diff sign → 语义色变量。 */
@@ -109,6 +116,50 @@ function Glyph({ ch, color }: { ch: string; color: string }): ReactNode {
 
 export function ChatBubble(props: ChatBubbleProps) {
   const { type } = props;
+
+  if (type === "workflow") {
+    const isFailure = props.workflowKind === "FailureDetected";
+    return (
+      <div
+        data-block="workflow"
+        data-workflow-kind={props.workflowKind}
+        style={{
+          margin: "8px 0",
+          borderLeft: `2px solid ${
+            isFailure ? "var(--desk-danger)" : "var(--desk-border-strong)"
+          }`,
+          padding: "5px 0 5px 10px",
+          fontSize: 11.5,
+        }}
+      >
+        <div style={{ display: "flex", gap: 7, alignItems: "baseline", flexWrap: "wrap" }}>
+          <span
+            style={{
+              color: isFailure ? "var(--desk-danger)" : "var(--desk-accent)",
+              fontWeight: 700,
+            }}
+          >
+            {props.workflowKind}
+          </span>
+          {(props.workflowRole || props.workflowDesk) && (
+            <span style={{ color: "var(--desk-text-dim)" }}>
+              {[props.workflowRole, props.workflowDesk].filter(Boolean).join(" · ")}
+            </span>
+          )}
+          {props.workflowAt && (
+            <span style={{ color: "var(--desk-text-faint)", marginLeft: "auto" }}>
+              {props.workflowAt}
+            </span>
+          )}
+        </div>
+        {props.workflowSummary && (
+          <div style={{ color: "var(--desk-text-soft)", marginTop: 3, overflowWrap: "anywhere" }}>
+            {props.workflowSummary}
+          </div>
+        )}
+      </div>
+    );
+  }
 
   if (type === "user") {
     return (

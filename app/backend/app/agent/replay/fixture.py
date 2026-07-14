@@ -6,6 +6,8 @@
   **fingerprint 不入 key**（否则供应商静默换模型→key 漂移→缓存永失效）；fingerprint 漂移走事件（store）。
 - HMAC 完整性诚实边界（R12）：HMAC key 与 fixture 同机 → 只【防篡改/防自欺、非防本机恶意】，
   不宣称密码学不可抵赖。
+- ``LLMFixture`` 的运行时对象保留 request/response 以供重放，但 ``to_dict`` 只返回无明文
+  metadata；敏感 payload 必须由 ``FixtureStore`` 按 owner 加密后才能持久化。
 """
 
 from __future__ import annotations
@@ -22,6 +24,11 @@ from ...lineage.ids import canonical_json, fixture_key as _make_fixture_key
 # 不可变版本 id 的标志：含 8 位日期 / YYYY-MM-DD / 明确快照后缀。否则视为会滚动的【别名】。
 _DATE_RE = re.compile(r"\d{8}|\d{4}-\d{2}-\d{2}")
 _ALIAS_MARKERS = ("latest", "preview")
+_GATEWAY_AUDIT_FIELD = "gateway_audit"
+_GATEWAY_AUDIT_KEYS = frozenset({"provider", "model", "auth_ref", "origin_call_ref"})
+_PROVIDER_CHARS = frozenset("._-")
+_MODEL_CHARS = frozenset("._:/+-")
+_SECRET_REF_CHARS = frozenset("._-+")
 
 
 def is_alias_model_id(model_id: str | None) -> bool:
@@ -37,6 +44,113 @@ def is_alias_model_id(model_id: str | None) -> bool:
 
 def _sha16(text: str) -> str:
     return hashlib.sha256(text.encode("utf-8")).hexdigest()[:16]
+
+
+def _sha256_json(value: Any) -> str:
+    return hashlib.sha256(canonical_json(value).encode("utf-8")).hexdigest()
+
+
+def owner_scope_ref(owner_user_id: str) -> str:
+    """不泄露 owner 明文的稳定 scope ref。
+
+    这只是索引/隔离标签，不是授权凭据；授权仍由调用方传入的已认证 owner 承担。
+    """
+
+    owner = str(owner_user_id or "").strip()
+    if not owner:
+        raise ValueError("owner_user_id 不能为空：replay 持久化操作必须带 owner scope")
+    digest = hashlib.sha256(owner.encode("utf-8")).hexdigest()
+    return f"ownerref:{digest[:32]}"
+
+
+def _safe_ascii_identifier(value: str, *, punctuation: frozenset[str], limit: int) -> bool:
+    return bool(value) and len(value) <= limit and value.isascii() and all(
+        ch.isalnum() or ch in punctuation for ch in value
+    )
+
+
+def _safe_secret_ref(value: str) -> bool:
+    prefix = "secretref://"
+    if not value.startswith(prefix) or len(value) > 256:
+        return False
+    parts = value[len(prefix):].split("/")
+    return len(parts) == 2 and all(
+        _safe_ascii_identifier(part, punctuation=_SECRET_REF_CHARS, limit=128)
+        for part in parts
+    )
+
+
+def gateway_audit_metadata(
+    *,
+    provider: str,
+    model: str,
+    auth_ref: str,
+    origin_call_ref: str,
+) -> dict[str, str]:
+    """Return the only gateway evidence allowed in fixture metadata.
+
+    Prompt/output bodies, owner ids and credential material are deliberately
+    outside this schema. ``auth_ref`` is a controlled SecretRef, never a key.
+    """
+
+    values = {
+        "provider": str(provider or ""),
+        "model": str(model or ""),
+        "auth_ref": str(auth_ref or ""),
+        "origin_call_ref": str(origin_call_ref or ""),
+    }
+    if not _safe_ascii_identifier(
+        values["provider"], punctuation=_PROVIDER_CHARS, limit=128,
+    ):
+        raise ValueError("fixture gateway provider is not a controlled identifier")
+    if (
+        "://" in values["model"]
+        or not _safe_ascii_identifier(values["model"], punctuation=_MODEL_CHARS, limit=256)
+    ):
+        raise ValueError("fixture gateway model is not a controlled identifier")
+    if not _safe_secret_ref(values["auth_ref"]):
+        raise ValueError("fixture gateway auth_ref must be a controlled SecretRef")
+    origin = values["origin_call_ref"]
+    if len(origin) != 16 or any(ch not in "0123456789abcdef" for ch in origin):
+        raise ValueError("fixture gateway origin_call_ref must be a sha256/16 reference")
+    return values
+
+
+def attach_gateway_audit_metadata(
+    model_pin: dict[str, Any],
+    *,
+    provider: str,
+    model: str,
+    auth_ref: str,
+    origin_call_ref: str,
+) -> dict[str, Any]:
+    """Attach validated audit refs without widening encrypted fixture payloads."""
+
+    pin = dict(model_pin)
+    pin[_GATEWAY_AUDIT_FIELD] = gateway_audit_metadata(
+        provider=provider,
+        model=model,
+        auth_ref=auth_ref,
+        origin_call_ref=origin_call_ref,
+    )
+    return pin
+
+
+def extract_gateway_audit_metadata(model_pin: dict[str, Any]) -> dict[str, str] | None:
+    """Read a complete safe audit envelope; malformed/legacy metadata is absent."""
+
+    raw = model_pin.get(_GATEWAY_AUDIT_FIELD) if isinstance(model_pin, dict) else None
+    if not isinstance(raw, dict) or set(raw) != _GATEWAY_AUDIT_KEYS:
+        return None
+    try:
+        return gateway_audit_metadata(
+            provider=raw.get("provider", ""),
+            model=raw.get("model", ""),
+            auth_ref=raw.get("auth_ref", ""),
+            origin_call_ref=raw.get("origin_call_ref", ""),
+        )
+    except ValueError:
+        return None
 
 
 @dataclass(frozen=True)
@@ -89,10 +203,11 @@ class LLMFixture:
     run_id: str                      # C1，部件03 RunStore 句柄（uuid，非内容哈希）
     repro_level: str                 # ReproLevel
     model_pin: dict[str, Any]
-    request: dict[str, Any]          # 完整 messages + tools + 请求参数（敏感 → 调用方决定是否加密）
-    response: dict[str, Any]         # content + tool_calls + raw
-    tool_calls: list[dict[str, Any]]
+    request: dict[str, Any]          # 只存内存；持久化由 FixtureStore 按 owner 加密
+    response: dict[str, Any]         # 只存内存；不得进 metadata JSONL 明文
+    tool_calls: list[dict[str, Any]] # 只存内存；arguments 可含私密输出
     translation_status: str          # ok | schema_invalid | human_confirm_required
+    owner_ref: str = ""             # owner_user_id 的稳定摘要，绝不存 owner 明文
     schema_ref: str | None = None
     decision_authority: str = "none"  # 恒 none：LLM 不持决策权（R7）
     created_at_utc: str = field(default_factory=lambda: datetime.now(UTC).isoformat())
@@ -112,11 +227,57 @@ class LLMFixture:
             d.pop(k, None)
         return d
 
-    def to_dict(self) -> dict[str, Any]:
+    def sensitive_payload(self) -> dict[str, Any]:
+        """只允许交给 owner-scoped 加密存储的敏感 payload。"""
+
+        return {
+            "run_id": self.run_id,
+            "request": self.request,
+            "response": self.response,
+            "tool_calls": self.tool_calls,
+        }
+
+    def to_memory_dict(self) -> dict[str, Any]:
+        """显式的运行时复制面；可含明文，不得直接落盘。"""
+
         return asdict(self)
+
+    def to_dict(self) -> dict[str, Any]:
+        """安全 metadata 序列化：不含 owner/run/prompt/output/tool-call 明文。"""
+
+        if not self.owner_ref:
+            raise ValueError("LLMFixture 缺 owner_ref，拒绝序列化 ownerless fixture metadata")
+        model_pin = dict(self.model_pin)
+        if _GATEWAY_AUDIT_FIELD in model_pin:
+            audit = extract_gateway_audit_metadata(model_pin)
+            if audit is None:
+                raise ValueError("fixture gateway audit metadata is malformed or unsafe")
+            model_pin[_GATEWAY_AUDIT_FIELD] = audit
+        return {
+            "fixture_key": self.fixture_key,
+            "owner_ref": self.owner_ref,
+            "run_ref": _sha256_json({"run_id": self.run_id}),
+            "repro_level": self.repro_level,
+            "model_pin": model_pin,
+            "request_digest": _sha256_json(self.request),
+            "response_digest": _sha256_json(self.response),
+            "tool_calls_digest": _sha256_json(self.tool_calls),
+            "translation_status": self.translation_status,
+            "schema_ref": self.schema_ref,
+            "decision_authority": self.decision_authority,
+            "created_at_utc": self.created_at_utc,
+            "integrity": self.integrity,
+            "consumed": self.consumed,
+            "tombstoned": self.tombstoned,
+        }
 
     @classmethod
     def from_dict(cls, d: dict[str, Any]) -> "LLMFixture":
+        """仅从显式的运行时 payload 恢复；安全 metadata 单独无法重建明文。"""
+
+        required_sensitive = {"run_id", "request", "response", "tool_calls"}
+        if not required_sensitive.issubset(d):
+            raise ValueError("serialized fixture metadata 不含明文 payload；须先由 FixtureStore 按 owner 解密")
         known = {f for f in cls.__dataclass_fields__}  # type: ignore[attr-defined]
         return cls(**{k: v for k, v in d.items() if k in known})
 
@@ -132,6 +293,7 @@ def verify_hmac(fixture: LLMFixture, key: bytes) -> bool:
 
 
 __all__ = [
-    "FixtureKey", "LLMFixture", "ModelPin", "compute_hmac", "is_alias_model_id",
-    "prompt_digest", "verify_hmac",
+    "FixtureKey", "LLMFixture", "ModelPin", "attach_gateway_audit_metadata",
+    "compute_hmac", "extract_gateway_audit_metadata", "gateway_audit_metadata",
+    "is_alias_model_id", "owner_scope_ref", "prompt_digest", "verify_hmac",
 ]

@@ -1,6 +1,15 @@
 ﻿from __future__ import annotations
 
+import hashlib
+import hmac
 import json
+import io
+import os
+import shutil
+import stat
+import uuid
+from contextlib import contextmanager
+from contextvars import ContextVar
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
@@ -36,6 +45,23 @@ TABLE_FILE_NAMES = {
     "positions": "positions.csv",
 }
 
+_AUTHORIZED_FILE_HASHES: ContextVar[tuple[str, dict[str, str]] | None] = ContextVar(
+    "quantbt_authorized_run_file_hashes",
+    default=None,
+)
+
+
+@contextmanager
+def authorized_run_file_snapshot(
+    run_id: str,
+    file_hashes: dict[str, str],
+):
+    token = _AUTHORIZED_FILE_HASHES.set((str(run_id), dict(file_hashes)))
+    try:
+        yield
+    finally:
+        _AUTHORIZED_FILE_HASHES.reset(token)
+
 
 @dataclass
 class LoadedRun:
@@ -51,21 +77,152 @@ class LoadedRun:
 
 
 def run_dir(run_id: str) -> Path:
-    return RUN_ROOT / run_id
+    normalized = str(run_id or "").strip()
+    if (
+        not normalized
+        or normalized in {".", ".."}
+        or not all(character.isalnum() or character in {"_", "-", "."} for character in normalized)
+    ):
+        raise ValueError("invalid run_id")
+    root = RUN_ROOT.resolve()
+    candidate = root / normalized
+    if candidate.is_symlink():
+        raise ValueError("run directory symlinks are not allowed")
+    resolved = candidate.resolve()
+    try:
+        resolved.relative_to(root)
+    except ValueError as exc:
+        raise ValueError("run path escapes run root") from exc
+    return resolved
 
 
-def _read_json(path: Path) -> dict[str, Any]:
-    return json.loads(path.read_text(encoding="utf-8-sig"))
+def safe_run_file(
+    run_id: str,
+    file_name: str,
+    *,
+    require_file: bool = False,
+) -> Path:
+    """Resolve one direct run artifact without following symlinks.
+
+    Run artifacts are a flat, fixed-name contract.  Rejecting symlinks here
+    keeps every reader from escaping ``RUN_ROOT`` through ``run.json`` or an
+    artifact even when the top-level run directory itself is safe.
+    """
+
+    normalized_name = str(file_name or "").strip()
+    if (
+        not normalized_name
+        or Path(normalized_name).name != normalized_name
+        or normalized_name in {".", ".."}
+    ):
+        raise ValueError("invalid run artifact name")
+    root = run_dir(run_id)
+    candidate = root / normalized_name
+    if candidate.is_symlink():
+        raise FileNotFoundError("run artifact is unavailable")
+    resolved = candidate.resolve(strict=False)
+    try:
+        resolved.relative_to(root)
+    except ValueError as exc:
+        raise FileNotFoundError("run artifact is unavailable") from exc
+    if require_file and not candidate.is_file():
+        raise FileNotFoundError(f"run artifact does not exist: {normalized_name}")
+    return resolved
 
 
-def _read_text(path: Path) -> str:
-    return path.read_text(encoding="utf-8-sig") if path.exists() else ""
+def safe_run_relative_file(run_id: str, relative_path: Path) -> Path:
+    """Resolve a nested, relative run artifact while rejecting symlink components."""
+
+    relative = Path(relative_path)
+    if relative.is_absolute() or not relative.parts or any(part in {"", ".", ".."} for part in relative.parts):
+        raise ValueError("invalid run artifact path")
+    root = run_dir(run_id)
+    candidate = root
+    for part in relative.parts:
+        candidate /= part
+        if candidate.is_symlink():
+            raise FileNotFoundError("run artifact is unavailable")
+    resolved = candidate.resolve(strict=False)
+    try:
+        resolved.relative_to(root)
+    except ValueError as exc:
+        raise FileNotFoundError("run artifact is unavailable") from exc
+    return resolved
 
 
-def _load_csv(path: Path) -> pl.DataFrame:
-    if not path.exists():
+def read_run_relative_bytes(run_id: str, relative_path: Path) -> bytes:
+    """Read one artifact through anchored no-follow directory/file descriptors."""
+
+    relative = Path(relative_path)
+    if relative.is_absolute() or not relative.parts or any(
+        part in {"", ".", ".."} for part in relative.parts
+    ):
+        raise ValueError("invalid run artifact path")
+    root = run_dir(run_id)
+    directory_flags = os.O_RDONLY | getattr(os, "O_DIRECTORY", 0)
+    directory_flags |= getattr(os, "O_NOFOLLOW", 0)
+    file_flags = os.O_RDONLY | getattr(os, "O_NOFOLLOW", 0)
+    directory_fd = os.open(root, directory_flags)
+    opened_directories = [directory_fd]
+    file_fd = -1
+    try:
+        current_fd = directory_fd
+        for part in relative.parts[:-1]:
+            current_fd = os.open(part, directory_flags, dir_fd=current_fd)
+            opened_directories.append(current_fd)
+        file_fd = os.open(relative.parts[-1], file_flags, dir_fd=current_fd)
+        info = os.fstat(file_fd)
+        if not stat.S_ISREG(info.st_mode):
+            raise FileNotFoundError("run artifact is not a regular file")
+        chunks: list[bytes] = []
+        while True:
+            chunk = os.read(file_fd, 1024 * 1024)
+            if not chunk:
+                break
+            chunks.append(chunk)
+        payload = b"".join(chunks)
+        authorized = _AUTHORIZED_FILE_HASHES.get()
+        if authorized is not None and authorized[0] == str(run_id):
+            relative_name = relative.as_posix()
+            expected_hash = authorized[1].get(relative_name)
+            if expected_hash is None or not hmac.compare_digest(
+                expected_hash,
+                hashlib.sha256(payload).hexdigest(),
+            ):
+                raise FileNotFoundError(
+                    "run artifact differs from the authorized snapshot"
+                )
+        return payload
+    except (NotADirectoryError, IsADirectoryError, OSError) as exc:
+        if isinstance(exc, FileNotFoundError):
+            raise
+        raise FileNotFoundError("run artifact is unavailable") from exc
+    finally:
+        if file_fd >= 0:
+            os.close(file_fd)
+        for fd in reversed(opened_directories):
+            os.close(fd)
+
+
+def _read_run_json(run_id: str, relative_path: Path) -> dict[str, Any]:
+    return json.loads(
+        read_run_relative_bytes(run_id, relative_path).decode("utf-8-sig")
+    )
+
+
+def _read_run_text(run_id: str, relative_path: Path) -> str:
+    try:
+        return read_run_relative_bytes(run_id, relative_path).decode("utf-8-sig")
+    except FileNotFoundError:
+        return ""
+
+
+def _load_run_csv(run_id: str, relative_path: Path) -> pl.DataFrame:
+    try:
+        payload = read_run_relative_bytes(run_id, relative_path)
+    except FileNotFoundError:
         return pl.DataFrame()
-    return pl.read_csv(path, try_parse_dates=True)
+    return pl.read_csv(io.BytesIO(payload), try_parse_dates=True)
 
 
 def _safe_number(value: Any) -> float | None:
@@ -78,11 +235,9 @@ def _safe_number(value: Any) -> float | None:
     return number
 
 
-def _read_log_entries(path: Path) -> list[dict[str, str]]:
-    if not path.exists():
-        return []
+def _read_log_entries(text: str) -> list[dict[str, str]]:
     entries: list[dict[str, str]] = []
-    for line in path.read_text(encoding="utf-8-sig").splitlines():
+    for line in text.splitlines():
         parts = line.split(" - ", 2)
         if len(parts) == 3:
             entries.append({"timestamp": parts[0], "level": parts[1], "message": parts[2]})
@@ -92,21 +247,27 @@ def _read_log_entries(path: Path) -> list[dict[str, str]]:
 
 
 def load_run(run_id: str) -> LoadedRun:
-    root = run_dir(run_id)
-    manifest_path = root / "run.json"
-    if not manifest_path.exists():
-        raise FileNotFoundError(f"run.json 不存在: {manifest_path}")
     return LoadedRun(
         run_id=run_id,
-        manifest=_read_json(manifest_path),
-        portfolio=_load_csv(root / TABLE_FILE_NAMES["portfolio"]),
-        trades=_load_csv(root / TABLE_FILE_NAMES["trades"]),
-        positions=_load_csv(root / TABLE_FILE_NAMES["positions"]),
-        report_markdown=_read_text(root / "report.md"),
-        source_code=_read_text(root / "strategy.py"),
-        attribution=_load_csv(root / "attribution.csv"),
-        log_entries=_read_log_entries(root / "backtest.log"),
+        manifest=_read_run_json(run_id, Path("run.json")),
+        portfolio=_load_run_csv(run_id, Path(TABLE_FILE_NAMES["portfolio"])),
+        trades=_load_run_csv(run_id, Path(TABLE_FILE_NAMES["trades"])),
+        positions=_load_run_csv(run_id, Path(TABLE_FILE_NAMES["positions"])),
+        report_markdown=_read_run_text(run_id, Path("report.md")),
+        source_code=_read_run_text(run_id, Path("strategy.py")),
+        attribution=_load_run_csv(run_id, Path("attribution.csv")),
+        log_entries=_read_log_entries(_read_run_text(run_id, Path("backtest.log"))),
     )
+
+
+def load_run_manifest(run_id: str) -> dict[str, Any]:
+    manifest = _read_run_json(run_id, Path("run.json"))
+    if not isinstance(manifest, dict):
+        raise ValueError("run manifest must be an object")
+    manifest_run_id = str(manifest.get("run_id") or "").strip()
+    if manifest_run_id != str(run_id or "").strip():
+        raise ValueError("run manifest id does not match directory")
+    return manifest
 
 
 def _manifest_run_id(path: Path, manifest: dict[str, Any]) -> str:
@@ -117,8 +278,19 @@ def _manifest_strategy_name(path: Path, manifest: dict[str, Any]) -> str:
     return str(manifest.get("strategy_name") or manifest.get("strategy_id") or path.name)
 
 
-def _build_run_summary_from_manifest(path: Path, manifest: dict[str, Any]) -> dict[str, Any]:
+def _build_run_summary_from_manifest(
+    path: Path,
+    manifest: dict[str, Any],
+    *,
+    file_hashes: dict[str, str] | None = None,
+) -> dict[str, Any]:
     run_id = _manifest_run_id(path, manifest)
+    def artifact_available(file_name: str) -> bool:
+        if file_hashes is not None:
+            return file_name in file_hashes
+        candidate = path / file_name
+        return not candidate.is_symlink() and candidate.is_file()
+
     metric = lambda *keys: _metric_value(manifest, *keys)
     overall = {
         "total_return": metric("returns", "total_return"),
@@ -142,7 +314,7 @@ def _build_run_summary_from_manifest(path: Path, manifest: dict[str, Any]) -> di
         "strategy_mode": manifest.get("strategy_mode"),
         "strategy_ref": manifest.get("strategy_ref"),
         "strategy_script_path": str(path / "strategy.py"),
-        "strategy_script_name": "strategy.py" if (path / "strategy.py").exists() else None,
+        "strategy_script_name": "strategy.py" if artifact_available("strategy.py") else None,
         "artifact_dir": str(path),
         "overall": overall,
         "in_sample": manifest.get("in_sample") or {},
@@ -167,7 +339,7 @@ def _build_run_summary_from_manifest(path: Path, manifest: dict[str, Any]) -> di
         "unit_handling": manifest.get("unit_handling"),
         "pasteurization": manifest.get("pasteurization"),
         "model_used": bool(manifest.get("model_used", False)),
-        "tearsheet_available": (path / "tearsheet.html").exists(),
+        "tearsheet_available": artifact_available("tearsheet.html"),
         "data_coverage_summary": manifest.get("data_coverage_summary", {}),
         "returns": metric("returns", "total_return"),
         "turnover": metric("turnover"),
@@ -197,18 +369,40 @@ def _build_run_summary_from_manifest(path: Path, manifest: dict[str, Any]) -> di
     }
 
 
+def run_summary_from_manifest(
+    run_id: str,
+    manifest: dict[str, Any],
+    *,
+    file_hashes: dict[str, str] | None = None,
+) -> dict[str, Any]:
+    if str(manifest.get("run_id") or "").strip() != str(run_id or "").strip():
+        raise ValueError("run manifest id does not match directory")
+    return _build_run_summary_from_manifest(
+        run_dir(run_id),
+        manifest,
+        file_hashes=file_hashes,
+    )
+
+
+def listed_run_ids() -> tuple[str, ...]:
+    if not RUN_ROOT.exists():
+        return ()
+    return tuple(
+        path.name
+        for path in sorted(RUN_ROOT.iterdir())
+        if not path.is_symlink() and path.is_dir() and not path.name.startswith(".")
+    )
+
+
 def _collect_manifest_rows() -> list[dict[str, Any]]:
     if not RUN_ROOT.exists():
         return []
     rows: list[dict[str, Any]] = []
     for path in sorted(RUN_ROOT.iterdir()):
-        if not path.is_dir():
-            continue
-        manifest_path = path / "run.json"
-        if not manifest_path.exists():
+        if path.is_symlink() or not path.is_dir():
             continue
         try:
-            manifest = _read_json(manifest_path)
+            manifest = load_run_manifest(path.name)
         except Exception:
             continue
         rows.append(_build_run_summary_from_manifest(path, manifest))
@@ -219,13 +413,6 @@ def list_runs() -> list[dict[str, Any]]:
     rows = _collect_manifest_rows()
     rows.sort(key=lambda item: item.get("started_at", ""), reverse=True)
     return rows
-
-
-def _csv_row_count(path: Path) -> int | None:
-    if not path.exists():
-        return None
-    with path.open("r", encoding="utf-8-sig") as handle:
-        return max(sum(1 for _ in handle) - 1, 0)
 
 
 def build_artifact_stats(run_id: str) -> dict[str, Any]:
@@ -243,13 +430,26 @@ def build_artifact_stats(run_id: str) -> dict[str, Any]:
     }
     stats: dict[str, Any] = {}
     for name, file_name in mapping.items():
+        try:
+            payload = read_run_relative_bytes(run_id, Path(file_name))
+        except (FileNotFoundError, ValueError):
+            payload = b""
+            available = False
+        else:
+            available = True
         path = root / file_name
+        row_count = None
+        if available and path.suffix.lower() == ".csv":
+            row_count = max(
+                payload.count(b"\n") - (1 if payload.endswith(b"\n") else 0),
+                0,
+            )
         stats[name] = {
             "artifact_name": name,
-            "available": path.exists(),
-            "file_path": str(path) if path.exists() else None,
-            "file_size_bytes": path.stat().st_size if path.exists() else None,
-            "row_count": _csv_row_count(path) if path.exists() and path.suffix.lower() == ".csv" else None,
+            "available": available,
+            "file_path": str(path) if available else None,
+            "file_size_bytes": len(payload) if available else None,
+            "row_count": row_count,
         }
     return stats
 
@@ -326,7 +526,7 @@ def load_table_response(
 ) -> dict[str, Any]:
     if table_name not in TABLE_FILE_NAMES:
         raise ValueError(f"未知 table: {table_name}")
-    frame = _load_csv(run_dir(run_id) / TABLE_FILE_NAMES[table_name])
+    frame = _load_run_csv(run_id, Path(TABLE_FILE_NAMES[table_name]))
     available = frame.height > 0
     frame = _apply_table_filters(frame, start_ts=start_ts, end_ts=end_ts, symbol=symbol, side=side)
     if not sort:
@@ -344,8 +544,7 @@ def load_table_response(
 
 
 def _load_series_file(run_id: str, series_name: str) -> list[dict[str, Any]]:
-    path = run_dir(run_id) / "series" / f"{series_name}.csv"
-    frame = _load_csv(path)
+    frame = _load_run_csv(run_id, Path("series") / f"{series_name}.csv")
     if frame.height == 0 or "timestamp" not in frame.columns or "value" not in frame.columns:
         return []
     return [{"timestamp": row["timestamp"], "value": _safe_number(row["value"])} for row in frame.to_dicts()]
@@ -369,6 +568,8 @@ def _compute_max_drawdown_series(frame: pl.DataFrame) -> pl.DataFrame:
         return frame
     if "drawdown" not in frame.columns:
         frame = _compute_drawdown_series(frame)
+    if "drawdown" not in frame.columns:
+        return frame
     running_min: list[float] = []
     current = 0.0
     for raw in frame["drawdown"].to_list():
@@ -536,19 +737,110 @@ def _numeric_filter_matches(row: dict[str, Any], field: str, operator: str, valu
     return True
 
 
-def delete_run(run_id: str) -> None:
+def delete_run(
+    run_id: str,
+    *,
+    expected_file_hashes: dict[str, str] | None = None,
+    expected_directory_identity: tuple[int, int] | None = None,
+) -> None:
     """删除实验目录（与 quant1 删除行为对齐，仅限 RUN_ROOT 下）。"""
-    import shutil
-
     root = run_dir(run_id)
     if not root.exists():
         raise FileNotFoundError(f"run 不存在: {run_id}")
+    if expected_file_hashes is not None:
+        if expected_directory_identity is None:
+            raise FileNotFoundError("authorized run directory identity is required")
+        run_root = RUN_ROOT.resolve()
+        root_flags = os.O_RDONLY | getattr(os, "O_DIRECTORY", 0)
+        root_flags |= getattr(os, "O_NOFOLLOW", 0)
+        root_fd = os.open(run_root, root_flags)
+        run_fd = -1
+        quarantine_name = f".deleting-{run_id}-{uuid.uuid4().hex}"
+        renamed = False
+        try:
+            run_fd = os.open(run_id, root_flags, dir_fd=root_fd)
+            opened_identity = os.fstat(run_fd)
+            if (
+                opened_identity.st_dev,
+                opened_identity.st_ino,
+            ) != expected_directory_identity:
+                raise FileNotFoundError(
+                    "run directory changed before authorized deletion"
+                )
+            current_file_paths: set[str] = set()
+            for directory, directory_names, file_names in os.walk(
+                root,
+                topdown=True,
+                followlinks=False,
+            ):
+                directory_path = Path(directory)
+                for directory_name in directory_names:
+                    child = directory_path / directory_name
+                    if child.is_symlink():
+                        raise FileNotFoundError(
+                            "run directory changed before authorized deletion"
+                        )
+                for file_name in file_names:
+                    child = directory_path / file_name
+                    child_stat = child.lstat()
+                    if not stat.S_ISREG(child_stat.st_mode):
+                        raise FileNotFoundError(
+                            "run directory changed before authorized deletion"
+                        )
+                    current_file_paths.add(child.relative_to(root).as_posix())
+            if current_file_paths != set(expected_file_hashes):
+                raise FileNotFoundError(
+                    "run directory changed before authorized deletion"
+                )
+            with authorized_run_file_snapshot(run_id, expected_file_hashes):
+                for relative_name in sorted(expected_file_hashes):
+                    read_run_relative_bytes(run_id, Path(relative_name))
+            os.rename(
+                run_id,
+                quarantine_name,
+                src_dir_fd=root_fd,
+                dst_dir_fd=root_fd,
+            )
+            renamed = True
+            observed_identity = os.stat(
+                quarantine_name,
+                dir_fd=root_fd,
+                follow_symlinks=False,
+            )
+            if (
+                opened_identity.st_dev != observed_identity.st_dev
+                or opened_identity.st_ino != observed_identity.st_ino
+            ):
+                os.rename(
+                    quarantine_name,
+                    run_id,
+                    src_dir_fd=root_fd,
+                    dst_dir_fd=root_fd,
+                )
+                renamed = False
+                raise FileNotFoundError(
+                    "run directory changed before authorized deletion"
+                )
+        finally:
+            if run_fd >= 0:
+                os.close(run_fd)
+            os.close(root_fd)
+        if renamed:
+            shutil.rmtree(run_root / quarantine_name)
+        return
     shutil.rmtree(root)
 
 
-def query_runs(payload: dict[str, Any] | None = None) -> dict[str, Any]:
+def query_runs(
+    payload: dict[str, Any] | None = None,
+    *,
+    allowed_run_ids: set[str] | None = None,
+    source_rows: list[dict[str, Any]] | None = None,
+) -> dict[str, Any]:
     request = payload or {}
-    rows = _collect_manifest_rows()
+    rows = list(source_rows) if source_rows is not None else _collect_manifest_rows()
+    if allowed_run_ids is not None:
+        rows = [row for row in rows if str(row.get("run_id") or "") in allowed_run_ids]
     search = str(request.get("search") or "").strip().lower()
     status = str(request.get("status") or "").strip().lower()
     market = str(request.get("market") or "").strip().lower()
@@ -726,7 +1018,7 @@ def artifact_download_path(run_id: str, artifact_name: str) -> Path:
     file_name = mapping.get(artifact_name)
     if file_name is None:
         raise ValueError(f"未知 artifact: {artifact_name}")
-    return run_dir(run_id) / file_name
+    return safe_run_file(run_id, file_name, require_file=True)
 
 
 def export_path(run_id: str, export_type: str) -> Path:
@@ -739,4 +1031,4 @@ def export_path(run_id: str, export_type: str) -> Path:
     file_name = mapping.get(export_type)
     if file_name is None:
         raise ValueError(f"未知 export 类型: {export_type}")
-    return run_dir(run_id) / file_name
+    return safe_run_file(run_id, file_name, require_file=True)

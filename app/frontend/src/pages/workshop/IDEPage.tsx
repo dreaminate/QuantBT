@@ -44,6 +44,122 @@ interface IDERun {
   result_keys: string[];
 }
 
+interface RDPManifestSummary {
+  package_id: string;
+  research_question?: string;
+  asset_refs?: string[];
+  run_refs?: string[];
+  target_runtime?: string;
+  artifact_hash?: string;
+}
+
+type RDPManifestLoadState =
+  | { state: "idle" }
+  | { state: "loading"; runId: string }
+  | { state: "ready"; runId: string; manifests: RDPManifestSummary[] }
+  | { state: "error"; runId: string; message: string };
+
+type RDPManifestCreateState =
+  | { state: "idle" }
+  | { state: "creating"; runId: string; strippedFields: string[] }
+  | { state: "error"; runId: string; message: string; strippedFields: string[] }
+  | { state: "success"; runId: string; packageId: string; strippedFields: string[] };
+
+type RDPManifestRefreshResult =
+  | { state: "ready"; manifests: RDPManifestSummary[] }
+  | { state: "error"; message: string }
+  | { state: "stale" };
+
+interface RDPManifestDraftState {
+  runId: string | null;
+  value: string;
+}
+
+const EMPTY_RDP_MANIFEST_DRAFT = "{}";
+
+const RDP_SERVER_OWNED_MANIFEST_FIELDS = [
+  "ide_run_id",
+  "asset_refs",
+  "run_refs",
+  "source_file_refs",
+  "artifact_hash",
+  "reproducibility_command",
+  "package_id",
+  "rdp_id",
+] as const;
+
+const PROMOTION_LABEL_OPTIONS = [
+  "draft",
+  "exploratory",
+  "challenged",
+  "user_waived_theory",
+  "user_waived_validation",
+  "custom_methodology",
+  "evidence_sufficient",
+  "proof_backed",
+  "production_ready",
+] as const;
+
+type PromotionLabel = (typeof PROMOTION_LABEL_OPTIONS)[number];
+
+function isManifestExactlyBoundToIDERun(manifest: RDPManifestSummary, runId: string): boolean {
+  const expectedRef = `ide_run:${runId}`;
+  return (
+    Boolean(manifest.package_id?.trim())
+    && Array.isArray(manifest.asset_refs)
+    && manifest.asset_refs.length === 1
+    && manifest.asset_refs[0] === expectedRef
+    && Array.isArray(manifest.run_refs)
+    && manifest.run_refs.length === 1
+    && manifest.run_refs[0] === expectedRef
+  );
+}
+
+function responseDetail(payload: unknown, fallback: string): string {
+  if (payload && typeof payload === "object" && "detail" in payload) {
+    const detail = String((payload as { detail?: unknown }).detail ?? "").trim();
+    if (detail) return detail;
+  }
+  return fallback;
+}
+
+async function fetchExactRdpManifests(runId: string): Promise<RDPManifestSummary[]> {
+  const response = await authFetch("/api/research-os/rdp/manifests");
+  const payload = await response.json().catch(() => null);
+  if (!response.ok) throw new Error(responseDetail(payload, `HTTP ${response.status}`));
+  if (!payload || typeof payload !== "object" || !Array.isArray((payload as { manifests?: unknown }).manifests)) {
+    throw new Error("RDP manifest response malformed");
+  }
+  return (payload as { manifests: RDPManifestSummary[] }).manifests.filter(
+    (manifest) => isManifestExactlyBoundToIDERun(manifest, runId),
+  );
+}
+
+function parseRdpManifestDraft(rawDraft: string): {
+  manifest: Record<string, unknown>;
+  strippedFields: string[];
+} {
+  let parsed: unknown;
+  try {
+    parsed = JSON.parse(rawDraft);
+  } catch {
+    throw new Error("RDP manifest JSON 无效：请输入合法 JSON object");
+  }
+  if (!parsed || typeof parsed !== "object" || Array.isArray(parsed)) {
+    throw new Error("RDP manifest JSON 顶层必须是 object");
+  }
+
+  const manifest = { ...(parsed as Record<string, unknown>) };
+  const strippedFields: string[] = [];
+  for (const field of RDP_SERVER_OWNED_MANIFEST_FIELDS) {
+    if (Object.prototype.hasOwnProperty.call(manifest, field)) {
+      delete manifest[field];
+      strippedFields.push(field);
+    }
+  }
+  return { manifest, strippedFields };
+}
+
 const DEFAULT_TEMPLATE = `"""聚宽风策略模板 (v0.8.2)。
 
 约束：
@@ -120,6 +236,48 @@ export function IDEPage() {
   const [generationContext, setGenerationContext] = useState<GenerationContext | null>(null);
   const [showContext, setShowContext] = useState(false);
   const [promoting, setPromoting] = useState(false);
+  const [rdpManifestStatus, setRdpManifestStatus] = useState<RDPManifestLoadState>({ state: "idle" });
+  const [rdpManifestDraft, setRdpManifestDraft] = useState<RDPManifestDraftState>({
+    runId: null,
+    value: EMPTY_RDP_MANIFEST_DRAFT,
+  });
+  const [rdpManifestCreateStatus, setRdpManifestCreateStatus] = useState<RDPManifestCreateState>({ state: "idle" });
+  const [selectedRdpPackageId, setSelectedRdpPackageId] = useState("");
+  const [requestedPromotionLabel, setRequestedPromotionLabel] = useState<PromotionLabel | "">("");
+  const activeRunIdRef = useRef<string | null>(null);
+  const rdpManifestLoadSequenceRef = useRef(0);
+  const rdpManifestCreateSequenceRef = useRef(0);
+
+  const activeRunCanPromote = Boolean(
+    activeRun?.status === "ok" && activeRun.result_keys.includes("equity_curve"),
+  );
+  activeRunIdRef.current = activeRun?.run_id ?? null;
+
+  const refreshRdpManifests = useCallback(async (runId: string): Promise<RDPManifestRefreshResult> => {
+    const requestSequence = ++rdpManifestLoadSequenceRef.current;
+    setRdpManifestStatus({ state: "loading", runId });
+    try {
+      const manifests = await fetchExactRdpManifests(runId);
+      if (
+        rdpManifestLoadSequenceRef.current !== requestSequence
+        || activeRunIdRef.current !== runId
+      ) {
+        return { state: "stale" };
+      }
+      setRdpManifestStatus({ state: "ready", runId, manifests });
+      return { state: "ready", manifests };
+    } catch (error) {
+      const message = error instanceof Error ? error.message : String(error);
+      if (
+        rdpManifestLoadSequenceRef.current !== requestSequence
+        || activeRunIdRef.current !== runId
+      ) {
+        return { state: "stale" };
+      }
+      setRdpManifestStatus({ state: "error", runId, message });
+      return { state: "error", message };
+    }
+  }, []);
 
   const reload = useCallback(async () => {
     try {
@@ -146,6 +304,155 @@ export function IDEPage() {
       .then((c) => c && setGenerationContext(c))
       .catch(() => {/* noop */});
   }, [userId]);
+
+  useEffect(() => {
+    rdpManifestCreateSequenceRef.current += 1;
+    setSelectedRdpPackageId("");
+    setRequestedPromotionLabel("");
+    setRdpManifestCreateStatus({ state: "idle" });
+    setRdpManifestDraft({
+      runId: activeRun?.run_id ?? null,
+      value: EMPTY_RDP_MANIFEST_DRAFT,
+    });
+
+    if (!userId || !activeRun || !activeRunCanPromote) {
+      rdpManifestLoadSequenceRef.current += 1;
+      setRdpManifestStatus({ state: "idle" });
+      return;
+    }
+
+    const runId = activeRun.run_id;
+    void refreshRdpManifests(runId);
+
+    return () => {
+      rdpManifestLoadSequenceRef.current += 1;
+      rdpManifestCreateSequenceRef.current += 1;
+    };
+  }, [userId, activeRun?.run_id, activeRunCanPromote, refreshRdpManifests]);
+
+  const rdpStatusRunId = rdpManifestStatus.state === "idle" ? null : rdpManifestStatus.runId;
+  const currentRdpManifestStatus: RDPManifestLoadState = activeRun && activeRunCanPromote
+    && rdpStatusRunId !== activeRun.run_id
+    ? { state: "loading", runId: activeRun.run_id }
+    : rdpManifestStatus;
+  const eligibleRdpManifests = currentRdpManifestStatus.state === "ready"
+    ? currentRdpManifestStatus.manifests
+    : [];
+  const currentRdpManifestDraft = activeRun && rdpManifestDraft.runId === activeRun.run_id
+    ? rdpManifestDraft.value
+    : EMPTY_RDP_MANIFEST_DRAFT;
+  const currentRdpManifestCreateStatus: RDPManifestCreateState =
+    rdpManifestCreateStatus.state !== "idle"
+      && activeRun
+      && rdpManifestCreateStatus.runId !== activeRun.run_id
+      ? { state: "idle" }
+      : rdpManifestCreateStatus;
+
+  const updateRdpManifestDraft = (value: string) => {
+    if (!activeRun) return;
+    setRdpManifestDraft({ runId: activeRun.run_id, value });
+    setRdpManifestCreateStatus({ state: "idle" });
+  };
+
+  const createRdpManifest = async () => {
+    if (!activeRun || !activeRunCanPromote) return;
+    const runId = activeRun.run_id;
+
+    let parsedDraft: ReturnType<typeof parseRdpManifestDraft>;
+    try {
+      parsedDraft = parseRdpManifestDraft(currentRdpManifestDraft);
+    } catch (error) {
+      setRdpManifestCreateStatus({
+        state: "error",
+        runId,
+        message: error instanceof Error ? error.message : String(error),
+        strippedFields: [],
+      });
+      return;
+    }
+
+    const requestSequence = ++rdpManifestCreateSequenceRef.current;
+    setRdpManifestCreateStatus({
+      state: "creating",
+      runId,
+      strippedFields: parsedDraft.strippedFields,
+    });
+    try {
+      const response = await authFetch("/api/research-os/rdp/manifests", {
+        method: "POST",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify({
+          ide_run_id: runId,
+          manifest: parsedDraft.manifest,
+        }),
+      });
+      const payload = await response.json().catch(() => null);
+      if (
+        rdpManifestCreateSequenceRef.current !== requestSequence
+        || activeRunIdRef.current !== runId
+      ) {
+        return;
+      }
+      if (!response.ok) {
+        throw new Error(responseDetail(payload, `RDP manifest 创建失败（HTTP ${response.status}）`));
+      }
+      const packageId = payload && typeof payload === "object"
+        ? String((payload as { package_id?: unknown }).package_id ?? "").trim()
+        : "";
+      if (!packageId) throw new Error("RDP manifest 创建响应缺少 package_id");
+
+      const refreshResult = await refreshRdpManifests(runId);
+      if (
+        rdpManifestCreateSequenceRef.current !== requestSequence
+        || activeRunIdRef.current !== runId
+        || refreshResult.state === "stale"
+      ) {
+        return;
+      }
+      if (refreshResult.state === "error") {
+        setRdpManifestCreateStatus({
+          state: "error",
+          runId,
+          message: `RDP 已创建，但清单重读失败：${refreshResult.message}`,
+          strippedFields: parsedDraft.strippedFields,
+        });
+        return;
+      }
+      const exactCreatedManifest = refreshResult.manifests.find(
+        (manifest) => manifest.package_id === packageId
+          && isManifestExactlyBoundToIDERun(manifest, runId),
+      );
+      if (!exactCreatedManifest) {
+        setRdpManifestCreateStatus({
+          state: "error",
+          runId,
+          message: "RDP 已创建，但重读后未发现与当前 IDE run 精确绑定的返回 package",
+          strippedFields: parsedDraft.strippedFields,
+        });
+        return;
+      }
+      setSelectedRdpPackageId(packageId);
+      setRdpManifestCreateStatus({
+        state: "success",
+        runId,
+        packageId,
+        strippedFields: parsedDraft.strippedFields,
+      });
+    } catch (error) {
+      if (
+        rdpManifestCreateSequenceRef.current !== requestSequence
+        || activeRunIdRef.current !== runId
+      ) {
+        return;
+      }
+      setRdpManifestCreateStatus({
+        state: "error",
+        runId,
+        message: error instanceof Error ? error.message : String(error),
+        strippedFields: parsedDraft.strippedFields,
+      });
+    }
+  };
 
   const openStrategy = (s: StrategyFile) => {
     setCurrentName(s.name);
@@ -278,6 +585,17 @@ export function IDEPage() {
       alert("emit_result 必须包含 equity_curve 才能提升为正式 Run");
       return;
     }
+    const selectedManifest = eligibleRdpManifests.find(
+      (manifest) => manifest.package_id === selectedRdpPackageId,
+    );
+    if (!selectedManifest || !isManifestExactlyBoundToIDERun(selectedManifest, activeRun.run_id)) {
+      alert("请先选择与当前 IDE run 精确绑定的 RDP package");
+      return;
+    }
+    if (!requestedPromotionLabel) {
+      alert("请明确选择本次申请的 promotion label");
+      return;
+    }
     setPromoting(true);
     try {
       const validationRefs =
@@ -287,7 +605,11 @@ export function IDEPage() {
       const res = await authFetch(`/api/ide/runs/${activeRun.run_id}/promote`, {
         method: "POST",
         headers: { "content-type": "application/json" },
-        body: JSON.stringify({ market_data_use_validation_refs: validationRefs }),
+        body: JSON.stringify({
+          market_data_use_validation_refs: validationRefs,
+          rdp_package_id: selectedManifest.package_id,
+          requested_label: requestedPromotionLabel,
+        }),
       });
       if (!res.ok) {
         const err = await res.json().catch(() => ({ detail: "promote 失败" }));
@@ -388,7 +710,12 @@ export function IDEPage() {
           ) : (
             <ul style={{ listStyle: "none", padding: 0, margin: 0, fontSize: 11 }}>
               {recentRuns.slice(0, 10).map((r) => (
-                <li key={r.run_id} style={{ marginBottom: 2, cursor: "pointer" }} onClick={() => { setActiveRun(r); setRightTab("output"); }}>
+                <li
+                  key={r.run_id}
+                  data-testid={`ide-recent-run-${r.run_id}`}
+                  style={{ marginBottom: 2, cursor: "pointer" }}
+                  onClick={() => { setActiveRun(r); setRightTab("output"); }}
+                >
                   <span className={`cc-chip ${r.status === "ok" ? "cc-chip--green" : r.status === "timeout" ? "cc-chip--yellow" : "cc-chip--red"}`} style={{ marginRight: 4 }}>
                     {r.status}
                   </span>
@@ -463,6 +790,17 @@ export function IDEPage() {
                 running={running}
                 onPromote={promoteRun}
                 promoting={promoting}
+                rdpManifestStatus={currentRdpManifestStatus}
+                eligibleRdpManifests={eligibleRdpManifests}
+                selectedRdpPackageId={selectedRdpPackageId}
+                onSelectRdpPackage={setSelectedRdpPackageId}
+                requestedPromotionLabel={requestedPromotionLabel}
+                onSelectPromotionLabel={setRequestedPromotionLabel}
+                rdpManifestDraft={currentRdpManifestDraft}
+                onChangeRdpManifestDraft={updateRdpManifestDraft}
+                rdpManifestCreateStatus={currentRdpManifestCreateStatus}
+                onCreateRdpManifest={createRdpManifest}
+                onOpenRdpWorkbench={() => navigate("/agent-workbench")}
               />
             ) : (
               <CodeGenerationPanel
@@ -553,7 +891,39 @@ function CodeEditor({ code, onChange }: { code: string; onChange: (v: string) =>
   );
 }
 
-function RunOutput({ run, running, onPromote, promoting }: { run: IDERun | null; running: boolean; onPromote: () => void; promoting: boolean }) {
+function RunOutput({
+  run,
+  running,
+  onPromote,
+  promoting,
+  rdpManifestStatus,
+  eligibleRdpManifests,
+  selectedRdpPackageId,
+  onSelectRdpPackage,
+  requestedPromotionLabel,
+  onSelectPromotionLabel,
+  rdpManifestDraft,
+  onChangeRdpManifestDraft,
+  rdpManifestCreateStatus,
+  onCreateRdpManifest,
+  onOpenRdpWorkbench,
+}: {
+  run: IDERun | null;
+  running: boolean;
+  onPromote: () => void;
+  promoting: boolean;
+  rdpManifestStatus: RDPManifestLoadState;
+  eligibleRdpManifests: RDPManifestSummary[];
+  selectedRdpPackageId: string;
+  onSelectRdpPackage: (packageId: string) => void;
+  requestedPromotionLabel: PromotionLabel | "";
+  onSelectPromotionLabel: (label: PromotionLabel | "") => void;
+  rdpManifestDraft: string;
+  onChangeRdpManifestDraft: (draft: string) => void;
+  rdpManifestCreateStatus: RDPManifestCreateState;
+  onCreateRdpManifest: () => void;
+  onOpenRdpWorkbench: () => void;
+}) {
   const [riskPreview, setRiskPreview] = useState<{ trust_level?: string; summary?: string; flags?: any[] } | null>(null);
 
   useEffect(() => {
@@ -582,6 +952,13 @@ function RunOutput({ run, running, onPromote, promoting }: { run: IDERun | null;
     : riskPreview?.trust_level === "high_risk" ? "高风险"
     : riskPreview?.trust_level === "insufficient_data" ? "信息不足"
     : null;
+  const promotionSelectionReady = rdpManifestStatus.state === "ready"
+    && eligibleRdpManifests.some((manifest) => manifest.package_id === selectedRdpPackageId)
+    && Boolean(requestedPromotionLabel);
+  const rdpManifestCreating = rdpManifestCreateStatus.state === "creating";
+  const strippedServerFields = rdpManifestCreateStatus.state === "idle"
+    ? []
+    : rdpManifestCreateStatus.strippedFields;
 
   return (
     <div>
@@ -612,16 +989,147 @@ function RunOutput({ run, running, onPromote, promoting }: { run: IDERun | null;
         </div>
       )}
       {canPromote && (
-        <button
-          type="button"
-          className="cc-btn cc-btn--accent"
-          onClick={onPromote}
-          disabled={promoting}
-          style={{ width: "100%", marginBottom: 8 }}
-          title="把沙箱结果落到 runs/<id> 跑 metrics，进 RunDetail 三联图"
+        <div
+          data-testid="ide-promotion-prerequisites"
+          className="cc-card"
+          style={{ padding: 8, marginBottom: 8, fontSize: 12 }}
         >
-          {promoting ? "promoting..." : "⤴ 提升为正式 Run · 进 /runs/<id>"}
-        </button>
+          <div className="cc-section-title" style={{ fontSize: 11, marginBottom: 6 }}>
+            正式 Run 前置选择
+          </div>
+          {rdpManifestStatus.state === "loading" && (
+            <div data-testid="ide-rdp-loading" className="cc-dim">正在读取当前账户的 RDP 清单…</div>
+          )}
+          {rdpManifestStatus.state === "error" && (
+            <div data-testid="ide-rdp-error" style={{ color: "var(--cc-red, #f55)", marginBottom: 6 }}>
+              RDP 清单读取失败：{rdpManifestStatus.message}
+            </div>
+          )}
+          {rdpManifestStatus.state === "ready" && eligibleRdpManifests.length === 0 && (
+            <div data-testid="ide-rdp-empty" className="cc-dim" style={{ marginBottom: 6 }}>
+              没有同时以 asset_refs 与 run_refs 精确绑定当前 IDE run 的 RDP package。
+            </div>
+          )}
+          {rdpManifestStatus.state === "ready" && eligibleRdpManifests.length > 0 && (
+            <>
+              <label htmlFor="ide-promotion-rdp-package" className="cc-mono cc-dim" style={{ display: "block", fontSize: 11 }}>
+                RDP package（必选）
+              </label>
+              <select
+                id="ide-promotion-rdp-package"
+                data-testid="ide-promotion-rdp-package"
+                className="cc-select cc-select--sm"
+                value={selectedRdpPackageId}
+                onChange={(event) => onSelectRdpPackage(event.target.value)}
+                style={{ width: "100%", margin: "3px 0 7px" }}
+              >
+                <option value="">请选择与当前 run 精确绑定的 package</option>
+                {eligibleRdpManifests.map((manifest) => (
+                  <option key={manifest.package_id} value={manifest.package_id}>
+                    {manifest.package_id}{manifest.research_question ? ` · ${manifest.research_question}` : ""}
+                  </option>
+                ))}
+              </select>
+              <label htmlFor="ide-promotion-label" className="cc-mono cc-dim" style={{ display: "block", fontSize: 11 }}>
+                promotion label（必选）
+              </label>
+              <select
+                id="ide-promotion-label"
+                data-testid="ide-promotion-label"
+                className="cc-select cc-select--sm"
+                value={requestedPromotionLabel}
+                onChange={(event) => onSelectPromotionLabel(event.target.value as PromotionLabel | "")}
+                style={{ width: "100%", margin: "3px 0 7px" }}
+              >
+                <option value="">请选择本次申请标签</option>
+                {PROMOTION_LABEL_OPTIONS.map((label) => (
+                  <option key={label} value={label}>{label}</option>
+                ))}
+              </select>
+            </>
+          )}
+          <div
+            data-testid="ide-rdp-create-panel"
+            style={{
+              borderTop: "1px solid var(--cc-border, rgba(255,255,255,0.08))",
+              marginTop: 8,
+              paddingTop: 8,
+            }}
+          >
+            <label htmlFor="ide-rdp-manifest-draft" className="cc-mono" style={{ display: "block", fontSize: 11, marginBottom: 4 }}>
+              为当前 run 创建 RDP · manifest JSON
+            </label>
+            <div data-testid="ide-rdp-create-guidance" className="cc-dim" style={{ fontSize: 10.5, lineHeight: 1.45, marginBottom: 6 }}>
+              不会自动生成证据。请显式填写 research_question；graph_refs、data_refs、dataset_version_refs、
+              market_data_use_validation_refs、ingestion_skill_refs；mathematical_refs、theory_binding_refs、
+              consistency_check_refs；code_refs、environment_lock_ref、test_refs、honest_n_refs、
+              cost_and_execution_assumptions、known_limits、verifier_verdict_ref；以及 compiler_artifact_refs、
+              mathematical_spine_chain_refs、goal_entrypoint_coverage_refs。引用必须属于当前账户并通过后端当前校验。
+              unverified_residuals 必须显式声明；若为 []，还必须提供 residual_attestation。
+            </div>
+            <div className="cc-dim" style={{ fontSize: 10.5, lineHeight: 1.45, marginBottom: 6 }}>
+              服务器拥有并冻结以下字段，提交前会明确剥离：{RDP_SERVER_OWNED_MANIFEST_FIELDS.join(", ")}。
+              后端将按当前 run 重新绑定并校验；target_runtime 缺省为 offline，强运行态仍需对应审批证据。
+            </div>
+            <textarea
+              id="ide-rdp-manifest-draft"
+              data-testid="ide-rdp-manifest-draft"
+              aria-label="RDP manifest JSON draft"
+              className="cc-input cc-mono"
+              value={rdpManifestDraft}
+              onChange={(event) => onChangeRdpManifestDraft(event.target.value)}
+              disabled={rdpManifestCreating}
+              spellCheck={false}
+              style={{ width: "100%", minHeight: 150, fontSize: 10.5, lineHeight: 1.45, resize: "vertical" }}
+            />
+            {strippedServerFields.length > 0 && (
+              <div data-testid="ide-rdp-stripped-fields" className="cc-dim" style={{ fontSize: 10.5, marginTop: 5 }}>
+                本次提交已剥离服务器字段：{strippedServerFields.join(", ")}
+              </div>
+            )}
+            {rdpManifestCreateStatus.state === "error" && (
+              <div data-testid="ide-rdp-create-error" role="alert" style={{ color: "var(--cc-red, #f55)", fontSize: 11, marginTop: 5 }}>
+                RDP 创建失败：{rdpManifestCreateStatus.message}
+              </div>
+            )}
+            {rdpManifestCreateStatus.state === "success" && (
+              <div data-testid="ide-rdp-create-success" style={{ color: "var(--cc-green, #3a6)", fontSize: 11, marginTop: 5 }}>
+                已创建、重读并精确绑定：{rdpManifestCreateStatus.packageId}
+              </div>
+            )}
+            <button
+              type="button"
+              data-testid="ide-rdp-create"
+              className="cc-btn cc-btn--ghost cc-btn--sm"
+              onClick={onCreateRdpManifest}
+              disabled={rdpManifestCreating}
+              style={{ width: "100%", marginTop: 6 }}
+            >
+              {rdpManifestCreating ? "creating RDP..." : "创建并绑定当前 run 的 RDP"}
+            </button>
+          </div>
+          <div className="cc-dim" style={{ fontSize: 11, marginBottom: 6 }}>
+            此处仅按清单字段筛选绑定关系，不表示已通过校验。提交后，后端会重新执行当前重现回执与证据校验；任一条件不满足都会拒绝提升。
+          </div>
+          <button
+            type="button"
+            className="cc-btn cc-btn--ghost cc-btn--sm"
+            onClick={onOpenRdpWorkbench}
+            style={{ width: "100%", marginBottom: 6 }}
+          >
+            打开研究执行台（管理已有 RDP）
+          </button>
+          <button
+            type="button"
+            className="cc-btn cc-btn--accent"
+            onClick={onPromote}
+            disabled={promoting || !promotionSelectionReady}
+            style={{ width: "100%" }}
+            title="提交后由后端执行当前重现回执与证据校验"
+          >
+            {promoting ? "promoting..." : "⤴ 提交正式 Run 提升申请"}
+          </button>
+        </div>
       )}
       {run.error && (
         <div className="cc-card" style={{ padding: 8, marginBottom: 8, fontSize: 12, color: "var(--cc-red, #f55)" }}>

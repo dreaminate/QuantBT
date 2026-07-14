@@ -19,7 +19,7 @@ import {
 
 /**
  * 模型库注册表（registry · DC §B）：2 列富卡 + stage 胶囊 + 晋级门 + DRILL-IN modal。
- * 晋级门「批准」缺 approver≠creator / reason / risk_restated 时禁止提交（UI 校验，对齐后端 422）。
+ * 晋级门只做 DEMO 表单校验；当前无后端提交端点，任何状态都不报告已提交。
  * Purged-CV / embargo / OOS 切片诚实标注，不渲染成假绿。
  */
 
@@ -206,8 +206,8 @@ function ModelCard({
 }
 
 /**
- * 晋级审批门面板（黄系）。批准须 approver≠creator + reason + risk_restated，
- * 否则禁用提交并列出阻止原因（对齐后端 422）。agent 永不自动。
+ * 晋级审批门面板（黄系）。表单可演示 approver≠creator + reason + risk_restated 校验；
+ * 当前没有晋级提交端点，因此按钮始终 fail closed。agent 永不自动。
  */
 function PromoteGatePanel({
   gate,
@@ -223,42 +223,8 @@ function PromoteGatePanel({
     reason: "",
     riskRestated: false,
   });
-  const [submitted, setSubmitted] = useState(false);
   const blockers = validateApprove(form, creator);
-  const canSubmit = blockers.length === 0;
-
-  if (submitted) {
-    return (
-      <div
-        style={{
-          maxWidth: 560,
-          marginTop: 12,
-          padding: "12px 14px",
-          borderRadius: "var(--desk-radius-lg)",
-          border: "1px solid var(--desk-success)",
-          background: "var(--desk-card)",
-          fontSize: 12,
-          color: "var(--desk-success)",
-        }}
-      >
-        ✓ 晋级请求已提交审批（{gate.modelId} · {STAGE_LABEL[gate.from]} → {STAGE_LABEL[gate.to]}）
-        <button
-          onClick={onCancel}
-          style={{
-            marginLeft: 12,
-            fontFamily: "inherit",
-            fontSize: 11,
-            border: "none",
-            background: "transparent",
-            color: "var(--desk-text-dim)",
-            cursor: "pointer",
-          }}
-        >
-          关闭
-        </button>
-      </div>
-    );
-  }
+  const formValid = blockers.length === 0;
 
   return (
     <div
@@ -337,7 +303,7 @@ function PromoteGatePanel({
       </div>
 
       {/* 阻止原因（诚实展示为什么不能提交） */}
-      {!canSubmit && (
+      {!formValid && (
         <ul
           data-gate-blockers
           style={{
@@ -353,14 +319,20 @@ function PromoteGatePanel({
           ))}
         </ul>
       )}
+      {formValid && (
+        <div
+          data-testid="promote-demo-only"
+          style={{ marginTop: 8, fontSize: 11, color: "var(--desk-warning)", lineHeight: 1.6 }}
+        >
+          DEMO 表单校验通过，但未调用后端晋级端点；registry 状态不会改变。
+        </div>
+      )}
 
       <div style={{ display: "flex", gap: 8, marginTop: 10 }}>
         <button
           data-gate-approve
-          disabled={!canSubmit}
-          onClick={() => {
-            if (canSubmit) setSubmitted(true);
-          }}
+          disabled
+          title="后端晋级提交端点未连接"
           style={{
             fontFamily: "inherit",
             fontSize: 11.5,
@@ -370,11 +342,11 @@ function PromoteGatePanel({
             border: "none",
             background: "var(--desk-warning)",
             color: "var(--desk-accent-ink)",
-            cursor: canSubmit ? "pointer" : "not-allowed",
-            opacity: canSubmit ? 1 : 0.45,
+            cursor: "not-allowed",
+            opacity: 0.45,
           }}
         >
-          ✓ 批准晋级
+          DEMO · 未提交后端
         </button>
         <button
           onClick={onCancel}

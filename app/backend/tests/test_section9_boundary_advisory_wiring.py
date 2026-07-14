@@ -1,4 +1,4 @@
-"""GOAL §9 边界验证器 · advisory-first 生产接线的对抗测试（RULES §2 种坏门必抓 + §3 诚实）。
+"""GOAL §9 边界验证器 · 生产接线的对抗测试（RULES §2 种坏门必抓 + §3 诚实）。
 
 本波把三个原本**零生产 call-site** 的 §9 canonical 边界验证器接到真实 register/admit 路径：
 
@@ -6,11 +6,11 @@
   · validate_factor_generator     → POST /api/factors/mine    （守门指标进生成 fitness / 生成器须命名独立 gatekeeper）
   · validate_strategy_book        → POST /api/strategy/submit_candidate（退役因子被新策略默认采用 → 拒；仅此 sub-criterion，余为 KNOWN_RUN_GAP）
 
-接线是 **advisory-first**：裁决以 `boundary_verdict` 挂到产物响应，**违例不 raise、不拒请求**
-（`enforced=False`）。强制是后续显式决策。
+Factor Library 与 generator 仍是 advisory。Strategy candidate 对能解析到 registry 的退役
+因子执行 pre-write 硬拒；不透明 factor-set ref 保持 `evaluated=False`，不伪造 clean pass。
 
 每个边界配：① 种一个已知违例 → 断言 `boundary_verdict` 抓住（ok=False + 精确 violation code）；
-② clean case → ok=True；③ advisory 不变量 → 违例下请求仍成功（不被拒）。
+② clean case → ok=True；③ 每条边界按其真实 enforcement 状态断言。
 精确 code 断言 + 输入翻转 ok 跟着翻 = 证明 verdict 真携带 validator 输出、不是常量门（不可被 no-op 蒙混）。
 """
 
@@ -180,22 +180,31 @@ def _submit_candidate(client: TestClient, factor_set) -> dict:
     return r.json()
 
 
-def test_strategy_book_retired_factor_default_adoption_flagged_advisory(client):
-    """种坏门：候选（新策略）默认采用一个 RETIRED 注册因子 → boundary_verdict 抓 retired_factor_default_adoption。"""
+def test_strategy_book_retired_factor_default_adoption_rejected_before_write(client):
+    """种坏门：新候选默认采用 RETIRED 因子 → 硬拒且候选账本零写入。"""
 
     fid = _register_factor("RETIRED")
-    body = _submit_candidate(client, [fid])
-    # advisory：候选仍登记、仍止于 paper（不被拒）。
-    assert body["status"] == "candidate" and body["stops_at"] == "paper_desk"
+    response = client.post(
+        "/api/strategy/submit_candidate",
+        json={
+            "run_id": "cand_s9",
+            "name": "cand_s9",
+            "destination": "paper_desk",
+            "factor_set": [fid],
+        },
+    )
+    assert response.status_code == 422, response.text
+    body = response.json()["detail"]
+    assert body["rejected"] is True
     bv = body["boundary_verdict"]
     assert bv["boundary"] == "strategy_book_§9"
-    assert bv["advisory"] is True and bv["enforced"] is False
+    assert bv["advisory"] is False and bv["enforced"] is True
     assert bv["ok"] is False
     assert "retired_factor_default_adoption" in _codes(bv)
     assert fid in bv["resolved_factor_refs"]
-    # 解析到了真实因子 → 这条边界确实被评估（evaluated），不是「没查」。
     assert bv["evaluated"] is True
     assert bv["unresolved_factor_refs"] == []
+    assert app_main.CANDIDATE_POOL.list_candidates() == []
 
 
 def test_strategy_book_qualified_factor_passes(client):
@@ -205,6 +214,7 @@ def test_strategy_book_qualified_factor_passes(client):
     body = _submit_candidate(client, [fid])
     bv = body["boundary_verdict"]
     assert bv["ok"] is True
+    assert bv["advisory"] is False and bv["enforced"] is True
     assert bv["evaluated"] is True
     assert "retired_factor_default_adoption" not in _codes(bv)
     assert fid in bv["resolved_factor_refs"]

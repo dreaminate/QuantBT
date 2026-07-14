@@ -70,7 +70,7 @@ docker compose up -d
 | M7 信号融合 | `app.signals.fuse_signals` | `signals/` | （后端逻辑层） |
 | M8 组合 | `app.portfolio.optimize_portfolio` | `portfolio/` | （后端逻辑层） |
 | M9.1 执行抽象 | `app.execution.{BacktestVenue,PaperVenue,GenericTradingVenue}` | `execution/` | – |
-| M9.3 Binance 实盘 | `BinanceSpotVenue` / `BinanceUMFuturesVenue` + `BinanceUserDataStream` | `execution/binance_*.py` | `POST /api/security/keystore` `POST /api/security/network` |
+| M9.3 Binance 受控执行 | `LeasedBinanceVenue` + `BinanceSpotVenue` / `BinanceUMFuturesVenue`；正式成交由 30 秒 REST reconciler 回查 `/order` + trades 并写 formal/HMAC ledger | `execution/leased_binance.py` `execution/binance_*.py` | 仅通过 copy-trade guarded chain；`BinanceUserDataStream` 仍是未接线实验原型，不计入 runtime/health 能力 |
 | M10 评估 | `app.eval.{cscv_pbo,deflated_sharpe_ratio,bootstrap_sharpe_ci,brinson_attribution}` | `eval/` | （写进 run.metrics） |
 | M11 因子生命周期 | `LifecycleManager` | `factor_factory/lifecycle.py` | – |
 | M12 实验追踪 | `ExperimentStore` `RunStore` `ModelRegistry` | `experiments/` | `GET /api/experiments` `/runs` `/models` |
@@ -134,7 +134,7 @@ curl http://127.0.0.1:8000/api/data/export -o my-quantbt-export.tar.gz
 
 1. **`frontend-run-detail/src/pages/RunDetailPage.tsx` 冻结**：仅排版/显示逻辑/加字段
 2. **A股不接券商**：禁止 `import vnpy/easytrader/ths_trader` 等
-3. **Binance API key 必须 keyring 加密 + 启动时校验无 withdraw 权限**
+3. **Binance API key 必须经认证 UI/API 写入持久加密 keystore；mainnet 激活必须证明无 withdraw/transfer 权限**
 
 ---
 

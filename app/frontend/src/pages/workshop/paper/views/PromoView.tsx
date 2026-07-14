@@ -9,7 +9,7 @@ import {
   approveHint,
   promoFactors,
 } from "../mock";
-import { type PaperRun, type PromoCheck } from "../types";
+import { type ApproveState, type PaperRun, type PromoCheck } from "../types";
 
 /**
  * 晋升通道 · live ladder 的 paper→OBSERVATION 段。
@@ -24,6 +24,9 @@ export function PromoView({
   run,
   promoted,
   onApprove,
+  liveMode = false,
+  liveRunName,
+  liveEligible,
   liveChecks,
   approving,
   approveError,
@@ -32,17 +35,48 @@ export function PromoView({
   promoted: boolean;
   /** 提交真审批：携验证背书 + 理由（INV-5）。失败由页面经 approveError 显式回传。 */
   onApprove: (form: { endorsementRef: string; reason: string }) => void;
+  /** true 时整页只显示 promotion API 返回的状态；未返回的生命周期数据显式标不可用。 */
+  liveMode?: boolean;
+  liveRunName?: string;
+  liveEligible?: boolean;
   liveChecks?: PromoCheck[] | null;
   /** 审批请求在途（禁用按钮，防重复提交）。 */
   approving?: boolean;
   /** 审批失败的诚实错误文案（缺背书/未审批/网络失败）；非空即显红，不伪成功。 */
   approveError?: string | null;
 }) {
-  const stages = promoStages(promoted);
-  const elig = promoEligibility(run, promoted);
-  const checks = liveChecks ?? promoChecks(run);
-  const aState = approveState(run, promoted);
-  const factors = promoFactors(promoted);
+  const stages = liveMode ? [] : promoStages(promoted);
+  const elig = liveMode
+    ? {
+        eligible: liveEligible === true,
+        label: promoted
+          ? "后端状态：已晋级"
+          : liveEligible
+            ? "后端判定：满足晋级条件"
+            : "后端判定：不满足晋级条件",
+        color: promoted || liveEligible ? ("up" as const) : ("warn" as const),
+      }
+    : promoEligibility(run, promoted);
+  const checks = liveMode ? (liveChecks ?? []) : promoChecks(run);
+  const aState: ApproveState = liveMode
+    ? promoted
+      ? "promoted"
+      : liveEligible
+        ? "ready"
+        : "blocked"
+    : approveState(run, promoted);
+  const factors = liveMode ? [] : promoFactors(promoted);
+  const displayName = liveMode ? (liveRunName ?? "后端未返回 run 名称") : run.name;
+  const approvalLabel = liveMode
+    ? aState === "promoted"
+      ? "✓ 已晋级 · 后端已记录"
+      : "⤴ 人工审批晋级"
+    : approveLabel(aState);
+  const approvalHint = liveMode
+    ? aState === "promoted"
+      ? "晋级状态来自后端 promotion 记录"
+      : "Agent 永不自动 · 须人工 + 验证背书（INV-5）"
+    : approveHint(aState);
 
   // 审批表单：验证背书 + 理由（INV-5 必填，前端硬拦空值）。
   const [endorsementRef, setEndorsementRef] = useState("");
@@ -83,16 +117,25 @@ export function PromoView({
   return (
     <div style={{ padding: "18px 22px", maxWidth: 860 }}>
       <div style={{ fontSize: 12, color: "var(--desk-text-muted)", marginBottom: 4 }}>
-        晋升通道 · 模拟实盘是因子/策略上真钱前的最后一道闸
+        {liveMode
+          ? "晋升通道 · 后端 promotion gate"
+          : "晋升通道 · 模拟实盘是因子/策略上真钱前的最后一道闸"}
       </div>
       <div style={{ fontSize: 11, color: "var(--desk-text-faint)", marginBottom: 16 }}>
-        与因子台五态机联动：<span style={{ color: "var(--desk-warning)" }}>PROBATION</span> → 模拟实盘 1
-        月年化 &gt; 基准 → <span style={{ color: "var(--desk-success)" }}>OBSERVATION</span>。Agent
-        永不自动晋级，须人工审批 + 验证背书（INV-5）。
+        {liveMode ? (
+          "合格、晋级和门检查均来自 /api/paper/*；接口未返回的生命周期与因子引用不会用 mock 补齐。"
+        ) : (
+          <>
+            与因子台五态机联动：<span style={{ color: "var(--desk-warning)" }}>PROBATION</span> → 模拟实盘 1
+            月年化 &gt; 基准 → <span style={{ color: "var(--desk-success)" }}>OBSERVATION</span>。Agent
+            永不自动晋级，须人工审批 + 验证背书（INV-5）。
+          </>
+        )}
       </div>
 
       {/* pipeline */}
       <div
+        data-testid={liveMode ? "live-promo-lifecycle-unavailable" : undefined}
         style={{
           background: "var(--desk-card)",
           border: "1px solid var(--desk-border)",
@@ -101,99 +144,108 @@ export function PromoView({
           marginBottom: 14,
         }}
       >
-        <div style={{ display: "flex", alignItems: "stretch" }}>
-          {stages.map((s) => {
-            const nodeStyle: React.CSSProperties = s.current
-              ? {
-                  background: "var(--desk-success)",
-                  color: "var(--desk-accent-ink)",
-                  boxShadow: "0 0 0 4px var(--desk-minimap-view)",
-                }
-              : s.reached
+        {liveMode ? (
+          <div style={{ color: "var(--desk-text-muted)", fontSize: 11.5, lineHeight: 1.6 }}>
+            promotion API 未返回生命周期阶段引用；此处不显示 mock 阶段。
+          </div>
+        ) : (
+          <div style={{ display: "flex", alignItems: "stretch" }}>
+            {stages.map((s) => {
+              const nodeStyle: React.CSSProperties = s.current
                 ? {
-                    background: "transparent",
-                    color: "var(--desk-success)",
-                    border: "2px solid var(--desk-success)",
+                    background: "var(--desk-success)",
+                    color: "var(--desk-accent-ink)",
+                    boxShadow: "0 0 0 4px var(--desk-minimap-view)",
                   }
-                : {
-                    background: "var(--desk-node-head)",
-                    color: "var(--desk-text-faint)",
-                    border: "2px solid var(--desk-border-strong)",
-                  };
-            return (
-              <div
-                key={s.label}
-                style={{
-                  flex: 1,
-                  display: "flex",
-                  flexDirection: "column",
-                  alignItems: "center",
-                  position: "relative",
-                }}
-              >
+                : s.reached
+                  ? {
+                      background: "transparent",
+                      color: "var(--desk-success)",
+                      border: "2px solid var(--desk-success)",
+                    }
+                  : {
+                      background: "var(--desk-node-head)",
+                      color: "var(--desk-text-faint)",
+                      border: "2px solid var(--desk-border-strong)",
+                    };
+              return (
                 <div
+                  key={s.label}
                   style={{
-                    width: 34,
-                    height: 34,
-                    borderRadius: "50%",
+                    flex: 1,
                     display: "flex",
+                    flexDirection: "column",
                     alignItems: "center",
-                    justifyContent: "center",
-                    fontSize: 14,
-                    fontWeight: 700,
-                    ...nodeStyle,
+                    position: "relative",
                   }}
                 >
-                  {s.glyph}
-                </div>
-                <div
-                  style={{
-                    fontSize: 11,
-                    color: s.reached || s.current ? "var(--desk-success)" : "var(--desk-text-faint)",
-                    fontWeight: s.current ? 700 : 500,
-                    marginTop: 8,
-                  }}
-                >
-                  {s.label}
-                </div>
-                <div
-                  style={{
-                    fontSize: 9,
-                    color: "var(--desk-text-faint)",
-                    marginTop: 3,
-                    textAlign: "center",
-                    lineHeight: 1.4,
-                    minHeight: 26,
-                  }}
-                >
-                  {s.sub}
-                </div>
-                {s.hasArrow && (
                   <div
                     style={{
-                      position: "absolute",
-                      top: 16,
-                      right: -1,
-                      width: "calc(100% - 8px)",
-                      height: 1,
-                      transform: "translateX(50%)",
-                      background: s.arrowReached
-                        ? "var(--desk-success)"
-                        : "var(--desk-border-strong)",
+                      width: 34,
+                      height: 34,
+                      borderRadius: "50%",
+                      display: "flex",
+                      alignItems: "center",
+                      justifyContent: "center",
+                      fontSize: 14,
+                      fontWeight: 700,
+                      ...nodeStyle,
                     }}
-                  />
-                )}
-              </div>
-            );
-          })}
-        </div>
+                  >
+                    {s.glyph}
+                  </div>
+                  <div
+                    style={{
+                      fontSize: 11,
+                      color:
+                        s.reached || s.current
+                          ? "var(--desk-success)"
+                          : "var(--desk-text-faint)",
+                      fontWeight: s.current ? 700 : 500,
+                      marginTop: 8,
+                    }}
+                  >
+                    {s.label}
+                  </div>
+                  <div
+                    style={{
+                      fontSize: 9,
+                      color: "var(--desk-text-faint)",
+                      marginTop: 3,
+                      textAlign: "center",
+                      lineHeight: 1.4,
+                      minHeight: 26,
+                    }}
+                  >
+                    {s.sub}
+                  </div>
+                  {s.hasArrow && (
+                    <div
+                      style={{
+                        position: "absolute",
+                        top: 16,
+                        right: -1,
+                        width: "calc(100% - 8px)",
+                        height: 1,
+                        transform: "translateX(50%)",
+                        background: s.arrowReached
+                          ? "var(--desk-success)"
+                          : "var(--desk-border-strong)",
+                      }}
+                    />
+                  )}
+                </div>
+              );
+            })}
+          </div>
+        )}
       </div>
 
       {/* gate check */}
       <div
         style={{
           background: "var(--desk-card)",
-          border: "1px solid var(--desk-success)",
+          border: `1px solid ${color(elig.color)}`,
           borderRadius: "var(--desk-radius-lg)",
           overflow: "hidden",
           marginBottom: 14,
@@ -203,14 +255,14 @@ export function PromoView({
           style={{
             padding: "12px 15px",
             background: "var(--desk-node-head)",
-            borderBottom: "1px solid var(--desk-success)",
+            borderBottom: `1px solid ${color(elig.color)}`,
             display: "flex",
             alignItems: "center",
             gap: 9,
           }}
         >
-          <span style={{ color: "var(--desk-success)" }}>⤴</span>
-          <span style={{ fontWeight: 700 }}>晋级判定 · {run.name}</span>
+          <span style={{ color: color(elig.color) }}>⤴</span>
+          <span style={{ fontWeight: 700 }}>晋级判定 · {displayName}</span>
           <span
             style={{
               marginLeft: "auto",
@@ -226,16 +278,22 @@ export function PromoView({
         </div>
         <div style={{ padding: "13px 15px" }}>
           <div style={{ display: "flex", flexDirection: "column", gap: 8, marginBottom: 13 }}>
-            {checks.map((c) => (
-              <div
-                key={c.t}
-                style={{ display: "flex", alignItems: "center", gap: 9, fontSize: 12 }}
-              >
-                <span style={{ color: color(c.color), fontSize: 13 }}>{c.icon}</span>
-                <span style={{ color: "var(--desk-text-dim)", flex: 1 }}>{c.t}</span>
-                <span style={{ color: color(c.color), fontSize: 11 }}>{c.v}</span>
-              </div>
-            ))}
+            {checks.length ? (
+              checks.map((c) => (
+                <div
+                  key={c.t}
+                  style={{ display: "flex", alignItems: "center", gap: 9, fontSize: 12 }}
+                >
+                  <span style={{ color: color(c.color), fontSize: 13 }}>{c.icon}</span>
+                  <span style={{ color: "var(--desk-text-dim)", flex: 1 }}>{c.t}</span>
+                  <span style={{ color: color(c.color), fontSize: 11 }}>{c.v}</span>
+                </div>
+              ))
+            ) : (
+              <span style={{ color: "var(--desk-text-muted)", fontSize: 11.5 }}>
+                后端未返回晋级检查；未显示 mock 检查
+              </span>
+            )}
           </div>
           {/* 审批表单（INV-5）：验证背书 + 理由必填，仅 ready 态显示（已晋级/blocked 不可填）。 */}
           {aState === "ready" && (
@@ -292,12 +350,12 @@ export function PromoView({
                   : approveStyle),
               }}
             >
-              {approving ? "审批提交中…" : approveLabel(aState)}
+              {approving ? "审批提交中…" : approvalLabel}
             </button>
             <span style={{ fontSize: 10, color: "var(--desk-text-faint)" }}>
               {aState === "ready" && formIncomplete
                 ? "须填验证背书 + 理由（INV-5：裸翻必拒）"
-                : approveHint(aState)}
+                : approvalHint}
             </span>
           </div>
           {/* §3 失败诚实呈现：缺背书/未审批/网络失败 → 显红，绝不伪「已晋级」绿。
@@ -324,6 +382,7 @@ export function PromoView({
 
       {/* factor lifecycle linkage */}
       <div
+        data-testid={liveMode ? "live-promo-factors-unavailable" : undefined}
         style={{
           background: "var(--desk-card)",
           border: "1px solid var(--desk-border)",
@@ -342,54 +401,69 @@ export function PromoView({
             marginBottom: 11,
           }}
         >
-          本策略因子 · 生命周期联动
-          <span style={{ marginLeft: "auto", fontSize: 10, color: "var(--desk-ghost)" }}>
-            去因子台 ↗
-          </span>
+          {liveMode ? "因子生命周期引用" : "本策略因子 · 生命周期联动"}
+          {!liveMode && (
+            <span style={{ marginLeft: "auto", fontSize: 10, color: "var(--desk-ghost)" }}>
+              去因子台 ↗
+            </span>
+          )}
         </div>
-        <div style={{ display: "flex", flexDirection: "column" }}>
-          {factors.map((f) => (
-            <div
-              key={f.id}
-              style={{
-                display: "flex",
-                alignItems: "center",
-                gap: 10,
-                padding: "7px 0",
-                borderBottom: "1px solid var(--desk-border-soft)",
-              }}
-            >
-              <span
+        {liveMode ? (
+          <div style={{ color: "var(--desk-text-muted)", fontSize: 11.5, lineHeight: 1.6 }}>
+            promotion API 未返回因子 ID、权重、贡献或生命周期引用；此处不显示 mock 因子。
+          </div>
+        ) : (
+          <div style={{ display: "flex", flexDirection: "column" }}>
+            {factors.map((f) => (
+              <div
+                key={f.id}
                 style={{
-                  width: 7,
-                  height: 7,
-                  borderRadius: "50%",
-                  flex: "none",
-                  background: color(f.stateColor),
-                }}
-              />
-              <span style={{ flex: 1.6, color: "var(--desk-text-soft)", fontSize: 11.5 }}>
-                {f.id}
-              </span>
-              <span style={{ flex: 1, fontSize: 10, color: color(f.stateColor) }}>{f.state}</span>
-              <span
-                style={{ flex: 1, textAlign: "right", fontSize: 10.5, color: "var(--desk-text-muted)" }}
-              >
-                权重 {f.w}
-              </span>
-              <span
-                style={{
-                  flex: 0.9,
-                  textAlign: "right",
-                  fontSize: 10.5,
-                  color: color(f.contribColor),
+                  display: "flex",
+                  alignItems: "center",
+                  gap: 10,
+                  padding: "7px 0",
+                  borderBottom: "1px solid var(--desk-border-soft)",
                 }}
               >
-                {f.contrib}
-              </span>
-            </div>
-          ))}
-        </div>
+                <span
+                  style={{
+                    width: 7,
+                    height: 7,
+                    borderRadius: "50%",
+                    flex: "none",
+                    background: color(f.stateColor),
+                  }}
+                />
+                <span style={{ flex: 1.6, color: "var(--desk-text-soft)", fontSize: 11.5 }}>
+                  {f.id}
+                </span>
+                <span style={{ flex: 1, fontSize: 10, color: color(f.stateColor) }}>
+                  {f.state}
+                </span>
+                <span
+                  style={{
+                    flex: 1,
+                    textAlign: "right",
+                    fontSize: 10.5,
+                    color: "var(--desk-text-muted)",
+                  }}
+                >
+                  权重 {f.w}
+                </span>
+                <span
+                  style={{
+                    flex: 0.9,
+                    textAlign: "right",
+                    fontSize: 10.5,
+                    color: color(f.contribColor),
+                  }}
+                >
+                  {f.contrib}
+                </span>
+              </div>
+            ))}
+          </div>
+        )}
       </div>
     </div>
   );

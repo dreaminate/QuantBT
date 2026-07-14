@@ -26,7 +26,9 @@ from app.research_os import (
     ModelRecertificationRecord,
     ModelRiskTier,
     PersistentCompilerIRStore,
+    PersistentEntrypointEvidenceRegistry,
     PersistentGoalEntrypointCoverageRegistry,
+    PersistentGoalValidationReceiptRegistry,
     PersistentModelGovernanceRegistry,
     RecertificationTrigger,
     ResearchGraphStore,
@@ -34,6 +36,8 @@ from app.research_os import (
     model_passport_from_dict,
     validate_model_promotion,
 )
+from app.research_os.goal_proof_ledger import GoalProofLedger
+from app.research_os.ref_resolution import build_real_ref_resolver
 from app.training import TrainingRequest, TrainingService, schema_drift
 
 
@@ -154,15 +158,70 @@ def _clear_dependency_overrides():
     app_main.app.dependency_overrides.pop(require_user_dependency, None)
 
 
+def _patch_goal_proof_stores(tmp_path, monkeypatch, *, graph=None):  # noqa: ANN001
+    graph = graph if graph is not None else ResearchGraphStore()
+    proof_ledger = GoalProofLedger(tmp_path / "goal_proof_ledger")
+    compiler = PersistentCompilerIRStore(
+        tmp_path / "compiler_ir.jsonl",
+        proof_ledger=proof_ledger,
+        legacy_read_only=True,
+    )
+    validations = PersistentGoalValidationReceiptRegistry(
+        tmp_path / "goal_validation_receipts.jsonl",
+        proof_ledger=proof_ledger,
+        legacy_read_only=True,
+    )
+    evidence = PersistentEntrypointEvidenceRegistry(
+        tmp_path / "entrypoint_evidence.jsonl",
+        research_graph_store=graph,
+        compiler_store=compiler,
+        validation_receipt_registry=validations,
+        proof_ledger=proof_ledger,
+        legacy_read_only=True,
+    )
+    coverage = PersistentGoalEntrypointCoverageRegistry(
+        tmp_path / "goal_entrypoint_coverage.jsonl",
+        proof_ledger=proof_ledger,
+        legacy_read_only=True,
+    )
+    coverage.set_ref_resolver(
+        build_real_ref_resolver(
+            research_graph_store=graph,
+            lifecycle_registry=None,
+            governance_registry=None,
+            rag_index=None,
+            spine_chain_registry=None,
+            compiler_store=compiler,
+            goal_validation_receipt_registry=validations,
+            platform_source_evidence_registry=evidence,
+        )
+    )
+    monkeypatch.setattr(app_main, "RESEARCH_GRAPH_STORE", graph)
+    monkeypatch.setattr(app_main, "COMPILER_IR_STORE", compiler)
+    monkeypatch.setattr(app_main, "GOAL_VALIDATION_RECEIPT_REGISTRY", validations)
+    monkeypatch.setattr(app_main, "ENTRYPOINT_EVIDENCE_REGISTRY", evidence)
+    monkeypatch.setattr(app_main, "GOAL_ENTRYPOINT_COVERAGE_REGISTRY", coverage)
+    return graph
+
+
+def _assert_ir_receipt_evidence(qro, ir, *expected_refs: str) -> None:  # noqa: ANN001
+    assert len(ir.validation_refs) == 1
+    assert ir.validation_refs[0].startswith("goal_validation_receipt:")
+    receipt = app_main.GOAL_VALIDATION_RECEIPT_REGISTRY.receipt(
+        ir.validation_refs[0],
+        owner_user_id=qro.owner,
+    )
+    assert receipt.subject_qro_refs == (qro.qro_id,)
+    assert receipt.graph_command_refs == ir.graph_command_refs
+    assert receipt.outcome == "passed"
+    for ref in expected_refs:
+        assert ref in receipt.evidence_refs
+
+
 def _client_with_model_governance_registry(tmp_path, monkeypatch):
     registry = PersistentModelGovernanceRegistry(tmp_path / "model_governance.jsonl")
-    graph = ResearchGraphStore()
-    compiler_store = PersistentCompilerIRStore(tmp_path / "compiler_ir.jsonl")
-    coverage_store = PersistentGoalEntrypointCoverageRegistry(tmp_path / "goal_entrypoint_coverage.jsonl")
     monkeypatch.setattr(app_main, "MODEL_GOVERNANCE_REGISTRY", registry)
-    monkeypatch.setattr(app_main, "RESEARCH_GRAPH_STORE", graph)
-    monkeypatch.setattr(app_main, "COMPILER_IR_STORE", compiler_store)
-    monkeypatch.setattr(app_main, "GOAL_ENTRYPOINT_COVERAGE_REGISTRY", coverage_store)
+    _patch_goal_proof_stores(tmp_path, monkeypatch)
     app_main.app.dependency_overrides[require_user_dependency] = lambda: SimpleNamespace(
         username="u1",
         user_id="u1",
@@ -172,18 +231,13 @@ def _client_with_model_governance_registry(tmp_path, monkeypatch):
 
 def _client_with_model_registry(tmp_path, monkeypatch):
     registry = PersistentModelGovernanceRegistry(tmp_path / "model_governance.jsonl")
-    graph = ResearchGraphStore()
-    compiler_store = PersistentCompilerIRStore(tmp_path / "compiler_ir.jsonl")
-    coverage_store = PersistentGoalEntrypointCoverageRegistry(tmp_path / "goal_entrypoint_coverage.jsonl")
     model_registry = ModelRegistry(
         tmp_path / "experiments",
         gate_service=_approval_service(tmp_path),
         model_governance_registry=registry,
     )
     monkeypatch.setattr(app_main, "MODEL_GOVERNANCE_REGISTRY", registry)
-    monkeypatch.setattr(app_main, "RESEARCH_GRAPH_STORE", graph)
-    monkeypatch.setattr(app_main, "COMPILER_IR_STORE", compiler_store)
-    monkeypatch.setattr(app_main, "GOAL_ENTRYPOINT_COVERAGE_REGISTRY", coverage_store)
+    _patch_goal_proof_stores(tmp_path, monkeypatch)
     monkeypatch.setattr(app_main, "MODEL_REGISTRY", model_registry)
     app_main.app.dependency_overrides[require_user_dependency] = lambda: SimpleNamespace(
         username="u1",
@@ -484,7 +538,9 @@ def test_model_governance_api_records_passport_summary(tmp_path, monkeypatch):
 
 def test_model_governance_api_records_monitoring_profile_and_recertification(tmp_path, monkeypatch):
     client, registry = _client_with_model_governance_registry(tmp_path, monkeypatch)
-    passport = registry.record_passport(_passport())
+    passport = registry.record_passport(
+        _passport(), owner_user_id="u1", recorded_by="u1"
+    )
 
     profile = client.post(
         "/api/research-os/model_governance/monitoring_profiles",
@@ -510,7 +566,11 @@ def test_model_governance_api_records_monitoring_profile_and_recertification(tmp
     )
     assert monitoring_qro.input_contract["metric_ref_count"] == 1
     assert monitoring_qro.output_contract["monitoring_profile_id"] == profile_body["monitoring_profile_id"]
-    assert passport.passport_id in monitoring_ir.validation_refs
+    _assert_ir_receipt_evidence(
+        monitoring_qro,
+        monitoring_ir,
+        passport.passport_id,
+    )
 
     recertification = client.post(
         "/api/research-os/model_governance/recertification_records",
@@ -534,7 +594,11 @@ def test_model_governance_api_records_monitoring_profile_and_recertification(tmp
     )
     assert recertification_qro.input_contract["evidence_ref_count"] == 1
     assert recertification_qro.output_contract["decision"] == "accepted"
-    assert passport.passport_id in recertification_ir.validation_refs
+    _assert_ir_receipt_evidence(
+        recertification_qro,
+        recertification_ir,
+        passport.passport_id,
+    )
 
     summary = client.get("/api/research-os/model_governance/summary")
     assert summary.status_code == 200
@@ -547,7 +611,9 @@ def test_model_governance_api_records_monitoring_profile_and_recertification(tmp
 
 def test_model_governance_api_records_artifact_inspection(tmp_path, monkeypatch):
     client, registry = _client_with_model_governance_registry(tmp_path, monkeypatch)
-    passport = registry.record_passport(_passport())
+    passport = registry.record_passport(
+        _passport(), owner_user_id="u1", recorded_by="u1"
+    )
 
     response = client.post(
         "/api/research-os/model_governance/artifact_inspections",
@@ -576,7 +642,7 @@ def test_model_governance_api_records_artifact_inspection(tmp_path, monkeypatch)
     )
     assert qro.output_contract["checks_count"] == 1
     assert qro.output_contract["limitations_count"] == 1
-    assert passport.passport_id in ir.validation_refs
+    _assert_ir_receipt_evidence(qro, ir, passport.passport_id)
 
     summary = client.get("/api/research-os/model_governance/summary")
     assert summary.status_code == 200
@@ -588,7 +654,9 @@ def test_model_governance_api_records_artifact_inspection(tmp_path, monkeypatch)
 def test_model_governance_api_rejects_recertification_without_declared_trigger(tmp_path, monkeypatch):
     client, registry = _client_with_model_governance_registry(tmp_path, monkeypatch)
     passport = registry.record_passport(
-        _passport(recertification_triggers=(RecertificationTrigger.MATERIAL_MODEL_CHANGE,))
+        _passport(recertification_triggers=(RecertificationTrigger.MATERIAL_MODEL_CHANGE,)),
+        owner_user_id="u1",
+        recorded_by="u1",
     )
 
     response = client.post(
@@ -639,7 +707,8 @@ def test_model_predict_api_requires_stage_monitoring_and_records_invocation(tmp_
             artifact_manifest=(artifact,),
             feature_refs=("f1", "f2"),
             validation_dossier_ref="validation_dossier:momentum:v1",
-        )
+        ),
+        owner_user_id="u1",
     )
     registry.record_artifact_inspection(
         _inspection(
@@ -648,7 +717,8 @@ def test_model_predict_api_requires_stage_monitoring_and_records_invocation(tmp_
             inspection_ref=inspection_ref,
             inspection_mode="metadata_only_no_deserialize",
             checks=("sha256_match", "serialized_deserialize_skipped"),
-        )
+        ),
+        owner_user_id="u1",
     )
     profile = registry.record_monitoring_profile(
         ModelMonitoringProfile(
@@ -657,15 +727,19 @@ def test_model_predict_api_requires_stage_monitoring_and_records_invocation(tmp_
             metric_refs=("metric:prediction_error",),
             schedule_ref="schedule:per_batch",
             alert_policy_ref="alert:prediction_drift",
-        )
+        ),
+        owner_user_id="u1",
     )
     version = model_registry.register_version(
         "momentum",
         artifact_path=str(artifact_path),
         model_passport_ref=passport.passport_id,
         validation_dossier_ref="validation_dossier:momentum:v1",
+        owner_user_id="u1",
     )
-    model_registry._apply_stage_unchecked("momentum", version.version, "staging")
+    model_registry._apply_stage_unchecked(
+        "momentum", version.version, "staging", owner_user_id="u1"
+    )
 
     response = client.post(
         f"/api/models/momentum/versions/{version.version}/predict",
@@ -704,7 +778,7 @@ def test_model_predict_api_requires_stage_monitoring_and_records_invocation(tmp_
     )
     assert qro.input_contract["row_count"] == 1
     assert qro.output_contract["prediction_hash"] == body["prediction_hash"]
-    assert passport.passport_id in ir.validation_refs
+    _assert_ir_receipt_evidence(qro, ir, passport.passport_id)
     contracts = client.get("/api/factors/signal_contracts").json()
     assert any(item["signal_ref"] == body["signal_ref"] for item in contracts)
 
@@ -733,7 +807,9 @@ def test_model_predict_api_rejects_incomplete_signal_protocol(tmp_path, monkeypa
             artifact_manifest=(artifact,),
             feature_refs=("f1", "f2"),
             validation_dossier_ref="validation_dossier:momentum:v1",
-        )
+        ),
+        owner_user_id="u1",
+        recorded_by="u1",
     )
     registry.record_artifact_inspection(
         _inspection(
@@ -741,7 +817,8 @@ def test_model_predict_api_rejects_incomplete_signal_protocol(tmp_path, monkeypa
             artifact_hash=artifact_hash,
             inspection_ref=inspection_ref,
             inspection_mode="metadata_only_no_deserialize",
-        )
+        ),
+        owner_user_id="u1",
     )
     registry.record_monitoring_profile(
         ModelMonitoringProfile(
@@ -750,15 +827,20 @@ def test_model_predict_api_rejects_incomplete_signal_protocol(tmp_path, monkeypa
             metric_refs=("metric:prediction_error",),
             schedule_ref="schedule:per_batch",
             alert_policy_ref="alert:prediction_drift",
-        )
+        ),
+        owner_user_id="u1",
+        recorded_by="u1",
     )
     version = model_registry.register_version(
         "momentum",
         artifact_path=str(artifact_path),
         model_passport_ref=passport.passport_id,
         validation_dossier_ref="validation_dossier:momentum:v1",
+        owner_user_id="u1",
     )
-    model_registry._apply_stage_unchecked("momentum", version.version, "staging")
+    model_registry._apply_stage_unchecked(
+        "momentum", version.version, "staging", owner_user_id="u1"
+    )
 
     response = client.post(
         f"/api/models/momentum/versions/{version.version}/predict",
@@ -796,7 +878,9 @@ def test_model_predict_api_rejects_dev_stage_without_serving_invocation(tmp_path
         direct_load=False,
     )
     passport = registry.record_passport(
-        _passport(artifact_manifest=(artifact,), feature_refs=("f1", "f2"))
+        _passport(artifact_manifest=(artifact,), feature_refs=("f1", "f2")),
+        owner_user_id="u1",
+        recorded_by="u1",
     )
     registry.record_artifact_inspection(
         _inspection(
@@ -804,13 +888,15 @@ def test_model_predict_api_rejects_dev_stage_without_serving_invocation(tmp_path
             artifact_hash=artifact_hash,
             inspection_ref=inspection_ref,
             inspection_mode="metadata_only_no_deserialize",
-        )
+        ),
+        owner_user_id="u1",
     )
     model_registry.register_version(
         "momentum",
         artifact_path=str(artifact_path),
         model_passport_ref=passport.passport_id,
         validation_dossier_ref=passport.validation_dossier_ref,
+        owner_user_id="u1",
     )
 
     response = client.post(
@@ -830,7 +916,9 @@ def test_model_registry_promotion_requires_recorded_model_passport_ref(tmp_path)
         gate_service=_approval_service(tmp_path),
         model_governance_registry=registry,
     )
-    model_registry.register_version("momentum", artifact_path="a.safetensors")
+    model_registry.register_version(
+        "momentum", artifact_path="a.safetensors", owner_user_id="alice"
+    )
 
     with pytest.raises(GateStateError, match="model_passport_ref"):
         model_registry.promote(
@@ -841,6 +929,7 @@ def test_model_registry_promotion_requires_recorded_model_passport_ref(tmp_path)
             verification_record_id="verdict:001",
             evidence=_promotion_evidence(),
             strategy_goal_ref="theme",
+            owner_user_id="alice",
         )
 
 
@@ -850,9 +939,11 @@ def test_model_registry_promotion_rejects_unrecorded_model_passport_ref(tmp_path
         gate_service=_approval_service(tmp_path),
         model_governance_registry=PersistentModelGovernanceRegistry(tmp_path / "model_governance.jsonl"),
     )
-    model_registry.register_version("momentum", artifact_path="a.safetensors")
+    model_registry.register_version(
+        "momentum", artifact_path="a.safetensors", owner_user_id="alice"
+    )
 
-    with pytest.raises(GateStateError, match="未登记"):
+    with pytest.raises(GateStateError, match="未为 owner=alice 登记"):
         model_registry.promote(
             "momentum",
             1,
@@ -862,18 +953,25 @@ def test_model_registry_promotion_rejects_unrecorded_model_passport_ref(tmp_path
             evidence=_promotion_evidence(),
             strategy_goal_ref="theme",
             model_passport_ref="model_passport:missing",
+            owner_user_id="alice",
         )
 
 
 def test_model_registry_promotion_rejects_mismatched_model_passport_ref(tmp_path):
     registry = PersistentModelGovernanceRegistry(tmp_path / "model_governance.jsonl")
-    passport = registry.record_passport(_passport(model_version_ref="model_version:other:v1"))
+    passport = registry.record_passport(
+        _passport(model_version_ref="model_version:other:v1"),
+        owner_user_id="alice",
+        recorded_by="alice",
+    )
     model_registry = ModelRegistry(
         tmp_path / "experiments",
         gate_service=_approval_service(tmp_path),
         model_governance_registry=registry,
     )
-    model_registry.register_version("momentum", artifact_path="a.safetensors")
+    model_registry.register_version(
+        "momentum", artifact_path="a.safetensors", owner_user_id="alice"
+    )
 
     with pytest.raises(GateStateError, match="不匹配"):
         model_registry.promote(
@@ -885,18 +983,25 @@ def test_model_registry_promotion_rejects_mismatched_model_passport_ref(tmp_path
             evidence=_promotion_evidence(),
             strategy_goal_ref="theme",
             model_passport_ref=passport.passport_id,
+            owner_user_id="alice",
         )
 
 
 def test_model_registry_promotion_records_passport_and_dossier_refs_in_gate_evidence(tmp_path):
     registry = PersistentModelGovernanceRegistry(tmp_path / "model_governance.jsonl")
-    passport = registry.record_passport(_passport(model_version_ref="model_version:momentum:v1"))
+    passport = registry.record_passport(
+        _passport(model_version_ref="model_version:momentum:v1"),
+        owner_user_id="alice",
+        recorded_by="alice",
+    )
     model_registry = ModelRegistry(
         tmp_path / "experiments",
         gate_service=_approval_service(tmp_path),
         model_governance_registry=registry,
     )
-    model_registry.register_version("momentum", artifact_path="a.safetensors")
+    model_registry.register_version(
+        "momentum", artifact_path="a.safetensors", owner_user_id="alice"
+    )
 
     gate = model_registry.promote(
         "momentum",
@@ -907,6 +1012,7 @@ def test_model_registry_promotion_records_passport_and_dossier_refs_in_gate_evid
         evidence=_promotion_evidence(),
         strategy_goal_ref="theme",
         model_passport_ref=passport.passport_id,
+        owner_user_id="alice",
     )
 
     assert gate.decision == "pending"
@@ -916,7 +1022,9 @@ def test_model_registry_promotion_records_passport_and_dossier_refs_in_gate_evid
 
 def test_model_promote_api_requires_and_accepts_model_passport_ref(tmp_path, monkeypatch):
     client, registry, model_registry = _client_with_model_registry(tmp_path, monkeypatch)
-    model_registry.register_version("momentum", artifact_path="a.safetensors")
+    model_registry.register_version(
+        "momentum", artifact_path="a.safetensors", owner_user_id="u1"
+    )
 
     missing = client.post(
         "/api/models/momentum/promote",
@@ -931,7 +1039,11 @@ def test_model_promote_api_requires_and_accepts_model_passport_ref(tmp_path, mon
     assert missing.status_code == 422
     assert "model_passport_ref" in missing.text
 
-    passport = registry.record_passport(_passport(model_version_ref="model_version:momentum:v1"))
+    passport = registry.record_passport(
+        _passport(model_version_ref="model_version:momentum:v1"),
+        owner_user_id="u1",
+        recorded_by="u1",
+    )
     accepted = client.post(
         "/api/models/momentum/promote",
         json={
@@ -952,11 +1064,18 @@ def test_model_promote_api_requires_and_accepts_model_passport_ref(tmp_path, mon
 
 
 def test_model_promote_api_records_model_qro_without_raw_evidence(tmp_path, monkeypatch):
-    graph = ResearchGraphStore()
     client, registry, model_registry = _client_with_model_registry(tmp_path, monkeypatch)
-    monkeypatch.setattr(app_main, "RESEARCH_GRAPH_STORE", graph)
-    model_registry.register_version("momentum", artifact_path="a.safetensors")
-    passport = registry.record_passport(_passport(model_version_ref="model_version:momentum:v1"))
+    graph = app_main.RESEARCH_GRAPH_STORE
+    model_registry.register_version(
+        "momentum",
+        artifact_path="a.safetensors",
+        owner_user_id="u1",
+    )
+    passport = registry.record_passport(
+        _passport(model_version_ref="model_version:momentum:v1"),
+        owner_user_id="u1",
+        recorded_by="u1",
+    )
 
     response = client.post(
         "/api/models/momentum/promote",
@@ -999,8 +1118,12 @@ def test_model_promote_api_records_model_qro_without_raw_evidence(tmp_path, monk
     assert ir.source_qro_refs == (body["qro_id"],)
     assert ir.graph_command_refs == (body["research_graph_command_id"],)
     assert ir.permission_ref == "model_registry.promote:user_manual"
-    assert "validation_dossier:momentum:v1" in ir.validation_refs
-    assert passport.passport_id in ir.validation_refs
+    _assert_ir_receipt_evidence(
+        qro,
+        ir,
+        "validation_dossier:momentum:v1",
+        passport.passport_id,
+    )
     assert compiler_pass.entry_source == "api"
     assert compiler_pass.actor_source == "user_manual"
     assert coverage.entrypoint_ref == "api:models.promote"
@@ -1026,11 +1149,16 @@ def test_model_promote_api_records_model_qro_without_raw_evidence(tmp_path, monk
 
 
 def test_model_promote_api_records_rejected_model_qro_without_raw_gaps(tmp_path, monkeypatch):
-    graph = ResearchGraphStore()
     client, registry, model_registry = _client_with_model_registry(tmp_path, monkeypatch)
-    monkeypatch.setattr(app_main, "RESEARCH_GRAPH_STORE", graph)
-    model_registry.register_version("momentum", artifact_path="a.safetensors")
-    passport = registry.record_passport(_passport(model_version_ref="model_version:momentum:v1"))
+    graph = app_main.RESEARCH_GRAPH_STORE
+    model_registry.register_version(
+        "momentum", artifact_path="a.safetensors", owner_user_id="u1"
+    )
+    passport = registry.record_passport(
+        _passport(model_version_ref="model_version:momentum:v1"),
+        owner_user_id="u1",
+        recorded_by="u1",
+    )
 
     rejected = client.post(
         "/api/models/momentum/promote",
@@ -1080,11 +1208,18 @@ def test_model_promote_api_records_rejected_model_qro_without_raw_gaps(tmp_path,
 
 
 def test_model_promotion_approval_records_model_qro_without_reason_payload(tmp_path, monkeypatch):
-    graph = ResearchGraphStore()
     client, registry, model_registry = _client_with_model_registry(tmp_path, monkeypatch)
-    monkeypatch.setattr(app_main, "RESEARCH_GRAPH_STORE", graph)
-    model_registry.register_version("momentum", artifact_path="a.safetensors")
-    passport = registry.record_passport(_passport(model_version_ref="model_version:momentum:v1"))
+    graph = app_main.RESEARCH_GRAPH_STORE
+    model_registry.register_version(
+        "momentum",
+        artifact_path="a.safetensors",
+        owner_user_id="u1",
+    )
+    passport = registry.record_passport(
+        _passport(model_version_ref="model_version:momentum:v1"),
+        owner_user_id="u1",
+        recorded_by="u1",
+    )
     opened = client.post(
         "/api/models/momentum/promote",
         json={
@@ -1100,6 +1235,20 @@ def test_model_promotion_approval_records_model_qro_without_reason_payload(tmp_p
     assert opened.status_code == 200, opened.text
     gate_id = opened.json()["gate_id"]
 
+    granted = client.post(
+        f"/api/models/momentum/gates/{gate_id}/reviewer-grants",
+        json={
+            "reviewer_user_id": "reviewer-u2",
+            "permissions": ["view", "approve", "reject"],
+            "expires_at_utc": "2099-01-01T00:00:00+00:00",
+        },
+    )
+    assert granted.status_code == 200, granted.text
+    app_main.app.dependency_overrides[require_user_dependency] = lambda: SimpleNamespace(
+        username="reviewer-u2",
+        user_id="reviewer-u2",
+    )
+
     approved = client.post(
         f"/api/models/momentum/gates/{gate_id}/approve",
         json={
@@ -1112,7 +1261,7 @@ def test_model_promotion_approval_records_model_qro_without_reason_payload(tmp_p
     assert approved.status_code == 200, approved.text
     body = approved.json()
     assert body["decision"] == "approved"
-    assert body["side_effect_ref"] == "stage:momentum:v1:staging"
+    assert body["side_effect_ref"] == "stage:u1:momentum:v1:staging"
     assert body["qro_id"]
     assert body["research_graph_command_id"]
     assert body["compiler_ir_ref"]
@@ -1123,7 +1272,9 @@ def test_model_promotion_approval_records_model_qro_without_reason_payload(tmp_p
     assert qro.output_contract["gate_id"] == gate_id
     assert qro.output_contract["reason_hash"]
     assert qro.output_contract["risk_restated_hash"]
-    assert qro.output_contract["side_effect_ref"] == "stage:momentum:v1:staging"
+    assert qro.output_contract["side_effect_ref"] == "stage:u1:momentum:v1:staging"
+    assert qro.output_contract["approved_by"] == "reviewer-u2"
+    assert qro.owner == "u1"
     qro_contract_text = str(qro.input_contract) + str(qro.output_contract)
     assert "Reviewed validation dossier" not in qro_contract_text
     assert "Model remains offline" not in qro_contract_text
@@ -1135,8 +1286,12 @@ def test_model_promotion_approval_records_model_qro_without_reason_payload(tmp_p
     assert ir.source_qro_refs == (body["qro_id"],)
     assert ir.graph_command_refs == (body["research_graph_command_id"],)
     assert ir.permission_ref == "model_registry.promotion.approve:user_manual"
-    assert "validation_dossier:momentum:v1" in ir.validation_refs
-    assert passport.passport_id in ir.validation_refs
+    _assert_ir_receipt_evidence(
+        qro,
+        ir,
+        "validation_dossier:momentum:v1",
+        passport.passport_id,
+    )
     assert compiler_pass.entry_source == "api"
     assert coverage.entrypoint_ref == "api:models.gates.approve"
     compiled_text = str(ir.__dict__) + str(compiler_pass.__dict__) + str(coverage.__dict__)
@@ -1218,6 +1373,7 @@ def test_schema_change_event_ref_binds_model_and_both_fingerprints():
 
 _SCHEMA_MODEL = "ridge"
 _SCHEMA_MODEL_CARD_REF = f"model_type_card:{_SCHEMA_MODEL}"
+_SCHEMA_OWNER = "schema-owner"
 
 
 def _schema_panel(features, *, n: int = 240, seed: int = 0) -> pd.DataFrame:
@@ -1255,14 +1411,18 @@ def _expected_change_event_ref(prev_fp: str, features) -> str:
 def test_first_governed_training_run_records_schema_fingerprint(tmp_path):
     """① schema fingerprint 真被算出并钉进 passport（producer 落账）。"""
     svc, registry = _schema_service(tmp_path)
-    job = svc.train_now(_schema_request(["f1", "f2"]), _schema_panel(["f1", "f2"]))
+    job = svc.train_now(
+        _schema_request(["f1", "f2"]),
+        _schema_panel(["f1", "f2"]),
+        owner_user_id=_SCHEMA_OWNER,
+    )
     assert job.status == "succeeded", job.error
-    passport = registry.passports()[0]
+    passport = registry.passports(owner_user_id=_SCHEMA_OWNER)[0]
     expected = schema_drift.compute_dataset_schema(
         _schema_panel(["f1", "f2"]), ["f1", "f2"], "label"
     ).fingerprint
     assert passport.dataset_schema_fingerprint == expected
-    assert registry.change_events(passport.passport_id) == ()  # 首跑无 schema 变更事件
+    assert registry.change_events(passport.passport_id, owner_user_id=_SCHEMA_OWNER) == ()
 
 
 def test_training_pre_run_gate_blocks_data_schema_change_without_recert(tmp_path):
@@ -1274,43 +1434,65 @@ def test_training_pre_run_gate_blocks_data_schema_change_without_recert(tmp_path
     """
     svc, registry = _schema_service(tmp_path)
 
-    job1 = svc.train_now(_schema_request(["f1", "f2"]), _schema_panel(["f1", "f2"]))
+    job1 = svc.train_now(
+        _schema_request(["f1", "f2"]),
+        _schema_panel(["f1", "f2"]),
+        owner_user_id=_SCHEMA_OWNER,
+    )
     assert job1.status == "succeeded", job1.error
-    assert len(registry.passports()) == 1
+    assert len(registry.passports(owner_user_id=_SCHEMA_OWNER)) == 1
 
     # run 2：同模型，加列 f3 → schema 指纹变、无 DATA_SCHEMA_CHANGE 重认证记录 → 必须 fail-closed
-    job2 = svc.train_now(_schema_request(["f1", "f2", "f3"]), _schema_panel(["f1", "f2", "f3"]))
+    job2 = svc.train_now(
+        _schema_request(["f1", "f2", "f3"]),
+        _schema_panel(["f1", "f2", "f3"]),
+        owner_user_id=_SCHEMA_OWNER,
+    )
     assert job2.status == "failed"
     assert job2.error.startswith("DataSchemaRecertificationRequired"), job2.error
     assert "DATA_SCHEMA_CHANGE" in job2.error or "data_schema_change" in job2.error
     # 训练在门前被挡：result.json 未写出、未登记第二份 passport / 第二个版本
     job2_dir = svc._jobs.job_dir(job2.job_id)
     assert not (job2_dir / "result.json").exists()
-    assert len(registry.passports()) == 1
-    assert len(svc._models.list_versions(_SCHEMA_MODEL)) == 1
+    assert len(registry.passports(owner_user_id=_SCHEMA_OWNER)) == 1
+    assert len(svc._models.list_versions(_SCHEMA_MODEL, owner_user_id=_SCHEMA_OWNER)) == 1
 
 
 def test_training_passes_when_data_schema_unchanged(tmp_path):
     """变异三态·态二：schema 未变（同特征/同 dtype、数据值不同）→ 正常放行、无重认证事件。"""
     svc, registry = _schema_service(tmp_path)
-    job1 = svc.train_now(_schema_request(["f1", "f2"]), _schema_panel(["f1", "f2"], seed=1))
+    job1 = svc.train_now(
+        _schema_request(["f1", "f2"]),
+        _schema_panel(["f1", "f2"], seed=1),
+        owner_user_id=_SCHEMA_OWNER,
+    )
     assert job1.status == "succeeded", job1.error
-    job2 = svc.train_now(_schema_request(["f1", "f2"]), _schema_panel(["f1", "f2"], seed=2))
+    job2 = svc.train_now(
+        _schema_request(["f1", "f2"]),
+        _schema_panel(["f1", "f2"], seed=2),
+        owner_user_id=_SCHEMA_OWNER,
+    )
     assert job2.status == "succeeded", job2.error
 
-    passports = registry.passports()
+    passports = registry.passports(owner_user_id=_SCHEMA_OWNER)
     assert len(passports) == 2
     assert passports[0].dataset_schema_fingerprint == passports[1].dataset_schema_fingerprint
-    assert registry.change_events(passports[1].passport_id) == ()  # 无 schema 变更 → 无事件
+    assert registry.change_events(
+        passports[1].passport_id, owner_user_id=_SCHEMA_OWNER
+    ) == ()
 
 
 def test_training_passes_after_data_schema_recertification(tmp_path):
     """变异三态·态三 + ②自动事件发射：schema 变后补一条 accepted DATA_SCHEMA_CHANGE 重认证 →
     下一 run 放行、训练后 passport 带 DATA_SCHEMA_CHANGE change_event + 绑定清账记录。"""
     svc, registry = _schema_service(tmp_path)
-    job1 = svc.train_now(_schema_request(["f1", "f2"]), _schema_panel(["f1", "f2"]))
+    job1 = svc.train_now(
+        _schema_request(["f1", "f2"]),
+        _schema_panel(["f1", "f2"]),
+        owner_user_id=_SCHEMA_OWNER,
+    )
     assert job1.status == "succeeded", job1.error
-    p1 = registry.passports()[0]
+    p1 = registry.passports(owner_user_id=_SCHEMA_OWNER)[0]
 
     now_fp, change_event_ref = _expected_change_event_ref(p1.dataset_schema_fingerprint, ["f1", "f2", "f3"])
     recert = registry.record_recertification_record(
@@ -1322,18 +1504,26 @@ def test_training_passes_after_data_schema_recertification(tmp_path):
             evidence_refs=("validation_dossier:recert:schema:v2",),
             decision="accepted",
             recorded_by="reviewer",
-        )
+        ),
+        owner_user_id=_SCHEMA_OWNER,
+        recorded_by="reviewer",
     )
 
-    job2 = svc.train_now(_schema_request(["f1", "f2", "f3"]), _schema_panel(["f1", "f2", "f3"]))
+    job2 = svc.train_now(
+        _schema_request(["f1", "f2", "f3"]),
+        _schema_panel(["f1", "f2", "f3"]),
+        owner_user_id=_SCHEMA_OWNER,
+    )
     assert job2.status == "succeeded", job2.error
 
-    passports = registry.passports()
+    passports = registry.passports(owner_user_id=_SCHEMA_OWNER)
     assert len(passports) == 2
     p2 = passports[1]
     assert p2.dataset_schema_fingerprint == now_fp
     # ② DATA_SCHEMA_CHANGE change_event 真被发射并登记在 P2 上
-    assert registry.change_events(p2.passport_id) == (RecertificationTrigger.DATA_SCHEMA_CHANGE.value,)
+    assert registry.change_events(p2.passport_id, owner_user_id=_SCHEMA_OWNER) == (
+        RecertificationTrigger.DATA_SCHEMA_CHANGE.value,
+    )
     # 清账记录被绑回 passport（record_passport §15 门据此放行）
     assert recert.recertification_record_id in p2.recertification_records
 
@@ -1341,9 +1531,13 @@ def test_training_passes_after_data_schema_recertification(tmp_path):
 def test_training_gate_not_cleared_by_mismatched_change_event_ref(tmp_path):
     """对抗·防绕过：重认证记录的 change_event_ref 对不上本次 schema 迁移 → 门不认、仍 fail-closed。"""
     svc, registry = _schema_service(tmp_path)
-    job1 = svc.train_now(_schema_request(["f1", "f2"]), _schema_panel(["f1", "f2"]))
+    job1 = svc.train_now(
+        _schema_request(["f1", "f2"]),
+        _schema_panel(["f1", "f2"]),
+        owner_user_id=_SCHEMA_OWNER,
+    )
     assert job1.status == "succeeded", job1.error
-    p1 = registry.passports()[0]
+    p1 = registry.passports(owner_user_id=_SCHEMA_OWNER)[0]
 
     # 一条 trigger 对、decision 对，但 change_event_ref 指向别的迁移 → 不能清本次的账
     registry.record_recertification_record(
@@ -1355,21 +1549,31 @@ def test_training_gate_not_cleared_by_mismatched_change_event_ref(tmp_path):
             evidence_refs=("validation_dossier:recert:wrong",),
             decision="accepted",
             recorded_by="reviewer",
-        )
+        ),
+        owner_user_id=_SCHEMA_OWNER,
+        recorded_by="reviewer",
     )
 
-    job2 = svc.train_now(_schema_request(["f1", "f2", "f3"]), _schema_panel(["f1", "f2", "f3"]))
+    job2 = svc.train_now(
+        _schema_request(["f1", "f2", "f3"]),
+        _schema_panel(["f1", "f2", "f3"]),
+        owner_user_id=_SCHEMA_OWNER,
+    )
     assert job2.status == "failed"
     assert job2.error.startswith("DataSchemaRecertificationRequired"), job2.error
-    assert len(registry.passports()) == 1
+    assert len(registry.passports(owner_user_id=_SCHEMA_OWNER)) == 1
 
 
 def test_training_gate_not_cleared_by_rejected_recertification(tmp_path):
     """对抗·防绕过：change_event_ref 对上，但 decision=rejected（未清账）→ 门仍 fail-closed。"""
     svc, registry = _schema_service(tmp_path)
-    job1 = svc.train_now(_schema_request(["f1", "f2"]), _schema_panel(["f1", "f2"]))
+    job1 = svc.train_now(
+        _schema_request(["f1", "f2"]),
+        _schema_panel(["f1", "f2"]),
+        owner_user_id=_SCHEMA_OWNER,
+    )
     assert job1.status == "succeeded", job1.error
-    p1 = registry.passports()[0]
+    p1 = registry.passports(owner_user_id=_SCHEMA_OWNER)[0]
 
     _now_fp, change_event_ref = _expected_change_event_ref(p1.dataset_schema_fingerprint, ["f1", "f2", "f3"])
     registry.record_recertification_record(
@@ -1381,22 +1585,32 @@ def test_training_gate_not_cleared_by_rejected_recertification(tmp_path):
             evidence_refs=("validation_dossier:recert:rejected",),
             decision="rejected",
             recorded_by="reviewer",
-        )
+        ),
+        owner_user_id=_SCHEMA_OWNER,
+        recorded_by="reviewer",
     )
 
-    job2 = svc.train_now(_schema_request(["f1", "f2", "f3"]), _schema_panel(["f1", "f2", "f3"]))
+    job2 = svc.train_now(
+        _schema_request(["f1", "f2", "f3"]),
+        _schema_panel(["f1", "f2", "f3"]),
+        owner_user_id=_SCHEMA_OWNER,
+    )
     assert job2.status == "failed"
     assert job2.error.startswith("DataSchemaRecertificationRequired"), job2.error
-    assert len(registry.passports()) == 1
+    assert len(registry.passports(owner_user_id=_SCHEMA_OWNER)) == 1
 
 
 def test_training_gate_baseline_ignores_fingerprintless_passport(tmp_path):
     """对抗·防 fail-open：在 producer 基线之后塞一份【无 schema 指纹】的 passport（如手动 REST 登记）
     不能把基线抹掉——下一 run schema 变仍以最近【带指纹】的 passport 为基线、照常 fail-closed。"""
     svc, registry = _schema_service(tmp_path)
-    job1 = svc.train_now(_schema_request(["f1", "f2"]), _schema_panel(["f1", "f2"]))
+    job1 = svc.train_now(
+        _schema_request(["f1", "f2"]),
+        _schema_panel(["f1", "f2"]),
+        owner_user_id=_SCHEMA_OWNER,
+    )
     assert job1.status == "succeeded", job1.error
-    assert registry.passports()[0].dataset_schema_fingerprint
+    assert registry.passports(owner_user_id=_SCHEMA_OWNER)[0].dataset_schema_fingerprint
 
     # 同模型卡、但无 dataset_schema_fingerprint 的 passport 成为「最新」一份
     registry.record_passport(
@@ -1404,11 +1618,17 @@ def test_training_gate_baseline_ignores_fingerprintless_passport(tmp_path):
             model_version_ref="model_version:ridge:manual",
             model_type_card_ref=_SCHEMA_MODEL_CARD_REF,
             training_run_ref="training_run:manual",
-        )
+        ),
+        owner_user_id=_SCHEMA_OWNER,
+        recorded_by=_SCHEMA_OWNER,
     )
-    assert registry.passports()[-1].dataset_schema_fingerprint == ""
+    assert registry.passports(owner_user_id=_SCHEMA_OWNER)[-1].dataset_schema_fingerprint == ""
 
     # run 2 加列 f3 → 基线仍是 P1（带指纹），无 recert → 仍阻断
-    job2 = svc.train_now(_schema_request(["f1", "f2", "f3"]), _schema_panel(["f1", "f2", "f3"]))
+    job2 = svc.train_now(
+        _schema_request(["f1", "f2", "f3"]),
+        _schema_panel(["f1", "f2", "f3"]),
+        owner_user_id=_SCHEMA_OWNER,
+    )
     assert job2.status == "failed"
     assert job2.error.startswith("DataSchemaRecertificationRequired"), job2.error

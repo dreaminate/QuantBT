@@ -6,8 +6,6 @@ T5 honest-N 改小→拒 / T6 真信号→放行 / T12 幂等门后副作用 / T
 
 from __future__ import annotations
 
-from types import SimpleNamespace
-
 import numpy as np
 import pytest
 
@@ -22,6 +20,20 @@ from app.eval.bootstrap import bootstrap_sharpe_ci
 from app.eval.dsr import deflated_sharpe_ratio
 from app.experiments.store import ModelRegistry
 from app.lineage.ledger import Ledger, LedgerEntry
+from app.research_os import (
+    DependencyKind,
+    ModelArtifactFormat,
+    ModelArtifactManifestEntry,
+    ModelArtifactSource,
+    ModelGovernancePassport,
+    ModelRiskTier,
+    PersistentModelGovernanceRegistry,
+    RecertificationTrigger,
+    SafeLoadingPolicy,
+)
+
+
+_OWNER_USER_ID = "test-owner"
 
 
 def _svc(tmp_path, **kw):
@@ -50,13 +62,71 @@ def _open_conf(svc, *, created_by="alice", evidence=_DEFAULT, vrid="v-1", to_sta
                          strategy_goal_ref=goal)
 
 
-class _ModelGovernanceFixture:
-    def passport(self, passport_ref: str):
-        return SimpleNamespace(
-            passport_id=passport_ref,
-            model_version_ref="m:v2",
+def _governed_registry(tmp_path, gate_service):
+    governance = PersistentModelGovernanceRegistry(
+        tmp_path / "audit" / "model_governance.jsonl"
+    )
+    registry = ModelRegistry(
+        tmp_path / "experiments",
+        gate_service=gate_service,
+        model_governance_registry=governance,
+    )
+    evidence = registry.model_recertification_evidence_registry
+    vendor = evidence.record_dependency_content(
+        owner_user_id=_OWNER_USER_ID,
+        dependency_kind=DependencyKind.VENDOR,
+        dependency_ref="package:test-model-runtime",
+        content=b"test-model-runtime==1\n",
+        resolver_ref="test-lock:vendor:v1",
+        recorded_by="test-fixture",
+    )
+    foundation = evidence.record_dependency_content(
+        owner_user_id=_OWNER_USER_ID,
+        dependency_kind=DependencyKind.FOUNDATION_MODEL,
+        dependency_ref="foundation:test-model",
+        content=b"test-foundation-model-v1\n",
+        resolver_ref="test-lock:foundation:v1",
+        recorded_by="test-fixture",
+    )
+    passport = governance.record_passport(
+        ModelGovernancePassport(
+            model_version_ref="model_version:m:v2",
+            model_type_card_ref="model_type_card:m",
+            training_plan_ref="training_plan:test-m-v2",
+            training_run_ref="training_run:test-m-v2",
+            model_risk_tier=ModelRiskTier.MEDIUM,
+            materiality="approval gate regression fixture",
+            intended_use=("approval gate regression",),
+            prohibited_use=("unapproved live trading",),
+            dataset_refs=("dataset:test",),
+            feature_refs=("feature:test",),
+            label_refs=("label:test",),
+            training_code_hash="sha256:test-training-code",
+            artifact_manifest=(
+                ModelArtifactManifestEntry(
+                    artifact_ref="artifact:m:v2",
+                    uri="registry://models/m/v2/model.safetensors",
+                    artifact_format=ModelArtifactFormat.SAFE_TENSORS,
+                    source=ModelArtifactSource.PROJECT_PRODUCED,
+                    content_hash="sha256:test-artifact",
+                    producer_run_ref="training_run:test-m-v2",
+                    sandbox_inspection_ref="artifact_inspection:m:v2",
+                ),
+            ),
+            safe_loading_policy=SafeLoadingPolicy(
+                sandboxed_load_inspect=True,
+                torch_weights_only=True,
+            ),
+            vendor_dependency_refs=(vendor.fingerprint_ref,),
+            foundation_model_dependency_refs=(foundation.fingerprint_ref,),
+            monitoring_requirements=("test drift monitor",),
+            recertification_triggers=tuple(RecertificationTrigger),
             validation_dossier_ref="validation_dossier:m:v2",
-        )
+        ),
+        owner_user_id=_OWNER_USER_ID,
+        recorded_by="test-fixture",
+    )
+    return registry, passport
 
 
 # ── T1 · 噪声 → PBO≈1/DSR≈0 → 三角不同向 → 门必拒 ─────────────────────────────────
@@ -250,19 +320,29 @@ def test_resume_after_crash_no_double_execute():
 # ── 复核 #17 · ModelRegistry 经门正路：approve_promotion 真翻 stage ──────────────
 def test_registry_approve_flips_stage(tmp_path):
     svc = _svc(tmp_path)
-    reg = ModelRegistry(tmp_path, gate_service=svc, model_governance_registry=_ModelGovernanceFixture())
-    reg.register_version("m", artifact_path="a.pkl")
-    reg.register_version("m", artifact_path="b.pkl")
+    reg, passport = _governed_registry(tmp_path, svc)
+    reg.register_version("m", artifact_path="a.pkl", owner_user_id=_OWNER_USER_ID)
+    reg.register_version("m", artifact_path="b.pkl", owner_user_id=_OWNER_USER_ID)
     gate = reg.promote("m", 2, "production", created_by="alice", verification_record_id="v",
                        evidence=_good_evidence(), strategy_goal_ref="theme",
-                       model_passport_ref="model_passport:m:v2")
+                       model_passport_ref=passport.passport_id,
+                       owner_user_id=_OWNER_USER_ID)
     assert gate.decision == "pending"
-    reg.approve_promotion(gate.gate_id, approver="bob", reason="独立复核一致三角同向适用域已核可上")
-    assert any(v.version == 2 and v.stage == "production" for v in reg.list_versions("m")), \
+    reg.approve_promotion(
+        gate.gate_id,
+        model_id="m",
+        owner_user_id=_OWNER_USER_ID,
+        approver="bob",
+        reason="独立复核一致三角同向适用域已核可上",
+    )
+    assert any(
+        v.version == 2 and v.stage == "production"
+        for v in reg.list_versions("m", owner_user_id=_OWNER_USER_ID)
+    ), \
         "approve_promotion 后 stage 未真翻到 production（gate→registry 执行断链，门坏）"
     # 侧门关闭：apply_stage 不可直翻 production
     with pytest.raises(GateStateError):
-        reg.apply_stage("m", 1, "production")
+        reg.apply_stage("m", 1, "production", owner_user_id=_OWNER_USER_ID)
 
 
 # ── T15 · 裁决措辞：证据充分/不足 + 适用域 + 未验证；禁可信/安全/保证 ────────────────
@@ -288,9 +368,9 @@ def test_boilerplate_reason_rejected():
 # ── ModelRegistry.promote 接审批门：production 经门、rejected 不翻 stage ──────────
 def test_registry_promote_through_gate(tmp_path):
     svc = _svc(tmp_path)
-    reg = ModelRegistry(tmp_path, gate_service=svc, model_governance_registry=_ModelGovernanceFixture())
-    reg.register_version("m", artifact_path="a.pkl")
-    reg.register_version("m", artifact_path="b.pkl")
+    reg, passport = _governed_registry(tmp_path, svc)
+    reg.register_version("m", artifact_path="a.pkl", owner_user_id=_OWNER_USER_ID)
+    reg.register_version("m", artifact_path="b.pkl", owner_user_id=_OWNER_USER_ID)
     # 缺要件 → GateRejection，stage 不翻
     res = reg.promote(
         "m",
@@ -298,11 +378,15 @@ def test_registry_promote_through_gate(tmp_path):
         "production",
         created_by="alice",
         evidence=_good_evidence(pbo=0.9),
-        model_passport_ref="model_passport:m:v2",
+        model_passport_ref=passport.passport_id,
+        owner_user_id=_OWNER_USER_ID,
     )
     from app.approval.schema import GateRejection
     assert isinstance(res, GateRejection) and res.gap_list
-    assert all(v.stage != "production" for v in reg.list_versions("m")), "被拒却翻了 stage（门坏）"
+    assert all(
+        v.stage != "production"
+        for v in reg.list_versions("m", owner_user_id=_OWNER_USER_ID)
+    ), "被拒却翻了 stage（门坏）"
 
 
 # —— helper：每条用例独立 tmp 目录 ——

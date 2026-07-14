@@ -13,6 +13,7 @@ from __future__ import annotations
 
 import threading
 import time
+from datetime import UTC, datetime
 
 import pytest
 
@@ -23,6 +24,16 @@ from app.agent.replay.store import FixtureStore, ReplayMiss
 from app.dag import DAGDefinition, DAGTask, register_op, run_dag
 from app.dag.kernel import DurableExecutor
 from app.jobs import InMemoryJobStore
+from app.lineage.ids import content_hash
+from app.llm.call_record import (
+    CallRecordKind,
+    CallStatus,
+    LLMCallRecord,
+    ReplayState,
+    make_call_id,
+    seal_record,
+)
+from app.llm.call_record_store import LLMCallRecordStore
 from app.schemas import JobProgress, JobRecord
 
 
@@ -258,23 +269,100 @@ class _SpyLLM(LLMClient):
 
     def __init__(self) -> None:
         self.calls = 0
+        self.last_record: LLMCallRecord | None = None
+        self._owner = ""
+        self._seal: bytes | None = None
+        self._sink = None
+
+    def enable_audit(self, *, owner_user_id: str, seal_secret: bytes, record_sink=None) -> None:
+        self._owner = owner_user_id
+        self._seal = seal_secret
+        self._sink = record_sink
 
     def chat(self, messages, *, tools=None, model=None, temperature=0.2):  # noqa: ARG002
         self.calls += 1
-        return LLMResponse(content="hello-world", tool_calls=[])
+        response = LLMResponse(content="hello-world", tool_calls=[])
+        if self._seal is not None:
+            invocation = f"spy-origin-{self.calls}"
+            now = datetime.now(UTC).isoformat()
+            prompt_hash = content_hash({"messages": [m.content for m in messages], "tools": tools})
+            response_digest = content_hash({"content": response.content, "tool_calls": []})
+            common = dict(
+                provider="spy",
+                model="spy-model-20240101",
+                auth_ref="secretref://spy/spy",
+                replay_state=ReplayState.LIVE.value,
+                owner_user_id=self._owner,
+                workflow_id="spy-origin",
+                invocation_id=invocation,
+                routing_policy_ref="routing:runtime:spy-test",
+                routing_policy_state="runtime_digest",
+                prompt_digest=prompt_hash,
+                prompt_hash=prompt_hash,
+                tool_schema_hash=content_hash(tools or []),
+                response_digest=response_digest,
+                response_ref=f"llm_response:{response_digest}",
+                started_at=now,
+                finished_at=now,
+                latency_ms=0.0,
+                cost={
+                    "status": "unavailable", "currency": "USD", "amount": None,
+                    "source": "none", "reason": "provider_cost_not_reported",
+                },
+                status=CallStatus.OK.value,
+            )
+            records = []
+            for kind in (CallRecordKind.ATTEMPT.value, CallRecordKind.TERMINAL.value):
+                record = LLMCallRecord(
+                    **common,
+                    record_kind=kind,
+                    call_id=make_call_id(
+                        prompt_digest="", provider="", model="", role="", session_id="", seq=1,
+                        owner_user_id=self._owner, workflow_id="spy-origin",
+                        invocation_id=invocation, record_kind=kind, attempt_no=1,
+                    ),
+                )
+                record.seal = seal_record(record, self._seal)
+                if self._sink is not None:
+                    self._sink(record)
+                records.append(record)
+            self.last_record = records[-1]
+        return response
 
 
 def test_agent_replay_zero_llm_calls_byte_identical(tmp_path):
     """record 一遍 → replay 整 turn：inner LLM 调用 0 次、turn 逐字段一致（R11/durable≠reproducible）。"""
     store = FixtureStore(tmp_path / "fx")
+    audit_store = LLMCallRecordStore(tmp_path / "audit" / "llm.jsonl")
     inner1 = _SpyLLM()
-    rec = RecordingLLMClient(inner1, store, mode="record", run_id="agent-1")
+    inner1.enable_audit(
+        owner_user_id="user:kernel-replay", seal_secret=audit_store.seal_secret,
+        record_sink=audit_store.append,
+    )
+    rec = RecordingLLMClient(
+        inner1,
+        store,
+        mode="record",
+        run_id="agent-1",
+        owner_user_id="user:kernel-replay",
+        seal_secret=audit_store.seal_secret,
+    )
     turn1 = AgentRuntime(rec).run("hello")
     assert inner1.calls == 1
     assert turn1.final_message == "hello-world"
 
     inner2 = _SpyLLM()
-    rep = RecordingLLMClient(inner2, store, mode="replay", run_id="agent-1")
+    rep = RecordingLLMClient(
+        inner2,
+        store,
+        mode="replay",
+        run_id="agent-1",
+        owner_user_id="user:kernel-replay",
+        workflow_id="kernel-replay",
+        invocation_id_factory=lambda: "kernel-replay-1",
+        record_sink=audit_store.append,
+        seal_secret=audit_store.seal_secret,
+    )
     turn2 = AgentRuntime(rep).run("hello")
     assert inner2.calls == 0  # 重放绝不重跑 LLM
     assert turn2.final_message == turn1.final_message
@@ -284,11 +372,35 @@ def test_agent_replay_zero_llm_calls_byte_identical(tmp_path):
 def test_agent_replay_miss_raises_not_silent_realapi(tmp_path):
     """R11 命门：replay 未命中绝不回退打真 API → 抛 ReplayMiss，inner 调用 0 次。"""
     store = FixtureStore(tmp_path / "fx")
+    audit_store = LLMCallRecordStore(tmp_path / "audit" / "llm.jsonl")
     inner = _SpyLLM()
-    AgentRuntime(RecordingLLMClient(inner, store, mode="record", run_id="r")).run("hello")
+    inner.enable_audit(
+        owner_user_id="user:kernel-replay", seal_secret=audit_store.seal_secret,
+        record_sink=audit_store.append,
+    )
+    AgentRuntime(
+        RecordingLLMClient(
+            inner,
+            store,
+            mode="record",
+                run_id="r",
+                owner_user_id="user:kernel-replay",
+                seal_secret=audit_store.seal_secret,
+        )
+    ).run("hello")
 
     inner2 = _SpyLLM()
-    rep = RecordingLLMClient(inner2, store, mode="replay", run_id="r")
+    rep = RecordingLLMClient(
+        inner2,
+        store,
+        mode="replay",
+        run_id="r",
+        owner_user_id="user:kernel-replay",
+        workflow_id="kernel-replay-miss",
+        invocation_id_factory=lambda: "kernel-replay-miss-1",
+        record_sink=audit_store.append,
+        seal_secret=audit_store.seal_secret,
+    )
     with pytest.raises(ReplayMiss):
         AgentRuntime(rep).run("一个没录过的全新 prompt")
     assert inner2.calls == 0

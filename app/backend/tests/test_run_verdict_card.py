@@ -54,6 +54,8 @@ def _write_run(root: Path, run_id: str, *, n: int = 600, verdict_id: str | None 
     rd.mkdir(parents=True, exist_ok=True)
     manifest = {
         "run_id": run_id,
+        "owner_user_id": "alice",
+        "owner_username": "alice",
         "strategy_name": "测试策略",
         "strategy_id": "s_test",
         "status": "completed",
@@ -102,6 +104,7 @@ def _run_report_market_data_registry(tmp_path: Path) -> PersistentMarketDataRegi
             checksum="sha256:run_report:crypto_perp",
             asof_join_rule_ref="pit:run_report:crypto_perp",
         ),
+        owner_user_id="alice",
         use_context=ValidationUseContext.BACKTEST,
     )
     registry.record_instrument(
@@ -112,7 +115,8 @@ def _run_report_market_data_registry(tmp_path: Path) -> PersistentMarketDataRegi
             currency="USDT",
             exchange_calendar_ref="calendar:crypto:24x7",
             symbol_mapping_ref="symbols:run_report:crypto_perp",
-        )
+        ),
+        owner_user_id="alice",
     )
     registry.record_capability_matrix(
         MarketCapabilityMatrixRecord(
@@ -135,6 +139,7 @@ def _run_report_market_data_registry(tmp_path: Path) -> PersistentMarketDataRegi
             execution_availability="none",
             permission_requirement=None,
         ),
+        owner_user_id="alice",
         use_context=ValidationUseContext.BACKTEST,
     )
     registry.record_use_validation(
@@ -154,9 +159,10 @@ def _run_report_market_data_registry(tmp_path: Path) -> PersistentMarketDataRegi
                 "known_at:run_report:crypto_perp",
                 "effective_at:run_report:crypto_perp",
             ),
-            recorded_by="pytest",
+            recorded_by="alice",
             created_at_utc="2026-06-27T00:00:00+00:00",
-        )
+        ),
+        owner_user_id="alice",
     )
     return registry
 

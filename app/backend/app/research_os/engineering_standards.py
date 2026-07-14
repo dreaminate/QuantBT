@@ -2,8 +2,15 @@
 
 from __future__ import annotations
 
-from dataclasses import dataclass
+import hashlib
+import json
+import os
+import threading
+from dataclasses import asdict, dataclass
+from pathlib import Path
 from typing import Any
+
+from ..cross_process_lock import acquire_exclusive_fd
 
 
 def _tuple(value: Any) -> tuple[Any, ...]:
@@ -331,6 +338,51 @@ class PerformanceBaselineVerdict:
         return self.status == PERF_KNOWN_RUN_GAP
 
 
+@dataclass(frozen=True)
+class EngineeringStandardsRunRecord:
+    """Content-addressed §16 evidence package for one exact source run.
+
+    Authorization is deliberately not embedded in the portable record.  The
+    persistent registry adds a server-derived owner envelope and keys reads by
+    ``(owner_user_id, source_run_ref)``.
+    """
+
+    source_run_ref: str
+    mock_records: tuple[MockHonestyRecord, ...]
+    data_updates: tuple[DataUpdateStandardRecord, ...]
+    llm_calls: tuple[LLMReplayStandardRecord, ...]
+    theory_claims: tuple[TheoryImplementationStandardRecord, ...]
+    fatal_records: tuple[FatalRuntimeStandardRecord, ...]
+    performance_records: tuple[PerformanceBaselineMeasurement, ...]
+    record_ref: str = ""
+    record_version: str = "engineering_standards_run.v1"
+
+    def __post_init__(self) -> None:
+        for field_name in (
+            "mock_records",
+            "data_updates",
+            "llm_calls",
+            "theory_claims",
+            "fatal_records",
+            "performance_records",
+        ):
+            object.__setattr__(self, field_name, tuple(getattr(self, field_name)))
+        if not self.record_ref:
+            object.__setattr__(self, "record_ref", self.canonical_record_ref)
+
+    @property
+    def canonical_record_ref(self) -> str:
+        payload = asdict(self)
+        payload.pop("record_ref", None)
+        encoded = json.dumps(
+            payload,
+            ensure_ascii=False,
+            sort_keys=True,
+            separators=(",", ":"),
+        ).encode("utf-8")
+        return f"engstd_{hashlib.sha256(encoded).hexdigest()}"
+
+
 def classify_performance_baseline(
     measurement: PerformanceBaselineMeasurement,
 ) -> PerformanceBaselineVerdict:
@@ -391,9 +443,333 @@ def validate_engineering_standards(
     return EngineeringStandardDecision(accepted=not violations, violations=tuple(violations))
 
 
+_RUN_FAMILY_REF_FIELDS = (
+    ("mock_records", "record_ref"),
+    ("data_updates", "update_ref"),
+    ("llm_calls", "call_ref"),
+    ("theory_claims", "claim_ref"),
+    ("fatal_records", "runtime_ref"),
+    ("performance_records", "baseline_ref"),
+)
+
+
+def validate_engineering_standards_run_record(
+    record: EngineeringStandardsRunRecord,
+) -> EngineeringStandardDecision:
+    """Validate a complete six-family package before it can become a receipt."""
+
+    violations: list[EngineeringStandardViolation] = []
+
+    def reject(code: str, message: str, *, field: str = "", ref: str = "") -> None:
+        violations.append(
+            EngineeringStandardViolation(code, message, field=field, ref=ref)
+        )
+
+    if not _present(record.source_run_ref):
+        reject(
+            "engineering_standard_source_run_required",
+            "engineering standards packages require an exact source_run_ref",
+            field="source_run_ref",
+        )
+    if record.record_version != "engineering_standards_run.v1":
+        reject(
+            "engineering_standard_record_version_unsupported",
+            "unsupported engineering standards record version",
+            field="record_version",
+            ref=record.record_ref,
+        )
+    if record.record_ref != record.canonical_record_ref:
+        reject(
+            "engineering_standard_record_ref_mismatch",
+            "record_ref must equal the content-addressed engineering standards identity",
+            field="record_ref",
+            ref=record.record_ref,
+        )
+
+    for family_name, ref_field in _RUN_FAMILY_REF_FIELDS:
+        family = tuple(getattr(record, family_name))
+        if not family:
+            reject(
+                "engineering_standard_family_missing",
+                "a producer receipt requires all six canonical §16 families",
+                field=family_name,
+                ref=record.record_ref,
+            )
+            continue
+        refs = [str(getattr(item, ref_field, "") or "").strip() for item in family]
+        if any(not ref for ref in refs) or len(refs) != len(set(refs)):
+            reject(
+                "engineering_standard_family_ref_invalid",
+                "family record refs must be non-empty and unique",
+                field=family_name,
+                ref=record.record_ref,
+            )
+
+    canonical = validate_engineering_standards(
+        mock_records=record.mock_records,
+        data_updates=record.data_updates,
+        llm_calls=record.llm_calls,
+        theory_claims=record.theory_claims,
+        fatal_records=record.fatal_records,
+    )
+    violations.extend(canonical.violations)
+    for measurement in record.performance_records:
+        try:
+            verdict = classify_performance_baseline(measurement)
+        except (TypeError, ValueError) as exc:
+            reject(
+                "performance_baseline_unparseable",
+                f"performance baseline could not be classified: {type(exc).__name__}",
+                field="performance_records",
+                ref=measurement.baseline_ref,
+            )
+            continue
+        if verdict.is_known_run_gap:
+            reject(
+                "performance_baseline_known_run_gap",
+                "unmeasured performance baselines cannot mint a §16 producer receipt",
+                field="performance_records",
+                ref=measurement.baseline_ref,
+            )
+        elif verdict.decision is not None:
+            violations.extend(verdict.decision.violations)
+    return EngineeringStandardDecision(not violations, tuple(violations))
+
+
+def engineering_standards_run_record_to_dict(
+    record: EngineeringStandardsRunRecord,
+) -> dict[str, Any]:
+    return asdict(record)
+
+
+def _family_rows(raw: dict[str, Any], field_name: str) -> tuple[dict[str, Any], ...]:
+    value = raw.get(field_name)
+    if not isinstance(value, (list, tuple)):
+        raise TypeError(f"{field_name} must be a list")
+    rows = tuple(value)
+    if any(not isinstance(item, dict) for item in rows):
+        raise TypeError(f"{field_name} items must be objects")
+    return rows
+
+
+def engineering_standards_run_record_from_dict(
+    raw: dict[str, Any],
+) -> EngineeringStandardsRunRecord:
+    if not isinstance(raw, dict):
+        raise TypeError("engineering standards run record must be an object")
+    return EngineeringStandardsRunRecord(
+        source_run_ref=str(raw.get("source_run_ref") or ""),
+        mock_records=tuple(
+            MockHonestyRecord(**item) for item in _family_rows(raw, "mock_records")
+        ),
+        data_updates=tuple(
+            DataUpdateStandardRecord(**item)
+            for item in _family_rows(raw, "data_updates")
+        ),
+        llm_calls=tuple(
+            LLMReplayStandardRecord(**item)
+            for item in _family_rows(raw, "llm_calls")
+        ),
+        theory_claims=tuple(
+            TheoryImplementationStandardRecord(**item)
+            for item in _family_rows(raw, "theory_claims")
+        ),
+        fatal_records=tuple(
+            FatalRuntimeStandardRecord(**item)
+            for item in _family_rows(raw, "fatal_records")
+        ),
+        performance_records=tuple(
+            PerformanceBaselineMeasurement(**item)
+            for item in _family_rows(raw, "performance_records")
+        ),
+        record_ref=str(raw.get("record_ref") or ""),
+        record_version=str(
+            raw.get("record_version") or "engineering_standards_run.v1"
+        ),
+    )
+
+
+class PersistentEngineeringStandardsRegistry:
+    """Append-only, owner-enveloped registry for complete §16 run packages."""
+
+    def __init__(self, path: str | Path) -> None:
+        self._path = Path(path)
+        self._path.parent.mkdir(parents=True, exist_ok=True)
+        self._lock_path = self._path.with_name(f".{self._path.name}.lock")
+        self._lock = threading.RLock()
+        self._by_source: dict[tuple[str, str], EngineeringStandardsRunRecord] = {}
+        self._by_ref: dict[tuple[str, str], EngineeringStandardsRunRecord] = {}
+        self._quarantined_legacy_rows = 0
+        self._load_existing()
+
+    @property
+    def path(self) -> Path:
+        return self._path
+
+    @property
+    def quarantined_legacy_rows(self) -> int:
+        return self._quarantined_legacy_rows
+
+    @staticmethod
+    def _owner(value: Any) -> str:
+        owner = str(value or "").strip()
+        if not owner:
+            raise ValueError("engineering standards owner_user_id is required")
+        return owner
+
+    def _load_existing(self) -> None:
+        if not self._path.exists():
+            return
+        with self._path.open("r", encoding="utf-8") as fh:
+            for line_no, line in enumerate(fh, start=1):
+                if not line.strip():
+                    continue
+                try:
+                    row = json.loads(line)
+                    if row.get("schema_version") != 2:
+                        self._quarantined_legacy_rows += 1
+                        continue
+                    self._apply_row(row, persist=False)
+                except Exception as exc:  # noqa: BLE001 - malformed current history blocks startup.
+                    raise ValueError(
+                        f"invalid persisted engineering standards row at {self._path}:{line_no}"
+                    ) from exc
+
+    def _append_event(self, row: dict[str, Any]) -> None:
+        fd = os.open(self._lock_path, os.O_RDWR | os.O_CREAT, 0o600)
+        held = None
+        try:
+            os.chmod(self._lock_path, 0o600)
+            held = acquire_exclusive_fd(fd, timeout_seconds=30.0)
+            with self._path.open("a", encoding="utf-8") as fh:
+                fh.write(
+                    json.dumps(
+                        row,
+                        ensure_ascii=False,
+                        sort_keys=True,
+                        separators=(",", ":"),
+                    )
+                    + "\n"
+                )
+                fh.flush()
+                os.fsync(fh.fileno())
+        finally:
+            if held is not None:
+                held.release()
+            os.close(fd)
+
+    def _apply_row(
+        self,
+        row: dict[str, Any],
+        *,
+        persist: bool,
+    ) -> EngineeringStandardsRunRecord:
+        if row.get("schema_version") != 2:
+            raise ValueError("engineering standards owner envelope schema_version=2 is required")
+        if row.get("event_type") != "engineering_standards_run_recorded":
+            raise ValueError("unknown engineering standards event_type")
+        owner = self._owner(row.get("owner_user_id"))
+        recorded_by = str(row.get("recorded_by") or "").strip()
+        if not recorded_by:
+            raise ValueError("engineering standards recorded_by is required")
+        raw = row.get("record")
+        if not isinstance(raw, dict):
+            raise ValueError("engineering standards event missing record")
+        return self._record(
+            engineering_standards_run_record_from_dict(raw),
+            owner_user_id=owner,
+            recorded_by=recorded_by,
+            persist=persist,
+        )
+
+    def record_run(
+        self,
+        record: EngineeringStandardsRunRecord,
+        *,
+        owner_user_id: str,
+        recorded_by: str,
+    ) -> EngineeringStandardsRunRecord:
+        return self._record(
+            record,
+            owner_user_id=owner_user_id,
+            recorded_by=recorded_by,
+            persist=True,
+        )
+
+    def _record(
+        self,
+        record: EngineeringStandardsRunRecord,
+        *,
+        owner_user_id: str,
+        recorded_by: str,
+        persist: bool,
+    ) -> EngineeringStandardsRunRecord:
+        if not isinstance(record, EngineeringStandardsRunRecord):
+            raise TypeError("record must be EngineeringStandardsRunRecord")
+        owner = self._owner(owner_user_id)
+        actor = str(recorded_by or "").strip()
+        if not actor:
+            raise ValueError("engineering standards recorded_by is required")
+        decision = validate_engineering_standards_run_record(record)
+        if not decision.accepted:
+            raise ValueError(
+                "; ".join(violation.code for violation in decision.violations)
+            )
+        source_key = (owner, record.source_run_ref)
+        ref_key = (owner, record.record_ref)
+        with self._lock:
+            source_existing = self._by_source.get(source_key)
+            ref_existing = self._by_ref.get(ref_key)
+            for existing in (source_existing, ref_existing):
+                if existing is not None:
+                    if existing != record:
+                        raise ValueError(
+                            "engineering standards identity collision with different content"
+                        )
+                    return existing
+            if persist:
+                self._append_event(
+                    {
+                        "schema_version": 2,
+                        "event_type": "engineering_standards_run_recorded",
+                        "owner_user_id": owner,
+                        "recorded_by": actor,
+                        "record": engineering_standards_run_record_to_dict(record),
+                    }
+                )
+            self._by_source[source_key] = record
+            self._by_ref[ref_key] = record
+            return record
+
+    def run_record(
+        self,
+        source_run_ref: str,
+        *,
+        owner_user_id: str,
+    ) -> EngineeringStandardsRunRecord:
+        return self._by_source[(self._owner(owner_user_id), str(source_run_ref))]
+
+    def record(
+        self,
+        record_ref: str,
+        *,
+        owner_user_id: str,
+    ) -> EngineeringStandardsRunRecord:
+        return self._by_ref[(self._owner(owner_user_id), str(record_ref))]
+
+    def records(self, *, owner_user_id: str) -> list[EngineeringStandardsRunRecord]:
+        owner = self._owner(owner_user_id)
+        return [
+            record
+            for (record_owner, _source_ref), record in self._by_source.items()
+            if record_owner == owner
+        ]
+
+
 __all__ = [
     "DataUpdateStandardRecord",
     "EngineeringStandardDecision",
+    "EngineeringStandardsRunRecord",
     "EngineeringStandardViolation",
     "FatalRuntimeStandardRecord",
     "LLMReplayStandardRecord",
@@ -404,10 +780,14 @@ __all__ = [
     "PerformanceBaselineMeasurement",
     "PerformanceBaselineRecord",
     "PerformanceBaselineVerdict",
+    "PersistentEngineeringStandardsRegistry",
     "TheoryImplementationStandardRecord",
     "classify_performance_baseline",
+    "engineering_standards_run_record_from_dict",
+    "engineering_standards_run_record_to_dict",
     "validate_data_update_standard",
     "validate_engineering_standards",
+    "validate_engineering_standards_run_record",
     "validate_fatal_runtime_standard",
     "validate_llm_replay_standard",
     "validate_mock_honesty",

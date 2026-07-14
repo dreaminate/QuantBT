@@ -4,6 +4,7 @@ from __future__ import annotations
 
 from .checks import (
     DailyState,
+    EquitySnapshot,
     KillSwitch,
     PreTradeCheck,
     PreTradeError,
@@ -13,6 +14,7 @@ from .checks import (
 
 __all__ = [
     "DailyState",
+    "EquitySnapshot",
     "KillSwitch",
     "PreTradeCheck",
     "PreTradeError",

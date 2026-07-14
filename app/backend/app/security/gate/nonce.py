@@ -8,6 +8,7 @@ from __future__ import annotations
 
 import sqlite3
 import threading
+import hashlib
 from datetime import UTC, datetime
 from pathlib import Path
 
@@ -26,6 +27,11 @@ class NonceLedger:
             "CREATE TABLE IF NOT EXISTS nonces (nonce TEXT PRIMARY KEY, consumed_at_utc TEXT, context TEXT)"
         )
         self._conn.commit()
+
+    @property
+    def ledger_ref(self) -> str:
+        canonical_path = str((self._root / NONCE_DB_FILENAME).resolve())
+        return "nonce_ledger_" + hashlib.sha256(canonical_path.encode("utf-8")).hexdigest()
 
     def check_and_consume(self, nonce: str, *, context: str = "") -> bool:
         """第一次见 → True（消费成功）；已见过 → False（重放）。UNIQUE 兜底并发竞态。"""

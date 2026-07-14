@@ -64,9 +64,9 @@ git checkout fullstack  # 或主分支
 mkdir -p data/secrets data/artifacts/experiments
 chmod 700 data/secrets
 
-# secrets.yaml
+# 可选 secrets.yaml（只放 LLM / Tushare / Sentry；严禁 Binance key）
 nano data/secrets/secrets.yaml
-# 贴入完整 secrets schema (参 deploy/secrets.yaml.example)
+# 贴入非交易 schema（参 deploy/secrets.yaml.example）
 chmod 600 data/secrets/secrets.yaml
 ```
 
@@ -187,7 +187,7 @@ docker compose -f deploy/cloud/docker-compose.prod.yml restart caddy
 ## 10. 常见问题
 
 - **Caddy 证书签发失败**：检查 DNS 是否正确解析；80 端口对外
-- **backend 起不来**：`docker compose logs backend`，多半是 secrets.yaml 路径或权限问题
+- **backend 起不来**：`docker compose logs backend`；检查 secrets.yaml 权限/内容、`QUANTBT_MASTER_KEY` 与持久 keystore
 - **postgres 启动慢**：首次 init schema ~20s，等一下
 - **CORS 错误**：`.env` 的 `QUANTBT_DOMAIN` 必须和访问域名完全一致
 - **Binance API 调用 403**：阿里云轻量香港默认放行国际网络，但要确认 outbound 不限
@@ -197,7 +197,7 @@ docker compose -f deploy/cloud/docker-compose.prod.yml restart caddy
 - [ ] root 关 password auth
 - [ ] 防火墙只开 22/80/443
 - [ ] fail2ban 安装：`apt install fail2ban`
-- [ ] secrets.yaml + .env chmod 600
+- [ ] 可选 secrets.yaml + .env chmod 600，且 YAML 中没有 Binance 段
 - [ ] QUANTBT_MASTER_KEY 已 ≥ 64 字符随机
 - [ ] POSTGRES_PASSWORD 已 ≥ 32 字符随机
 - [ ] HTTPS 已签发（绿色锁）

@@ -33,7 +33,7 @@ export interface FactorEvalViewProps {
   factor: MockFactor;
   horizon: number;
   onHorizon: (h: number) => void;
-  /** 真实后端数据；任一字段存在则覆盖对应 mock 区块并改挂 LIVE 角标。 */
+  /** 后端数据；传入后每个缺失区块单独显示不可用，绝不回落 mock。 */
   live?: FactorEvalLive | null;
 }
 
@@ -51,26 +51,46 @@ const HS = [1, 3, 5, 10, 20];
 export function FactorEvalView({ factor: sel, horizon, onHorizon, live }: FactorEvalViewProps) {
   const selH = sel.decay.find((d) => d.h === horizon) ?? sel.decay[2];
 
-  // 真实后端：IC 卡优先用后端实测（含 Newey-West HAC t），否则回落 mock。
+  // 一旦容器注入后端 payload，缺失项必须明确不可用，不能再用 mock 补洞。
   const liveIc = live?.ic ?? null;
   const liveLayered = live?.layered ?? null;
   const liveDecay = live?.decay ?? null;
-  const icConnected = !!(liveIc || liveLayered || liveDecay);
-
-  const icVal = liveIc?.ic_mean ?? selH.ic;
-  const rankIcVal = liveIc?.rank_ic_mean ?? selH.ic * 1.06;
-  const icIrVal = liveIc?.ic_ir ?? sel.icIr;
-  const nwT = liveIc?.ic_tstat_nw;
-  const metrics = [
-    { label: `IC@${horizon}d`, value: icVal.toFixed(3), color: icThresholdColor(icVal) },
-    { label: "Rank-IC", value: rankIcVal.toFixed(3), color: "var(--desk-text-soft)" },
-    { label: "IC-IR", value: icIrVal.toFixed(2), color: irThresholdColor(icIrVal) },
-    // 接入真实数据时第 4 卡换成 Newey-West HAC t（重叠窗口自相关调整后的显著性，诚实口径）。
-    liveIc && nwT != null
-      ? { label: "NW t", value: nwT.toFixed(2), color: Math.abs(nwT) >= 3 ? "var(--desk-success)" : "var(--desk-warning)" }
-      : { label: "胜率", value: `${(50 + sel.icIr * 6).toFixed(0)}%`, color: "var(--desk-text-soft)" },
-    { label: "样本期", value: liveIc ? String(liveIc.sample_count) : "504", color: "var(--desk-text-dim)" },
-  ];
+  const hasLivePayload = live != null;
+  const liveComplete = Boolean(liveIc && liveLayered?.buckets.length && liveDecay?.length);
+  const unavailableColor = "var(--desk-text-faint)";
+  const liveMetric = (value: number | null | undefined, digits: number) =>
+    value == null ? "不可用" : value.toFixed(digits);
+  const metrics = hasLivePayload
+    ? [
+        {
+          label: `IC@${horizon}d`,
+          value: liveMetric(liveIc?.ic_mean, 3),
+          color: liveIc?.ic_mean == null ? unavailableColor : icThresholdColor(liveIc.ic_mean),
+        },
+        { label: "Rank-IC", value: liveMetric(liveIc?.rank_ic_mean, 3), color: liveIc?.rank_ic_mean == null ? unavailableColor : "var(--desk-text-soft)" },
+        {
+          label: "IC-IR",
+          value: liveMetric(liveIc?.ic_ir, 2),
+          color: liveIc?.ic_ir == null ? unavailableColor : irThresholdColor(liveIc.ic_ir),
+        },
+        {
+          label: "NW t",
+          value: liveMetric(liveIc?.ic_tstat_nw, 2),
+          color: liveIc?.ic_tstat_nw == null
+            ? unavailableColor
+            : Math.abs(liveIc.ic_tstat_nw) >= 3
+              ? "var(--desk-success)"
+              : "var(--desk-warning)",
+        },
+        { label: "样本期", value: liveIc ? String(liveIc.sample_count) : "不可用", color: liveIc ? "var(--desk-text-dim)" : unavailableColor },
+      ]
+    : [
+        { label: `IC@${horizon}d`, value: selH.ic.toFixed(3), color: icThresholdColor(selH.ic) },
+        { label: "Rank-IC", value: (selH.ic * 1.06).toFixed(3), color: "var(--desk-text-soft)" },
+        { label: "IC-IR", value: sel.icIr.toFixed(2), color: irThresholdColor(sel.icIr) },
+        { label: "胜率", value: `${(50 + sel.icIr * 6).toFixed(0)}%`, color: "var(--desk-text-soft)" },
+        { label: "样本期", value: "504", color: "var(--desk-text-dim)" },
+      ];
 
   const allL = sel.layers.flat();
   const lo = Math.min(...allL);
@@ -118,14 +138,14 @@ export function FactorEvalView({ factor: sel, horizon, onHorizon, live }: Factor
 
   const decayTable = liveDecay
     ? liveDecay.map((d) => {
-        const ic = d.ic_mean ?? 0;
+        const ic = d.ic_mean;
         return {
           h: `${d.horizon} 日`,
-          ic: ic.toFixed(3),
-          rankIc: (d.rank_ic_mean ?? 0).toFixed(3),
-          ir: (d.ic_ir ?? 0).toFixed(2),
+          ic: liveMetric(ic, 3),
+          rankIc: liveMetric(d.rank_ic_mean, 3),
+          ir: liveMetric(d.ic_ir, 2),
           selected: d.horizon === horizon,
-          icColor: icThresholdColor(ic),
+          icColor: ic == null ? unavailableColor : icThresholdColor(ic),
         };
       })
     : sel.decay.map((d) => ({
@@ -144,19 +164,19 @@ export function FactorEvalView({ factor: sel, horizon, onHorizon, live }: Factor
           <span style={{ fontSize: 16, fontWeight: 700 }}>{sel.id}</span>
           <span style={{ fontSize: 11, color: "var(--desk-text-faint)" }}>{sel.formula}</span>
           <span style={{ marginLeft: "auto", display: "flex", gap: 10, alignItems: "center" }}>
-            {icConnected ? (
+            {hasLivePayload ? (
               <span
-                data-testid="eval-live-badge"
+                data-testid={liveComplete ? "eval-live-badge" : "eval-partial-badge"}
                 style={{
                   fontSize: 10,
                   fontWeight: 700,
-                  color: "var(--desk-success)",
-                  border: "1px solid color-mix(in srgb, var(--desk-success) 40%, transparent)",
+                  color: liveComplete ? "var(--desk-success)" : "var(--desk-warning)",
+                  border: `1px solid color-mix(in srgb, ${liveComplete ? "var(--desk-success)" : "var(--desk-warning)"} 40%, transparent)`,
                   borderRadius: 4,
                   padding: "1px 6px",
                 }}
               >
-                LIVE · IC/分层真实数据
+                {liveComplete ? "后端 · IC / 分位均值 / 衰减" : "后端数据不完整 · 不混入 MOCK"}
               </span>
             ) : (
               <MockBadge label="MOCK 数据 · 分层回测合成（待接 /api/factors/{id}/layered_backtest）" />
@@ -187,21 +207,30 @@ export function FactorEvalView({ factor: sel, horizon, onHorizon, live }: Factor
         {/* 分层回测 */}
         <PanelCard style={{ marginBottom: 14, padding: "13px 16px" }}>
           <SectionTitle
-            right={<span style={{ fontSize: 11, fontWeight: 600, color: monoColor }}>{mono}</span>}
+            right={liveLayered ? <span style={{ fontSize: 11, fontWeight: 600, color: monoColor }}>{mono}</span> : hasLivePayload ? <span style={{ fontSize: 11, color: unavailableColor }}>不可用</span> : <span style={{ fontSize: 11, fontWeight: 600, color: monoColor }}>{mono}</span>}
           >
-            分层回测 · 五分位累计净值{" "}
+            {hasLivePayload ? "分层回测 · 分位均值" : "分层回测 · 五分位累计净值"}{" "}
             <span style={{ fontSize: 10, fontWeight: 400, color: "var(--desk-text-muted)" }}>
-              按因子值排序分 5 组 · 等权 · 504 交易日 · 周度调仓
+              {hasLivePayload ? "后端未返回累计净值序列" : "按因子值排序分 5 组 · 等权 · 504 交易日 · 周度调仓"}
             </span>
           </SectionTitle>
           <div style={{ display: "flex", gap: 16 }}>
-            <svg viewBox="0 0 460 200" preserveAspectRatio="none" style={{ flex: 1, height: 200, display: "block" }}>
-              <line x1="0" y1="100" x2="460" y2="100" stroke="var(--desk-border)" strokeWidth="1" />
-              {layerPaths.map((l, i) => (
-                <path key={i} d={l.path} fill="none" stroke={l.color} strokeWidth={l.width} />
-              ))}
-            </svg>
-            <div
+            {hasLivePayload ? (
+              <div
+                data-testid="layer-cumulative-unavailable"
+                style={{ flex: 1, height: 200, display: "grid", placeItems: "center", color: unavailableColor, fontSize: 11, border: "1px dashed var(--desk-border)" }}
+              >
+                {liveLayered ? "后端仅返回分位均值，累计净值序列不可用" : "分层回测后端结果不可用"}
+              </div>
+            ) : (
+              <svg viewBox="0 0 460 200" preserveAspectRatio="none" style={{ flex: 1, height: 200, display: "block" }}>
+                <line x1="0" y1="100" x2="460" y2="100" stroke="var(--desk-border)" strokeWidth="1" />
+                {layerPaths.map((l, i) => (
+                  <path key={i} d={l.path} fill="none" stroke={l.color} strokeWidth={l.width} />
+                ))}
+              </svg>
+            )}
+            {(!hasLivePayload || liveLayered) && <div
               style={{
                 flex: "none",
                 width: 150,
@@ -231,7 +260,7 @@ export function FactorEvalView({ factor: sel, horizon, onHorizon, live }: Factor
                 <span style={{ color: "var(--desk-text-muted)" }}>多空 Q5−Q1</span>
                 <span style={{ color: monoColor, fontWeight: 700 }}>{spreadTxt}</span>
               </div>
-            </div>
+            </div>}
           </div>
         </PanelCard>
 
@@ -241,20 +270,28 @@ export function FactorEvalView({ factor: sel, horizon, onHorizon, live }: Factor
             <SectionTitle
               right={
                 <span style={{ fontSize: 10.5, fontWeight: 400, color: "var(--desk-text-muted)" }}>
-                  命中率 {hit}
+                  {hasLivePayload ? "后端未返回序列" : `命中率 ${hit}`}
                 </span>
               }
             >
               IC 序列 · 累计
             </SectionTitle>
-            <svg viewBox="0 0 320 120" preserveAspectRatio="none" style={{ width: "100%", height: 104, display: "block" }}>
-              <line x1="0" y1="60" x2="320" y2="60" stroke="var(--desk-border-strong)" strokeWidth="1" strokeDasharray="2 3" />
-              <path d={icBars} stroke={icThresholdColor(sel.icMean)} strokeWidth="2" opacity="0.8" />
-              <path d={cumPath} fill="none" stroke="var(--desk-accent)" strokeWidth="1.8" />
-            </svg>
-            <div style={{ fontSize: 9, color: "var(--desk-text-faint)", marginTop: 3 }}>
-              柱 = 日度 IC · 紫线 = 累计 IC
-            </div>
+            {hasLivePayload ? (
+              <div data-testid="ic-series-unavailable" style={{ height: 120, display: "grid", placeItems: "center", color: unavailableColor, fontSize: 11 }}>
+                IC 序列不可用；后端仅返回汇总指标
+              </div>
+            ) : (
+              <>
+                <svg viewBox="0 0 320 120" preserveAspectRatio="none" style={{ width: "100%", height: 104, display: "block" }}>
+                  <line x1="0" y1="60" x2="320" y2="60" stroke="var(--desk-border-strong)" strokeWidth="1" strokeDasharray="2 3" />
+                  <path d={icBars} stroke={icThresholdColor(sel.icMean)} strokeWidth="2" opacity="0.8" />
+                  <path d={cumPath} fill="none" stroke="var(--desk-accent)" strokeWidth="1.8" />
+                </svg>
+                <div style={{ fontSize: 9, color: "var(--desk-text-faint)", marginTop: 3 }}>
+                  柱 = 日度 IC · 紫线 = 累计 IC
+                </div>
+              </>
+            )}
           </PanelCard>
           <PanelCard style={{ flex: 1 }}>
             <SectionTitle>IC 衰减表 · horizon</SectionTitle>
@@ -273,7 +310,11 @@ export function FactorEvalView({ factor: sel, horizon, onHorizon, live }: Factor
                 <span style={{ flex: 1, textAlign: "right" }}>Rank-IC</span>
                 <span style={{ flex: 1, textAlign: "right" }}>IR</span>
               </div>
-              {decayTable.map((r) => (
+              {hasLivePayload && (!liveDecay || liveDecay.length === 0) ? (
+                <div data-testid="decay-unavailable" style={{ padding: "18px 0", textAlign: "center", color: unavailableColor, fontSize: 11 }}>
+                  IC 衰减后端结果不可用
+                </div>
+              ) : decayTable.map((r) => (
                 <div
                   key={r.h}
                   style={{

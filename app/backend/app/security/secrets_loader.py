@@ -1,11 +1,12 @@
-"""读 ~/.quantbt/secrets.yaml 并安全注入到 SecureKeystore + 进程内 env。
+"""Read non-trading secrets from ``~/.quantbt/secrets.yaml``.
 
 设计：
 - 文件路径默认 `~/.quantbt/secrets.yaml`，可被 `QUANTBT_SECRETS_PATH` 覆盖
-- 文件权限自动收紧为 0600（仅当前用户读写），否则启动 warning
+- 文件必须是当前用户拥有、非 symlink、权限精确 0600，否则拒绝
 - 任何 secret 永远不打印到日志；只回报字段名 + 状态
 - 支持热加载：`POST /api/security/reload_secrets`
 - yaml 缺失 / 任何字段空 → 不抛错，跳过对应 provider
+- Binance key/secret 禁止进入 YAML，只能走认证 keystore API
 """
 
 from __future__ import annotations
@@ -20,7 +21,7 @@ from typing import Any
 
 import yaml
 
-from .keystore import KeystoreRecord, SecureKeystore
+from .keystore import KeystoreError, KeystoreRecord, SecureKeystore
 
 
 logger = logging.getLogger(__name__)
@@ -59,10 +60,14 @@ def _resolve_path(explicit: str | os.PathLike[str] | None = None) -> Path:
 def _check_permissions(path: Path) -> tuple[bool, str | None]:
     if not path.exists():
         return False, None
-    mode = stat.S_IMODE(path.stat().st_mode)
-    # 期望 0600；任何 group / other 位置位都告警
-    if mode & 0o077:
-        return False, f"权限过宽 {oct(mode)}，建议 chmod 600 {path}"
+    info = path.lstat()
+    if stat.S_ISLNK(info.st_mode) or not stat.S_ISREG(info.st_mode):
+        return False, "secrets file must be a regular non-symlink file"
+    if info.st_uid != os.getuid():
+        return False, "secrets file must be owned by the current user"
+    mode = stat.S_IMODE(info.st_mode)
+    if mode != 0o600:
+        return False, f"secrets file must have mode 0600, found {oct(mode)}"
     return True, None
 
 
@@ -72,7 +77,7 @@ def load_secrets(
     path: str | os.PathLike[str] | None = None,
     set_env: bool = True,
 ) -> SecretsLoadReport:
-    """读取 secrets.yaml 并把每条非空字段写入 keystore + （可选）env。"""
+    """Load non-trading YAML entries into the keystore/environment."""
 
     target = _resolve_path(path)
     report = SecretsLoadReport(path=str(target))
@@ -83,15 +88,30 @@ def load_secrets(
     ok, warn = _check_permissions(target)
     report.permission_secure = ok
     if warn:
-        report.warnings.append(warn)
+        raise KeystoreError(warn)
     try:
-        raw = yaml.safe_load(target.read_text(encoding="utf-8")) or {}
-    except yaml.YAMLError as exc:
-        report.warnings.append(f"yaml 解析失败：{exc}")
+        flags = os.O_RDONLY | getattr(os, "O_NOFOLLOW", 0)
+        fd = os.open(target, flags)
+        try:
+            stream = os.fdopen(fd, "r", encoding="utf-8")
+            fd = -1
+            with stream:
+                raw = yaml.safe_load(stream) or {}
+        finally:
+            if fd >= 0:
+                os.close(fd)
+    except yaml.YAMLError:
+        report.warnings.append("yaml 解析失败")
         return report
     if not isinstance(raw, dict):
         report.warnings.append("yaml 根必须是 mapping，跳过")
         return report
+
+    binance = raw.get("binance")
+    if binance not in (None, {}):
+        raise KeystoreError(
+            "Binance credentials are forbidden in secrets.yaml; use the authenticated keystore API"
+        )
 
     # Tushare
     tushare = (raw.get("tushare") or {}).get("token")
@@ -134,17 +154,7 @@ def load_secrets(
                 os.environ[f"LLM_{provider.upper()}_MODEL"] = model
         report.loaded.append(f"llm_{provider}")
 
-    # Binance
-    binance = raw.get("binance") or {}
-    for network in ("testnet", "mainnet"):
-        info = binance.get(network) or {}
-        key = info.get("api_key")
-        secret = info.get("api_secret")
-        if not key or not secret:
-            report.skipped.append(f"binance_{network}")
-            continue
-        keystore.store(KeystoreRecord(name=f"binance_{network}", api_key=key, api_secret=secret, note=network))
-        report.loaded.append(f"binance_{network}")
+    report.skipped.extend(("binance_testnet", "binance_mainnet"))
 
     # Sentry
     sentry_dsn = (raw.get("sentry") or {}).get("dsn")

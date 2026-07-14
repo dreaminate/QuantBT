@@ -3,13 +3,19 @@
 from __future__ import annotations
 
 import json
+import hashlib
+import os
+import threading
+import fcntl
+from contextlib import contextmanager
 from dataclasses import asdict, dataclass, field, is_dataclass
 from datetime import UTC, datetime
 from enum import Enum
 from pathlib import Path
 from typing import Any
 
-from ..lineage.ids import content_hash as qbt_content_hash
+from ..lineage.ids import canonical_json, content_hash as qbt_content_hash
+from ..cross_process_lock import acquire_exclusive_fd
 from .spine import RuntimeStatus
 
 
@@ -49,6 +55,180 @@ def _stable(value: Any) -> Any:
     return value
 
 
+def _canonical_v2_ref(record: Any, *, record_type: str, ref_field: str, prefix: str) -> str:
+    payload = _stable(record)
+    if not isinstance(payload, dict):
+        raise TypeError(f"{record_type} identity payload must be an object")
+    payload.pop(ref_field, None)
+    payload.pop("created_at_utc", None)
+    digest = hashlib.sha256(
+        canonical_json(
+            {
+                "identity_version": 2,
+                "record_type": record_type,
+                "payload": payload,
+            }
+        ).encode("utf-8")
+    ).hexdigest()
+    return f"{prefix}v2_{digest}"
+
+
+def _same_record_semantics(left: Any, right: Any) -> bool:
+    a = _stable(left)
+    b = _stable(right)
+    if not isinstance(a, dict) or not isinstance(b, dict):
+        return a == b
+    a.pop("created_at_utc", None)
+    b.pop("created_at_utc", None)
+    return a == b
+
+
+def _reject_legacy_reserved_v2_identity(
+    *,
+    schema_version: int,
+    ref: str,
+    reserved_prefix: str,
+    record_type: str,
+) -> None:
+    """Keep persisted schema provenance from being replaced by a ref prefix.
+
+    Legacy rows remain readable under their legacy identities, but a v1 row
+    may not occupy the reserved canonical-v2 namespace. Otherwise downstream
+    strict checks could mistake an unauthenticated legacy payload for a v2
+    content-bound parent merely because its caller-chosen ref starts with v2.
+    """
+
+    if schema_version == 1 and str(ref or "").startswith(reserved_prefix):
+        raise ValueError(
+            f"legacy {record_type} row cannot claim reserved v2 identity {ref}"
+        )
+
+
+_IDENTITY_APPEND_LOCK = threading.RLock()
+_RECONCILIATION_MUTATION_LOCK = threading.RLock()
+_RECONCILIATION_MUTATION_LOCAL = threading.local()
+
+
+def _read_jsonl_lines_locked(path: Path) -> list[str]:
+    """Read a complete JSONL snapshot without observing an in-flight append."""
+
+    with _IDENTITY_APPEND_LOCK:
+        try:
+            with path.open("r", encoding="utf-8") as fh:
+                fcntl.flock(fh.fileno(), fcntl.LOCK_SH)
+                try:
+                    return fh.read().splitlines()
+                finally:
+                    fcntl.flock(fh.fileno(), fcntl.LOCK_UN)
+        except FileNotFoundError:
+            return []
+
+
+def _same_payload_semantics(left: dict[str, Any], right: dict[str, Any]) -> bool:
+    a = dict(left)
+    b = dict(right)
+    a.pop("created_at_utc", None)
+    b.pop("created_at_utc", None)
+    return a == b
+
+
+def _append_v2_jsonl_once(
+    path: Path,
+    row: dict[str, Any],
+    *,
+    payload_key: str,
+    ref_field: str,
+) -> bool:
+    """Append one v2 identity record once across threads/processes."""
+
+    target = row[payload_key]
+    target_ref = str(target[ref_field])
+    encoded = json.dumps(row, ensure_ascii=False, sort_keys=True, separators=(",", ":")) + "\n"
+    with _IDENTITY_APPEND_LOCK:
+        with path.open("a+", encoding="utf-8") as fh:
+            fcntl.flock(fh.fileno(), fcntl.LOCK_EX)
+            try:
+                fh.seek(0)
+                for line in fh:
+                    if not line.strip():
+                        continue
+                    existing_row = json.loads(line)
+                    existing_payload = existing_row.get(payload_key)
+                    if not isinstance(existing_payload, dict):
+                        continue
+                    if str(existing_payload.get(ref_field) or "") != target_ref:
+                        continue
+                    if int(existing_row.get("schema_version", 0) or 0) != 2:
+                        raise ValueError(f"v2 identity collides with legacy record {target_ref}")
+                    if not _same_payload_semantics(existing_payload, target):
+                        raise ValueError(f"v2 identity collision at {target_ref}")
+                    return False
+                fh.seek(0, os.SEEK_END)
+                fh.write(encoded)
+                fh.flush()
+                os.fsync(fh.fileno())
+                return True
+            finally:
+                fcntl.flock(fh.fileno(), fcntl.LOCK_UN)
+
+
+def _append_jsonl_once_durable(
+    path: Path,
+    row: dict[str, Any],
+    *,
+    payload_key: str,
+    ref_field: str,
+) -> bool:
+    """Durably append one legacy-schema parent without duplicate/collision drift."""
+
+    target = row[payload_key]
+    target_ref = str(target[ref_field])
+    encoded = json.dumps(row, ensure_ascii=False, sort_keys=True, separators=(",", ":")) + "\n"
+    with _IDENTITY_APPEND_LOCK:
+        with path.open("a+", encoding="utf-8") as fh:
+            fcntl.flock(fh.fileno(), fcntl.LOCK_EX)
+            try:
+                fh.seek(0)
+                for line in fh:
+                    if not line.strip():
+                        continue
+                    existing_row = json.loads(line)
+                    existing_payload = existing_row.get(payload_key)
+                    if not isinstance(existing_payload, dict):
+                        continue
+                    if str(existing_payload.get(ref_field) or "") != target_ref:
+                        continue
+                    if (
+                        existing_row.get("schema_version") != row.get("schema_version")
+                        or existing_row.get("event_type") != row.get("event_type")
+                    ):
+                        raise ValueError(f"persisted identity provenance collision at {target_ref}")
+                    if not _same_payload_semantics(existing_payload, target):
+                        raise ValueError(f"persisted identity collision at {target_ref}")
+                    return False
+                fh.seek(0, os.SEEK_END)
+                fh.write(encoded)
+                fh.flush()
+                os.fsync(fh.fileno())
+                return True
+            finally:
+                fcntl.flock(fh.fileno(), fcntl.LOCK_UN)
+
+
+def execution_client_order_ref_hash(value: str) -> str:
+    return "sha256:" + hashlib.sha256(
+        canonical_json({"kind": "execution_client_order_ref", "value": str(value)}).encode("utf-8")
+    ).hexdigest()
+
+
+def _valid_utc_timestamp(value: str) -> bool:
+    try:
+        parsed = datetime.fromisoformat(str(value))
+    except (TypeError, ValueError):
+        return False
+    return parsed.tzinfo is not None and parsed.utcoffset() is not None
+
+
 IMMUTABLE_EXECUTION_INVARIANTS = {
     "permission",
     "secret_isolation",
@@ -83,6 +263,7 @@ class RuntimePromotionRequest:
     asset_class: str
     source_runtime: RuntimeStatus | str
     target_runtime: RuntimeStatus | str
+    subject_ref: str | None = None
     paper_run_ref: str | None = None
     testnet_run_ref: str | None = None
     approval_ref: str | None = None
@@ -106,6 +287,7 @@ class RuntimePromotionRecord:
     asset_class: str
     source_runtime: RuntimeStatus | str
     target_runtime: RuntimeStatus | str
+    subject_ref: str | None = None
     paper_run_ref: str | None = None
     testnet_run_ref: str | None = None
     approval_ref: str | None = None
@@ -126,30 +308,17 @@ class RuntimePromotionRecord:
     def __post_init__(self) -> None:
         object.__setattr__(self, "source_runtime", _value(self.source_runtime) or RuntimeStatus.OFFLINE.value)
         object.__setattr__(self, "target_runtime", _value(self.target_runtime) or RuntimeStatus.OFFLINE.value)
-        object.__setattr__(self, "waiver_requests", _str_tuple(self.waiver_requests))
-        object.__setattr__(self, "evidence_refs", _str_tuple(self.evidence_refs))
+        object.__setattr__(self, "waiver_requests", tuple(sorted(set(_str_tuple(self.waiver_requests)))))
+        object.__setattr__(self, "evidence_refs", tuple(sorted(set(_str_tuple(self.evidence_refs)))))
         if not self.runtime_promotion_ref:
             object.__setattr__(
                 self,
                 "runtime_promotion_ref",
-                "runtime_promotion_"
-                + qbt_content_hash(
-                    {
-                        "request_ref": self.request_ref,
-                        "asset_class": self.asset_class,
-                        "source_runtime": _value(self.source_runtime),
-                        "target_runtime": _value(self.target_runtime),
-                        "paper_run_ref": self.paper_run_ref,
-                        "testnet_run_ref": self.testnet_run_ref,
-                        "approval_ref": self.approval_ref,
-                        "permission_gate_ref": self.permission_gate_ref,
-                        "order_guard_ref": self.order_guard_ref,
-                        "audit_record_ref": self.audit_record_ref,
-                        "kill_switch_ref": self.kill_switch_ref,
-                        "secret_ref": self.secret_ref,
-                        "responsibility_boundary_ref": self.responsibility_boundary_ref,
-                        "mock_profile": self.mock_profile,
-                    }
+                _canonical_v2_ref(
+                    self,
+                    record_type="runtime_promotion",
+                    ref_field="runtime_promotion_ref",
+                    prefix="runtime_promotion_",
                 ),
             )
 
@@ -159,6 +328,7 @@ class RuntimePromotionRecord:
             asset_class=self.asset_class,
             source_runtime=self.source_runtime,
             target_runtime=self.target_runtime,
+            subject_ref=self.subject_ref,
             paper_run_ref=self.paper_run_ref,
             testnet_run_ref=self.testnet_run_ref,
             approval_ref=self.approval_ref,
@@ -259,6 +429,7 @@ class ExecutionOrderIntentRecord:
                         "quantity_ref": self.quantity_ref,
                         "notional_ref": self.notional_ref,
                         "price_ref": self.price_ref,
+                        "recorded_by": self.recorded_by,
                     }
                 ),
             )
@@ -625,37 +796,24 @@ class ExecutionOrderSubmissionRecord:
     submission_status: str = "recorded"
     venue_order_ref: str | None = None
     ack_ref: str | None = None
+    client_order_ref_hash: str | None = None
     evidence_refs: tuple[str, ...] = ()
     recorded_by: str = "system"
     created_at_utc: str = field(default_factory=lambda: datetime.now(UTC).isoformat())
     submission_ref: str = ""
 
     def __post_init__(self) -> None:
-        object.__setattr__(self, "evidence_refs", _str_tuple(self.evidence_refs))
+        object.__setattr__(self, "evidence_refs", tuple(sorted(set(_str_tuple(self.evidence_refs)))))
         object.__setattr__(self, "submit_enabled", bool(self.submit_enabled))
         if not self.submission_ref:
             object.__setattr__(
                 self,
                 "submission_ref",
-                "order_submission_"
-                + qbt_content_hash(
-                    {
-                        "order_intent_ref": self.order_intent_ref,
-                        "runtime_promotion_ref": self.runtime_promotion_ref,
-                        "submitter_ref": self.submitter_ref,
-                        "guarded_venue_ref": self.guarded_venue_ref,
-                        "venue_ref": self.venue_ref,
-                        "submission_mode": self.submission_mode,
-                        "permission_gate_ref": self.permission_gate_ref,
-                        "order_guard_ref": self.order_guard_ref,
-                        "idempotency_key": self.idempotency_key,
-                        "order_materialization_ref": self.order_materialization_ref,
-                        "venue_capability_ref": self.venue_capability_ref,
-                        "submit_request_ref": self.submit_request_ref,
-                        "submission_status": self.submission_status,
-                        "venue_order_ref": self.venue_order_ref,
-                        "ack_ref": self.ack_ref,
-                    }
+                _canonical_v2_ref(
+                    self,
+                    record_type="execution_order_submission",
+                    ref_field="submission_ref",
+                    prefix="order_submission_",
                 ),
             )
 
@@ -673,6 +831,7 @@ class ExecutionVenueEventRecord:
     audit_record_ref: str
     order_guard_ref: str
     idempotency_key: str
+    submission_ref: str | None = None
     venue_order_ref: str | None = None
     client_order_ref: str | None = None
     ack_ref: str | None = None
@@ -688,26 +847,16 @@ class ExecutionVenueEventRecord:
     venue_event_ref: str = ""
 
     def __post_init__(self) -> None:
-        object.__setattr__(self, "evidence_refs", _str_tuple(self.evidence_refs))
+        object.__setattr__(self, "evidence_refs", tuple(sorted(set(_str_tuple(self.evidence_refs)))))
         if not self.venue_event_ref:
             object.__setattr__(
                 self,
                 "venue_event_ref",
-                "venue_event_"
-                + qbt_content_hash(
-                    {
-                        "order_intent_ref": self.order_intent_ref,
-                        "runtime_promotion_ref": self.runtime_promotion_ref,
-                        "venue_ref": self.venue_ref,
-                        "event_kind": self.event_kind,
-                        "status": self.status,
-                        "venue_order_ref": self.venue_order_ref,
-                        "client_order_ref": self.client_order_ref,
-                        "ack_ref": self.ack_ref,
-                        "fill_ref": self.fill_ref,
-                        "reconcile_ref": self.reconcile_ref,
-                        "raw_event_hash": self.raw_event_hash,
-                    }
+                _canonical_v2_ref(
+                    self,
+                    record_type="execution_venue_event",
+                    ref_field="venue_event_ref",
+                    prefix="venue_event_",
                 ),
             )
 
@@ -720,6 +869,7 @@ class ExecutionReconciliationRecord:
     order_intent_ref: str
     runtime_promotion_ref: str
     audit_record_ref: str
+    submission_ref: str | None = None
     venue_order_ref: str | None = None
     event_refs: tuple[str, ...] = ()
     status: str = "missing_events"
@@ -731,24 +881,18 @@ class ExecutionReconciliationRecord:
     reconciliation_ref: str = ""
 
     def __post_init__(self) -> None:
-        object.__setattr__(self, "event_refs", _str_tuple(self.event_refs))
-        object.__setattr__(self, "discrepancy_refs", _str_tuple(self.discrepancy_refs))
-        object.__setattr__(self, "evidence_refs", _str_tuple(self.evidence_refs))
+        object.__setattr__(self, "event_refs", tuple(sorted(set(_str_tuple(self.event_refs)))))
+        object.__setattr__(self, "discrepancy_refs", tuple(sorted(set(_str_tuple(self.discrepancy_refs)))))
+        object.__setattr__(self, "evidence_refs", tuple(sorted(set(_str_tuple(self.evidence_refs)))))
         if not self.reconciliation_ref:
             object.__setattr__(
                 self,
                 "reconciliation_ref",
-                "execution_reconcile_"
-                + qbt_content_hash(
-                    {
-                        "order_intent_ref": self.order_intent_ref,
-                        "runtime_promotion_ref": self.runtime_promotion_ref,
-                        "venue_order_ref": self.venue_order_ref,
-                        "event_refs": self.event_refs,
-                        "status": self.status,
-                        "discrepancy_refs": self.discrepancy_refs,
-                        "action_required": self.action_required,
-                    }
+                _canonical_v2_ref(
+                    self,
+                    record_type="execution_reconciliation",
+                    ref_field="reconciliation_ref",
+                    prefix="execution_reconcile_",
                 ),
             )
 
@@ -811,9 +955,34 @@ class UserRiskChoiceRecord:
     failure_mode_refs: tuple[str, ...]
     recommendation_ref: str | None
     responsibility_boundary_ref: str | None
+    owner_user_id: str = ""
+    master_id: str = ""
+    follower_id: str = ""
+    account_binding_ref: str = ""
+    subject_ref: str = ""
+    runtime_request_ref: str = ""
+    asset_class: str = ""
+    risk_disclosure_profile_ref: str = ""
+    impact_disclosure_ref: str | None = None
+    actor_source: str = "user_manual"
+    created_at_utc: str = field(default_factory=lambda: datetime.now(UTC).isoformat())
 
     def __post_init__(self) -> None:
-        object.__setattr__(self, "failure_mode_refs", _tuple(self.failure_mode_refs))
+        object.__setattr__(self, "failure_mode_refs", _str_tuple(self.failure_mode_refs))
+        if not self.choice_ref:
+            object.__setattr__(
+                self,
+                "choice_ref",
+                _canonical_v2_ref(
+                    self,
+                    record_type="user_risk_choice",
+                    ref_field="choice_ref",
+                    prefix="user_risk_choice_",
+                ),
+            )
+
+    def to_dict(self) -> dict[str, Any]:
+        return _stable(self)
 
 
 def validate_runtime_promotion(request: RuntimePromotionRequest) -> ExecutionBoundaryDecision:
@@ -894,6 +1063,7 @@ def runtime_promotion_record_from_dict(data: dict[str, Any]) -> RuntimePromotion
         asset_class=str(data.get("asset_class") or ""),
         source_runtime=str(data.get("source_runtime") or RuntimeStatus.OFFLINE.value),
         target_runtime=str(data.get("target_runtime") or RuntimeStatus.OFFLINE.value),
+        subject_ref=data.get("subject_ref"),
         paper_run_ref=data.get("paper_run_ref"),
         testnet_run_ref=data.get("testnet_run_ref"),
         approval_ref=data.get("approval_ref"),
@@ -913,8 +1083,66 @@ def runtime_promotion_record_from_dict(data: dict[str, Any]) -> RuntimePromotion
     )
 
 
-def validate_runtime_promotion_record(record: RuntimePromotionRecord) -> ExecutionBoundaryDecision:
+def user_risk_choice_from_dict(data: dict[str, Any]) -> UserRiskChoiceRecord:
+    return UserRiskChoiceRecord(
+        choice_ref=str(data.get("choice_ref") or ""),
+        selected_risk_path=str(data.get("selected_risk_path") or ""),
+        cost_disclosure_ref=data.get("cost_disclosure_ref"),
+        leverage_disclosure_ref=data.get("leverage_disclosure_ref"),
+        margin_disclosure_ref=data.get("margin_disclosure_ref"),
+        borrow_disclosure_ref=data.get("borrow_disclosure_ref"),
+        funding_disclosure_ref=data.get("funding_disclosure_ref"),
+        slippage_disclosure_ref=data.get("slippage_disclosure_ref"),
+        liquidation_disclosure_ref=data.get("liquidation_disclosure_ref"),
+        regulation_disclosure_ref=data.get("regulation_disclosure_ref"),
+        failure_mode_refs=_str_tuple(data.get("failure_mode_refs")),
+        recommendation_ref=data.get("recommendation_ref"),
+        responsibility_boundary_ref=data.get("responsibility_boundary_ref"),
+        owner_user_id=str(data.get("owner_user_id") or ""),
+        master_id=str(data.get("master_id") or ""),
+        follower_id=str(data.get("follower_id") or ""),
+        account_binding_ref=str(data.get("account_binding_ref") or ""),
+        subject_ref=str(data.get("subject_ref") or ""),
+        runtime_request_ref=str(data.get("runtime_request_ref") or ""),
+        asset_class=str(data.get("asset_class") or ""),
+        risk_disclosure_profile_ref=str(data.get("risk_disclosure_profile_ref") or ""),
+        impact_disclosure_ref=data.get("impact_disclosure_ref"),
+        actor_source=str(data.get("actor_source") or ""),
+        created_at_utc=str(data.get("created_at_utc") or datetime.now(UTC).isoformat()),
+    )
+
+
+def validate_runtime_promotion_record(
+    record: RuntimePromotionRecord,
+    *,
+    enforce_identity: bool = True,
+) -> ExecutionBoundaryDecision:
     violations: list[ExecutionBoundaryViolation] = []
+    if enforce_identity:
+        expected_ref = _canonical_v2_ref(
+            record,
+            record_type="runtime_promotion",
+            ref_field="runtime_promotion_ref",
+            prefix="runtime_promotion_",
+        )
+        if record.runtime_promotion_ref != expected_ref:
+            violations.append(
+                ExecutionBoundaryViolation(
+                    "runtime_promotion_content_identity_mismatch",
+                    "runtime promotion ref must equal its canonical v2 content identity",
+                    field="runtime_promotion_ref",
+                    ref=record.runtime_promotion_ref,
+                )
+            )
+        if not _valid_utc_timestamp(record.created_at_utc):
+            violations.append(
+                ExecutionBoundaryViolation(
+                    "runtime_promotion_bad_created_at",
+                    "runtime promotion created_at_utc must be timezone-aware",
+                    field="created_at_utc",
+                    ref=record.runtime_promotion_ref,
+                )
+            )
     for field_name in ("request_ref", "asset_class", "source_runtime", "target_runtime"):
         if not _present(getattr(record, field_name)):
             violations.append(
@@ -2667,6 +2895,7 @@ def execution_order_submission_from_dict(data: dict[str, Any]) -> ExecutionOrder
         submission_status=str(data.get("submission_status") or "recorded"),
         venue_order_ref=data.get("venue_order_ref"),
         ack_ref=data.get("ack_ref"),
+        client_order_ref_hash=data.get("client_order_ref_hash"),
         evidence_refs=_str_tuple(data.get("evidence_refs")),
         recorded_by=str(data.get("recorded_by") or "system"),
         created_at_utc=str(data.get("created_at_utc") or datetime.now(UTC).isoformat()),
@@ -2687,8 +2916,34 @@ def validate_execution_order_submission(
     order_materialization: ExecutionOrderMaterializationRecord | None = None,
     venue_capability: ExecutionVenueCapabilityRecord | None = None,
     submit_request: ExecutionSubmitRequestRecord | None = None,
+    enforce_identity: bool = True,
 ) -> ExecutionBoundaryDecision:
     violations: list[ExecutionBoundaryViolation] = []
+    if enforce_identity:
+        expected_ref = _canonical_v2_ref(
+            record,
+            record_type="execution_order_submission",
+            ref_field="submission_ref",
+            prefix="order_submission_",
+        )
+        if record.submission_ref != expected_ref:
+            violations.append(
+                ExecutionBoundaryViolation(
+                    "order_submission_content_identity_mismatch",
+                    "order submission ref must equal its canonical v2 content identity",
+                    field="submission_ref",
+                    ref=record.submission_ref,
+                )
+            )
+        if not _valid_utc_timestamp(record.created_at_utc):
+            violations.append(
+                ExecutionBoundaryViolation(
+                    "order_submission_bad_created_at",
+                    "order submission created_at_utc must be timezone-aware",
+                    field="created_at_utc",
+                    ref=record.submission_ref,
+                )
+            )
     for field_name in (
         "order_intent_ref",
         "runtime_promotion_ref",
@@ -2722,7 +2977,7 @@ def validate_execution_order_submission(
                 ref=record.submission_ref,
             )
         )
-    if status not in {"recorded", "skipped", "submitted", "accepted", "rejected", "failed"}:
+    if status not in {"recorded", "skipped", "submitted", "accepted", "rejected", "failed", "outcome_unknown"}:
         violations.append(
             ExecutionBoundaryViolation(
                 "order_submission_bad_status",
@@ -2767,7 +3022,7 @@ def validate_execution_order_submission(
                 ref=record.submission_ref,
             )
         )
-    if not record.submit_enabled and status in {"submitted", "accepted"}:
+    if not record.submit_enabled and status in {"submitted", "accepted", "outcome_unknown"}:
         violations.append(
             ExecutionBoundaryViolation(
                 "order_submission_status_without_submit",
@@ -2782,6 +3037,15 @@ def validate_execution_order_submission(
                 "order_submission_missing_ack_ref",
                 "submitted/accepted/rejected submissions require ack_ref evidence",
                 field="ack_ref",
+                ref=record.submission_ref,
+            )
+        )
+    if status in {"accepted", "rejected", "outcome_unknown"} and not _present(record.client_order_ref_hash):
+        violations.append(
+            ExecutionBoundaryViolation(
+                "order_submission_missing_client_order_ref_hash",
+                "accepted, rejected, and outcome-unknown submissions require deterministic client-order identity",
+                field="client_order_ref_hash",
                 ref=record.submission_ref,
             )
         )
@@ -3047,6 +3311,17 @@ def validate_execution_order_submission(
                     ref=record.submission_ref,
                 )
             )
+        if _present(submit_request.client_order_ref_hash) and (
+            record.client_order_ref_hash != submit_request.client_order_ref_hash
+        ):
+            violations.append(
+                ExecutionBoundaryViolation(
+                    "order_submission_client_order_ref_mismatch",
+                    "order submission client-order identity must match the submit request",
+                    field="client_order_ref_hash",
+                    ref=record.submission_ref,
+                )
+            )
         if record.submit_enabled and submit_request.submit_request_status != "ready":
             violations.append(
                 ExecutionBoundaryViolation(
@@ -3094,6 +3369,7 @@ def execution_venue_event_from_dict(data: dict[str, Any]) -> ExecutionVenueEvent
         audit_record_ref=str(data.get("audit_record_ref") or ""),
         order_guard_ref=str(data.get("order_guard_ref") or ""),
         idempotency_key=str(data.get("idempotency_key") or ""),
+        submission_ref=data.get("submission_ref"),
         venue_order_ref=data.get("venue_order_ref"),
         client_order_ref=data.get("client_order_ref"),
         ack_ref=data.get("ack_ref"),
@@ -3115,8 +3391,36 @@ def validate_execution_venue_event(
     *,
     known_order_intent_refs: set[str] | None = None,
     known_runtime_promotion_refs: set[str] | None = None,
+    known_submission_refs: set[str] | None = None,
+    submission: ExecutionOrderSubmissionRecord | None = None,
+    enforce_identity: bool = True,
 ) -> ExecutionBoundaryDecision:
     violations: list[ExecutionBoundaryViolation] = []
+    if enforce_identity:
+        expected_ref = _canonical_v2_ref(
+            record,
+            record_type="execution_venue_event",
+            ref_field="venue_event_ref",
+            prefix="venue_event_",
+        )
+        if record.venue_event_ref != expected_ref:
+            violations.append(
+                ExecutionBoundaryViolation(
+                    "venue_event_content_identity_mismatch",
+                    "venue event ref must equal its canonical v2 content identity",
+                    field="venue_event_ref",
+                    ref=record.venue_event_ref,
+                )
+            )
+        if not _valid_utc_timestamp(record.created_at_utc):
+            violations.append(
+                ExecutionBoundaryViolation(
+                    "venue_event_bad_created_at",
+                    "venue event created_at_utc must be timezone-aware",
+                    field="created_at_utc",
+                    ref=record.venue_event_ref,
+                )
+            )
     for field_name in (
         "order_intent_ref",
         "runtime_promotion_ref",
@@ -3155,6 +3459,15 @@ def validate_execution_venue_event(
                 ref=record.venue_event_ref,
             )
         )
+    if event_kind and str(record.status or "").lower() != event_kind:
+        violations.append(
+            ExecutionBoundaryViolation(
+                "venue_event_status_kind_mismatch",
+                "venue event status must match event_kind",
+                field="status",
+                ref=record.venue_event_ref,
+            )
+        )
     if known_order_intent_refs is not None and record.order_intent_ref not in known_order_intent_refs:
         violations.append(
             ExecutionBoundaryViolation(
@@ -3173,6 +3486,133 @@ def validate_execution_venue_event(
                 ref=record.venue_event_ref,
             )
         )
+    if known_submission_refs is not None:
+        if not _present(record.submission_ref):
+            violations.append(
+                ExecutionBoundaryViolation(
+                    "venue_event_missing_submission_ref",
+                    "strict venue events must resolve to the exact order submission",
+                    field="submission_ref",
+                    ref=record.venue_event_ref,
+                )
+            )
+        elif str(record.submission_ref) not in known_submission_refs:
+            violations.append(
+                ExecutionBoundaryViolation(
+                    "venue_event_unknown_submission_ref",
+                    "venue event submission_ref must resolve to a recorded submission",
+                    field="submission_ref",
+                    ref=record.venue_event_ref,
+                )
+            )
+    if submission is not None:
+        if not str(submission.submission_ref).startswith("order_submission_v2_"):
+            violations.append(
+                ExecutionBoundaryViolation(
+                    "venue_event_legacy_submission_parent",
+                    "strict venue events cannot use a legacy submission as live evidence",
+                    field="submission_ref",
+                    ref=record.venue_event_ref,
+                )
+            )
+        expected_pairs = (
+            ("submission_ref", submission.submission_ref),
+            ("order_intent_ref", submission.order_intent_ref),
+            ("runtime_promotion_ref", submission.runtime_promotion_ref),
+            ("venue_ref", submission.venue_ref),
+            ("order_guard_ref", submission.order_guard_ref),
+            ("idempotency_key", submission.idempotency_key),
+        )
+        for field_name, expected in expected_pairs:
+            if getattr(record, field_name) != expected:
+                violations.append(
+                    ExecutionBoundaryViolation(
+                        "venue_event_submission_ref_mismatch",
+                        f"venue event {field_name} must match its order submission",
+                        field=field_name,
+                        ref=record.venue_event_ref,
+                    )
+                )
+        if _present(submission.venue_order_ref) and _present(record.venue_order_ref) and record.venue_order_ref != submission.venue_order_ref:
+            violations.append(
+                ExecutionBoundaryViolation(
+                    "venue_event_submission_venue_order_mismatch",
+                    "venue event venue_order_ref must match its order submission",
+                    field="venue_order_ref",
+                    ref=record.venue_event_ref,
+                )
+            )
+        if _present(submission.ack_ref) and _present(record.ack_ref) and record.ack_ref != submission.ack_ref:
+            violations.append(
+                ExecutionBoundaryViolation(
+                    "venue_event_submission_ack_mismatch",
+                    "venue event ack_ref must match its order submission",
+                    field="ack_ref",
+                    ref=record.venue_event_ref,
+                )
+            )
+        parent_status = str(submission.submission_status or "").lower()
+        allowed_parent_statuses = {
+            "submitted": {"accepted"},
+            "accepted": {"accepted"},
+            "rejected": {"rejected", "outcome_unknown"},
+            "partially_filled": {"accepted", "outcome_unknown"},
+            "filled": {"accepted", "outcome_unknown"},
+            "canceled": {"accepted", "outcome_unknown"},
+            "expired": {"accepted", "outcome_unknown"},
+            "reconciled": {"accepted", "outcome_unknown"},
+        }
+        if parent_status not in allowed_parent_statuses.get(event_kind, set()):
+            violations.append(
+                ExecutionBoundaryViolation(
+                    "venue_event_submission_state_mismatch",
+                    "venue event kind is impossible for the parent submission state",
+                    field="event_kind",
+                    ref=record.venue_event_ref,
+                )
+            )
+        if event_kind in {"accepted", "rejected"} and parent_status != "outcome_unknown" and (
+            not _present(record.ack_ref) or record.ack_ref != submission.ack_ref
+        ):
+            violations.append(
+                ExecutionBoundaryViolation(
+                    "venue_event_submission_ack_mismatch",
+                    "accepted/rejected venue event requires the exact parent submission ack",
+                    field="ack_ref",
+                    ref=record.venue_event_ref,
+                )
+            )
+        if event_kind in {
+            "submitted",
+            "accepted",
+            "rejected",
+            "partially_filled",
+            "filled",
+            "canceled",
+            "expired",
+            "reconciled",
+        }:
+            if not _present(record.client_order_ref) or (
+                execution_client_order_ref_hash(str(record.client_order_ref))
+                != submission.client_order_ref_hash
+            ):
+                violations.append(
+                    ExecutionBoundaryViolation(
+                        "venue_event_client_order_ref_mismatch",
+                        "venue event must resolve to the exact parent client-order identity",
+                        field="client_order_ref",
+                        ref=record.venue_event_ref,
+                    )
+                )
+        if not _present(record.raw_event_hash) or not record.evidence_refs:
+            violations.append(
+                ExecutionBoundaryViolation(
+                    "venue_event_missing_trusted_evidence",
+                    "strict venue event requires a raw-event digest and evidence refs",
+                    field="raw_event_hash",
+                    ref=record.venue_event_ref,
+                )
+            )
     if event_kind in {"accepted", "partially_filled", "filled", "canceled", "expired", "reconciled"} and not _present(
         record.venue_order_ref
     ):
@@ -3194,7 +3634,7 @@ def validate_execution_venue_event(
             )
         )
     if event_kind in {"partially_filled", "filled"}:
-        for field_name in ("fill_ref", "quantity_ref", "price_ref"):
+        for field_name in ("fill_ref", "quantity_ref", "price_ref", "fee_ref"):
             if not _present(getattr(record, field_name)):
                 violations.append(
                     ExecutionBoundaryViolation(
@@ -3220,6 +3660,7 @@ def execution_reconciliation_from_dict(data: dict[str, Any]) -> ExecutionReconci
     return ExecutionReconciliationRecord(
         order_intent_ref=str(data.get("order_intent_ref") or ""),
         runtime_promotion_ref=str(data.get("runtime_promotion_ref") or ""),
+        submission_ref=data.get("submission_ref"),
         venue_order_ref=data.get("venue_order_ref"),
         event_refs=_str_tuple(data.get("event_refs")),
         status=str(data.get("status") or "missing_events"),
@@ -3256,6 +3697,7 @@ def reconcile_execution_venue_events(
     runtime_promotion_ref: str,
     audit_record_ref: str,
     events: tuple[ExecutionVenueEventRecord, ...],
+    submission_ref: str | None = None,
     venue_order_ref: str | None = None,
     evidence_refs: tuple[str, ...] = (),
     recorded_by: str = "system",
@@ -3265,6 +3707,7 @@ def reconcile_execution_venue_events(
         for event in events
         if event.order_intent_ref == order_intent_ref
         and event.runtime_promotion_ref == runtime_promotion_ref
+        and (not _present(submission_ref) or event.submission_ref == submission_ref)
         and (not _present(venue_order_ref) or event.venue_order_ref == venue_order_ref)
     )
     event_refs = tuple(event.venue_event_ref for event in matching)
@@ -3279,11 +3722,13 @@ def reconcile_execution_venue_events(
     elif len(venue_order_refs) > 1:
         status = "venue_order_mismatch"
         discrepancy_refs.append("multiple_venue_order_refs")
-    elif {"filled", "canceled"} <= event_kinds or {"filled", "rejected"} <= event_kinds:
+    elif "filled" in event_kinds and event_kinds & {"canceled", "expired", "rejected"}:
         status = "terminal_conflict"
         discrepancy_refs.append("conflicting_terminal_events")
     elif "reconciled" in event_kinds:
         status = "reconciled"
+    elif event_kinds & {"canceled", "expired"} and "partially_filled" in event_kinds:
+        status = "closed_partial_fill"
     elif event_kinds & {"filled", "partially_filled"} or statuses & {"filled", "partially_filled"}:
         status = "needs_reconcile"
         discrepancy_refs.append("missing_reconcile_event")
@@ -3293,7 +3738,7 @@ def reconcile_execution_venue_events(
         status = "open"
         discrepancy_refs.append("no_terminal_event")
 
-    action_required = status not in {"reconciled", "closed_no_fill"}
+    action_required = status not in {"reconciled", "closed_no_fill", "closed_partial_fill"}
     if _present(venue_order_ref) and venue_order_refs and venue_order_ref not in venue_order_refs:
         status = "venue_order_mismatch"
         discrepancy_refs.append("requested_venue_order_ref_not_observed")
@@ -3302,6 +3747,7 @@ def reconcile_execution_venue_events(
     return ExecutionReconciliationRecord(
         order_intent_ref=order_intent_ref,
         runtime_promotion_ref=runtime_promotion_ref,
+        submission_ref=submission_ref,
         venue_order_ref=observed_venue_order_ref,
         event_refs=event_refs,
         status=status,
@@ -3319,8 +3765,37 @@ def validate_execution_reconciliation(
     known_order_intent_refs: set[str] | None = None,
     known_runtime_promotion_refs: set[str] | None = None,
     known_venue_event_refs: set[str] | None = None,
+    known_submission_refs: set[str] | None = None,
+    submission: ExecutionOrderSubmissionRecord | None = None,
+    venue_events: tuple[ExecutionVenueEventRecord, ...] = (),
+    enforce_identity: bool = True,
 ) -> ExecutionBoundaryDecision:
     violations: list[ExecutionBoundaryViolation] = []
+    if enforce_identity:
+        expected_ref = _canonical_v2_ref(
+            record,
+            record_type="execution_reconciliation",
+            ref_field="reconciliation_ref",
+            prefix="execution_reconcile_",
+        )
+        if record.reconciliation_ref != expected_ref:
+            violations.append(
+                ExecutionBoundaryViolation(
+                    "execution_reconcile_content_identity_mismatch",
+                    "reconciliation ref must equal its canonical v2 content identity",
+                    field="reconciliation_ref",
+                    ref=record.reconciliation_ref,
+                )
+            )
+        if not _valid_utc_timestamp(record.created_at_utc):
+            violations.append(
+                ExecutionBoundaryViolation(
+                    "execution_reconcile_bad_created_at",
+                    "reconciliation created_at_utc must be timezone-aware",
+                    field="created_at_utc",
+                    ref=record.reconciliation_ref,
+                )
+            )
     for field_name in ("order_intent_ref", "runtime_promotion_ref", "audit_record_ref", "status"):
         if not _present(getattr(record, field_name)):
             violations.append(
@@ -3337,6 +3812,7 @@ def validate_execution_reconciliation(
         "needs_reconcile",
         "reconciled",
         "closed_no_fill",
+        "closed_partial_fill",
         "terminal_conflict",
         "venue_order_mismatch",
     }:
@@ -3348,11 +3824,11 @@ def validate_execution_reconciliation(
                 ref=record.reconciliation_ref,
             )
         )
-    if record.status in {"reconciled", "closed_no_fill"} and record.action_required:
+    if record.status in {"reconciled", "closed_no_fill", "closed_partial_fill"} and record.action_required:
         violations.append(
             ExecutionBoundaryViolation(
                 "execution_reconcile_terminal_action_required",
-                "terminal reconciled/closed_no_fill states cannot require action",
+                "terminal reconciled/closed states cannot require action",
                 field="action_required",
                 ref=record.reconciliation_ref,
             )
@@ -3394,6 +3870,88 @@ def validate_execution_reconciliation(
                 ref=record.reconciliation_ref,
             )
         )
+    if known_submission_refs is not None:
+        if not _present(record.submission_ref):
+            violations.append(
+                ExecutionBoundaryViolation(
+                    "execution_reconcile_missing_submission_ref",
+                    "strict reconciliation must resolve to one order submission",
+                    field="submission_ref",
+                    ref=record.reconciliation_ref,
+                )
+            )
+        elif str(record.submission_ref) not in known_submission_refs:
+            violations.append(
+                ExecutionBoundaryViolation(
+                    "execution_reconcile_unknown_submission_ref",
+                    "reconciliation submission_ref must resolve to a recorded submission",
+                    field="submission_ref",
+                    ref=record.reconciliation_ref,
+                )
+            )
+    if submission is not None:
+        if not str(submission.submission_ref).startswith("order_submission_v2_"):
+            violations.append(
+                ExecutionBoundaryViolation(
+                    "execution_reconcile_legacy_submission_parent",
+                    "strict reconciliation cannot use a legacy submission as live evidence",
+                    field="submission_ref",
+                    ref=record.reconciliation_ref,
+                )
+            )
+        for field_name, expected in (
+            ("submission_ref", submission.submission_ref),
+            ("order_intent_ref", submission.order_intent_ref),
+            ("runtime_promotion_ref", submission.runtime_promotion_ref),
+        ):
+            if getattr(record, field_name) != expected:
+                violations.append(
+                    ExecutionBoundaryViolation(
+                        "execution_reconcile_submission_ref_mismatch",
+                        f"reconciliation {field_name} must match its submission",
+                        field=field_name,
+                        ref=record.reconciliation_ref,
+                    )
+                )
+        if _present(submission.venue_order_ref) and _present(record.venue_order_ref) and record.venue_order_ref != submission.venue_order_ref:
+            violations.append(
+                ExecutionBoundaryViolation(
+                    "execution_reconcile_submission_venue_order_mismatch",
+                    "reconciliation venue_order_ref must match its submission",
+                    field="venue_order_ref",
+                    ref=record.reconciliation_ref,
+                )
+            )
+    event_by_ref = {event.venue_event_ref: event for event in venue_events}
+    if submission is not None and set(record.event_refs) != set(event_by_ref):
+        violations.append(
+            ExecutionBoundaryViolation(
+                "execution_reconcile_event_set_mismatch",
+                "strict reconciliation event_refs must exactly equal the supplied event objects",
+                field="event_refs",
+                ref=record.reconciliation_ref,
+            )
+        )
+    for event_ref in record.event_refs:
+        event = event_by_ref.get(event_ref)
+        if event is None and (submission is not None or venue_events):
+            violations.append(
+                ExecutionBoundaryViolation(
+                    "execution_reconcile_missing_venue_event_object",
+                    "strict reconciliation requires every event_ref to resolve to the supplied venue event object",
+                    field="event_refs",
+                    ref=record.reconciliation_ref,
+                )
+            )
+        elif event is not None and _present(record.submission_ref) and event.submission_ref != record.submission_ref:
+            violations.append(
+                ExecutionBoundaryViolation(
+                    "execution_reconcile_event_submission_mismatch",
+                    "reconciliation event must belong to the same submission",
+                    field="event_refs",
+                    ref=record.reconciliation_ref,
+                )
+            )
     if known_venue_event_refs is not None:
         missing = [event_ref for event_ref in record.event_refs if event_ref not in known_venue_event_refs]
         if missing:
@@ -3405,6 +3963,33 @@ def validate_execution_reconciliation(
                     ref=record.reconciliation_ref,
                 )
             )
+    if submission is not None and set(record.event_refs) == set(event_by_ref):
+        derived = reconcile_execution_venue_events(
+            order_intent_ref=record.order_intent_ref,
+            runtime_promotion_ref=record.runtime_promotion_ref,
+            submission_ref=record.submission_ref,
+            venue_order_ref=record.venue_order_ref,
+            audit_record_ref=record.audit_record_ref,
+            events=tuple(event_by_ref.values()),
+            evidence_refs=record.evidence_refs,
+            recorded_by=record.recorded_by,
+        )
+        for field_name in (
+            "venue_order_ref",
+            "event_refs",
+            "status",
+            "discrepancy_refs",
+            "action_required",
+        ):
+            if getattr(record, field_name) != getattr(derived, field_name):
+                violations.append(
+                    ExecutionBoundaryViolation(
+                        "execution_reconcile_not_canonical",
+                        f"reconciliation {field_name} must equal the canonical derivation from its events",
+                        field=field_name,
+                        ref=record.reconciliation_ref,
+                    )
+                )
     return ExecutionBoundaryDecision(accepted=not violations, violations=tuple(violations))
 
 
@@ -3525,7 +4110,7 @@ class PersistentExecutionOrderIntentRegistry:
         assert self._path is not None
         if not self._path.exists():
             return
-        for line_no, line in enumerate(self._path.read_text(encoding="utf-8").splitlines(), start=1):
+        for line_no, line in enumerate(_read_jsonl_lines_locked(self._path), start=1):
             if not line.strip():
                 continue
             try:
@@ -3554,8 +4139,9 @@ class PersistentExecutionOrderIntentRegistry:
             "event_type": "execution_order_intent_recorded",
             "order_intent": record.to_dict(),
         }
-        with self._path.open("a", encoding="utf-8") as fh:
-            fh.write(json.dumps(row, ensure_ascii=False, sort_keys=True, separators=(",", ":")) + "\n")
+        _append_jsonl_once_durable(
+            self._path, row, payload_key="order_intent", ref_field="order_intent_ref"
+        )
 
     def record_intent(
         self,
@@ -3572,8 +4158,8 @@ class PersistentExecutionOrderIntentRegistry:
         if not decision.accepted:
             codes = ",".join(v.code for v in decision.violations)
             raise ValueError(codes)
-        self._records[record.order_intent_ref] = record
         self._append(record)
+        self._records[record.order_intent_ref] = record
         return record
 
     def intent(self, order_intent_ref: str) -> ExecutionOrderIntentRecord:
@@ -3583,6 +4169,12 @@ class PersistentExecutionOrderIntentRegistry:
 
     def intents(self) -> list[ExecutionOrderIntentRecord]:
         return sorted(self._records.values(), key=lambda item: (item.created_at_utc, item.order_intent_ref))
+
+    def refresh(self) -> None:
+        if self._path is None:
+            return
+        refreshed = type(self)(self._path)
+        self._records = refreshed._records
 
 
 class PersistentExecutionOrderMaterializationRegistry:
@@ -3603,7 +4195,7 @@ class PersistentExecutionOrderMaterializationRegistry:
         assert self._path is not None
         if not self._path.exists():
             return
-        for line_no, line in enumerate(self._path.read_text(encoding="utf-8").splitlines(), start=1):
+        for line_no, line in enumerate(_read_jsonl_lines_locked(self._path), start=1):
             if not line.strip():
                 continue
             try:
@@ -3632,8 +4224,12 @@ class PersistentExecutionOrderMaterializationRegistry:
             "event_type": "execution_order_materialization_recorded",
             "order_materialization": record.to_dict(),
         }
-        with self._path.open("a", encoding="utf-8") as fh:
-            fh.write(json.dumps(row, ensure_ascii=False, sort_keys=True, separators=(",", ":")) + "\n")
+        _append_jsonl_once_durable(
+            self._path,
+            row,
+            payload_key="order_materialization",
+            ref_field="materialization_ref",
+        )
 
     def record_materialization(
         self,
@@ -3654,8 +4250,8 @@ class PersistentExecutionOrderMaterializationRegistry:
         if not decision.accepted:
             codes = ",".join(v.code for v in decision.violations)
             raise ValueError(codes)
-        self._records[record.materialization_ref] = record
         self._append(record)
+        self._records[record.materialization_ref] = record
         return record
 
     def materialization(self, materialization_ref: str) -> ExecutionOrderMaterializationRecord:
@@ -3665,6 +4261,12 @@ class PersistentExecutionOrderMaterializationRegistry:
 
     def materializations(self) -> list[ExecutionOrderMaterializationRecord]:
         return sorted(self._records.values(), key=lambda item: (item.created_at_utc, item.materialization_ref))
+
+    def refresh(self) -> None:
+        if self._path is None:
+            return
+        refreshed = type(self)(self._path)
+        self._records = refreshed._records
 
 
 class PersistentExecutionVenueConnectivityCheckRegistry:
@@ -3685,7 +4287,7 @@ class PersistentExecutionVenueConnectivityCheckRegistry:
         assert self._path is not None
         if not self._path.exists():
             return
-        for line_no, line in enumerate(self._path.read_text(encoding="utf-8").splitlines(), start=1):
+        for line_no, line in enumerate(_read_jsonl_lines_locked(self._path), start=1):
             if not line.strip():
                 continue
             try:
@@ -3716,8 +4318,12 @@ class PersistentExecutionVenueConnectivityCheckRegistry:
             "event_type": "execution_venue_connectivity_check_recorded",
             "venue_connectivity_check": record.to_dict(),
         }
-        with self._path.open("a", encoding="utf-8") as fh:
-            fh.write(json.dumps(row, ensure_ascii=False, sort_keys=True, separators=(",", ":")) + "\n")
+        _append_jsonl_once_durable(
+            self._path,
+            row,
+            payload_key="venue_connectivity_check",
+            ref_field="venue_connectivity_check_ref",
+        )
 
     def record_check(
         self,
@@ -3738,8 +4344,8 @@ class PersistentExecutionVenueConnectivityCheckRegistry:
         if not decision.accepted:
             codes = ",".join(v.code for v in decision.violations)
             raise ValueError(codes)
-        self._records[record.venue_connectivity_check_ref] = record
         self._append(record)
+        self._records[record.venue_connectivity_check_ref] = record
         return record
 
     def check(self, venue_connectivity_check_ref: str) -> ExecutionVenueConnectivityCheckRecord:
@@ -3749,6 +4355,12 @@ class PersistentExecutionVenueConnectivityCheckRegistry:
 
     def checks(self) -> list[ExecutionVenueConnectivityCheckRecord]:
         return sorted(self._records.values(), key=lambda item: (item.created_at_utc, item.venue_connectivity_check_ref))
+
+    def refresh(self) -> None:
+        if self._path is None:
+            return
+        refreshed = type(self)(self._path)
+        self._records = refreshed._records
 
 
 class PersistentExecutionVenueSafetyAttestationRegistry:
@@ -3769,7 +4381,7 @@ class PersistentExecutionVenueSafetyAttestationRegistry:
         assert self._path is not None
         if not self._path.exists():
             return
-        for line_no, line in enumerate(self._path.read_text(encoding="utf-8").splitlines(), start=1):
+        for line_no, line in enumerate(_read_jsonl_lines_locked(self._path), start=1):
             if not line.strip():
                 continue
             try:
@@ -3798,8 +4410,12 @@ class PersistentExecutionVenueSafetyAttestationRegistry:
             "event_type": "execution_venue_safety_attestation_recorded",
             "venue_safety_attestation": record.to_dict(),
         }
-        with self._path.open("a", encoding="utf-8") as fh:
-            fh.write(json.dumps(row, ensure_ascii=False, sort_keys=True, separators=(",", ":")) + "\n")
+        _append_jsonl_once_durable(
+            self._path,
+            row,
+            payload_key="venue_safety_attestation",
+            ref_field="venue_safety_attestation_ref",
+        )
 
     def record_attestation(
         self,
@@ -3824,8 +4440,8 @@ class PersistentExecutionVenueSafetyAttestationRegistry:
         if not decision.accepted:
             codes = ",".join(v.code for v in decision.violations)
             raise ValueError(codes)
-        self._records[record.venue_safety_attestation_ref] = record
         self._append(record)
+        self._records[record.venue_safety_attestation_ref] = record
         return record
 
     def attestation(self, venue_safety_attestation_ref: str) -> ExecutionVenueSafetyAttestationRecord:
@@ -3835,6 +4451,12 @@ class PersistentExecutionVenueSafetyAttestationRegistry:
 
     def attestations(self) -> list[ExecutionVenueSafetyAttestationRecord]:
         return sorted(self._records.values(), key=lambda item: (item.created_at_utc, item.venue_safety_attestation_ref))
+
+    def refresh(self) -> None:
+        if self._path is None:
+            return
+        refreshed = type(self)(self._path)
+        self._records = refreshed._records
 
 
 class PersistentExecutionVenueCapabilityRegistry:
@@ -3855,7 +4477,7 @@ class PersistentExecutionVenueCapabilityRegistry:
         assert self._path is not None
         if not self._path.exists():
             return
-        for line_no, line in enumerate(self._path.read_text(encoding="utf-8").splitlines(), start=1):
+        for line_no, line in enumerate(_read_jsonl_lines_locked(self._path), start=1):
             if not line.strip():
                 continue
             try:
@@ -3884,8 +4506,12 @@ class PersistentExecutionVenueCapabilityRegistry:
             "event_type": "execution_venue_capability_recorded",
             "venue_capability": record.to_dict(),
         }
-        with self._path.open("a", encoding="utf-8") as fh:
-            fh.write(json.dumps(row, ensure_ascii=False, sort_keys=True, separators=(",", ":")) + "\n")
+        _append_jsonl_once_durable(
+            self._path,
+            row,
+            payload_key="venue_capability",
+            ref_field="venue_capability_ref",
+        )
 
     def record_capability(
         self,
@@ -3910,8 +4536,8 @@ class PersistentExecutionVenueCapabilityRegistry:
         if not decision.accepted:
             codes = ",".join(v.code for v in decision.violations)
             raise ValueError(codes)
-        self._records[record.venue_capability_ref] = record
         self._append(record)
+        self._records[record.venue_capability_ref] = record
         return record
 
     def capability(self, venue_capability_ref: str) -> ExecutionVenueCapabilityRecord:
@@ -3921,6 +4547,12 @@ class PersistentExecutionVenueCapabilityRegistry:
 
     def capabilities(self) -> list[ExecutionVenueCapabilityRecord]:
         return sorted(self._records.values(), key=lambda item: (item.created_at_utc, item.venue_capability_ref))
+
+    def refresh(self) -> None:
+        if self._path is None:
+            return
+        refreshed = type(self)(self._path)
+        self._records = refreshed._records
 
 
 class PersistentExecutionSubmitRequestRegistry:
@@ -3941,7 +4573,7 @@ class PersistentExecutionSubmitRequestRegistry:
         assert self._path is not None
         if not self._path.exists():
             return
-        for line_no, line in enumerate(self._path.read_text(encoding="utf-8").splitlines(), start=1):
+        for line_no, line in enumerate(_read_jsonl_lines_locked(self._path), start=1):
             if not line.strip():
                 continue
             try:
@@ -3970,8 +4602,12 @@ class PersistentExecutionSubmitRequestRegistry:
             "event_type": "execution_submit_request_recorded",
             "submit_request": record.to_dict(),
         }
-        with self._path.open("a", encoding="utf-8") as fh:
-            fh.write(json.dumps(row, ensure_ascii=False, sort_keys=True, separators=(",", ":")) + "\n")
+        _append_jsonl_once_durable(
+            self._path,
+            row,
+            payload_key="submit_request",
+            ref_field="submit_request_ref",
+        )
 
     def record_request(
         self,
@@ -4000,8 +4636,8 @@ class PersistentExecutionSubmitRequestRegistry:
         if not decision.accepted:
             codes = ",".join(v.code for v in decision.violations)
             raise ValueError(codes)
-        self._records[record.submit_request_ref] = record
         self._append(record)
+        self._records[record.submit_request_ref] = record
         return record
 
     def request(self, submit_request_ref: str) -> ExecutionSubmitRequestRecord:
@@ -4011,6 +4647,12 @@ class PersistentExecutionSubmitRequestRegistry:
 
     def requests(self) -> list[ExecutionSubmitRequestRecord]:
         return sorted(self._records.values(), key=lambda item: (item.created_at_utc, item.submit_request_ref))
+
+    def refresh(self) -> None:
+        if self._path is None:
+            return
+        refreshed = type(self)(self._path)
+        self._records = refreshed._records
 
 
 class PersistentExecutionOrderSubmissionRegistry:
@@ -4031,12 +4673,13 @@ class PersistentExecutionOrderSubmissionRegistry:
         assert self._path is not None
         if not self._path.exists():
             return
-        for line_no, line in enumerate(self._path.read_text(encoding="utf-8").splitlines(), start=1):
+        for line_no, line in enumerate(_read_jsonl_lines_locked(self._path), start=1):
             if not line.strip():
                 continue
             try:
                 row = json.loads(line)
-                if row.get("schema_version") != 1:
+                schema_version = int(row.get("schema_version", 0) or 0)
+                if schema_version not in {1, 2}:
                     raise ValueError("unsupported execution order submission schema_version")
                 if row.get("event_type") != "execution_order_submission_recorded":
                     raise ValueError("unsupported execution order submission event_type")
@@ -4044,10 +4687,24 @@ class PersistentExecutionOrderSubmissionRegistry:
                 if not isinstance(payload, dict):
                     raise ValueError("missing order_submission")
                 record = execution_order_submission_from_dict(payload)
-                decision = validate_execution_order_submission(record)
+                _reject_legacy_reserved_v2_identity(
+                    schema_version=schema_version,
+                    ref=record.submission_ref,
+                    reserved_prefix="order_submission_v2_",
+                    record_type="execution order submission",
+                )
+                decision = validate_execution_order_submission(
+                    record,
+                    enforce_identity=schema_version == 2,
+                )
                 if not decision.accepted:
                     codes = ",".join(v.code for v in decision.violations)
                     raise ValueError(f"invalid execution order submission record: {codes}")
+                existing = self._records.get(record.submission_ref)
+                if existing is not None:
+                    if schema_version == 2 and not _same_record_semantics(existing, record):
+                        raise ValueError("execution order submission identity collision")
+                    continue
                 self._records[record.submission_ref] = record
             except Exception as exc:  # noqa: BLE001 - corrupt execution history must be visible.
                 raise ValueError(f"invalid persisted execution order submission row at {self._path}:{line_no}") from exc
@@ -4056,12 +4713,16 @@ class PersistentExecutionOrderSubmissionRegistry:
         if self._path is None:
             return
         row = {
-            "schema_version": 1,
+            "schema_version": 2,
             "event_type": "execution_order_submission_recorded",
             "order_submission": record.to_dict(),
         }
-        with self._path.open("a", encoding="utf-8") as fh:
-            fh.write(json.dumps(row, ensure_ascii=False, sort_keys=True, separators=(",", ":")) + "\n")
+        _append_v2_jsonl_once(
+            self._path,
+            row,
+            payload_key="order_submission",
+            ref_field="submission_ref",
+        )
 
     def record_submission(
         self,
@@ -4078,6 +4739,22 @@ class PersistentExecutionOrderSubmissionRegistry:
         venue_capability: ExecutionVenueCapabilityRecord | None = None,
         submit_request: ExecutionSubmitRequestRecord | None = None,
     ) -> ExecutionOrderSubmissionRecord:
+        if record.submit_enabled and any(
+            parent is None
+            for parent in (
+                order_intent,
+                runtime_promotion,
+                order_materialization,
+                venue_capability,
+                submit_request,
+            )
+        ):
+            raise ValueError("strict submit-enabled recording requires every formal parent object")
+        existing = self._records.get(record.submission_ref)
+        if existing is not None:
+            if not _same_record_semantics(existing, record):
+                raise ValueError("execution order submission identity collision")
+            return existing
         decision = validate_execution_order_submission(
             record,
             known_order_intent_refs=known_order_intent_refs,
@@ -4094,8 +4771,8 @@ class PersistentExecutionOrderSubmissionRegistry:
         if not decision.accepted:
             codes = ",".join(v.code for v in decision.violations)
             raise ValueError(codes)
-        self._records[record.submission_ref] = record
         self._append(record)
+        self._records[record.submission_ref] = record
         return record
 
     def submission(self, submission_ref: str) -> ExecutionOrderSubmissionRecord:
@@ -4103,8 +4780,34 @@ class PersistentExecutionOrderSubmissionRegistry:
             raise KeyError(f"unknown execution order submission: {submission_ref}")
         return self._records[submission_ref]
 
+    def submission_by_audit_record_ref(
+        self,
+        audit_record_ref: str,
+    ) -> ExecutionOrderSubmissionRecord:
+        """Resolve exactly one guarded submission by its canonical audit identity."""
+
+        ref = str(audit_record_ref or "").strip()
+        if not ref.startswith("copy_submission_audit_"):
+            raise KeyError("canonical copy-trade submission audit ref is required")
+        matches = [
+            record
+            for record in self._records.values()
+            if record.audit_record_ref == ref
+        ]
+        if len(matches) != 1:
+            raise KeyError(f"unknown or ambiguous execution submission audit: {ref}")
+        return matches[0]
+
     def submissions(self) -> list[ExecutionOrderSubmissionRecord]:
         return sorted(self._records.values(), key=lambda item: (item.created_at_utc, item.submission_ref))
+
+    def refresh(self) -> None:
+        """Reload durable rows so sibling process/appends are visible."""
+
+        if self._path is None:
+            return
+        refreshed = type(self)(self._path)
+        self._records = refreshed._records
 
 
 class PersistentRuntimePromotionRegistry:
@@ -4125,12 +4828,13 @@ class PersistentRuntimePromotionRegistry:
         assert self._path is not None
         if not self._path.exists():
             return
-        for line_no, line in enumerate(self._path.read_text(encoding="utf-8").splitlines(), start=1):
+        for line_no, line in enumerate(_read_jsonl_lines_locked(self._path), start=1):
             if not line.strip():
                 continue
             try:
                 row = json.loads(line)
-                if row.get("schema_version") != 1:
+                schema_version = int(row.get("schema_version", 0) or 0)
+                if schema_version not in {1, 2}:
                     raise ValueError("unsupported runtime promotion schema_version")
                 if row.get("event_type") != "runtime_promotion_recorded":
                     raise ValueError("unsupported runtime promotion event_type")
@@ -4138,10 +4842,24 @@ class PersistentRuntimePromotionRegistry:
                 if not isinstance(payload, dict):
                     raise ValueError("missing runtime_promotion")
                 record = runtime_promotion_record_from_dict(payload)
-                decision = validate_runtime_promotion_record(record)
+                _reject_legacy_reserved_v2_identity(
+                    schema_version=schema_version,
+                    ref=record.runtime_promotion_ref,
+                    reserved_prefix="runtime_promotion_v2_",
+                    record_type="runtime promotion",
+                )
+                decision = validate_runtime_promotion_record(
+                    record,
+                    enforce_identity=schema_version == 2,
+                )
                 if not decision.accepted:
                     codes = ",".join(v.code for v in decision.violations)
                     raise ValueError(f"invalid runtime promotion record: {codes}")
+                existing = self._records.get(record.runtime_promotion_ref)
+                if existing is not None:
+                    if schema_version == 2 and not _same_record_semantics(existing, record):
+                        raise ValueError("runtime promotion identity collision")
+                    continue
                 self._records[record.runtime_promotion_ref] = record
             except Exception as exc:  # noqa: BLE001 - corrupt execution history must be visible.
                 raise ValueError(f"invalid persisted runtime promotion row at {self._path}:{line_no}") from exc
@@ -4150,20 +4868,29 @@ class PersistentRuntimePromotionRegistry:
         if self._path is None:
             return
         row = {
-            "schema_version": 1,
+            "schema_version": 2,
             "event_type": "runtime_promotion_recorded",
             "runtime_promotion": record.to_dict(),
         }
-        with self._path.open("a", encoding="utf-8") as fh:
-            fh.write(json.dumps(row, ensure_ascii=False, sort_keys=True, separators=(",", ":")) + "\n")
+        _append_v2_jsonl_once(
+            self._path,
+            row,
+            payload_key="runtime_promotion",
+            ref_field="runtime_promotion_ref",
+        )
 
     def record_promotion(self, record: RuntimePromotionRecord) -> RuntimePromotionRecord:
+        existing = self._records.get(record.runtime_promotion_ref)
+        if existing is not None:
+            if not _same_record_semantics(existing, record):
+                raise ValueError("runtime promotion identity collision")
+            return existing
         decision = validate_runtime_promotion_record(record)
         if not decision.accepted:
             codes = ",".join(v.code for v in decision.violations)
             raise ValueError(codes)
-        self._records[record.runtime_promotion_ref] = record
         self._append(record)
+        self._records[record.runtime_promotion_ref] = record
         return record
 
     def promotion(self, runtime_promotion_ref: str) -> RuntimePromotionRecord:
@@ -4173,6 +4900,174 @@ class PersistentRuntimePromotionRegistry:
 
     def promotions(self) -> list[RuntimePromotionRecord]:
         return sorted(self._records.values(), key=lambda item: (item.created_at_utc, item.runtime_promotion_ref))
+
+    def refresh(self) -> None:
+        if self._path is None:
+            return
+        refreshed = type(self)(self._path)
+        self._records = refreshed._records
+
+
+class PersistentUserRiskChoiceRegistry:
+    """Append-only, owner-scoped user acknowledgement registry."""
+
+    def __init__(self, path: str | Path | None = None) -> None:
+        self._path = Path(path) if path is not None else None
+        self._records: dict[str, UserRiskChoiceRecord] = {}
+        if self._path is not None:
+            self._path.parent.mkdir(parents=True, exist_ok=True)
+            self._load_existing()
+
+    def _load_existing(self) -> None:
+        assert self._path is not None
+        if not self._path.exists():
+            return
+        for line_no, line in enumerate(_read_jsonl_lines_locked(self._path), start=1):
+            if not line.strip():
+                continue
+            try:
+                row = json.loads(line)
+                if int(row.get("schema_version", 0) or 0) != 2:
+                    raise ValueError("unsupported user risk choice schema_version")
+                if row.get("event_type") != "user_risk_choice_recorded":
+                    raise ValueError("unsupported user risk choice event_type")
+                payload = row.get("user_risk_choice")
+                if not isinstance(payload, dict):
+                    raise ValueError("missing user_risk_choice")
+                record = user_risk_choice_from_dict(payload)
+                decision = validate_user_risk_choice(record)
+                if not decision.accepted:
+                    codes = ",".join(violation.code for violation in decision.violations)
+                    raise ValueError(f"invalid user risk choice record: {codes}")
+                existing = self._records.get(record.choice_ref)
+                if existing is not None:
+                    if not _same_record_semantics(existing, record):
+                        raise ValueError("user risk choice identity collision")
+                    continue
+                self._records[record.choice_ref] = record
+            except Exception as exc:  # noqa: BLE001
+                raise ValueError(
+                    f"invalid persisted user risk choice row at {self._path}:{line_no}"
+                ) from exc
+
+    def _append(self, record: UserRiskChoiceRecord) -> None:
+        if self._path is None:
+            return
+        row = {
+            "schema_version": 2,
+            "event_type": "user_risk_choice_recorded",
+            "user_risk_choice": record.to_dict(),
+        }
+        _append_v2_jsonl_once(
+            self._path,
+            row,
+            payload_key="user_risk_choice",
+            ref_field="choice_ref",
+        )
+        if os.name != "nt":
+            self._path.chmod(0o600)
+
+    def record_choice(self, record: UserRiskChoiceRecord) -> UserRiskChoiceRecord:
+        existing = self._records.get(record.choice_ref)
+        if existing is not None:
+            if not _same_record_semantics(existing, record):
+                raise ValueError("user risk choice identity collision")
+            return existing
+        decision = validate_user_risk_choice(record)
+        if not decision.accepted:
+            codes = ",".join(violation.code for violation in decision.violations)
+            raise ValueError(codes)
+        self._append(record)
+        self._records[record.choice_ref] = record
+        return record
+
+    def choice(self, choice_ref: str) -> UserRiskChoiceRecord:
+        try:
+            return self._records[str(choice_ref)]
+        except KeyError as exc:
+            raise KeyError(f"unknown user risk choice: {choice_ref}") from exc
+
+    def choice_for_owner(self, choice_ref: str, owner_user_id: str) -> UserRiskChoiceRecord:
+        record = self.choice(choice_ref)
+        if record.owner_user_id != str(owner_user_id or ""):
+            raise PermissionError("user risk choice belongs to a different owner")
+        return record
+
+    def choices_for_owner(self, owner_user_id: str) -> list[UserRiskChoiceRecord]:
+        owner = str(owner_user_id or "")
+        return sorted(
+            (record for record in self._records.values() if record.owner_user_id == owner),
+            key=lambda item: (item.created_at_utc, item.choice_ref),
+        )
+
+    def refresh(self) -> None:
+        if self._path is None:
+            return
+        refreshed = type(self)(self._path)
+        self._records = refreshed._records
+
+
+class PersistentConsentBackedUserRiskChoiceRegistry(PersistentUserRiskChoiceRegistry):
+    """Read-only projection of choices committed by the consent authority.
+
+    ``store`` is intentionally duck-typed so the Research OS execution module
+    does not import the copy-trade package and create a package cycle.
+    """
+
+    def __init__(
+        self,
+        store: Any,
+        *,
+        legacy_path: str | Path | None = None,
+    ) -> None:
+        self._store = store
+        self._legacy_path = Path(legacy_path) if legacy_path is not None else None
+        self._path = Path(store.db_path)
+        self._records: dict[str, UserRiskChoiceRecord] = {}
+        self.refresh()
+
+    def refresh(self) -> None:
+        records: dict[str, UserRiskChoiceRecord] = {}
+        for choice in self._store.choices():
+            records[choice.choice_ref] = choice
+        if self._legacy_path is not None and self._legacy_path.exists():
+            legacy = PersistentUserRiskChoiceRegistry(self._legacy_path)
+            for choice in legacy._records.values():
+                if not self._store.legacy_choice_is_committed(choice):
+                    continue
+                existing = records.get(choice.choice_ref)
+                if existing is not None and existing != choice:
+                    raise ValueError("user risk choice identity collision across stores")
+                records[choice.choice_ref] = choice
+        self._records = records
+
+    def record_choice(self, record: UserRiskChoiceRecord) -> UserRiskChoiceRecord:
+        del record
+        raise PermissionError(
+            "user risk choices may only be committed by the atomic risk-consent boundary"
+        )
+
+    def snapshot_token(self) -> str:
+        self.refresh()
+        digest = hashlib.sha256(
+            canonical_json(
+                [
+                    choice.to_dict()
+                    for choice in sorted(
+                        self._records.values(),
+                        key=lambda item: item.choice_ref,
+                    )
+                ]
+            ).encode("utf-8")
+        ).hexdigest()
+        return f"risk-consent-choice-snapshot:{digest}"
+
+    def snapshot_clone(self) -> PersistentUserRiskChoiceRegistry:
+        self.refresh()
+        clone = PersistentUserRiskChoiceRegistry()
+        for choice in self._records.values():
+            clone.record_choice(choice)
+        return clone
 
 
 class PersistentExecutionVenueEventRegistry:
@@ -4193,12 +5088,13 @@ class PersistentExecutionVenueEventRegistry:
         assert self._path is not None
         if not self._path.exists():
             return
-        for line_no, line in enumerate(self._path.read_text(encoding="utf-8").splitlines(), start=1):
+        for line_no, line in enumerate(_read_jsonl_lines_locked(self._path), start=1):
             if not line.strip():
                 continue
             try:
                 row = json.loads(line)
-                if row.get("schema_version") != 1:
+                schema_version = int(row.get("schema_version", 0) or 0)
+                if schema_version not in {1, 2}:
                     raise ValueError("unsupported execution venue event schema_version")
                 if row.get("event_type") != "execution_venue_event_recorded":
                     raise ValueError("unsupported execution venue event event_type")
@@ -4206,10 +5102,24 @@ class PersistentExecutionVenueEventRegistry:
                 if not isinstance(payload, dict):
                     raise ValueError("missing venue_event")
                 record = execution_venue_event_from_dict(payload)
-                decision = validate_execution_venue_event(record)
+                _reject_legacy_reserved_v2_identity(
+                    schema_version=schema_version,
+                    ref=record.venue_event_ref,
+                    reserved_prefix="venue_event_v2_",
+                    record_type="execution venue event",
+                )
+                decision = validate_execution_venue_event(
+                    record,
+                    enforce_identity=schema_version == 2,
+                )
                 if not decision.accepted:
                     codes = ",".join(v.code for v in decision.violations)
                     raise ValueError(f"invalid execution venue event record: {codes}")
+                existing = self._records.get(record.venue_event_ref)
+                if existing is not None:
+                    if schema_version == 2 and not _same_record_semantics(existing, record):
+                        raise ValueError("execution venue event identity collision")
+                    continue
                 self._records[record.venue_event_ref] = record
             except Exception as exc:  # noqa: BLE001 - corrupt execution history must be visible.
                 raise ValueError(f"invalid persisted execution venue event row at {self._path}:{line_no}") from exc
@@ -4218,12 +5128,16 @@ class PersistentExecutionVenueEventRegistry:
         if self._path is None:
             return
         row = {
-            "schema_version": 1,
+            "schema_version": 2,
             "event_type": "execution_venue_event_recorded",
             "venue_event": record.to_dict(),
         }
-        with self._path.open("a", encoding="utf-8") as fh:
-            fh.write(json.dumps(row, ensure_ascii=False, sort_keys=True, separators=(",", ":")) + "\n")
+        _append_v2_jsonl_once(
+            self._path,
+            row,
+            payload_key="venue_event",
+            ref_field="venue_event_ref",
+        )
 
     def record_event(
         self,
@@ -4231,17 +5145,28 @@ class PersistentExecutionVenueEventRegistry:
         *,
         known_order_intent_refs: set[str] | None = None,
         known_runtime_promotion_refs: set[str] | None = None,
+        known_submission_refs: set[str] | None = None,
+        submission: ExecutionOrderSubmissionRecord | None = None,
     ) -> ExecutionVenueEventRecord:
+        if submission is None or known_submission_refs is None:
+            raise ValueError("strict venue event recording requires an exact submission parent")
+        existing = self._records.get(record.venue_event_ref)
+        if existing is not None:
+            if not _same_record_semantics(existing, record):
+                raise ValueError("execution venue event identity collision")
+            return existing
         decision = validate_execution_venue_event(
             record,
             known_order_intent_refs=known_order_intent_refs,
             known_runtime_promotion_refs=known_runtime_promotion_refs,
+            known_submission_refs=known_submission_refs,
+            submission=submission,
         )
         if not decision.accepted:
             codes = ",".join(v.code for v in decision.violations)
             raise ValueError(codes)
-        self._records[record.venue_event_ref] = record
         self._append(record)
+        self._records[record.venue_event_ref] = record
         return record
 
     def event(self, venue_event_ref: str) -> ExecutionVenueEventRecord:
@@ -4251,6 +5176,14 @@ class PersistentExecutionVenueEventRegistry:
 
     def events(self) -> list[ExecutionVenueEventRecord]:
         return sorted(self._records.values(), key=lambda item: (item.created_at_utc, item.venue_event_ref))
+
+    def refresh(self) -> None:
+        """Reload durable rows so sibling process/appends are visible."""
+
+        if self._path is None:
+            return
+        refreshed = type(self)(self._path)
+        self._records = refreshed._records
 
 
 class PersistentExecutionReconciliationRegistry:
@@ -4267,12 +5200,13 @@ class PersistentExecutionReconciliationRegistry:
         assert self._path is not None
         if not self._path.exists():
             return
-        for line_no, line in enumerate(self._path.read_text(encoding="utf-8").splitlines(), start=1):
+        for line_no, line in enumerate(_read_jsonl_lines_locked(self._path), start=1):
             if not line.strip():
                 continue
             try:
                 row = json.loads(line)
-                if row.get("schema_version") != 1:
+                schema_version = int(row.get("schema_version", 0) or 0)
+                if schema_version not in {1, 2}:
                     raise ValueError("unsupported execution reconciliation schema_version")
                 if row.get("event_type") != "execution_reconciliation_recorded":
                     raise ValueError("unsupported execution reconciliation event_type")
@@ -4280,10 +5214,24 @@ class PersistentExecutionReconciliationRegistry:
                 if not isinstance(payload, dict):
                     raise ValueError("missing reconciliation")
                 record = execution_reconciliation_from_dict(payload)
-                decision = validate_execution_reconciliation(record)
+                _reject_legacy_reserved_v2_identity(
+                    schema_version=schema_version,
+                    ref=record.reconciliation_ref,
+                    reserved_prefix="execution_reconcile_v2_",
+                    record_type="execution reconciliation",
+                )
+                decision = validate_execution_reconciliation(
+                    record,
+                    enforce_identity=schema_version == 2,
+                )
                 if not decision.accepted:
                     codes = ",".join(v.code for v in decision.violations)
                     raise ValueError(f"invalid execution reconciliation record: {codes}")
+                existing = self._records.get(record.reconciliation_ref)
+                if existing is not None:
+                    if schema_version == 2 and not _same_record_semantics(existing, record):
+                        raise ValueError("execution reconciliation identity collision")
+                    continue
                 self._records[record.reconciliation_ref] = record
             except Exception as exc:  # noqa: BLE001 - corrupt reconciliation history must be visible.
                 raise ValueError(f"invalid persisted execution reconciliation row at {self._path}:{line_no}") from exc
@@ -4292,12 +5240,56 @@ class PersistentExecutionReconciliationRegistry:
         if self._path is None:
             return
         row = {
-            "schema_version": 1,
+            "schema_version": 2,
             "event_type": "execution_reconciliation_recorded",
             "reconciliation": record.to_dict(),
         }
-        with self._path.open("a", encoding="utf-8") as fh:
-            fh.write(json.dumps(row, ensure_ascii=False, sort_keys=True, separators=(",", ":")) + "\n")
+        _append_v2_jsonl_once(
+            self._path,
+            row,
+            payload_key="reconciliation",
+            ref_field="reconciliation_ref",
+        )
+
+    @contextmanager
+    def mutation_guard(self):
+        """Serialize reconciliation-head changes with action creation.
+
+        The companion action API holds this same guard while it refreshes the
+        current head and appends an action.  Reconciliation writers therefore
+        cannot advance the head in that check-to-append interval.
+        """
+
+        with _RECONCILIATION_MUTATION_LOCK:
+            if self._path is None:
+                yield
+                return
+            lock_path = self._path.parent / ".execution_reconciliation_action.lock"
+            lock_key = str(lock_path.resolve())
+            held_by_path = getattr(_RECONCILIATION_MUTATION_LOCAL, "held_by_path", None)
+            if held_by_path is None:
+                held_by_path = {}
+                _RECONCILIATION_MUTATION_LOCAL.held_by_path = held_by_path
+            nested = held_by_path.get(lock_key)
+            if nested is not None:
+                nested["depth"] += 1
+                try:
+                    yield
+                finally:
+                    nested["depth"] -= 1
+                return
+            fd = os.open(lock_path, os.O_RDWR | os.O_CREAT, 0o600)
+            held = None
+            try:
+                os.chmod(lock_path, 0o600)
+                held = acquire_exclusive_fd(fd, timeout_seconds=5.0)
+                held_by_path[lock_key] = {"depth": 1, "fd": fd, "held": held}
+                yield
+            finally:
+                held_by_path.pop(lock_key, None)
+                if held is not None:
+                    held.release()
+                os.close(fd)
 
     def record_reconciliation(
         self,
@@ -4306,18 +5298,68 @@ class PersistentExecutionReconciliationRegistry:
         known_order_intent_refs: set[str] | None = None,
         known_runtime_promotion_refs: set[str] | None = None,
         known_venue_event_refs: set[str] | None = None,
+        known_submission_refs: set[str] | None = None,
+        submission: ExecutionOrderSubmissionRecord | None = None,
+        venue_events: tuple[ExecutionVenueEventRecord, ...] = (),
     ) -> ExecutionReconciliationRecord:
+        with self.mutation_guard():
+            return self._record_reconciliation_locked(
+                record,
+                known_order_intent_refs=known_order_intent_refs,
+                known_runtime_promotion_refs=known_runtime_promotion_refs,
+                known_venue_event_refs=known_venue_event_refs,
+                known_submission_refs=known_submission_refs,
+                submission=submission,
+                venue_events=venue_events,
+            )
+
+    def _record_reconciliation_locked(
+        self,
+        record: ExecutionReconciliationRecord,
+        *,
+        known_order_intent_refs: set[str] | None = None,
+        known_runtime_promotion_refs: set[str] | None = None,
+        known_venue_event_refs: set[str] | None = None,
+        known_submission_refs: set[str] | None = None,
+        submission: ExecutionOrderSubmissionRecord | None = None,
+        venue_events: tuple[ExecutionVenueEventRecord, ...] = (),
+    ) -> ExecutionReconciliationRecord:
+        if self._path is not None:
+            self.refresh()
+        if submission is None or known_submission_refs is None:
+            raise ValueError("strict reconciliation recording requires an exact submission parent")
+        existing = self._records.get(record.reconciliation_ref)
+        if existing is not None:
+            if not _same_record_semantics(existing, record):
+                raise ValueError("execution reconciliation identity collision")
+            return existing
+        duplicate_event_set = next(
+            (
+                item
+                for item in self._records.values()
+                if item.submission_ref == record.submission_ref
+                and set(item.event_refs) == set(record.event_refs)
+            ),
+            None,
+        )
+        if duplicate_event_set is not None:
+            raise ValueError(
+                "execution reconciliation event set already has a canonical record"
+            )
         decision = validate_execution_reconciliation(
             record,
             known_order_intent_refs=known_order_intent_refs,
             known_runtime_promotion_refs=known_runtime_promotion_refs,
             known_venue_event_refs=known_venue_event_refs,
+            known_submission_refs=known_submission_refs,
+            submission=submission,
+            venue_events=venue_events,
         )
         if not decision.accepted:
             codes = ",".join(v.code for v in decision.violations)
             raise ValueError(codes)
-        self._records[record.reconciliation_ref] = record
         self._append(record)
+        self._records[record.reconciliation_ref] = record
         return record
 
     def reconciliation(self, reconciliation_ref: str) -> ExecutionReconciliationRecord:
@@ -4327,6 +5369,14 @@ class PersistentExecutionReconciliationRegistry:
 
     def reconciliations(self) -> list[ExecutionReconciliationRecord]:
         return sorted(self._records.values(), key=lambda item: (item.created_at_utc, item.reconciliation_ref))
+
+    def refresh(self) -> None:
+        """Reload durable rows so sibling process/appends are visible."""
+
+        if self._path is None:
+            return
+        refreshed = type(self)(self._path)
+        self._records = refreshed._records
 
 
 class PersistentExecutionReconciliationActionRegistry:
@@ -4343,7 +5393,7 @@ class PersistentExecutionReconciliationActionRegistry:
         assert self._path is not None
         if not self._path.exists():
             return
-        for line_no, line in enumerate(self._path.read_text(encoding="utf-8").splitlines(), start=1):
+        for line_no, line in enumerate(_read_jsonl_lines_locked(self._path), start=1):
             if not line.strip():
                 continue
             try:
@@ -4372,8 +5422,12 @@ class PersistentExecutionReconciliationActionRegistry:
             "event_type": "execution_reconciliation_action_recorded",
             "action": record.to_dict(),
         }
-        with self._path.open("a", encoding="utf-8") as fh:
-            fh.write(json.dumps(row, ensure_ascii=False, sort_keys=True, separators=(",", ":")) + "\n")
+        _append_jsonl_once_durable(
+            self._path,
+            row,
+            payload_key="action",
+            ref_field="action_ref",
+        )
 
     def record_action(
         self,
@@ -4382,6 +5436,11 @@ class PersistentExecutionReconciliationActionRegistry:
         known_reconciliation_refs: set[str] | None = None,
         action_required_by_ref: dict[str, bool] | None = None,
     ) -> ExecutionReconciliationActionRecord:
+        existing = self._records.get(record.action_ref)
+        if existing is not None:
+            if not _same_record_semantics(existing, record):
+                raise ValueError("execution reconciliation action identity collision")
+            return existing
         decision = validate_execution_reconciliation_action(
             record,
             known_reconciliation_refs=known_reconciliation_refs,
@@ -4390,8 +5449,8 @@ class PersistentExecutionReconciliationActionRegistry:
         if not decision.accepted:
             codes = ",".join(v.code for v in decision.violations)
             raise ValueError(codes)
-        self._records[record.action_ref] = record
         self._append(record)
+        self._records[record.action_ref] = record
         return record
 
     def action(self, action_ref: str) -> ExecutionReconciliationActionRecord:
@@ -4402,14 +5461,102 @@ class PersistentExecutionReconciliationActionRegistry:
     def actions(self) -> list[ExecutionReconciliationActionRecord]:
         return sorted(self._records.values(), key=lambda item: (item.created_at_utc, item.action_ref))
 
+    def refresh(self) -> None:
+        """Reload durable rows so sibling process/appends are visible."""
 
-def validate_user_risk_choice(choice: UserRiskChoiceRecord) -> ExecutionBoundaryDecision:
+        if self._path is None:
+            return
+        refreshed = type(self)(self._path)
+        self._records = refreshed._records
+
+
+def validate_user_risk_choice(
+    choice: UserRiskChoiceRecord,
+    *,
+    enforce_identity: bool = True,
+) -> ExecutionBoundaryDecision:
     violations: list[ExecutionBoundaryViolation] = []
+    if enforce_identity:
+        expected_ref = _canonical_v2_ref(
+            choice,
+            record_type="user_risk_choice",
+            ref_field="choice_ref",
+            prefix="user_risk_choice_",
+        )
+        if choice.choice_ref != expected_ref:
+            violations.append(
+                ExecutionBoundaryViolation(
+                    "risk_choice_content_identity_mismatch",
+                    "user risk choice ref must equal its canonical v2 content identity",
+                    field="choice_ref",
+                    ref=choice.choice_ref,
+                )
+            )
+        if not _valid_utc_timestamp(choice.created_at_utc):
+            violations.append(
+                ExecutionBoundaryViolation(
+                    "risk_choice_bad_created_at",
+                    "user risk choice created_at_utc must be timezone-aware",
+                    field="created_at_utc",
+                    ref=choice.choice_ref,
+                )
+            )
+    for field_name in (
+        "owner_user_id",
+        "master_id",
+        "follower_id",
+        "account_binding_ref",
+        "subject_ref",
+        "runtime_request_ref",
+        "asset_class",
+        "selected_risk_path",
+        "risk_disclosure_profile_ref",
+        "actor_source",
+    ):
+        if not _present(getattr(choice, field_name)):
+            violations.append(
+                ExecutionBoundaryViolation(
+                    "risk_choice_missing_identity_binding",
+                    f"user risk choice requires {field_name}",
+                    field=field_name,
+                    ref=choice.choice_ref,
+                )
+            )
+    if choice.selected_risk_path != "small_live":
+        violations.append(
+            ExecutionBoundaryViolation(
+                "risk_choice_unsupported_path",
+                "current live copy-trade only supports the explicit small_live path",
+                field="selected_risk_path",
+                ref=choice.choice_ref,
+            )
+        )
+    if choice.asset_class != "crypto_perp":
+        violations.append(
+            ExecutionBoundaryViolation(
+                "risk_choice_asset_mismatch",
+                "current live copy-trade risk choice must bind crypto_perp",
+                field="asset_class",
+                ref=choice.choice_ref,
+            )
+        )
+    if choice.actor_source != "user_manual":
+        violations.append(
+            ExecutionBoundaryViolation(
+                "risk_choice_not_user_authored",
+                "user risk choice actor_source must be user_manual",
+                field="actor_source",
+                ref=choice.choice_ref,
+            )
+        )
     required = (
         "cost_disclosure_ref",
         "leverage_disclosure_ref",
         "margin_disclosure_ref",
+        "borrow_disclosure_ref",
+        "funding_disclosure_ref",
         "slippage_disclosure_ref",
+        "impact_disclosure_ref",
         "liquidation_disclosure_ref",
         "regulation_disclosure_ref",
         "recommendation_ref",
@@ -4485,6 +5632,8 @@ __all__ = [
     "PersistentExecutionVenueSafetyAttestationRegistry",
     "PersistentExecutionOrderIntentRegistry",
     "PersistentRuntimePromotionRegistry",
+    "PersistentConsentBackedUserRiskChoiceRegistry",
+    "PersistentUserRiskChoiceRegistry",
     "RuntimePromotionRecord",
     "RuntimePromotionRequest",
     "UserRiskChoiceRecord",
@@ -4498,8 +5647,10 @@ __all__ = [
     "execution_venue_capability_from_dict",
     "execution_venue_event_from_dict",
     "execution_venue_safety_attestation_from_dict",
+    "execution_client_order_ref_hash",
     "reconcile_execution_venue_events",
     "runtime_promotion_record_from_dict",
+    "user_risk_choice_from_dict",
     "validate_drift_triggered_action",
     "validate_execution_boundary",
     "validate_execution_math_claim",

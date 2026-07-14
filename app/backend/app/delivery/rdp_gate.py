@@ -1,18 +1,19 @@
-"""RDP 4 条拒绝门（GOAL §17 可证伪验收 · 北极星总闸）。
+"""RDP 拒绝门（GOAL §17 可证伪验收 · 北极星总闸）。
 
-§17 行 2069-2076 的 4 条「→ 拒」是正式研究交付的硬闸。本模块把它们落成**真能拒**的纯逻辑门：
+§17 的「→ 拒」条件是正式研究交付的硬闸。本模块把它们落成**真能拒**的纯逻辑门：
 缺字段【真拒】（raise / outcome.passed=False），绝不静默填默认放行（诚实纪律 RULES §3）。
 
   门1 manifest 完整性：缺 manifest 身份 / artifact hash / reproducibility command → 拒。
   门2 数据血统：缺 DatasetVersion 或 IngestionSkill 引用 → 拒。
   门3 未验证残余：缺「未验证残余」声明 → 拒（诚实闸：未声明残余的交付不完整）。
   门4 晋级可追溯：晋级资产追不到一份**关于本资产**的有效 RDP → 拒。
+  门5 重现收据：正式晋级缺当前、内容绑定、通过的 ReproductionReceipt → 拒。
 
 门的对抗契约（RULES §2「种已知坏门必抓」）：每条门配「去掉对应必填字段 → 必拒」的探针；
 若有人把门改弱（放过缺字段），对抗测试 `test_rdp_gate.py` 立刻红。门若是纸做的，测试抓不住。
 
-诚实边界：门4 只是纯追溯逻辑门，**未**接进真实 ApprovalGateService / paper.PromotionGate 的晋级
-路径（那是 follow-on，诚实标 P2）。但门本身真能拒——给它残缺/错配的追溯断言即返拒。
+诚实边界：门5除内容校验外，必须从注入可信 verifier 的持久化 store 解析到 exact 当前收据；
+门本身不运行任何命令，缺签发账本查询即拒。
 """
 
 from __future__ import annotations
@@ -20,11 +21,17 @@ from __future__ import annotations
 from dataclasses import dataclass
 
 from .rdp import PromotionClaim, RDPManifest
+from ..research_os.rdp_reproduction import (
+    PersistentRDPReproductionReceiptStore,
+    RDPReproductionReceipt,
+    reproduction_receipt_violations,
+)
 
 GATE_MANIFEST = "gate1_manifest_completeness"
 GATE_DATASET_LINEAGE = "gate2_dataset_lineage"
 GATE_UNVERIFIED_RESIDUAL = "gate3_unverified_residual"
 GATE_PROMOTION_TRACEABILITY = "gate4_promotion_traceability"
+GATE_REPRODUCTION_RECEIPT = "gate5_reproduction_receipt"
 
 
 def _blank(s: object) -> bool:
@@ -101,7 +108,10 @@ def gate_manifest_completeness(rdp: RDPManifest) -> RDPGateOutcome:
 def gate_dataset_lineage(rdp: RDPManifest) -> RDPGateOutcome:
     missing: list[str] = []
     resolvable_dvs = [dv for dv in rdp.dataset_versions if dv.is_resolvable]
-    if not resolvable_dvs:
+    resolvable_canonical_refs = [
+        ref for ref in rdp.dataset_version_refs if isinstance(ref, str) and ref.strip()
+    ]
+    if not resolvable_dvs and not resolvable_canonical_refs:
         # 空 list 或全是空壳引用（dataset_id/version 空）都算缺有效 DatasetVersion。
         missing.append("dataset_versions")
     skills = [s for s in rdp.ingestion_skill_refs if isinstance(s, str) and s.strip()]
@@ -167,8 +177,85 @@ def gate_promotion_traceability(
     return RDPGateOutcome(GATE_PROMOTION_TRACEABILITY, True)
 
 
+def gate_reproduction_receipt(
+    rdp: RDPManifest,
+    receipt: RDPReproductionReceipt | None,
+    *,
+    owner_user_id: str,
+    source_result_content_hash: str,
+    reproduction_receipt_store: PersistentRDPReproductionReceiptStore | None = None,
+) -> RDPGateOutcome:
+    """Require a store-issued current receipt for the exact owner and content.
+
+    Receipt issuance and authority lookup belong to the trusted-loader store;
+    self-consistent payload hashes are not issuer proof.  This function never
+    executes the manifest's free-form ``reproducibility_command``.
+    """
+
+    if receipt is None:
+        return RDPGateOutcome(
+            GATE_REPRODUCTION_RECEIPT,
+            False,
+            ("rdp_reproduction_receipt",),
+            "正式晋级缺当前通过的 RDP ReproductionReceipt → 拒",
+        )
+    violations = reproduction_receipt_violations(
+        receipt,
+        manifest=rdp,
+        owner_user_id=owner_user_id,
+        source_result_content_hash=source_result_content_hash,
+    )
+    if violations:
+        return RDPGateOutcome(
+            GATE_REPRODUCTION_RECEIPT,
+            False,
+            tuple(violations),
+            "RDP ReproductionReceipt 未通过内容绑定/新鲜度校验 → 拒: "
+            + ", ".join(violations),
+        )
+    if not isinstance(
+        reproduction_receipt_store,
+        PersistentRDPReproductionReceiptStore,
+    ):
+        return RDPGateOutcome(
+            GATE_REPRODUCTION_RECEIPT,
+            False,
+            ("rdp_reproduction_receipt_authority",),
+            "RDP ReproductionReceipt 缺可信持久化签发账本查询 → 拒",
+        )
+    try:
+        authoritative = reproduction_receipt_store.current_passed(
+            owner_user_id=owner_user_id,
+            manifest=rdp,
+            source_result_content_hash=source_result_content_hash,
+        )
+    except Exception as exc:  # noqa: BLE001 - unavailable authority is red.
+        return RDPGateOutcome(
+            GATE_REPRODUCTION_RECEIPT,
+            False,
+            ("rdp_reproduction_receipt_authority_lookup_failed",),
+            "RDP ReproductionReceipt 未在可信持久化签发账本中解析为当前通过记录 → 拒: "
+            f"{type(exc).__name__}",
+        )
+    if authoritative != receipt:
+        return RDPGateOutcome(
+            GATE_REPRODUCTION_RECEIPT,
+            False,
+            ("rdp_reproduction_receipt_authority_mismatch",),
+            "RDP ReproductionReceipt 与可信持久化签发账本的当前记录不一致 → 拒",
+        )
+    return RDPGateOutcome(GATE_REPRODUCTION_RECEIPT, True)
+
+
 def validate_rdp(
-    rdp: RDPManifest, *, promotion: PromotionClaim | None = None
+    rdp: RDPManifest,
+    *,
+    promotion: PromotionClaim | None = None,
+    reproduction_receipt: RDPReproductionReceipt | None = None,
+    reproduction_owner_user_id: str = "",
+    source_result_content_hash: str = "",
+    require_reproduction_receipt: bool = False,
+    reproduction_receipt_store: PersistentRDPReproductionReceiptStore | None = None,
 ) -> RDPValidation:
     """跑门1-3（恒）+ 门4（仅当给 promotion）。返结构化结果，不抛。
 
@@ -182,16 +269,41 @@ def validate_rdp(
     ]
     if promotion is not None:
         outcomes.append(gate_promotion_traceability(promotion, rdp))
+    if require_reproduction_receipt:
+        outcomes.append(
+            gate_reproduction_receipt(
+                rdp,
+                reproduction_receipt,
+                owner_user_id=reproduction_owner_user_id,
+                source_result_content_hash=source_result_content_hash,
+                reproduction_receipt_store=reproduction_receipt_store,
+            )
+        )
     ok = all(o.passed for o in outcomes)
     return RDPValidation(ok=ok, outcomes=tuple(outcomes))
 
 
 def require_valid_rdp(
-    rdp: RDPManifest, *, promotion: PromotionClaim | None = None
+    rdp: RDPManifest,
+    *,
+    promotion: PromotionClaim | None = None,
+    reproduction_receipt: RDPReproductionReceipt | None = None,
+    reproduction_owner_user_id: str = "",
+    source_result_content_hash: str = "",
+    require_reproduction_receipt: bool = False,
+    reproduction_receipt_store: PersistentRDPReproductionReceiptStore | None = None,
 ) -> RDPManifest:
     """校验并在未过门时 raise RDPRejected（带结构化缺口）。过 → 原样返回。"""
 
-    v = validate_rdp(rdp, promotion=promotion)
+    v = validate_rdp(
+        rdp,
+        promotion=promotion,
+        reproduction_receipt=reproduction_receipt,
+        reproduction_owner_user_id=reproduction_owner_user_id,
+        source_result_content_hash=source_result_content_hash,
+        require_reproduction_receipt=require_reproduction_receipt,
+        reproduction_receipt_store=reproduction_receipt_store,
+    )
     if not v.ok:
         raise RDPRejected(v)
     return rdp
@@ -253,6 +365,7 @@ __all__ = [
     "GATE_DATASET_LINEAGE",
     "GATE_UNVERIFIED_RESIDUAL",
     "GATE_PROMOTION_TRACEABILITY",
+    "GATE_REPRODUCTION_RECEIPT",
     "RDPGateOutcome",
     "RDPValidation",
     "RDPRejected",
@@ -260,6 +373,7 @@ __all__ = [
     "gate_dataset_lineage",
     "gate_unverified_residual",
     "gate_promotion_traceability",
+    "gate_reproduction_receipt",
     "validate_rdp",
     "require_valid_rdp",
     "assemble_rdp",

@@ -25,6 +25,7 @@ from app.strategy_goal_store import StrategyGoalStore, _complete_goal_dict
 
 MARKET_DATA_USE_REFS = ["market_data_use:ds2_chain:accepted"]
 MARKET_DATASET_REF = "dataset:btc_daily"
+TEST_OWNER_USER_ID = "test:ds2-strategy-goal"
 
 
 class _DatasetSemantics:
@@ -48,16 +49,22 @@ class _MarketDataUseRegistry:
             accepted=True,
             violation_codes=(),
             evidence_refs=("evidence:ds2_chain_market_data_use",),
-            recorded_by="test",
+            recorded_by=TEST_OWNER_USER_ID,
             created_at_utc="2026-06-27T00:00:00Z",
         )
 
-    def use_validation(self, validation_ref: str) -> MarketDataUseValidationRecord:
+    def use_validation(
+        self, validation_ref: str, *, owner_user_id: str,
+    ) -> MarketDataUseValidationRecord:
+        if owner_user_id != TEST_OWNER_USER_ID:
+            raise PermissionError(owner_user_id)
         if validation_ref != self._record.validation_ref:
             raise KeyError(validation_ref)
         return self._record
 
-    def dataset(self, dataset_ref: str) -> _DatasetSemantics:
+    def dataset(self, dataset_ref: str, *, owner_user_id: str) -> _DatasetSemantics:
+        if owner_user_id != TEST_OWNER_USER_ID:
+            raise PermissionError(owner_user_id)
         if dataset_ref != _DatasetSemantics.dataset_ref:
             raise KeyError(dataset_ref)
         return _DatasetSemantics()
@@ -170,6 +177,7 @@ def test_goal_id_flows_into_backtest_chat_to_backtest_chain(tmp_path, monkeypatc
         },
         ledger=Ledger(tmp_path / "lineage"), returns_store=None, data_root=tmp_path,
         verdict_store=None, verifier=None, llm_client=None, market_data_registry=_MarketDataUseRegistry(),
+        owner_user_id=TEST_OWNER_USER_ID,
     )
     assert out.get("error") is None, out
     assert out["run_id"], "chat 产的 goal_id 必须能驱动 DS-1 backtest 产真 run"

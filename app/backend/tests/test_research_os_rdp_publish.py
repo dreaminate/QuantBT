@@ -1,21 +1,30 @@
 from __future__ import annotations
 
+import base64
 import hashlib
 import json
+from functools import partial
 from types import SimpleNamespace
 
 import pytest
+from cryptography.hazmat.primitives import serialization
+from cryptography.hazmat.primitives.asymmetric.ed25519 import Ed25519PrivateKey
 from fastapi.testclient import TestClient
 
 from app import main
 from app.auth import require_user_dependency
 from app.research_os import (
+    ExternalReviewerIdentityRecord,
     PersistentRDPCIReleaseAttestationStore,
     PersistentRDPExternalPublicationProofStore,
     PersistentRDPPackagePublishStore,
     PersistentRDPSourceRunIntegrityStore,
     PersistentRDPStore,
+    PersistentExternalExpertSignatureRegistry,
+    PersistentTrustDisclosureRegistry,
+    PersistentTrustPressureRunRegistry,
     PersistentTrustReleaseApprovalRegistry,
+    PersistentTrustReleaseCheckRegistry,
     PersistentTrustReleaseGateRegistry,
     RDPLocalPackagePublisher,
     RDPOpenPackageMaterializer,
@@ -25,8 +34,33 @@ from app.research_os import (
     RuntimeStatus,
     TrustReleaseApprovalRecord,
     TrustReleaseGateRecord,
+    external_expert_review_signature_payload,
+    record_external_expert_review,
+    record_trust_pressure_run,
+    record_trust_release_approval,
     rdp_run_artifact_hash,
 )
+
+RDPOpenPackageMaterializer = partial(RDPOpenPackageMaterializer, owner_user_id="u1")
+RDPSourceFileBundler = partial(RDPSourceFileBundler, owner_user_id="u1")
+RDPPackageArchiveExporter = partial(RDPPackageArchiveExporter, owner_user_id="u1")
+RDPLocalPackagePublisher = partial(RDPLocalPackagePublisher, owner_user_id="u1")
+PersistentRDPPackagePublishStore = partial(
+    PersistentRDPPackagePublishStore, owner_user_id="u1"
+)
+PersistentRDPExternalPublicationProofStore = partial(
+    PersistentRDPExternalPublicationProofStore, owner_user_id="u1"
+)
+PersistentRDPCIReleaseAttestationStore = partial(
+    PersistentRDPCIReleaseAttestationStore, owner_user_id="u1"
+)
+PersistentRDPSourceRunIntegrityStore = partial(
+    PersistentRDPSourceRunIntegrityStore, owner_user_id="u1"
+)
+
+
+def _owned_root(root):
+    return root / "_owners" / hashlib.sha256(b"u1").hexdigest()
 
 
 def _manifest(**overrides) -> RDPManifest:
@@ -75,7 +109,10 @@ def _write_sources(source_root):
 def _write_run(run_root, run_id: str = "bt1"):
     run_dir = run_root / run_id
     run_dir.mkdir(parents=True, exist_ok=True)
-    (run_dir / "run.json").write_text(json.dumps({"run_id": run_id}, ensure_ascii=False), encoding="utf-8")
+    (run_dir / "run.json").write_text(
+        json.dumps({"run_id": run_id, "owner_user_id": "u1"}, ensure_ascii=False),
+        encoding="utf-8",
+    )
     (run_dir / "strategy.py").write_text("def alpha(row):\n    return row['close']\n", encoding="utf-8")
     (run_dir / "portfolio.csv").write_text("ts,equity\n2024-01-01,1.0\n", encoding="utf-8")
     return run_dir
@@ -133,6 +170,110 @@ def _release_approval(**overrides) -> TrustReleaseApprovalRecord:
     return TrustReleaseApprovalRecord(**data)
 
 
+def _trust_pressure_scenarios() -> list[dict]:
+    rows = []
+    for check_kind, prefix in (
+        ("anti_flattery_pressure_test", "anti-flattery"),
+        ("multi_turn_pressure_test", "multi-turn"),
+        ("expert_veto", "expert-veto"),
+        ("weakness_collapse_check", "weakness"),
+        ("mock_honesty_check", "mock-honesty"),
+        ("cold_start_honesty_check", "cold-start"),
+    ):
+        rows.append(
+            {
+                "check_kind": check_kind,
+                "scenario_ref": f"scenario:{prefix}",
+                "expected_behavior_ref": f"behavior:{prefix}:honest",
+                "observed_behavior_ref": f"behavior:{prefix}:honest",
+                "evidence_refs": [f"evidence:{prefix}"],
+                "validation_result_refs": [f"pytest:{prefix}"],
+            }
+        )
+    return rows
+
+
+def _record_trust_release_authority(
+    manifest: RDPManifest,
+    *,
+    owner_user_id: str = "u1",
+    release_ref: str = "release:v1",
+    artifact_ref_override: str | None = None,
+    signed_approval_ref_override: str | None = None,
+) -> TrustReleaseApprovalRecord:
+    run, gate, checks = record_trust_pressure_run(
+        release_ref=release_ref,
+        runner_mode="local_deterministic",
+        scenarios=_trust_pressure_scenarios(),
+        evidence_refs=("evidence:pressure-run",),
+        validation_result_refs=("pytest:pressure-run",),
+        runner_ref=f"trust_pressure_run:{release_ref}",
+    )
+    for check in checks:
+        main.TRUST_RELEASE_CHECK_REGISTRY.record_check(
+            check, owner_user_id=owner_user_id
+        )
+    main.TRUST_RELEASE_GATE_REGISTRY.record_gate(gate, owner_user_id=owner_user_id)
+    main.TRUST_PRESSURE_RUN_REGISTRY.record_run(run, owner_user_id=owner_user_id)
+
+    artifact_ref = artifact_ref_override or f"rdp:{manifest.package_id}"
+    review = record_external_expert_review(
+        release_ref=release_ref,
+        reviewer_ref="expert:independent_quant_reviewer",
+        reviewer_independence_ref="independence:expert:001",
+        artifact_ref=artifact_ref,
+        review_protocol_ref="protocol:trust-release-review:v1",
+        verdict="approved",
+        evidence_refs=("evidence:expert-review",),
+        signed_attestation_ref=f"attestation:expert:{manifest.package_id}",
+        review_ref=f"expert_review:{release_ref}",
+    )
+    main.TRUST_DISCLOSURE_REGISTRY.record_external_expert_review(
+        review, owner_user_id=owner_user_id
+    )
+    key = Ed25519PrivateKey.generate()
+    public_key_pem = key.public_key().public_bytes(
+        encoding=serialization.Encoding.PEM,
+        format=serialization.PublicFormat.SubjectPublicKeyInfo,
+    ).decode("utf-8")
+    identity = ExternalReviewerIdentityRecord(
+        identity_ref="expert_identity:independent_quant_reviewer",
+        reviewer_ref=review.reviewer_ref,
+        identity_provider_ref="identity_provider:test-public-key",
+        public_key_ref="public_key:independent_quant_reviewer:v1",
+        public_key_pem=public_key_pem,
+        reviewer_independence_ref=review.reviewer_independence_ref,
+        evidence_refs=("identity:evidence:001",),
+    )
+    main.TRUST_EXPERT_SIGNATURE_REGISTRY.record_identity(
+        identity, owner_user_id=owner_user_id
+    )
+    signature = main.TRUST_EXPERT_SIGNATURE_REGISTRY.record_signature(
+        review=review,
+        identity_ref=identity.identity_ref,
+        signature_b64=base64.b64encode(
+            key.sign(external_expert_review_signature_payload(review))
+        ).decode("ascii"),
+        attestation_ref=review.signed_attestation_ref,
+        owner_user_id=owner_user_id,
+    )
+    approval = record_trust_release_approval(
+        release_ref=release_ref,
+        release_gate=gate,
+        pressure_run=run,
+        expert_review=review,
+        artifact_ref=artifact_ref,
+        approval_protocol_ref="protocol:trust-release-approval:v1",
+        verdict="approved",
+        evidence_refs=("evidence:trust-release-approval",),
+        signed_approval_ref=signed_approval_ref_override or signature.verified_signature_ref,
+        approval_ref=f"trust_release_approval:{release_ref}",
+    )
+    return main.TRUST_RELEASE_APPROVAL_REGISTRY.record_approval(
+        approval, owner_user_id=owner_user_id
+    )
+
+
 def _materialize_bundle_archive(tmp_path, manifest: RDPManifest):
     materializer = RDPOpenPackageMaterializer(tmp_path / "rdp_packages")
     source_root = tmp_path / "source_root"
@@ -166,7 +307,13 @@ def _client_with_publish(tmp_path, monkeypatch):
     )
     ci_release_store = PersistentRDPCIReleaseAttestationStore(tmp_path / "rdp_ci_release_attestations.jsonl")
     trust_store = PersistentTrustReleaseGateRegistry(tmp_path / "trust_release_gates.jsonl")
+    trust_check_store = PersistentTrustReleaseCheckRegistry(tmp_path / "trust_release_checks.jsonl")
+    trust_pressure_store = PersistentTrustPressureRunRegistry(tmp_path / "trust_pressure_runs.jsonl")
     approval_store = PersistentTrustReleaseApprovalRegistry(tmp_path / "trust_release_approvals.jsonl")
+    trust_disclosure_store = PersistentTrustDisclosureRegistry(tmp_path / "trust_disclosures.jsonl")
+    trust_signature_store = PersistentExternalExpertSignatureRegistry(
+        tmp_path / "trust_expert_signatures.jsonl"
+    )
     integrity_store = PersistentRDPSourceRunIntegrityStore(tmp_path / "rdp_source_run_integrity.jsonl")
     monkeypatch.setattr(main, "RDP_STORE", store)
     monkeypatch.setattr(main, "RDP_PACKAGE_MATERIALIZER", materializer)
@@ -179,7 +326,11 @@ def _client_with_publish(tmp_path, monkeypatch):
     monkeypatch.setattr(main, "RDP_EXTERNAL_PUBLICATION_UPLOADER", None)
     monkeypatch.setattr(main, "RDP_CI_RELEASE_RUNNER", None)
     monkeypatch.setattr(main, "TRUST_RELEASE_GATE_REGISTRY", trust_store)
+    monkeypatch.setattr(main, "TRUST_RELEASE_CHECK_REGISTRY", trust_check_store)
+    monkeypatch.setattr(main, "TRUST_PRESSURE_RUN_REGISTRY", trust_pressure_store)
     monkeypatch.setattr(main, "TRUST_RELEASE_APPROVAL_REGISTRY", approval_store)
+    monkeypatch.setattr(main, "TRUST_DISCLOSURE_REGISTRY", trust_disclosure_store)
+    monkeypatch.setattr(main, "TRUST_EXPERT_SIGNATURE_REGISTRY", trust_signature_store)
     monkeypatch.setattr(main, "RDP_SOURCE_RUN_INTEGRITY_STORE", integrity_store)
     main.app.dependency_overrides[require_user_dependency] = lambda: SimpleNamespace(
         username="u1",
@@ -192,9 +343,12 @@ def _record_manifest_and_local_publish(client, store, materializer, bundler, sou
     _write_sources(source_root)
     run_root = tmp_path / "runs"
     run_dir = _write_run(run_root)
-    manifest = store.record_manifest(_manifest(artifact_hash=_artifact_hash(run_dir)))
-    main.TRUST_RELEASE_GATE_REGISTRY.record_gate(_release_gate())
-    main.TRUST_RELEASE_APPROVAL_REGISTRY.record_approval(_release_approval())
+    manifest = store.record_manifest(
+        _manifest(artifact_hash=_artifact_hash(run_dir)),
+        owner_user_id="u1",
+        recorded_by="u1",
+    )
+    _record_trust_release_authority(manifest)
     materializer.materialize(manifest)
     bundler.bundle(
         manifest,
@@ -287,8 +441,8 @@ def test_rdp_local_package_publisher_copies_archive_and_replays_publish_record(t
     )
     persisted = store.record_publication(record)
 
-    published_path = tmp_path / "rdp_packages" / "_published" / manifest.package_id / f"{manifest.package_id}.zip"
-    publication_json = tmp_path / "rdp_packages" / "_published" / manifest.package_id / "publication.json"
+    published_path = _owned_root(tmp_path / "rdp_packages") / "_published" / manifest.package_id / f"{manifest.package_id}.zip"
+    publication_json = _owned_root(tmp_path / "rdp_packages") / "_published" / manifest.package_id / "publication.json"
     assert published_path.exists()
     assert publication_json.exists()
     assert persisted.publish_hash.startswith("sha16:")
@@ -306,7 +460,7 @@ def test_rdp_local_package_publisher_rejects_tampered_archive_without_publish(tm
     manifest = _manifest()
     materializer, _bundler, _exporter, archive, _source_root = _materialize_bundle_archive(tmp_path, manifest)
     publisher = RDPLocalPackagePublisher(materializer.package_root)
-    archive_path = tmp_path / "rdp_packages" / "_archives" / f"{manifest.package_id}.zip"
+    archive_path = _owned_root(tmp_path / "rdp_packages") / "_archives" / f"{manifest.package_id}.zip"
     archive_path.write_text("tampered\n", encoding="utf-8")
 
     with pytest.raises(ValueError, match="archive sha256 mismatch"):
@@ -319,7 +473,7 @@ def test_rdp_local_package_publisher_rejects_tampered_archive_without_publish(tm
             trust_release_approval_ref="trust_release_approval:release:v1",
         )
 
-    assert not (tmp_path / "rdp_packages" / "_published" / manifest.package_id / f"{manifest.package_id}.zip").exists()
+    assert not (_owned_root(tmp_path / "rdp_packages") / "_published" / manifest.package_id / f"{manifest.package_id}.zip").exists()
 
 
 def test_rdp_publish_api_publishes_recorded_manifest_and_lists_publications(tmp_path, monkeypatch):
@@ -329,9 +483,12 @@ def test_rdp_publish_api_publishes_recorded_manifest_and_lists_publications(tmp_
     _write_sources(source_root)
     run_root = tmp_path / "runs"
     run_dir = _write_run(run_root)
-    manifest = store.record_manifest(_manifest(artifact_hash=_artifact_hash(run_dir)))
-    main.TRUST_RELEASE_GATE_REGISTRY.record_gate(_release_gate())
-    main.TRUST_RELEASE_APPROVAL_REGISTRY.record_approval(_release_approval())
+    manifest = store.record_manifest(
+        _manifest(artifact_hash=_artifact_hash(run_dir)),
+        owner_user_id="u1",
+        recorded_by="u1",
+    )
+    _record_trust_release_authority(manifest)
     materializer.materialize(manifest)
     bundler.bundle(
         manifest,
@@ -358,7 +515,7 @@ def test_rdp_publish_api_publishes_recorded_manifest_and_lists_publications(tmp_
         assert body["publish_hash"].startswith("sha16:")
         assert body["trust_release_ref"] == "release:v1"
         assert body["trust_release_approval_ref"] == "trust_release_approval:release:v1"
-        assert (tmp_path / "rdp_packages" / "_published" / manifest.package_id / f"{manifest.package_id}.zip").exists()
+        assert (_owned_root(tmp_path / "rdp_packages") / "_published" / manifest.package_id / f"{manifest.package_id}.zip").exists()
 
         listed = client.get("/api/research-os/rdp/publications")
         assert listed.status_code == 200
@@ -424,9 +581,10 @@ def test_rdp_external_publication_proof_requires_local_publication_without_parti
         tmp_path, monkeypatch
     )
     _write_sources(source_root)
-    manifest = store.record_manifest(_manifest())
-    main.TRUST_RELEASE_GATE_REGISTRY.record_gate(_release_gate())
-    main.TRUST_RELEASE_APPROVAL_REGISTRY.record_approval(_release_approval())
+    manifest = store.record_manifest(
+        _manifest(), owner_user_id="u1", recorded_by="u1"
+    )
+    _record_trust_release_authority(manifest)
     materializer.materialize(manifest)
     bundler.bundle(
         manifest,
@@ -950,9 +1108,12 @@ def test_rdp_publish_api_requires_source_run_integrity_without_publish_record(tm
     _write_sources(source_root)
     run_root = tmp_path / "runs"
     run_dir = _write_run(run_root)
-    manifest = store.record_manifest(_manifest(artifact_hash=_artifact_hash(run_dir)))
-    main.TRUST_RELEASE_GATE_REGISTRY.record_gate(_release_gate())
-    main.TRUST_RELEASE_APPROVAL_REGISTRY.record_approval(_release_approval())
+    manifest = store.record_manifest(
+        _manifest(artifact_hash=_artifact_hash(run_dir)),
+        owner_user_id="u1",
+        recorded_by="u1",
+    )
+    _record_trust_release_authority(manifest)
     materializer.materialize(manifest)
     bundler.bundle(
         manifest,
@@ -981,7 +1142,9 @@ def test_rdp_publish_api_requires_recorded_trust_release_gate_without_publish_re
         tmp_path, monkeypatch
     )
     _write_sources(source_root)
-    manifest = store.record_manifest(_manifest())
+    manifest = store.record_manifest(
+        _manifest(), owner_user_id="u1", recorded_by="u1"
+    )
     materializer.materialize(manifest)
     bundler.bundle(
         manifest,
@@ -1016,7 +1179,7 @@ def test_rdp_publish_api_requires_recorded_trust_release_gate_without_publish_re
         assert unknown.status_code == 422
         assert "unknown trust_release_ref" in unknown.json()["detail"]
 
-        main.TRUST_RELEASE_GATE_REGISTRY.record_gate(_release_gate())
+        _record_trust_release_authority(manifest)
         unknown_approval = client.post(
             f"/api/research-os/rdp/manifests/{manifest.package_id}/publish",
             json={
@@ -1029,7 +1192,8 @@ def test_rdp_publish_api_requires_recorded_trust_release_gate_without_publish_re
         assert "unknown trust_release_approval_ref" in unknown_approval.json()["detail"]
 
         main.TRUST_RELEASE_APPROVAL_REGISTRY.record_approval(
-            _release_approval(approval_ref="trust_release_approval:release:v2", release_ref="release:v2")
+            _release_approval(approval_ref="trust_release_approval:release:v2", release_ref="release:v2"),
+            owner_user_id="u1",
         )
         mismatched_approval = client.post(
             f"/api/research-os/rdp/manifests/{manifest.package_id}/publish",
@@ -1050,9 +1214,10 @@ def test_rdp_publish_api_rejects_missing_source_bundle_without_publish_record(tm
     client, store, materializer, _bundler, _exporter, _publisher, publish_store, _source_root = _client_with_publish(
         tmp_path, monkeypatch
     )
-    manifest = store.record_manifest(_manifest())
-    main.TRUST_RELEASE_GATE_REGISTRY.record_gate(_release_gate())
-    main.TRUST_RELEASE_APPROVAL_REGISTRY.record_approval(_release_approval())
+    manifest = store.record_manifest(
+        _manifest(), owner_user_id="u1", recorded_by="u1"
+    )
+    _record_trust_release_authority(manifest)
     materializer.materialize(manifest)
     try:
         response = client.post(
@@ -1076,9 +1241,12 @@ def test_rdp_publish_api_rejects_external_channel_without_publish_record(tmp_pat
     _write_sources(source_root)
     run_root = tmp_path / "runs"
     run_dir = _write_run(run_root)
-    manifest = store.record_manifest(_manifest(artifact_hash=_artifact_hash(run_dir)))
-    main.TRUST_RELEASE_GATE_REGISTRY.record_gate(_release_gate())
-    main.TRUST_RELEASE_APPROVAL_REGISTRY.record_approval(_release_approval())
+    manifest = store.record_manifest(
+        _manifest(artifact_hash=_artifact_hash(run_dir)),
+        owner_user_id="u1",
+        recorded_by="u1",
+    )
+    _record_trust_release_authority(manifest)
     materializer.materialize(manifest)
     bundler.bundle(
         manifest,
@@ -1099,6 +1267,63 @@ def test_rdp_publish_api_rejects_external_channel_without_publish_record(tmp_pat
         )
         assert response.status_code == 422
         assert "local_registry" in response.json()["detail"]
+        assert publish_store.publications() == []
+    finally:
+        main.app.dependency_overrides.pop(require_user_dependency, None)
+
+
+@pytest.mark.parametrize(
+    ("authority_kwargs", "expected_detail"),
+    [
+        ({"owner_user_id": "u2"}, "unknown trust_release_ref"),
+        (
+            {"artifact_ref_override": "rdp:another-package"},
+            "does not match RDP package artifact",
+        ),
+        (
+            {"signed_approval_ref_override": "verified_signature:missing"},
+            "unknown verified signed_approval_ref",
+        ),
+    ],
+)
+def test_rdp_publish_rejects_foreign_wrong_artifact_or_unverified_release_authority(
+    tmp_path,
+    monkeypatch,
+    authority_kwargs,
+    expected_detail,
+):
+    client, store, materializer, bundler, _exporter, _publisher, publish_store, source_root = _client_with_publish(
+        tmp_path, monkeypatch
+    )
+    _write_sources(source_root)
+    run_root = tmp_path / "runs"
+    run_dir = _write_run(run_root)
+    manifest = store.record_manifest(
+        _manifest(artifact_hash=_artifact_hash(run_dir)),
+        owner_user_id="u1",
+        recorded_by="u1",
+    )
+    _record_trust_release_authority(manifest, **authority_kwargs)
+    materializer.materialize(manifest)
+    bundler.bundle(
+        manifest,
+        source_map={
+            "source-file:strategy.py": "strategy.py",
+            "source-file:README.md": "README.md",
+        },
+    )
+    _record_source_run_integrity(manifest, materializer, run_root)
+    try:
+        response = client.post(
+            f"/api/research-os/rdp/manifests/{manifest.package_id}/publish",
+            json={
+                "channel": "local_registry",
+                "trust_release_ref": "release:v1",
+                "trust_release_approval_ref": "trust_release_approval:release:v1",
+            },
+        )
+        assert response.status_code == 422
+        assert expected_detail in response.json()["detail"]
         assert publish_store.publications() == []
     finally:
         main.app.dependency_overrides.pop(require_user_dependency, None)

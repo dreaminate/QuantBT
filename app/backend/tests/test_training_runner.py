@@ -19,6 +19,9 @@ from app.training import (
 )
 
 
+_OWNER_USER_ID = "test-owner"
+
+
 def _panel(n: int = 360, seed: int = 0) -> pd.DataFrame:
     rng = np.random.default_rng(seed)
     f1 = rng.normal(size=n)
@@ -105,7 +108,12 @@ def test_service_code_path_succeeds(tmp_path: Path) -> None:
         "panel = pd.read_parquet(os.environ['QUANTBT_PANEL_PATH'])\n"
         "emit({'oos_metrics': {'rows': float(len(panel))}, 'artifact_path': None})\n"
     )
-    job = svc.train_now_code("custom", code, _panel())
+    job = svc.train_now_code(
+        "custom",
+        code,
+        _panel(),
+        owner_user_id=_OWNER_USER_ID,
+    )
     assert job.status == "succeeded", job.error
     assert job.family == "code"
     assert job.metrics["rows"] == 360.0
@@ -128,6 +136,7 @@ def test_predict_with_then_feed_as_feature(tmp_path: Path) -> None:
             hyperparams={"n_estimators": 40},
         ),
         _panel(),
+        owner_user_id=_OWNER_USER_ID,
     )
     artifact = str(Path(a.artifact_dir) / "model.pkl")
     panel = _panel()
@@ -148,6 +157,7 @@ def test_service_input_models_composition(tmp_path: Path) -> None:
             hyperparams={"n_estimators": 40},
         ),
         _panel(),
+        owner_user_id=_OWNER_USER_ID,
     )
     artifact = str(Path(a.artifact_dir) / "model.pkl")
     # 训 B（lgbm），把 A 的输出当输入特征
@@ -161,6 +171,7 @@ def test_service_input_models_composition(tmp_path: Path) -> None:
             input_models=[{"artifact_path": artifact, "feature_cols": ["f1", "f2"], "as_col": "a_pred"}],
         ),
         _panel(),
+        owner_user_id=_OWNER_USER_ID,
     )
     assert b.status == "succeeded", b.error
     result = json.loads((Path(b.artifact_dir) / "result.json").read_text(encoding="utf-8"))
@@ -192,6 +203,7 @@ def test_service_dl_lstm_trains_in_subprocess(
             },
         ),
         _panel(400),
+        owner_user_id=_OWNER_USER_ID,
     )
     assert job.status == "succeeded", job.error
     assert job.family == "dl"

@@ -11,11 +11,16 @@ from __future__ import annotations
 
 import hashlib
 import json
+import os
 import re
+import threading
+from contextlib import contextmanager
 from dataclasses import asdict, dataclass, is_dataclass
 from enum import Enum
 from pathlib import Path
-from typing import Any
+from typing import Any, Iterator
+
+from app.cross_process_lock import acquire_exclusive_fd
 
 
 SECRET_PATTERN = re.compile(
@@ -24,6 +29,13 @@ SECRET_PATTERN = re.compile(
 )
 SECRET_IDENTIFIER_PATTERN = re.compile(r"(?i)(api[_-]?key|api[_-]?secret|secret|password|oauth|credential|private[_-]?key)")
 CANONICAL_FIELD_PATTERN = re.compile(r"^[A-Za-z_][A-Za-z0-9_.:-]{0,127}$")
+
+_NO_SECRET_SOURCE_CONNECTOR_TYPES: dict[str, frozenset[str]] = {
+    "local_file": frozenset({"local_file_no_auth"}),
+    "public_api": frozenset({"public_api_no_auth"}),
+    "public_csv": frozenset({"public_csv_no_auth"}),
+    "public_dataset": frozenset({"public_dataset_no_auth"}),
+}
 
 
 def _tuple(value: Any) -> tuple[Any, ...]:
@@ -124,6 +136,11 @@ class IngestionLifecycleState(str, Enum):
     REVOKED = "revoked"
 
 
+class NoSecretDataSourcePolicyStatus(str, Enum):
+    ACTIVE = "active"
+    REVOKED = "revoked"
+
+
 @dataclass(frozen=True)
 class OnboardingViolation:
     code: str
@@ -221,6 +238,33 @@ class DataSourceAssetRecord:
     retention_policy: str | None
     source_owner: str | None
     source_url_or_path: str | None
+
+
+@dataclass(frozen=True)
+class NoSecretDataSourcePolicyRecord:
+    policy_ref: str
+    source_ref: str
+    source_type: str
+    connector_type: str
+    external_credential_required: bool
+    permission_scope: str
+    status: NoSecretDataSourcePolicyStatus | str
+    actor_ref: str
+    approved_at: str
+    approval_ref: str
+    evidence_refs: tuple[str, ...]
+    reason: str
+    revoked_at: str | None = None
+    revocation_reason: str | None = None
+    revocation_evidence_refs: tuple[str, ...] = ()
+
+    def __post_init__(self) -> None:
+        object.__setattr__(self, "evidence_refs", _tuple(self.evidence_refs))
+        object.__setattr__(
+            self,
+            "revocation_evidence_refs",
+            _tuple(self.revocation_evidence_refs),
+        )
 
 
 @dataclass(frozen=True)
@@ -539,6 +583,191 @@ def validate_data_source_asset(asset: DataSourceAssetRecord) -> OnboardingDecisi
         export_allowed=not restricted,
         share_allowed=not restricted,
     )
+
+
+def validate_no_secret_data_source_policy(
+    record: NoSecretDataSourcePolicyRecord,
+    *,
+    source: DataSourceAssetRecord,
+    ingestion_skills: tuple[IngestionSkillRecord, ...] = (),
+) -> OnboardingDecision:
+    """Validate a narrowly-scoped public/local source no-credential approval."""
+
+    violations: list[OnboardingViolation] = []
+    for field_name in (
+        "policy_ref",
+        "source_ref",
+        "source_type",
+        "connector_type",
+        "permission_scope",
+        "actor_ref",
+        "approved_at",
+        "approval_ref",
+        "reason",
+    ):
+        _require_text(
+            violations,
+            field_name=field_name,
+            value=getattr(record, field_name),
+            ref=record.policy_ref,
+        )
+
+    if not str(record.policy_ref or "").startswith("no_secret_policy:"):
+        violations.append(
+            OnboardingViolation(
+                "no_secret_policy_ref_invalid",
+                "NoSecretDataSourcePolicy policy_ref must use the no_secret_policy namespace",
+                field="policy_ref",
+                ref=record.policy_ref,
+            )
+        )
+    if record.source_ref != source.source_ref:
+        violations.append(
+            OnboardingViolation(
+                "no_secret_policy_source_mismatch",
+                "NoSecretDataSourcePolicy source_ref must exactly match the recorded DataSourceAsset",
+                field="source_ref",
+                ref=record.policy_ref,
+            )
+        )
+    allowed_connector_types = _NO_SECRET_SOURCE_CONNECTOR_TYPES.get(record.source_type)
+    if allowed_connector_types is None:
+        violations.append(
+            OnboardingViolation(
+                "no_secret_policy_source_type_not_eligible",
+                "NoSecretDataSourcePolicy source_type must be explicitly public or local",
+                field="source_type",
+                ref=record.source_type,
+            )
+        )
+    elif record.connector_type not in allowed_connector_types:
+        violations.append(
+            OnboardingViolation(
+                "no_secret_policy_connector_type_not_eligible",
+                "NoSecretDataSourcePolicy connector_type must be an eligible no-auth connector for source_type",
+                field="connector_type",
+                ref=record.connector_type,
+            )
+        )
+    if record.external_credential_required is not False:
+        violations.append(
+            OnboardingViolation(
+                "no_secret_policy_external_credential_required",
+                "NoSecretDataSourcePolicy requires external_credential_required=False",
+                field="external_credential_required",
+                ref=record.policy_ref,
+            )
+        )
+    normalized_permission_scope = str(record.permission_scope or "").strip().lower()
+    if normalized_permission_scope != "read" and not normalized_permission_scope.endswith(":read"):
+        violations.append(
+            OnboardingViolation(
+                "no_secret_policy_permission_scope_not_read_only",
+                "NoSecretDataSourcePolicy permission_scope must be read-only",
+                field="permission_scope",
+                ref=record.permission_scope,
+            )
+        )
+    if not record.evidence_refs or any(not _present(ref) for ref in record.evidence_refs):
+        violations.append(
+            OnboardingViolation(
+                "no_secret_policy_missing_evidence_refs",
+                "NoSecretDataSourcePolicy requires non-empty evidence_refs",
+                field="evidence_refs",
+                ref=record.policy_ref,
+            )
+        )
+    if contains_plaintext_secret(_json_value(record)):
+        violations.append(
+            OnboardingViolation(
+                "plaintext_secret_in_no_secret_policy",
+                "NoSecretDataSourcePolicy metadata cannot contain credential material",
+                field="no_secret_policy",
+                ref=record.policy_ref,
+            )
+        )
+
+    status = _ref_value(record.status)
+    if status not in {
+        NoSecretDataSourcePolicyStatus.ACTIVE.value,
+        NoSecretDataSourcePolicyStatus.REVOKED.value,
+    }:
+        violations.append(
+            OnboardingViolation(
+                "no_secret_policy_status_invalid",
+                "NoSecretDataSourcePolicy status must be active or revoked",
+                field="status",
+                ref=record.policy_ref,
+            )
+        )
+    elif status == NoSecretDataSourcePolicyStatus.ACTIVE.value:
+        if _present(record.revoked_at) or _present(record.revocation_reason) or record.revocation_evidence_refs:
+            violations.append(
+                OnboardingViolation(
+                    "active_no_secret_policy_has_revocation_metadata",
+                    "active NoSecretDataSourcePolicy cannot contain revocation metadata",
+                    field="revoked_at",
+                    ref=record.policy_ref,
+                )
+            )
+    else:
+        for field_name, value in (
+            ("revoked_at", record.revoked_at),
+            ("revocation_reason", record.revocation_reason),
+        ):
+            if not _present(value):
+                violations.append(
+                    OnboardingViolation(
+                        f"revoked_no_secret_policy_missing_{field_name}",
+                        f"revoked NoSecretDataSourcePolicy requires {field_name}",
+                        field=field_name,
+                        ref=record.policy_ref,
+                    )
+                )
+        if not record.revocation_evidence_refs or any(
+            not _present(ref) for ref in record.revocation_evidence_refs
+        ):
+            violations.append(
+                OnboardingViolation(
+                    "revoked_no_secret_policy_missing_evidence_refs",
+                    "revoked NoSecretDataSourcePolicy requires revocation_evidence_refs",
+                    field="revocation_evidence_refs",
+                    ref=record.policy_ref,
+                )
+            )
+
+    for skill in ingestion_skills:
+        if skill.source_ref != record.source_ref:
+            continue
+        if skill.source_type != record.source_type:
+            violations.append(
+                OnboardingViolation(
+                    "no_secret_policy_skill_source_type_mismatch",
+                    "NoSecretDataSourcePolicy source_type must match every skill for the source",
+                    field="source_type",
+                    ref=skill.skill_id,
+                )
+            )
+        if skill.permission_scope != record.permission_scope:
+            violations.append(
+                OnboardingViolation(
+                    "no_secret_policy_skill_permission_scope_mismatch",
+                    "NoSecretDataSourcePolicy permission_scope must exactly match the skill",
+                    field="permission_scope",
+                    ref=skill.skill_id,
+                )
+            )
+        if skill.secret_refs or not ingestion_skill_allows_no_secret_connector(skill):
+            violations.append(
+                OnboardingViolation(
+                    "no_secret_policy_conflicts_with_skill_secret_path",
+                    "active NoSecretDataSourcePolicy cannot coexist with a credential-bearing skill path",
+                    field="secret_refs",
+                    ref=skill.skill_id,
+                )
+            )
+
+    return OnboardingDecision(accepted=not violations, violations=tuple(violations))
 
 
 def validate_ingestion_skill_run(
@@ -1610,29 +1839,61 @@ def _decision_message(decision: OnboardingDecision) -> str:
     return "; ".join(f"{v.code}:{v.field}" for v in decision.violations) or "settings record rejected"
 
 
-def _event_row(event_type: str, field_name: str, record: Any) -> dict[str, Any]:
-    return {
-        "schema_version": 1,
-        "event_type": event_type,
-        field_name: _json_value(record),
-    }
+_ONBOARDING_SCHEMA_VERSION = 2
+_RECORDED_BY_TYPES = (
+    DataConnectorConnectionCheckRecord,
+    DataConnectorSchemaProbeRecord,
+    DataConnectorFieldMappingRecord,
+    DataConnectorPITBitemporalRuleRecord,
+    LLMProviderHealthSnapshotRecord,
+)
 
 
-_EVENT_RECORD_TYPES: dict[str, tuple[str, type[Any]]] = {
-    "secret_ref_recorded": ("secret_ref", SecretRefRecord),
-    "data_source_asset_recorded": ("data_source_asset", DataSourceAssetRecord),
-    "ingestion_skill_recorded": ("ingestion_skill", IngestionSkillRecord),
-    "data_connector_check_recorded": ("data_connector_check", DataConnectorConnectionCheckRecord),
-    "data_connector_schema_probe_recorded": ("data_connector_schema_probe", DataConnectorSchemaProbeRecord),
-    "data_connector_field_mapping_recorded": ("data_connector_field_mapping", DataConnectorFieldMappingRecord),
-    "data_connector_pit_bitemporal_rule_recorded": (
-        "data_connector_pit_bitemporal_rule",
-        DataConnectorPITBitemporalRuleRecord,
+_EVENT_RECORD_TYPES: dict[str, tuple[type[Any], str, str]] = {
+    "secret_ref_recorded": (SecretRefRecord, "secret_ref", "_secret_refs"),
+    "data_source_asset_recorded": (DataSourceAssetRecord, "source_ref", "_data_sources"),
+    "no_secret_data_source_policy_recorded": (
+        NoSecretDataSourcePolicyRecord,
+        "policy_ref",
+        "_no_secret_data_source_policies",
     ),
-    "llm_provider_recorded": ("llm_provider", LLMProviderRecord),
-    "llm_provider_health_snapshot_recorded": ("llm_provider_health_snapshot", LLMProviderHealthSnapshotRecord),
-    "llm_credential_pool_recorded": ("credential_pool", LLMCredentialPoolRecord),
-    "model_routing_policy_recorded": ("routing_policy", ModelRoutingPolicyRecord),
+    "ingestion_skill_recorded": (IngestionSkillRecord, "skill_id", "_ingestion_skills"),
+    "data_connector_check_recorded": (
+        DataConnectorConnectionCheckRecord,
+        "check_ref",
+        "_data_connector_checks",
+    ),
+    "data_connector_schema_probe_recorded": (
+        DataConnectorSchemaProbeRecord,
+        "probe_ref",
+        "_data_connector_schema_probes",
+    ),
+    "data_connector_field_mapping_recorded": (
+        DataConnectorFieldMappingRecord,
+        "mapping_ref",
+        "_data_connector_field_mappings",
+    ),
+    "data_connector_pit_bitemporal_rule_recorded": (
+        DataConnectorPITBitemporalRuleRecord,
+        "rule_ref",
+        "_data_connector_pit_bitemporal_rules",
+    ),
+    "llm_provider_recorded": (LLMProviderRecord, "provider_id", "_llm_providers"),
+    "llm_provider_health_snapshot_recorded": (
+        LLMProviderHealthSnapshotRecord,
+        "snapshot_ref",
+        "_llm_provider_health_snapshots",
+    ),
+    "llm_credential_pool_recorded": (
+        LLMCredentialPoolRecord,
+        "pool_id",
+        "_credential_pools",
+    ),
+    "model_routing_policy_recorded": (
+        ModelRoutingPolicyRecord,
+        "routing_policy_id",
+        "_routing_policies",
+    ),
 }
 
 
@@ -1647,24 +1908,72 @@ class PersistentOnboardingRegistry:
     def __init__(self, path: str | Path) -> None:
         self._path = Path(path)
         self._path.parent.mkdir(parents=True, exist_ok=True)
-        self._secret_refs: dict[str, SecretRefRecord] = {}
-        self._data_sources: dict[str, DataSourceAssetRecord] = {}
-        self._ingestion_skills: dict[str, IngestionSkillRecord] = {}
-        self._data_connector_checks: dict[str, DataConnectorConnectionCheckRecord] = {}
-        self._data_connector_schema_probes: dict[str, DataConnectorSchemaProbeRecord] = {}
-        self._data_connector_field_mappings: dict[str, DataConnectorFieldMappingRecord] = {}
-        self._data_connector_pit_bitemporal_rules: dict[str, DataConnectorPITBitemporalRuleRecord] = {}
-        self._llm_providers: dict[str, LLMProviderRecord] = {}
-        self._llm_provider_health_snapshots: dict[str, LLMProviderHealthSnapshotRecord] = {}
-        self._credential_pools: dict[str, LLMCredentialPoolRecord] = {}
-        self._routing_policies: dict[str, ModelRoutingPolicyRecord] = {}
+        self._lock_path = self._path.with_name(f"{self._path.name}.lock")
+        self._thread_lock = threading.RLock()
+        self._reset_state()
         self._load_existing()
 
     @property
     def path(self) -> Path:
         return self._path
 
+    @property
+    def legacy_quarantined_count(self) -> int:
+        with self._thread_lock, self._exclusive_lock():
+            self._load_existing_unlocked()
+            return self._legacy_quarantined_count
+
+    def _reset_state(self) -> None:
+        self._secret_refs: dict[tuple[str, str], SecretRefRecord] = {}
+        self._data_sources: dict[tuple[str, str], DataSourceAssetRecord] = {}
+        self._no_secret_data_source_policies: dict[
+            tuple[str, str], NoSecretDataSourcePolicyRecord
+        ] = {}
+        self._ingestion_skills: dict[tuple[str, str], IngestionSkillRecord] = {}
+        self._data_connector_checks: dict[tuple[str, str], DataConnectorConnectionCheckRecord] = {}
+        self._data_connector_schema_probes: dict[tuple[str, str], DataConnectorSchemaProbeRecord] = {}
+        self._data_connector_field_mappings: dict[tuple[str, str], DataConnectorFieldMappingRecord] = {}
+        self._data_connector_pit_bitemporal_rules: dict[
+            tuple[str, str], DataConnectorPITBitemporalRuleRecord
+        ] = {}
+        self._llm_providers: dict[tuple[str, str], LLMProviderRecord] = {}
+        self._llm_provider_health_snapshots: dict[
+            tuple[str, str], LLMProviderHealthSnapshotRecord
+        ] = {}
+        self._credential_pools: dict[tuple[str, str], LLMCredentialPoolRecord] = {}
+        self._routing_policies: dict[tuple[str, str], ModelRoutingPolicyRecord] = {}
+        self._record_metadata: dict[tuple[str, str, str], tuple[int, str, dict[str, Any]]] = {}
+        self._legacy_quarantined_count = 0
+
+    @staticmethod
+    def _require_owner_user_id(owner_user_id: str) -> str:
+        if (
+            type(owner_user_id) is not str
+            or not owner_user_id
+            or owner_user_id != owner_user_id.strip()
+            or any(ord(char) < 32 for char in owner_user_id)
+        ):
+            raise ValueError("owner_user_id must be a stable non-empty exact string")
+        return owner_user_id
+
+    @contextmanager
+    def _exclusive_lock(self) -> Iterator[None]:
+        fd = os.open(self._lock_path, os.O_RDWR | os.O_CREAT, 0o600)
+        held = None
+        try:
+            held = acquire_exclusive_fd(fd, timeout_seconds=10.0)
+            yield
+        finally:
+            if held is not None:
+                held.release()
+            os.close(fd)
+
     def _load_existing(self) -> None:
+        with self._thread_lock, self._exclusive_lock():
+            self._load_existing_unlocked()
+
+    def _load_existing_unlocked(self) -> None:
+        self._reset_state()
         if not self._path.exists():
             return
         with self._path.open("r", encoding="utf-8") as fh:
@@ -1673,400 +1982,603 @@ class PersistentOnboardingRegistry:
                     continue
                 try:
                     row = json.loads(line)
-                    self._apply_row(row, persist=False)
+                    if not isinstance(row, dict):
+                        raise ValueError("onboarding settings row must be an object")
+                    if row.get("schema_version") == 1:
+                        self._legacy_quarantined_count += 1
+                        continue
+                    self._apply_v2_row(row)
                 except Exception as exc:  # noqa: BLE001 - bad settings history must block startup.
-                    raise ValueError(f"invalid persisted onboarding settings row at {self._path}:{line_no}") from exc
+                    raise ValueError(
+                        f"invalid persisted onboarding settings row at {self._path}:{line_no}"
+                    ) from exc
 
-    def _append_event(self, row: dict[str, Any]) -> None:
-        with self._path.open("a", encoding="utf-8") as fh:
-            fh.write(json.dumps(row, ensure_ascii=False, sort_keys=True, separators=(",", ":")) + "\n")
-            fh.flush()
+    @staticmethod
+    def _record_hash(row_without_hash: dict[str, Any]) -> str:
+        return "sha256:" + _content_hash(row_without_hash)
 
-    def _apply_row(self, row: dict[str, Any], *, persist: bool) -> None:
-        if row.get("schema_version") != 1:
-            raise ValueError("unsupported onboarding settings schema_version")
-        event_type = str(row.get("event_type") or "")
+    def _apply_v2_row(self, row: dict[str, Any]) -> None:
+        expected_fields = {
+            "schema_version",
+            "owner_user_id",
+            "event_type",
+            "record_revision",
+            "previous_record_hash",
+            "record_hash",
+            "payload",
+        }
+        if set(row) != expected_fields or row.get("schema_version") != _ONBOARDING_SCHEMA_VERSION:
+            raise ValueError("unsupported or malformed onboarding settings schema_version")
+        owner_user_id = self._require_owner_user_id(row.get("owner_user_id"))
+        event_type = row.get("event_type")
         spec = _EVENT_RECORD_TYPES.get(event_type)
         if spec is None:
             raise ValueError(f"unknown onboarding settings event_type={event_type!r}")
-        field_name, record_type = spec
-        raw = row.get(field_name)
-        if not isinstance(raw, dict):
-            raise ValueError(f"onboarding settings event missing {field_name}")
-        record = record_type(**raw)
+        record_type, ref_field, _storage_name = spec
+        payload = row.get("payload")
+        if not isinstance(payload, dict):
+            raise ValueError("onboarding settings event payload must be an object")
+        revision = row.get("record_revision")
+        if type(revision) is not int or revision < 1:
+            raise ValueError("record_revision must be a positive exact integer")
+        previous_hash = row.get("previous_record_hash")
+        if previous_hash is not None and type(previous_hash) is not str:
+            raise ValueError("previous_record_hash must be null or a string")
+        record_hash = row.get("record_hash")
+        if type(record_hash) is not str:
+            raise ValueError("record_hash must be a string")
+        body = {key: value for key, value in row.items() if key != "record_hash"}
+        if record_hash != self._record_hash(body):
+            raise ValueError("onboarding settings record_hash mismatch")
+        record = record_type(**payload)
+        record_ref = _ref_value(getattr(record, ref_field))
+        if not record_ref:
+            raise ValueError(f"onboarding settings record missing {ref_field}")
+        metadata_key = (owner_user_id, event_type, record_ref)
+        previous = self._record_metadata.get(metadata_key)
+        if previous is None:
+            if revision != 1 or previous_hash is not None:
+                raise ValueError("first onboarding record revision must be 1 with no previous hash")
+        elif revision != previous[0] + 1 or previous_hash != previous[1]:
+            raise ValueError("onboarding settings revision/hash chain mismatch")
+        self._validate_record(owner_user_id, record)
+        self._store_record(owner_user_id, event_type, record_ref, record)
+        self._record_metadata[metadata_key] = (revision, record_hash, payload)
+
+    def _append_event(self, row: dict[str, Any]) -> None:
+        encoded = (
+            json.dumps(row, ensure_ascii=False, sort_keys=True, separators=(",", ":")) + "\n"
+        ).encode("utf-8")
+        existed = self._path.exists()
+        fd = os.open(self._path, os.O_RDWR | os.O_APPEND | os.O_CREAT, 0o600)
+        start_size = os.fstat(fd).st_size
+        try:
+            view = memoryview(encoded)
+            while view:
+                written = os.write(fd, view)
+                if written <= 0:
+                    raise OSError("onboarding settings append made no progress")
+                view = view[written:]
+            os.fsync(fd)
+        except Exception:
+            try:
+                os.ftruncate(fd, start_size)
+                os.fsync(fd)
+            except OSError:
+                pass
+            raise
+        finally:
+            os.close(fd)
+        if not existed:
+            directory_fd = os.open(self._path.parent, os.O_RDONLY)
+            try:
+                os.fsync(directory_fd)
+            finally:
+                os.close(directory_fd)
+
+    def _validate_record(self, owner_user_id: str, record: Any) -> None:
+        if isinstance(record, _RECORDED_BY_TYPES) and record.recorded_by != owner_user_id:
+            raise ValueError("recorded_by must exactly match owner_user_id")
+        owner_key = lambda ref: (owner_user_id, ref)
         if isinstance(record, SecretRefRecord):
-            self._record_secret_ref(record, persist=persist)
+            decision = validate_secret_ref(record)
         elif isinstance(record, DataSourceAssetRecord):
-            self._record_data_source_asset(record, persist=persist)
+            current = self._data_sources.get(owner_key(record.source_ref))
+            if current is not None and current != record:
+                active_policies = tuple(
+                    policy
+                    for (owner, _policy_ref), policy in self._no_secret_data_source_policies.items()
+                    if owner == owner_user_id
+                    and policy.source_ref == record.source_ref
+                    and _ref_value(policy.status) == NoSecretDataSourcePolicyStatus.ACTIVE.value
+                )
+                if active_policies:
+                    raise ValueError(
+                        "DataSourceAsset with an active NoSecretDataSourcePolicy is immutable; "
+                        "revoke the policy before changing the source"
+                    )
+            decision = validate_data_source_asset(record)
+        elif isinstance(record, NoSecretDataSourcePolicyRecord):
+            source = self._data_sources.get(owner_key(record.source_ref))
+            if source is None:
+                raise ValueError(
+                    f"NoSecretDataSourcePolicy source_ref {record.source_ref!r} is not recorded for owner"
+                )
+            current = self._no_secret_data_source_policies.get(owner_key(record.policy_ref))
+            if current is None:
+                if _ref_value(record.status) != NoSecretDataSourcePolicyStatus.ACTIVE.value:
+                    raise ValueError("first NoSecretDataSourcePolicy revision must be active")
+                active_for_source = tuple(
+                    policy
+                    for (owner, policy_ref), policy in self._no_secret_data_source_policies.items()
+                    if owner == owner_user_id
+                    and policy_ref != record.policy_ref
+                    and policy.source_ref == record.source_ref
+                    and _ref_value(policy.status) == NoSecretDataSourcePolicyStatus.ACTIVE.value
+                )
+                if active_for_source:
+                    raise ValueError(
+                        "source_ref already has an active NoSecretDataSourcePolicy for owner"
+                    )
+            else:
+                immutable_fields = (
+                    "policy_ref",
+                    "source_ref",
+                    "source_type",
+                    "connector_type",
+                    "external_credential_required",
+                    "permission_scope",
+                    "actor_ref",
+                    "approved_at",
+                    "approval_ref",
+                    "evidence_refs",
+                    "reason",
+                )
+                if any(getattr(current, field) != getattr(record, field) for field in immutable_fields):
+                    raise ValueError(
+                        "NoSecretDataSourcePolicy approval identity is immutable; create a new policy"
+                    )
+                current_status = _ref_value(current.status)
+                next_status = _ref_value(record.status)
+                if current_status == NoSecretDataSourcePolicyStatus.REVOKED.value:
+                    raise ValueError("revoked NoSecretDataSourcePolicy is terminal")
+                if next_status != NoSecretDataSourcePolicyStatus.REVOKED.value:
+                    raise ValueError(
+                        "active NoSecretDataSourcePolicy is immutable; only revocation is allowed"
+                    )
+            skills = tuple(
+                skill
+                for (owner, _skill_id), skill in self._ingestion_skills.items()
+                if owner == owner_user_id and skill.source_ref == record.source_ref
+            )
+            decision = validate_no_secret_data_source_policy(
+                record,
+                source=source,
+                ingestion_skills=skills,
+            )
         elif isinstance(record, IngestionSkillRecord):
-            self._record_ingestion_skill(record, persist=persist)
+            if owner_key(record.source_ref) not in self._data_sources:
+                raise ValueError(f"IngestionSkill source_ref {record.source_ref!r} is not recorded for owner")
+            secrets = {
+                ref: value
+                for (owner, ref), value in self._secret_refs.items()
+                if owner == owner_user_id
+            }
+            decision = validate_ingestion_skill_run(record, secrets=secrets)
+            active_policies = tuple(
+                policy
+                for (owner, _policy_ref), policy in self._no_secret_data_source_policies.items()
+                if owner == owner_user_id
+                and policy.source_ref == record.source_ref
+                and _ref_value(policy.status) == NoSecretDataSourcePolicyStatus.ACTIVE.value
+            )
+            for policy in active_policies:
+                policy_decision = validate_no_secret_data_source_policy(
+                    policy,
+                    source=self._data_sources[owner_key(record.source_ref)],
+                    ingestion_skills=(record,),
+                )
+                if not policy_decision.accepted:
+                    raise ValueError(_decision_message(policy_decision))
         elif isinstance(record, DataConnectorConnectionCheckRecord):
-            self._record_data_connector_check(record, persist=persist)
+            try:
+                skill = self._ingestion_skills[owner_key(record.skill_id)]
+                source = self._data_sources[owner_key(record.source_ref)]
+            except KeyError as exc:
+                raise ValueError("connector check dependencies are not recorded for owner") from exc
+            secrets = {
+                ref: value
+                for (owner, ref), value in self._secret_refs.items()
+                if owner == owner_user_id
+            }
+            decision = validate_data_connector_connection_check(
+                record, skill=skill, source=source, secrets=secrets
+            )
         elif isinstance(record, DataConnectorSchemaProbeRecord):
-            self._record_data_connector_schema_probe(record, persist=persist)
+            try:
+                skill = self._ingestion_skills[owner_key(record.skill_id)]
+                source = self._data_sources[owner_key(record.source_ref)]
+                connector_check = self._data_connector_checks[owner_key(record.connector_check_ref)]
+            except KeyError as exc:
+                raise ValueError("schema probe dependencies are not recorded for owner") from exc
+            decision = validate_data_connector_schema_probe(
+                record, skill=skill, source=source, connector_check=connector_check
+            )
         elif isinstance(record, DataConnectorFieldMappingRecord):
-            self._record_data_connector_field_mapping(record, persist=persist)
+            try:
+                skill = self._ingestion_skills[owner_key(record.skill_id)]
+                source = self._data_sources[owner_key(record.source_ref)]
+                schema_probe = self._data_connector_schema_probes[owner_key(record.schema_probe_ref)]
+            except KeyError as exc:
+                raise ValueError("field mapping dependencies are not recorded for owner") from exc
+            decision = validate_data_connector_field_mapping(
+                record, skill=skill, source=source, schema_probe=schema_probe
+            )
         elif isinstance(record, DataConnectorPITBitemporalRuleRecord):
-            self._record_data_connector_pit_bitemporal_rule(record, persist=persist)
+            try:
+                skill = self._ingestion_skills[owner_key(record.skill_id)]
+                source = self._data_sources[owner_key(record.source_ref)]
+                field_mapping = self._data_connector_field_mappings[owner_key(record.field_mapping_ref)]
+                schema_probe = self._data_connector_schema_probes[owner_key(record.schema_probe_ref)]
+            except KeyError as exc:
+                raise ValueError("PIT/bitemporal rule dependencies are not recorded for owner") from exc
+            decision = validate_data_connector_pit_bitemporal_rule(
+                record,
+                skill=skill,
+                source=source,
+                field_mapping=field_mapping,
+                schema_probe=schema_probe,
+            )
         elif isinstance(record, LLMProviderRecord):
-            self._record_llm_provider(record, persist=persist)
+            decision = validate_llm_provider(record)
+            for ref in record.auth_refs:
+                if owner_key(ref) not in self._secret_refs:
+                    raise ValueError(f"LLM provider auth_ref {ref!r} is not recorded for owner")
         elif isinstance(record, LLMProviderHealthSnapshotRecord):
-            self._record_llm_provider_health_snapshot(record, persist=persist)
+            decision = validate_llm_provider_health_snapshot(record)
+            provider = self._llm_providers.get(owner_key(record.provider_id))
+            if provider is None:
+                raise ValueError(
+                    f"LLMProviderHealthSnapshot provider_id {record.provider_id!r} is not recorded for owner"
+                )
+            if record.auth_ref not in provider.auth_refs:
+                raise ValueError(
+                    f"LLMProviderHealthSnapshot auth_ref {record.auth_ref!r} is not recorded for provider"
+                )
+            secret_ref = self._secret_refs.get(owner_key(record.auth_ref))
+            if secret_ref is None:
+                raise ValueError(
+                    f"LLMProviderHealthSnapshot auth_ref {record.auth_ref!r} is not recorded for owner"
+                )
+            if secret_ref.status == SecretRefStatus.REVOKED or str(secret_ref.status) == SecretRefStatus.REVOKED.value:
+                raise ValueError(f"LLMProviderHealthSnapshot auth_ref {record.auth_ref!r} is revoked")
         elif isinstance(record, LLMCredentialPoolRecord):
-            self._record_credential_pool(record, persist=persist)
+            decision = validate_credential_pool(record)
+            if owner_key(record.provider_id) not in self._llm_providers:
+                raise ValueError(
+                    f"LLM credential pool provider_id {record.provider_id!r} is not recorded for owner"
+                )
+            for ref in record.auth_refs:
+                if owner_key(ref) not in self._secret_refs:
+                    raise ValueError(
+                        f"LLM credential pool auth_ref {ref!r} is not recorded for owner"
+                    )
         elif isinstance(record, ModelRoutingPolicyRecord):
-            self._record_routing_policy(record, persist=persist)
+            decision = validate_model_routing_policy(record)
+            for provider_id in record.allowed_providers:
+                if owner_key(provider_id) not in self._llm_providers:
+                    raise ValueError(
+                        f"ModelRoutingPolicy provider {provider_id!r} is not recorded for owner"
+                    )
+            if owner_key(record.credential_pool_ref) not in self._credential_pools:
+                raise ValueError(
+                    f"ModelRoutingPolicy credential_pool_ref {record.credential_pool_ref!r} is not recorded for owner"
+                )
         else:
             raise ValueError(f"unsupported onboarding settings record type {type(record).__name__}")
-
-    def record_secret_ref(self, record: SecretRefRecord) -> SecretRefRecord:
-        return self._record_secret_ref(record, persist=True)
-
-    def _record_secret_ref(self, record: SecretRefRecord, *, persist: bool) -> SecretRefRecord:
-        decision = validate_secret_ref(record)
         if not decision.accepted:
             raise ValueError(_decision_message(decision))
-        self._secret_refs[record.secret_ref] = record
-        if persist:
-            self._append_event(_event_row("secret_ref_recorded", "secret_ref", record))
-        return record
 
-    def record_data_source_asset(self, record: DataSourceAssetRecord) -> DataSourceAssetRecord:
-        return self._record_data_source_asset(record, persist=True)
+    def _store_record(self, owner_user_id: str, event_type: str, record_ref: str, record: Any) -> None:
+        storage_name = _EVENT_RECORD_TYPES[event_type][2]
+        getattr(self, storage_name)[(owner_user_id, record_ref)] = record
 
-    def _record_data_source_asset(self, record: DataSourceAssetRecord, *, persist: bool) -> DataSourceAssetRecord:
-        decision = validate_data_source_asset(record)
-        if not decision.accepted:
-            raise ValueError(_decision_message(decision))
-        self._data_sources[record.source_ref] = record
-        if persist:
-            self._append_event(_event_row("data_source_asset_recorded", "data_source_asset", record))
-        return record
+    def _record(
+        self,
+        event_type: str,
+        record: Any,
+        *,
+        owner_user_id: str,
+        expected_previous_revision: int | None,
+        expected_previous_hash: str | None,
+    ) -> Any:
+        owner_user_id = self._require_owner_user_id(owner_user_id)
+        record_type, ref_field, _storage_name = _EVENT_RECORD_TYPES[event_type]
+        if not isinstance(record, record_type):
+            raise TypeError(f"{event_type} requires {record_type.__name__}")
+        record_ref = _ref_value(getattr(record, ref_field))
+        payload = _json_value(record)
+        with self._thread_lock, self._exclusive_lock():
+            self._load_existing_unlocked()
+            metadata_key = (owner_user_id, event_type, record_ref)
+            previous = self._record_metadata.get(metadata_key)
+            if previous is not None and payload == previous[2]:
+                return record
+            if previous is None:
+                if expected_previous_revision is not None or expected_previous_hash is not None:
+                    raise ValueError("new onboarding record must not declare previous revision/hash")
+                revision = 1
+                previous_hash = None
+            else:
+                if (
+                    type(expected_previous_revision) is not int
+                    or expected_previous_revision != previous[0]
+                    or type(expected_previous_hash) is not str
+                    or expected_previous_hash != previous[1]
+                ):
+                    raise ValueError("changed onboarding record requires matching previous revision and hash")
+                revision = previous[0] + 1
+                previous_hash = previous[1]
+            self._validate_record(owner_user_id, record)
+            body = {
+                "schema_version": _ONBOARDING_SCHEMA_VERSION,
+                "owner_user_id": owner_user_id,
+                "event_type": event_type,
+                "record_revision": revision,
+                "previous_record_hash": previous_hash,
+                "payload": payload,
+            }
+            row = {**body, "record_hash": self._record_hash(body)}
+            self._append_event(row)
+            self._store_record(owner_user_id, event_type, record_ref, record)
+            self._record_metadata[metadata_key] = (revision, row["record_hash"], payload)
+            return record
 
-    def record_ingestion_skill(self, record: IngestionSkillRecord) -> IngestionSkillRecord:
-        return self._record_ingestion_skill(record, persist=True)
+    def _record_public(
+        self,
+        event_type: str,
+        record: Any,
+        *,
+        owner_user_id: str,
+        expected_previous_revision: int | None = None,
+        expected_previous_hash: str | None = None,
+    ) -> Any:
+        return self._record(
+            event_type,
+            record,
+            owner_user_id=owner_user_id,
+            expected_previous_revision=expected_previous_revision,
+            expected_previous_hash=expected_previous_hash,
+        )
 
-    def _record_ingestion_skill(self, record: IngestionSkillRecord, *, persist: bool) -> IngestionSkillRecord:
-        if record.source_ref not in self._data_sources:
-            raise ValueError(f"IngestionSkill source_ref {record.source_ref!r} is not recorded")
-        decision = validate_ingestion_skill_run(record, secrets=self._secret_refs)
-        if not decision.accepted:
-            raise ValueError(_decision_message(decision))
-        self._ingestion_skills[record.skill_id] = record
-        if persist:
-            self._append_event(_event_row("ingestion_skill_recorded", "ingestion_skill", record))
-        return record
+    def record_secret_ref(self, record: SecretRefRecord, *, owner_user_id: str, **cas: Any) -> SecretRefRecord:
+        return self._record_public("secret_ref_recorded", record, owner_user_id=owner_user_id, **cas)
+
+    def record_data_source_asset(
+        self, record: DataSourceAssetRecord, *, owner_user_id: str, **cas: Any
+    ) -> DataSourceAssetRecord:
+        return self._record_public("data_source_asset_recorded", record, owner_user_id=owner_user_id, **cas)
+
+    def record_no_secret_data_source_policy(
+        self,
+        record: NoSecretDataSourcePolicyRecord,
+        *,
+        owner_user_id: str,
+        **cas: Any,
+    ) -> NoSecretDataSourcePolicyRecord:
+        return self._record_public(
+            "no_secret_data_source_policy_recorded",
+            record,
+            owner_user_id=owner_user_id,
+            **cas,
+        )
+
+    def record_ingestion_skill(
+        self, record: IngestionSkillRecord, *, owner_user_id: str, **cas: Any
+    ) -> IngestionSkillRecord:
+        return self._record_public("ingestion_skill_recorded", record, owner_user_id=owner_user_id, **cas)
 
     def record_data_connector_check(
         self,
         record: DataConnectorConnectionCheckRecord,
-    ) -> DataConnectorConnectionCheckRecord:
-        return self._record_data_connector_check(record, persist=True)
-
-    def _record_data_connector_check(
-        self,
-        record: DataConnectorConnectionCheckRecord,
         *,
-        persist: bool,
+        owner_user_id: str,
+        **cas: Any,
     ) -> DataConnectorConnectionCheckRecord:
-        try:
-            skill = self._ingestion_skills[record.skill_id]
-        except KeyError as exc:
-            raise ValueError(f"connector check skill_id {record.skill_id!r} is not recorded") from exc
-        try:
-            source = self._data_sources[record.source_ref]
-        except KeyError as exc:
-            raise ValueError(f"connector check source_ref {record.source_ref!r} is not recorded") from exc
-        decision = validate_data_connector_connection_check(
-            record,
-            skill=skill,
-            source=source,
-            secrets=self._secret_refs,
-        )
-        if not decision.accepted:
-            raise ValueError(_decision_message(decision))
-        self._data_connector_checks[record.check_ref] = record
-        if persist:
-            self._append_event(_event_row("data_connector_check_recorded", "data_connector_check", record))
-        return record
+        return self._record_public("data_connector_check_recorded", record, owner_user_id=owner_user_id, **cas)
 
     def record_data_connector_schema_probe(
         self,
         record: DataConnectorSchemaProbeRecord,
-    ) -> DataConnectorSchemaProbeRecord:
-        return self._record_data_connector_schema_probe(record, persist=True)
-
-    def _record_data_connector_schema_probe(
-        self,
-        record: DataConnectorSchemaProbeRecord,
         *,
-        persist: bool,
+        owner_user_id: str,
+        **cas: Any,
     ) -> DataConnectorSchemaProbeRecord:
-        try:
-            skill = self._ingestion_skills[record.skill_id]
-        except KeyError as exc:
-            raise ValueError(f"schema probe skill_id {record.skill_id!r} is not recorded") from exc
-        try:
-            source = self._data_sources[record.source_ref]
-        except KeyError as exc:
-            raise ValueError(f"schema probe source_ref {record.source_ref!r} is not recorded") from exc
-        try:
-            connector_check = self._data_connector_checks[record.connector_check_ref]
-        except KeyError as exc:
-            raise ValueError(f"schema probe connector_check_ref {record.connector_check_ref!r} is not recorded") from exc
-        decision = validate_data_connector_schema_probe(
-            record,
-            skill=skill,
-            source=source,
-            connector_check=connector_check,
+        return self._record_public(
+            "data_connector_schema_probe_recorded", record, owner_user_id=owner_user_id, **cas
         )
-        if not decision.accepted:
-            raise ValueError(_decision_message(decision))
-        self._data_connector_schema_probes[record.probe_ref] = record
-        if persist:
-            self._append_event(_event_row("data_connector_schema_probe_recorded", "data_connector_schema_probe", record))
-        return record
 
     def record_data_connector_field_mapping(
         self,
         record: DataConnectorFieldMappingRecord,
-    ) -> DataConnectorFieldMappingRecord:
-        return self._record_data_connector_field_mapping(record, persist=True)
-
-    def _record_data_connector_field_mapping(
-        self,
-        record: DataConnectorFieldMappingRecord,
         *,
-        persist: bool,
+        owner_user_id: str,
+        **cas: Any,
     ) -> DataConnectorFieldMappingRecord:
-        try:
-            skill = self._ingestion_skills[record.skill_id]
-        except KeyError as exc:
-            raise ValueError(f"field mapping skill_id {record.skill_id!r} is not recorded") from exc
-        try:
-            source = self._data_sources[record.source_ref]
-        except KeyError as exc:
-            raise ValueError(f"field mapping source_ref {record.source_ref!r} is not recorded") from exc
-        try:
-            schema_probe = self._data_connector_schema_probes[record.schema_probe_ref]
-        except KeyError as exc:
-            raise ValueError(f"field mapping schema_probe_ref {record.schema_probe_ref!r} is not recorded") from exc
-        decision = validate_data_connector_field_mapping(
-            record,
-            skill=skill,
-            source=source,
-            schema_probe=schema_probe,
+        return self._record_public(
+            "data_connector_field_mapping_recorded", record, owner_user_id=owner_user_id, **cas
         )
-        if not decision.accepted:
-            raise ValueError(_decision_message(decision))
-        self._data_connector_field_mappings[record.mapping_ref] = record
-        if persist:
-            self._append_event(
-                _event_row("data_connector_field_mapping_recorded", "data_connector_field_mapping", record)
-            )
-        return record
 
     def record_data_connector_pit_bitemporal_rule(
         self,
         record: DataConnectorPITBitemporalRuleRecord,
-    ) -> DataConnectorPITBitemporalRuleRecord:
-        return self._record_data_connector_pit_bitemporal_rule(record, persist=True)
-
-    def _record_data_connector_pit_bitemporal_rule(
-        self,
-        record: DataConnectorPITBitemporalRuleRecord,
         *,
-        persist: bool,
+        owner_user_id: str,
+        **cas: Any,
     ) -> DataConnectorPITBitemporalRuleRecord:
-        try:
-            skill = self._ingestion_skills[record.skill_id]
-        except KeyError as exc:
-            raise ValueError(f"PIT/bitemporal rule skill_id {record.skill_id!r} is not recorded") from exc
-        try:
-            source = self._data_sources[record.source_ref]
-        except KeyError as exc:
-            raise ValueError(f"PIT/bitemporal rule source_ref {record.source_ref!r} is not recorded") from exc
-        try:
-            field_mapping = self._data_connector_field_mappings[record.field_mapping_ref]
-        except KeyError as exc:
-            raise ValueError(f"PIT/bitemporal rule field_mapping_ref {record.field_mapping_ref!r} is not recorded") from exc
-        try:
-            schema_probe = self._data_connector_schema_probes[record.schema_probe_ref]
-        except KeyError as exc:
-            raise ValueError(f"PIT/bitemporal rule schema_probe_ref {record.schema_probe_ref!r} is not recorded") from exc
-        decision = validate_data_connector_pit_bitemporal_rule(
+        return self._record_public(
+            "data_connector_pit_bitemporal_rule_recorded",
             record,
-            skill=skill,
-            source=source,
-            field_mapping=field_mapping,
-            schema_probe=schema_probe,
+            owner_user_id=owner_user_id,
+            **cas,
         )
-        if not decision.accepted:
-            raise ValueError(_decision_message(decision))
-        self._data_connector_pit_bitemporal_rules[record.rule_ref] = record
-        if persist:
-            self._append_event(
-                _event_row(
-                    "data_connector_pit_bitemporal_rule_recorded",
-                    "data_connector_pit_bitemporal_rule",
-                    record,
-                )
-            )
-        return record
 
-    def record_llm_provider(self, record: LLMProviderRecord) -> LLMProviderRecord:
-        return self._record_llm_provider(record, persist=True)
-
-    def _record_llm_provider(self, record: LLMProviderRecord, *, persist: bool) -> LLMProviderRecord:
-        decision = validate_llm_provider(record)
-        if not decision.accepted:
-            raise ValueError(_decision_message(decision))
-        for ref in record.auth_refs:
-            if ref not in self._secret_refs:
-                raise ValueError(f"LLM provider auth_ref {ref!r} is not recorded")
-        self._llm_providers[record.provider_id] = record
-        if persist:
-            self._append_event(_event_row("llm_provider_recorded", "llm_provider", record))
-        return record
+    def record_llm_provider(
+        self, record: LLMProviderRecord, *, owner_user_id: str, **cas: Any
+    ) -> LLMProviderRecord:
+        return self._record_public("llm_provider_recorded", record, owner_user_id=owner_user_id, **cas)
 
     def record_llm_provider_health_snapshot(
         self,
         record: LLMProviderHealthSnapshotRecord,
-    ) -> LLMProviderHealthSnapshotRecord:
-        return self._record_llm_provider_health_snapshot(record, persist=True)
-
-    def _record_llm_provider_health_snapshot(
-        self,
-        record: LLMProviderHealthSnapshotRecord,
         *,
-        persist: bool,
+        owner_user_id: str,
+        **cas: Any,
     ) -> LLMProviderHealthSnapshotRecord:
-        decision = validate_llm_provider_health_snapshot(record)
-        if not decision.accepted:
-            raise ValueError(_decision_message(decision))
-        provider = self._llm_providers.get(record.provider_id)
-        if provider is None:
-            raise ValueError(f"LLMProviderHealthSnapshot provider_id {record.provider_id!r} is not recorded")
-        if record.auth_ref not in provider.auth_refs:
-            raise ValueError(f"LLMProviderHealthSnapshot auth_ref {record.auth_ref!r} is not recorded for provider")
-        secret_ref = self._secret_refs.get(record.auth_ref)
-        if secret_ref is None:
-            raise ValueError(f"LLMProviderHealthSnapshot auth_ref {record.auth_ref!r} is not recorded")
-        if secret_ref.status == SecretRefStatus.REVOKED or str(secret_ref.status) == SecretRefStatus.REVOKED.value:
-            raise ValueError(f"LLMProviderHealthSnapshot auth_ref {record.auth_ref!r} is revoked")
-        self._llm_provider_health_snapshots[record.snapshot_ref] = record
-        if persist:
-            self._append_event(
-                _event_row(
-                    "llm_provider_health_snapshot_recorded",
-                    "llm_provider_health_snapshot",
-                    record,
-                )
-            )
-        return record
+        return self._record_public(
+            "llm_provider_health_snapshot_recorded", record, owner_user_id=owner_user_id, **cas
+        )
 
-    def record_credential_pool(self, record: LLMCredentialPoolRecord) -> LLMCredentialPoolRecord:
-        return self._record_credential_pool(record, persist=True)
+    def record_credential_pool(
+        self, record: LLMCredentialPoolRecord, *, owner_user_id: str, **cas: Any
+    ) -> LLMCredentialPoolRecord:
+        return self._record_public("llm_credential_pool_recorded", record, owner_user_id=owner_user_id, **cas)
 
-    def _record_credential_pool(self, record: LLMCredentialPoolRecord, *, persist: bool) -> LLMCredentialPoolRecord:
-        decision = validate_credential_pool(record)
-        if not decision.accepted:
-            raise ValueError(_decision_message(decision))
-        if record.provider_id not in self._llm_providers:
-            raise ValueError(f"LLM credential pool provider_id {record.provider_id!r} is not recorded")
-        for ref in record.auth_refs:
-            if ref not in self._secret_refs:
-                raise ValueError(f"LLM credential pool auth_ref {ref!r} is not recorded")
-        self._credential_pools[record.pool_id] = record
-        if persist:
-            self._append_event(_event_row("llm_credential_pool_recorded", "credential_pool", record))
-        return record
+    def record_routing_policy(
+        self, record: ModelRoutingPolicyRecord, *, owner_user_id: str, **cas: Any
+    ) -> ModelRoutingPolicyRecord:
+        return self._record_public("model_routing_policy_recorded", record, owner_user_id=owner_user_id, **cas)
 
-    def record_routing_policy(self, record: ModelRoutingPolicyRecord) -> ModelRoutingPolicyRecord:
-        return self._record_routing_policy(record, persist=True)
+    def record_state(self, event_type: str, record_ref: str, *, owner_user_id: str) -> tuple[int, str]:
+        owner_user_id = self._require_owner_user_id(owner_user_id)
+        if event_type not in _EVENT_RECORD_TYPES:
+            raise ValueError(f"unknown onboarding settings event_type={event_type!r}")
+        with self._thread_lock, self._exclusive_lock():
+            self._load_existing_unlocked()
+            revision, record_hash, _payload = self._record_metadata[
+                (owner_user_id, event_type, record_ref)
+            ]
+            return revision, record_hash
 
-    def _record_routing_policy(self, record: ModelRoutingPolicyRecord, *, persist: bool) -> ModelRoutingPolicyRecord:
-        decision = validate_model_routing_policy(record)
-        if not decision.accepted:
-            raise ValueError(_decision_message(decision))
-        for provider_id in record.allowed_providers:
-            if provider_id not in self._llm_providers:
-                raise ValueError(f"ModelRoutingPolicy provider {provider_id!r} is not recorded")
-        if record.credential_pool_ref not in self._credential_pools:
-            raise ValueError(f"ModelRoutingPolicy credential_pool_ref {record.credential_pool_ref!r} is not recorded")
-        self._routing_policies[record.routing_policy_id] = record
-        if persist:
-            self._append_event(_event_row("model_routing_policy_recorded", "routing_policy", record))
-        return record
+    def _get(self, storage_name: str, record_ref: str, owner_user_id: str) -> Any:
+        owner_user_id = self._require_owner_user_id(owner_user_id)
+        with self._thread_lock, self._exclusive_lock():
+            self._load_existing_unlocked()
+            return getattr(self, storage_name)[(owner_user_id, record_ref)]
 
-    def secret_ref(self, ref: str) -> SecretRefRecord:
-        return self._secret_refs[ref]
+    def _list(self, storage_name: str, owner_user_id: str) -> list[Any]:
+        owner_user_id = self._require_owner_user_id(owner_user_id)
+        with self._thread_lock, self._exclusive_lock():
+            self._load_existing_unlocked()
+            return [
+                record
+                for (owner, _ref), record in getattr(self, storage_name).items()
+                if owner == owner_user_id
+            ]
 
-    def data_source(self, source_ref: str) -> DataSourceAssetRecord:
-        return self._data_sources[source_ref]
+    def secret_ref(self, ref: str, *, owner_user_id: str) -> SecretRefRecord:
+        return self._get("_secret_refs", ref, owner_user_id)
 
-    def ingestion_skill(self, skill_id: str) -> IngestionSkillRecord:
-        return self._ingestion_skills[skill_id]
+    def data_source(self, source_ref: str, *, owner_user_id: str) -> DataSourceAssetRecord:
+        return self._get("_data_sources", source_ref, owner_user_id)
 
-    def data_connector_check(self, check_ref: str) -> DataConnectorConnectionCheckRecord:
-        return self._data_connector_checks[check_ref]
+    def no_secret_data_source_policy(
+        self, policy_ref: str, *, owner_user_id: str
+    ) -> NoSecretDataSourcePolicyRecord:
+        return self._get("_no_secret_data_source_policies", policy_ref, owner_user_id)
 
-    def data_connector_schema_probe(self, probe_ref: str) -> DataConnectorSchemaProbeRecord:
-        return self._data_connector_schema_probes[probe_ref]
+    def ingestion_skill(self, skill_id: str, *, owner_user_id: str) -> IngestionSkillRecord:
+        return self._get("_ingestion_skills", skill_id, owner_user_id)
 
-    def data_connector_field_mapping(self, mapping_ref: str) -> DataConnectorFieldMappingRecord:
-        return self._data_connector_field_mappings[mapping_ref]
+    def data_connector_check(
+        self, check_ref: str, *, owner_user_id: str
+    ) -> DataConnectorConnectionCheckRecord:
+        return self._get("_data_connector_checks", check_ref, owner_user_id)
 
-    def data_connector_pit_bitemporal_rule(self, rule_ref: str) -> DataConnectorPITBitemporalRuleRecord:
-        return self._data_connector_pit_bitemporal_rules[rule_ref]
+    def data_connector_schema_probe(
+        self, probe_ref: str, *, owner_user_id: str
+    ) -> DataConnectorSchemaProbeRecord:
+        return self._get("_data_connector_schema_probes", probe_ref, owner_user_id)
 
-    def llm_provider(self, provider_id: str) -> LLMProviderRecord:
-        return self._llm_providers[provider_id]
+    def data_connector_field_mapping(
+        self, mapping_ref: str, *, owner_user_id: str
+    ) -> DataConnectorFieldMappingRecord:
+        return self._get("_data_connector_field_mappings", mapping_ref, owner_user_id)
 
-    def llm_provider_health_snapshot(self, snapshot_ref: str) -> LLMProviderHealthSnapshotRecord:
-        return self._llm_provider_health_snapshots[snapshot_ref]
+    def data_connector_pit_bitemporal_rule(
+        self, rule_ref: str, *, owner_user_id: str
+    ) -> DataConnectorPITBitemporalRuleRecord:
+        return self._get("_data_connector_pit_bitemporal_rules", rule_ref, owner_user_id)
 
-    def credential_pool(self, pool_id: str) -> LLMCredentialPoolRecord:
-        return self._credential_pools[pool_id]
+    def llm_provider(self, provider_id: str, *, owner_user_id: str) -> LLMProviderRecord:
+        return self._get("_llm_providers", provider_id, owner_user_id)
 
-    def routing_policy(self, routing_policy_id: str) -> ModelRoutingPolicyRecord:
-        return self._routing_policies[routing_policy_id]
+    def llm_provider_health_snapshot(
+        self, snapshot_ref: str, *, owner_user_id: str
+    ) -> LLMProviderHealthSnapshotRecord:
+        return self._get("_llm_provider_health_snapshots", snapshot_ref, owner_user_id)
 
-    def secret_refs(self) -> list[SecretRefRecord]:
-        return list(self._secret_refs.values())
+    def credential_pool(self, pool_id: str, *, owner_user_id: str) -> LLMCredentialPoolRecord:
+        return self._get("_credential_pools", pool_id, owner_user_id)
 
-    def data_sources(self) -> list[DataSourceAssetRecord]:
-        return list(self._data_sources.values())
+    def routing_policy(
+        self, routing_policy_id: str, *, owner_user_id: str
+    ) -> ModelRoutingPolicyRecord:
+        return self._get("_routing_policies", routing_policy_id, owner_user_id)
 
-    def ingestion_skills(self) -> list[IngestionSkillRecord]:
-        return list(self._ingestion_skills.values())
+    def secret_refs(self, *, owner_user_id: str) -> list[SecretRefRecord]:
+        return self._list("_secret_refs", owner_user_id)
 
-    def data_connector_checks(self) -> list[DataConnectorConnectionCheckRecord]:
-        return list(self._data_connector_checks.values())
+    def data_sources(self, *, owner_user_id: str) -> list[DataSourceAssetRecord]:
+        return self._list("_data_sources", owner_user_id)
 
-    def data_connector_schema_probes(self) -> list[DataConnectorSchemaProbeRecord]:
-        return list(self._data_connector_schema_probes.values())
+    def no_secret_data_source_policies(
+        self,
+        *,
+        owner_user_id: str,
+        source_ref: str | None = None,
+        status: NoSecretDataSourcePolicyStatus | str | None = None,
+    ) -> list[NoSecretDataSourcePolicyRecord]:
+        policies = self._list("_no_secret_data_source_policies", owner_user_id)
+        if source_ref is not None:
+            policies = [policy for policy in policies if policy.source_ref == source_ref]
+        if status is not None:
+            policies = [policy for policy in policies if _ref_value(policy.status) == _ref_value(status)]
+        return policies
 
-    def data_connector_field_mappings(self) -> list[DataConnectorFieldMappingRecord]:
-        return list(self._data_connector_field_mappings.values())
+    def ingestion_skills(self, *, owner_user_id: str) -> list[IngestionSkillRecord]:
+        return self._list("_ingestion_skills", owner_user_id)
 
-    def data_connector_pit_bitemporal_rules(self) -> list[DataConnectorPITBitemporalRuleRecord]:
-        return list(self._data_connector_pit_bitemporal_rules.values())
+    def data_connector_checks(self, *, owner_user_id: str) -> list[DataConnectorConnectionCheckRecord]:
+        return self._list("_data_connector_checks", owner_user_id)
 
-    def llm_providers(self) -> list[LLMProviderRecord]:
-        return list(self._llm_providers.values())
+    def data_connector_schema_probes(self, *, owner_user_id: str) -> list[DataConnectorSchemaProbeRecord]:
+        return self._list("_data_connector_schema_probes", owner_user_id)
 
-    def llm_provider_health_snapshots(self, provider_id: str | None = None) -> list[LLMProviderHealthSnapshotRecord]:
-        snapshots = list(self._llm_provider_health_snapshots.values())
+    def data_connector_field_mappings(self, *, owner_user_id: str) -> list[DataConnectorFieldMappingRecord]:
+        return self._list("_data_connector_field_mappings", owner_user_id)
+
+    def data_connector_pit_bitemporal_rules(
+        self, *, owner_user_id: str
+    ) -> list[DataConnectorPITBitemporalRuleRecord]:
+        return self._list("_data_connector_pit_bitemporal_rules", owner_user_id)
+
+    def llm_providers(self, *, owner_user_id: str) -> list[LLMProviderRecord]:
+        return self._list("_llm_providers", owner_user_id)
+
+    def llm_provider_health_snapshots(
+        self, provider_id: str | None = None, *, owner_user_id: str
+    ) -> list[LLMProviderHealthSnapshotRecord]:
+        snapshots = self._list("_llm_provider_health_snapshots", owner_user_id)
         if provider_id is not None:
             return [record for record in snapshots if record.provider_id == provider_id]
         return snapshots
 
-    def credential_pools(self) -> list[LLMCredentialPoolRecord]:
-        return list(self._credential_pools.values())
+    def credential_pools(self, *, owner_user_id: str) -> list[LLMCredentialPoolRecord]:
+        return self._list("_credential_pools", owner_user_id)
 
-    def routing_policies(self) -> list[ModelRoutingPolicyRecord]:
-        return list(self._routing_policies.values())
+    def routing_policies(self, *, owner_user_id: str) -> list[ModelRoutingPolicyRecord]:
+        return self._list("_routing_policies", owner_user_id)
 
 
 __all__ = [
@@ -2082,6 +2594,8 @@ __all__ = [
     "LLMGatewayCallRequest",
     "LLMProviderRecord",
     "ModelRoutingPolicyRecord",
+    "NoSecretDataSourcePolicyRecord",
+    "NoSecretDataSourcePolicyStatus",
     "OnboardingDecision",
     "OnboardingViolation",
     "OnboardingWarning",
@@ -2103,5 +2617,6 @@ __all__ = [
     "validate_llm_provider",
     "validate_llm_provider_health_snapshot",
     "validate_model_routing_policy",
+    "validate_no_secret_data_source_policy",
     "validate_secret_ref",
 ]

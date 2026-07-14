@@ -45,6 +45,37 @@ describe("F2 视图真实后端 · live 注入覆盖 mock + 改挂 LIVE", () => 
     expect(screen.getByText("233")).toBeInTheDocument();
     // 不再出现 MOCK 角标
     expect(screen.queryByText(/MOCK 数据 · 分层回测/)).toBeNull();
+    expect(screen.getByText("后端 · IC / 分位均值 / 衰减")).toBeInTheDocument();
+    expect(screen.getByTestId("layer-cumulative-unavailable")).toHaveTextContent(/累计净值序列不可用/);
+    expect(screen.getByTestId("ic-series-unavailable")).toHaveTextContent(/后端仅返回汇总指标/);
+  });
+
+  it("评测台：后端 payload 部分缺失 → 缺失区块不可用，绝不回落 MOCK/504/0", () => {
+    renderWithDesk(
+      <FactorEvalView
+        factor={sel}
+        horizon={5}
+        onHorizon={() => {}}
+        live={{
+          ic: { ic_mean: null, rank_ic_mean: null, ic_ir: null, ic_tstat_nw: null, sample_count: 0 },
+          decay: null,
+          layered: {
+            effective_quantiles: 2,
+            long_short_spread: 0.01,
+            monotonic: false,
+            buckets: [
+              { quantile: 1, mean_return: -0.002, n_obs: 10 },
+              { quantile: 2, mean_return: 0.008, n_obs: 10 },
+            ],
+          },
+        }}
+      />,
+    );
+    expect(screen.getByTestId("eval-partial-badge")).toHaveTextContent("后端数据不完整 · 不混入 MOCK");
+    expect(screen.getAllByText("不可用").length).toBeGreaterThanOrEqual(4);
+    expect(screen.getByTestId("decay-unavailable")).toBeInTheDocument();
+    expect(screen.queryByText(/MOCK 数据 · 分层回测/)).toBeNull();
+    expect(screen.queryByText("504")).toBeNull();
   });
 
   it("评测台：无 live → 回落 mock + MockBadge（诚实，不假绿灯）", () => {
@@ -151,8 +182,9 @@ describe("F2 视图真实后端 · live 注入覆盖 mock + 改挂 LIVE", () => 
       />,
     );
     expect(screen.getByText(/前视门未通过/)).toBeInTheDocument();
-    // 校验未过 → 不展示「LIVE · 即时 IC 真实后端」绿成功角标
-    expect(screen.queryByText(/LIVE · 即时 IC 真实后端/)).toBeNull();
+    expect(screen.getByText(/后端校验未过 · lookahead/)).toBeInTheDocument();
+    expect(screen.getAllByText("不可用")).toHaveLength(2);
+    expect(screen.getByText(/DEMO 合成波形 · 不代表后端 IC 序列/)).toBeInTheDocument();
   });
 
   it("构建台：live 校验通过 → LIVE 即时 IC 角标 + 真实 IC", () => {
@@ -174,6 +206,30 @@ describe("F2 视图真实后端 · live 注入覆盖 mock + 改挂 LIVE", () => 
       />,
     );
     expect(screen.getByTestId("build-live-badge")).toBeInTheDocument();
+    expect(screen.getByTestId("build-live-badge")).toHaveTextContent("后端校验 · 汇总 IC");
     expect(screen.getByText("0.037")).toBeInTheDocument();
+  });
+
+  it("构建台：后端校验通过但未返回 IC → 汇总值不可用，不以 DEMO 数值补洞", () => {
+    renderWithDesk(
+      <FactorBuildView
+        expr="ts_zscore(close, 20)"
+        factorId="x"
+        chat={[]}
+        draft=""
+        onDraft={() => {}}
+        onSend={() => {}}
+        onInsert={() => {}}
+        onChip={() => {}}
+        gateOpen={false}
+        onGate={() => {}}
+        onGateClose={() => {}}
+        onGateConfirm={() => {}}
+        live={{ valid: true, stage: "ok", reason: "前视门通过", ic: null }}
+      />,
+    );
+    expect(screen.getAllByText("不可用")).toHaveLength(2);
+    expect(screen.getByText(/DEMO 合成波形 · 不代表后端 IC 序列/)).toBeInTheDocument();
+    expect(screen.queryByText(/DEMO IC/)).toBeNull();
   });
 });

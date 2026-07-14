@@ -100,6 +100,36 @@ def test_persistent_rag_api_replays_documents_and_filters_permissions(tmp_path, 
         main.app.dependency_overrides.pop(require_user_dependency, None)
 
 
+def test_rag_permissions_use_stable_user_id_not_display_username(tmp_path, monkeypatch):
+    index = PersistentResearchAssetRAGIndex(tmp_path / "research_asset_rag.jsonl")
+    monkeypatch.setattr(main, "RESEARCH_ASSET_RAG_INDEX", index)
+    main.app.dependency_overrides[require_user_dependency] = lambda: SimpleNamespace(
+        username="alice-display",
+        user_id="alice-id",
+    )
+    try:
+        client = TestClient(main.app)
+        added = client.post("/api/research-os/rag/documents", json=_doc_payload())
+        assert added.status_code == 200, added.text
+        document = index._docs[0]
+        assert document.permission.allowed_users == ("alice-id",)
+
+        response = client.post(
+            "/api/research-os/rag/retrieve",
+            json={
+                "query": "SecretRef market data",
+                "desk": "data",
+                "visible_asset_refs": ["qro:btc-momentum"],
+                "permission_tags": ["research.read"],
+                "projections": ["DataRAG"],
+            },
+        )
+        assert response.status_code == 200
+        assert len(response.json()["hits"]) == 1
+    finally:
+        main.app.dependency_overrides.pop(require_user_dependency, None)
+
+
 def test_rag_api_rejects_plaintext_secret_without_persisting(tmp_path, monkeypatch):
     client, index = _client_with_rag(tmp_path, monkeypatch)
     try:
@@ -136,10 +166,10 @@ def test_agent_rag_retrieval_records_source_version_usage(tmp_path, monkeypatch)
         usage = client.get("/api/research-os/rag/agent_usage", params={"source_id": "secretref:binance"})
         assert usage.status_code == 200
         item = usage.json()["usage"][0]
-        assert item["source_id"] == "secretref:binance"
-        assert item["version"] == "v1"
+        assert item["returned_documents"][0]["source_id"] == "secretref:binance"
+        assert item["returned_documents"][0]["version"] == "v1"
         assert item["agent_id"] == "agent:data"
-        assert item["user_id"] == "u1"
+        assert item["owner_user_id"] == "u1"
 
         main.app.dependency_overrides[require_user_dependency] = lambda: SimpleNamespace(
             username="u2",
@@ -263,7 +293,9 @@ def test_dense_vector_search_persists_local_embedding_index_and_records_usage(tm
         )
         assert client.post("/api/research-os/rag/documents", json=risk_doc).status_code == 200
         assert client.post("/api/research-os/rag/documents", json=momentum_doc).status_code == 200
-        assert "dense_embedding_indexed" in index.path.read_text(encoding="utf-8")
+        persisted = index.path.read_text(encoding="utf-8")
+        assert '"event_type":"owner_document_version_recorded"' in persisted
+        assert '"dense_vector"' in persisted
         assert {vector.embedding_model_ref for vector in index.dense_vectors()} == {DENSE_EMBEDDING_MODEL_REF}
 
         response = client.post(

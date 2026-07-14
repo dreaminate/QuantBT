@@ -27,6 +27,8 @@ class OrderGuard:
         capability: CapabilityToken | None = None,
         nonce_ledger: NonceLedger | None = None,
         on_event: Callable[[str, dict[str, Any]], None] | None = None,
+        before_lease: Callable[[Any, PolicyDecision], None] | None = None,
+        before_submit: Callable[[Any, PolicyDecision], None] | None = None,
     ) -> None:
         self._inner = inner_venue
         self._gate = gate
@@ -34,6 +36,8 @@ class OrderGuard:
         self._cap = capability
         self._nonce = nonce_ledger
         self._on_event = on_event
+        self._before_lease = before_lease
+        self._before_submit = before_submit
 
     @classmethod
     def wrap(cls, venue: Any, **kwargs: Any) -> "OrderGuard":
@@ -50,6 +54,7 @@ class OrderGuard:
         nonce: str | None = None,
         attestation: Attestation | None = None,
         drawdown_now: float = 0.0,
+        daily_turnover_so_far: float = 0.0,
         ref_price: float | None = None,
     ) -> Any:
         """门控上下文走【可信调用方显式入参】，**绝不**从 order.extra 取（复核 #15：extra 是 agent/
@@ -78,6 +83,7 @@ class OrderGuard:
         # S2/S3 策略门（deny-by-default + 升级）。
         decision = evaluate(self._gate, order, action=action,
                             attestation_ok=attestation_ok, drawdown_now=drawdown_now,
+                            daily_turnover_so_far=daily_turnover_so_far,
                             ref_price=ref_price)
         if not decision.allow:
             self._emit("ORDER_DENIED", decision)
@@ -91,6 +97,9 @@ class OrderGuard:
                 self._emit("ORDER_DENIED", d)
                 raise OrderGated(d)
 
+        if self._before_lease is not None:
+            self._before_lease(order, decision)
+
         # S4 JIT lease（只有放行才取 key）。
         lease = None
         if self._broker is not None and self._cap is not None:
@@ -98,21 +107,44 @@ class OrderGuard:
         try:
             # S5 提交：把 lease.record（broker 发的 JIT key）交给 venue 签名——lease 是【唯一】key 通道
             # （复核 #2）。venue 不支持 lease 入参时退化为自取（生产 venue 重构为只认 lease 是 deferred 接线项）。
-            ack = self._submit(order, lease)
+            ack = self._submit(
+                order,
+                lease,
+                before_order_request=(
+                    (lambda: self._before_submit(order, decision))
+                    if self._before_submit is not None
+                    else None
+                ),
+            )
         finally:
             if lease is not None:                 # S7 用完即焚
                 self._broker.revoke(lease)
         self._emit("ORDER_GATED", decision)       # S6 审计
         return ack
 
-    def _submit(self, order: Any, lease: Any) -> Any:
+    def _submit(
+        self,
+        order: Any,
+        lease: Any,
+        *,
+        before_order_request: Callable[[], None] | None,
+    ) -> Any:
         inner = self._inner.place_order
-        if lease is not None and _accepts_lease(inner):
+        kwargs: dict[str, Any] = {}
+        if lease is not None and _accepts_keyword(inner, "lease"):
+            kwargs["lease"] = lease
+        if _accepts_keyword(inner, "before_order_request"):
+            kwargs["before_order_request"] = before_order_request
+        elif before_order_request is not None:
+            # Venues without an explicit preflight boundary are considered to
+            # start the order request at the direct place_order invocation.
+            before_order_request()
+        if kwargs:
             # venue 接受 lease → lease 是唯一 key 通道。**不**包 try/except TypeError：
             # 提交期 venue 内部的真实 TypeError（如 POST 后 None 下标/序列化 bug）必须原样上抛，
             # 绝不能被误当成「venue 不支持 lease」吞掉、再无 lease 重试——那会同时掩盖真 bug 并对
             # lease-only 生产 venue 触发误导性 PermissionError（交易所侧可能已有真实持仓）。
-            return inner(order, lease=lease)
+            return inner(order, **kwargs)
         return inner(order)                        # venue 不收 lease（生产重构 deferred）或本次无 lease
 
 
@@ -129,6 +161,16 @@ def _accepts_lease(func: Callable[..., Any]) -> bool:
     except (ValueError, TypeError):
         return True
     return any(p.name == "lease" or p.kind is inspect.Parameter.VAR_KEYWORD for p in params)
+
+
+def _accepts_keyword(func: Callable[..., Any], keyword: str) -> bool:
+    """Return whether a callable accepts one explicit keyword or ``**kwargs``."""
+
+    try:
+        params = inspect.signature(func).parameters.values()
+    except (ValueError, TypeError):
+        return True
+    return any(p.name == keyword or p.kind is inspect.Parameter.VAR_KEYWORD for p in params)
 
 
 __all__ = ["OrderGuard"]

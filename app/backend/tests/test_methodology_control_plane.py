@@ -240,12 +240,15 @@ def test_choice_id_is_content_addressed_deterministic():
     assert a.choice_id == b.choice_id and a.choice_id  # 同输入同 id、非空
 
 
-# ── 与 spine_gate 互补（不替换）：单 spine 门挡不住 evidence_sufficient 放权 ───────────
-def test_spine_gate_alone_misses_evidence_sufficient_under_waiver_controlplane_catches():
-    """命门动因：evidence_sufficient ∈ 强标签但 ∉ PROOF_REQUIRING_LABELS——spine proof-honest
-    子句不挡它，故全绿放权资产在 spine 单门下仍可拿 evidence_sufficient；控制面把它压回诚实标签。"""
+# ── 与 spine_gate 互证（不替换）：两层都拒 waiver 冒充 evidence_sufficient ───────────
+def test_spine_and_controlplane_both_reject_evidence_sufficient_under_waiver():
+    """evidence_sufficient 虽不属于旧 proof-only 集合，仍是强标签。
 
-    # 结构事实：spine 单门的盲区
+    canonical spine 的 strong-label-honest 门与方法学控制面必须分别拒绝 user waiver
+    冒充强证据；两层互证，任一层被绕过都不能形成假绿。
+    """
+
+    # 结构事实：它不是 proof-only 标签，但仍受统一强标签诚实门约束。
     assert LABEL_EVIDENCE_SUFFICIENT in STRONG_LABELS
     assert LABEL_EVIDENCE_SUFFICIENT not in PROOF_REQUIRING_LABELS
 
@@ -274,16 +277,18 @@ def test_spine_gate_alone_misses_evidence_sufficient_under_waiver_controlplane_c
     )
     waiver = build_methodology_choice(MethodologyTier.USER_WAIVED, asset_ref=art.artifact_id)
 
-    # spine 单门：evidence_sufficient 在放权在场下仍可放行（proof-honest 不作用于它）
+    # canonical spine 先拒，并诚实降级。
     spine_dec = evaluate_promotion(
         art, binding, [check],
         requested_label=LABEL_EVIDENCE_SUFFICIENT,
         current_code_hash=content_hash(code_src),
         choice=waiver,
     )
-    assert spine_dec.promotable is True  # ← 盲区：spine 单门没拦住
+    assert spine_dec.promotable is False
+    assert spine_dec.granted_label not in STRONG_LABELS
+    assert any("strong-label-honest" in violation for violation in spine_dec.violations)
 
-    # 控制面：把 spine 拟授的 evidence_sufficient 压回诚实标签（互补补盲）
+    # 控制面独立地执行同一责任边界，不能依赖 spine 已经拒绝。
     assert effective_label(MethodologyTier.USER_WAIVED, spine_dec.granted_label) not in STRONG_LABELS
     cp_dec = constrain_promotion(MethodologyTier.USER_WAIVED, LABEL_EVIDENCE_SUFFICIENT, choice=waiver)
     assert cp_dec.permitted is False

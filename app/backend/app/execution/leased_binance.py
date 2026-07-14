@@ -16,7 +16,17 @@ from __future__ import annotations
 
 from typing import Any
 
-from .base import Balance, CancelAck, ExecutionAuditLog, ExecutionVenue, Order, OrderAck, Position
+from .base import (
+    Balance,
+    CancelAck,
+    ExecutionAuditLog,
+    ExecutionReport,
+    ExecutionVenue,
+    Order,
+    OrderAck,
+    OrderExecutionObservation,
+    Position,
+)
 from .binance_client import BinanceClient, BinanceCredentials, BinanceNetwork, BinanceProduct
 
 _NO_LEASE = "lease-only venue 必须经 OrderGuard 提供 JIT lease（INV-3：无 lease=无 key=不下单/不查私有端点）"
@@ -32,11 +42,18 @@ class LeasedBinanceVenue(ExecutionVenue):
         network: BinanceNetwork = "testnet",
         max_leverage: int = 5,
         audit: ExecutionAuditLog | None = None,
+        account_ref: str | None = None,
     ) -> None:
         self._product: BinanceProduct = product
         self._network: BinanceNetwork = network
         self._max_leverage = max_leverage
         self._audit = audit or ExecutionAuditLog()
+        normalized_account = str(account_ref or "").strip()
+        self.name = (
+            f"leased_binance:{normalized_account}:{network}:{product}"
+            if normalized_account
+            else "leased_binance"
+        )
 
     # ── 内核按需实例化（key 只在此刻现身）──
     def _kernel(self, lease: Any) -> ExecutionVenue:
@@ -56,8 +73,17 @@ class LeasedBinanceVenue(ExecutionVenue):
         return BinanceClient(cred, product=self._product)
 
     # ── 唯一 key 通道：place_order 必须带 lease ──
-    def place_order(self, order: Order, *, lease: Any = None) -> OrderAck:
-        return self._kernel(lease).place_order(order)
+    def place_order(
+        self,
+        order: Order,
+        *,
+        lease: Any = None,
+        before_order_request: Any = None,
+    ) -> OrderAck:
+        kernel = self._kernel(lease)
+        if before_order_request is None:
+            return kernel.place_order(order)
+        return kernel.place_order(order, before_order_request=before_order_request)  # type: ignore[call-arg]
 
     def get_mark_price(self, symbol: str) -> float | None:
         """门前名义额核验用的【可信公共】mark（无需 key）；失败/无价 → None（门 fail-safe deny）。"""
@@ -84,6 +110,125 @@ class LeasedBinanceVenue(ExecutionVenue):
 
     def get_balance(self, *, lease: Any = None) -> dict[str, Balance]:
         return self._kernel(lease).get_balance()
+
+    def list_open_orders(self, *, lease: Any = None) -> list[dict[str, Any]]:
+        kernel = self._kernel(lease)
+        getter = getattr(kernel, "list_open_exposure_orders", None)
+        if not callable(getter):
+            getter = getattr(kernel, "list_open_orders", None)
+        if not callable(getter):
+            raise NotImplementedError(f"{self.name} does not expose open-order discovery")
+        return getter()
+
+    def margin_equity(self, *, lease: Any = None) -> float:
+        kernel = self._kernel(lease)
+        getter = getattr(kernel, "margin_equity", None)
+        if not callable(getter):
+            raise NotImplementedError(f"{self.name} does not expose margin equity")
+        return float(getter())
+
+    def execution_reports_for_order(
+        self,
+        symbol: str,
+        *,
+        order_id: str | None = None,
+        client_order_id: str | None = None,
+        lease: Any = None,
+    ) -> list[ExecutionReport]:
+        kernel = self._kernel(lease)
+        getter = getattr(kernel, "execution_reports_for_order", None)
+        if not callable(getter):
+            raise NotImplementedError(f"{self.name} does not expose execution-report reconciliation")
+        return getter(symbol, order_id=order_id, client_order_id=client_order_id)
+
+    def execution_bundle_for_order(
+        self,
+        symbol: str,
+        *,
+        order_id: str | None = None,
+        client_order_id: str | None = None,
+        lease: Any = None,
+    ) -> tuple[OrderExecutionObservation, list[ExecutionReport]]:
+        kernel = self._kernel(lease)
+        getter = getattr(kernel, "execution_bundle_for_order", None)
+        if not callable(getter):
+            raise NotImplementedError(f"{self.name} does not expose order-lifecycle reconciliation")
+        return getter(symbol, order_id=order_id, client_order_id=client_order_id)
+
+    def order_execution_observation(
+        self,
+        symbol: str,
+        *,
+        order_id: str | None = None,
+        client_order_id: str | None = None,
+        expected_emergency_close: bool = False,
+        lease: Any = None,
+    ) -> OrderExecutionObservation:
+        kernel = self._kernel(lease)
+        getter = getattr(kernel, "order_execution_observation", None)
+        if not callable(getter):
+            raise NotImplementedError(f"{self.name} does not expose exact order observation")
+        return getter(
+            symbol,
+            order_id=order_id,
+            client_order_id=client_order_id,
+            expected_emergency_close=expected_emergency_close,
+        )
+
+    def execution_account_snapshot(self, symbol: str, *, lease: Any = None) -> dict[str, Any]:
+        kernel = self._kernel(lease)
+        snapshot = getattr(kernel, "execution_account_snapshot", None)
+        if not callable(snapshot):
+            raise NotImplementedError(f"{self.name} does not expose an execution account snapshot")
+        return snapshot(symbol)
+
+    def emergency_cancel_all(self, *, lease: Any = None) -> dict[str, Any]:
+        return self._kernel(lease).emergency_cancel_all()
+
+    def list_open_positions(self, *, lease: Any = None) -> list[Position]:
+        return self._kernel(lease).list_open_positions()
+
+    def close_open_position(
+        self,
+        position: Position,
+        *,
+        client_order_id: str | None = None,
+        lease: Any = None,
+    ) -> dict[str, Any]:
+        kernel = self._kernel(lease)
+        if client_order_id is None:
+            return kernel.close_open_position(position)
+        return kernel.close_open_position(  # type: ignore[call-arg]
+            position,
+            client_order_id=client_order_id,
+        )
+
+    def close_prepared_emergency_request(
+        self,
+        *,
+        request_params: dict[str, Any],
+        request_hash: str,
+        lease: Any = None,
+    ) -> dict[str, Any]:
+        kernel = self._kernel(lease)
+        submit = getattr(kernel, "close_prepared_emergency_request", None)
+        if not callable(submit):
+            raise NotImplementedError(
+                f"{self.name} does not expose content-bound emergency submission"
+            )
+        return submit(request_params=request_params, request_hash=request_hash)
+
+    def verify_emergency_flat(
+        self,
+        *,
+        close_positions: bool = True,
+        lease: Any = None,
+    ) -> dict[str, Any]:
+        kernel = self._kernel(lease)
+        verifier = getattr(kernel, "verify_emergency_flat", None)
+        if not callable(verifier):
+            raise NotImplementedError(f"{self.name} does not expose emergency flat verification")
+        return verifier(close_positions=close_positions)
 
 
 __all__ = ["LeasedBinanceVenue"]

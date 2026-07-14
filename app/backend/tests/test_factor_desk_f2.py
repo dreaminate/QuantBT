@@ -49,25 +49,85 @@ from app.research_os import (
     MarketCapabilityMatrixRecord,
     MarketDataUseValidationRecord,
     PersistentCompilerIRStore,
+    PersistentEntrypointEvidenceRegistry,
     PersistentGoalEntrypointCoverageRegistry,
+    PersistentGoalValidationReceiptRegistry,
     PersistentMarketDataRegistry,
     PersistentResearchGraphStore,
     QROType,
     ValidationUseContext,
 )
+from app.research_os.goal_proof_ledger import GoalProofLedger
+from app.research_os.ref_resolution import build_real_ref_resolver
 
 _BANNED = ("可信", "安全", "保证", "可复现", "排除过拟合")
 
 
+def _patch_goal_proof_stores(tmp_path, monkeypatch, *, graph=None):  # noqa: ANN001
+    graph = graph if graph is not None else PersistentResearchGraphStore(
+        tmp_path / "research_graph.jsonl"
+    )
+    proof_ledger = GoalProofLedger(tmp_path / "goal_proof_ledger")
+    compiler = PersistentCompilerIRStore(
+        tmp_path / "compiler_ir.jsonl",
+        proof_ledger=proof_ledger,
+        legacy_read_only=True,
+    )
+    validations = PersistentGoalValidationReceiptRegistry(
+        tmp_path / "goal_validation_receipts.jsonl",
+        proof_ledger=proof_ledger,
+        legacy_read_only=True,
+    )
+    evidence = PersistentEntrypointEvidenceRegistry(
+        tmp_path / "entrypoint_evidence.jsonl",
+        research_graph_store=graph,
+        compiler_store=compiler,
+        validation_receipt_registry=validations,
+        proof_ledger=proof_ledger,
+        legacy_read_only=True,
+    )
+    coverage = PersistentGoalEntrypointCoverageRegistry(
+        tmp_path / "goal_entrypoint_coverage.jsonl",
+        proof_ledger=proof_ledger,
+        legacy_read_only=True,
+    )
+    coverage.set_ref_resolver(
+        build_real_ref_resolver(
+            research_graph_store=graph,
+            lifecycle_registry=None,
+            governance_registry=None,
+            rag_index=None,
+            spine_chain_registry=None,
+            compiler_store=compiler,
+            goal_validation_receipt_registry=validations,
+            platform_source_evidence_registry=evidence,
+        )
+    )
+    monkeypatch.setattr(app_main, "RESEARCH_GRAPH_STORE", graph)
+    monkeypatch.setattr(app_main, "COMPILER_IR_STORE", compiler)
+    monkeypatch.setattr(app_main, "GOAL_VALIDATION_RECEIPT_REGISTRY", validations)
+    monkeypatch.setattr(app_main, "ENTRYPOINT_EVIDENCE_REGISTRY", evidence)
+    monkeypatch.setattr(app_main, "GOAL_ENTRYPOINT_COVERAGE_REGISTRY", coverage)
+    return graph
+
+
+def _assert_ir_receipt_evidence(qro, ir, *expected_refs: str) -> None:  # noqa: ANN001
+    assert len(ir.validation_refs) == 1
+    assert ir.validation_refs[0].startswith("goal_validation_receipt:")
+    receipt = app_main.GOAL_VALIDATION_RECEIPT_REGISTRY.receipt(
+        ir.validation_refs[0],
+        owner_user_id=qro.owner,
+    )
+    assert receipt.subject_qro_refs == (qro.qro_id,)
+    assert receipt.graph_command_refs == ir.graph_command_refs
+    assert receipt.outcome == "passed"
+    for ref in expected_refs:
+        assert ref in receipt.evidence_refs
+
+
 @pytest.fixture
 def client(tmp_path, monkeypatch):
-    monkeypatch.setattr(app_main, "RESEARCH_GRAPH_STORE", PersistentResearchGraphStore(tmp_path / "research_graph.jsonl"))
-    monkeypatch.setattr(app_main, "COMPILER_IR_STORE", PersistentCompilerIRStore(tmp_path / "compiler_ir.jsonl"))
-    monkeypatch.setattr(
-        app_main,
-        "GOAL_ENTRYPOINT_COVERAGE_REGISTRY",
-        PersistentGoalEntrypointCoverageRegistry(tmp_path / "goal_entrypoint_coverage.jsonl"),
-    )
+    _patch_goal_proof_stores(tmp_path, monkeypatch)
     monkeypatch.setattr(app_main, "MARKET_DATA_REGISTRY", PersistentMarketDataRegistry(tmp_path / "market_data.jsonl"))
     app.dependency_overrides[require_user_dependency] = lambda: SimpleNamespace(user_id="tester")
     try:
@@ -144,10 +204,14 @@ def _assert_factor_audit_compiler_coverage(
     assert "formula" not in qro.output_contract
     assert ir.source_qro_refs == (body["qro_id"],)
     assert ir.graph_command_refs == (body["research_graph_command_id"],)
-    assert body["validation_dossier_ref"] in ir.validation_refs
+    _assert_ir_receipt_evidence(
+        qro,
+        ir,
+        body["validation_dossier_ref"],
+        *market_data_use_validation_refs,
+    )
     for ref in market_data_use_validation_refs:
         assert ref in qro.evidence_refs
-        assert ref in ir.validation_refs
     assert compiler_pass.input_qro_refs == (body["qro_id"],)
     assert compiler_pass.entry_source == "api"
     assert compiler_pass.actor_source == "user_manual"
@@ -202,10 +266,14 @@ def _assert_factor_layered_compiler_coverage(
     assert "note" not in qro_contract_text
     assert ir.source_qro_refs == (body["qro_id"],)
     assert ir.graph_command_refs == (body["research_graph_command_id"],)
-    assert body["backtest_run_ref"] in ir.validation_refs
+    _assert_ir_receipt_evidence(
+        qro,
+        ir,
+        body["backtest_run_ref"],
+        *market_data_use_validation_refs,
+    )
     for ref in market_data_use_validation_refs:
         assert ref in qro.evidence_refs
-        assert ref in ir.validation_refs
     assert compiler_pass.input_qro_refs == (body["qro_id"],)
     assert compiler_pass.entry_source == "api"
     assert compiler_pass.actor_source == "user_manual"
@@ -264,11 +332,15 @@ def _assert_factor_preview_compiler_coverage(
     assert "reason" not in qro.output_contract
     assert ir.source_qro_refs == (body["qro_id"],)
     assert ir.graph_command_refs == (body["research_graph_command_id"],)
-    assert body["validation_dossier_ref"] in ir.validation_refs
-    assert f"factor_preview_stage:{stage}" in ir.validation_refs
+    _assert_ir_receipt_evidence(
+        qro,
+        ir,
+        body["validation_dossier_ref"],
+        f"factor_preview_stage:{stage}",
+        *market_data_use_validation_refs,
+    )
     for ref in market_data_use_validation_refs:
         assert ref in qro.evidence_refs
-        assert ref in ir.validation_refs
     assert compiler_pass.input_qro_refs == (body["qro_id"],)
     assert compiler_pass.entry_source == "api"
     assert compiler_pass.actor_source == "user_manual"
@@ -337,6 +409,7 @@ def _record_factor_market_data_use_validation(
             checksum=f"sha256:factor_layered:{fragment}",
             asof_join_rule_ref=f"pit:factor_layered:{fragment}" if timing_refs else None,
         ),
+        owner_user_id="tester",
         use_context=ValidationUseContext.BACKTEST,
     )
     registry.record_instrument(
@@ -347,7 +420,8 @@ def _record_factor_market_data_use_validation(
             currency=currency,
             exchange_calendar_ref=f"calendar:factor_layered:{fragment}",
             symbol_mapping_ref=f"symbols:factor_layered:{fragment}",
-        )
+        ),
+        owner_user_id="tester",
     )
     registry.record_capability_matrix(
         MarketCapabilityMatrixRecord(
@@ -370,6 +444,7 @@ def _record_factor_market_data_use_validation(
             execution_availability="none",
             permission_requirement=None,
         ),
+        owner_user_id="tester",
         use_context=ValidationUseContext.BACKTEST,
     )
     record = MarketDataUseValidationRecord(
@@ -390,14 +465,13 @@ def _record_factor_market_data_use_validation(
         )
         if timing_refs
         else (f"evidence:factor_layered:{fragment}:missing_timing",),
-        recorded_by="pytest",
+        recorded_by="tester",
         created_at_utc="2026-06-27T00:00:00+00:00",
     )
     if accepted and not violation_codes:
-        registry.record_use_validation(record)
-    else:
-        # 正常 registry 写路径会拒绝这类记录；这里模拟迁移残留/历史脏账，测 endpoint fail-closed。
-        registry._use_validations[validation_ref] = record  # noqa: SLF001
+        registry.record_use_validation(record, owner_user_id="tester")
+    # Unaccepted/violating records cannot enter the durable owner-v2 store.  The
+    # endpoint must therefore observe the ref as unavailable and fail closed.
     return validation_ref
 
 
@@ -617,14 +691,14 @@ def test_layered_backtest_rejects_unaccepted_or_violation_market_data_use_valida
             json={"n_quantiles": 5, "market_data_use_validation_refs": [rejected_ref]},
         )
         assert rejected.status_code == 422, rejected.text
-        assert "is not accepted" in rejected.text
+        assert "unknown market data use validation" in rejected.text
         assert _compiler_record_counts() == before
         violation = client.post(
             f"/api/factors/{fid}/layered_backtest",
             json={"n_quantiles": 5, "market_data_use_validation_refs": [violation_ref]},
         )
         assert violation.status_code == 422, violation.text
-        assert "has unresolved violations" in violation.text
+        assert "unknown market data use validation" in violation.text
         assert _compiler_record_counts() == before
     finally:
         _cleanup(fid)
@@ -882,14 +956,14 @@ def test_audit_rejects_unaccepted_or_violation_market_data_use_validation_before
             json={"tier": "standard", "market_data_use_validation_refs": [rejected_ref]},
         )
         assert rejected.status_code == 422, rejected.text
-        assert "is not accepted" in rejected.text
+        assert "unknown market data use validation" in rejected.text
         assert _compiler_record_counts() == before
         violation = client.post(
             f"/api/factors/{fid}/audit",
             json={"tier": "standard", "market_data_use_validation_refs": [violation_ref]},
         )
         assert violation.status_code == 422, violation.text
-        assert "has unresolved violations" in violation.text
+        assert "unknown market data use validation" in violation.text
         assert _compiler_record_counts() == before
     finally:
         _cleanup(fid)

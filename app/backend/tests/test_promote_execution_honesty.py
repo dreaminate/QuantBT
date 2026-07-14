@@ -72,13 +72,18 @@ class _MarketDataUseRegistry:
             created_at_utc="2026-06-27T00:00:00Z",
         )
 
-    def use_validation(self, validation_ref: str) -> MarketDataUseValidationRecord:
-        if validation_ref != self._record.validation_ref:
+    def use_validation(
+        self,
+        validation_ref: str,
+        *,
+        owner_user_id: str,
+    ) -> MarketDataUseValidationRecord:
+        if validation_ref != self._record.validation_ref or owner_user_id != "test":
             raise KeyError(validation_ref)
         return self._record
 
-    def dataset(self, dataset_ref: str) -> _DatasetSemantics:
-        if dataset_ref != _DatasetSemantics.dataset_ref:
+    def dataset(self, dataset_ref: str, *, owner_user_id: str) -> _DatasetSemantics:
+        if dataset_ref != _DatasetSemantics.dataset_ref or owner_user_id != "test":
             raise KeyError(dataset_ref)
         return _DatasetSemantics()
 
@@ -182,6 +187,7 @@ def test_synth_with_assembly_writes_template_block_caught_by_R4(iso):
               "market_data_use_validation_refs": MARKET_DATA_USE_REFS},
         ledger=iso["ledger"], returns_store=None, data_root=iso["root"],
         verdict_store=None, verifier=None, llm_client=None, market_data_registry=_MarketDataUseRegistry(),
+        owner_user_id="test",
     )
     assert out.get("error") is None, out
     run_id = out["run_id"]
@@ -214,6 +220,7 @@ def test_synth_without_assembly_writes_no_block_backward_compat(iso):
               "market_data_use_validation_refs": MARKET_DATA_USE_REFS},
         ledger=iso["ledger"], returns_store=None, data_root=iso["root"],
         verdict_store=None, verifier=None, llm_client=None, market_data_registry=_MarketDataUseRegistry(),
+        owner_user_id="test",
     )
     assert out.get("error") is None, out
     run_json = json.loads(

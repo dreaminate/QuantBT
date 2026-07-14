@@ -12,7 +12,9 @@
 
 from __future__ import annotations
 
+import copy
 import json
+from itertools import count
 
 import pytest
 
@@ -46,8 +48,11 @@ from app.llm import (
     verify_record_seal,
 )
 from app.security import InMemoryKeystore, KeystoreRecord, SecureKeystore
+from app.llm.gateway import EV_CALL_FINISHED
 
 TRIPWIRE_SECRET = "sk-LEAK-TRIPWIRE-deadbeef0123456789"
+_INVOCATIONS = count(1)
+_AUDIT_SEAL = b"llm-gateway-audit-test-key-0001" * 2
 
 
 # ============ 测试夹具 / 桩 ============
@@ -100,7 +105,7 @@ def _build_pool(profiles, keystore) -> LLMCredentialPool:
 
 
 def _gateway(profiles, *, keystore=None, factory=None, strict_degrade=True, mode=RoutingMode.HYBRID_ADAPTIVE,
-             scan_prompt_secrets=True, extra_secrets=None):
+             scan_prompt_secrets=True, extra_secrets=None, record_sink=None, seal_secret=None):
     ks = keystore if keystore is not None else _seed_keystore(profiles, extra_secrets=extra_secrets)
     pool = _build_pool(profiles, ks)
     policy = ModelRoutingPolicy(profiles, mode=mode)
@@ -109,6 +114,8 @@ def _gateway(profiles, *, keystore=None, factory=None, strict_degrade=True, mode
     return LLMGateway(
         policy=policy, credential_pool=pool, client_factory=factory,
         strict_degrade=strict_degrade, scan_prompt_secrets=scan_prompt_secrets,
+        record_sink=record_sink,
+        seal_secret=seal_secret or (_AUDIT_SEAL if record_sink is not None else None),
     )
 
 
@@ -128,25 +135,152 @@ def _profiles_mixed():
 
 
 def _req(role="reporter", difficulty="normal", risk="normal", independence=False, session="s1"):
+    invocation = f"inv-{next(_INVOCATIONS)}"
     return LLMRequest(
         messages=[LLMMessage(role="user", content="跑个因子 IC")],
         capability=RoleCapabilityRequest(role=role, difficulty=difficulty, risk=risk, independence_required=independence),
         session_id=session,
+        owner_user_id="owner-test",
+        workflow_id=session,
+        invocation_id=invocation,
     )
+
+
+def _record(**overrides):
+    prompt_hash = "1111111111111111"
+    response_digest = "0123456789abcdef"
+    values = {
+        "provider": "anthropic",
+        "model": "claude-opus-4",
+        "auth_ref": "secretref://anthropic/anthropic",
+        "replay_state": ReplayState.LIVE.value,
+        "owner_user_id": "owner-test",
+        "workflow_id": "workflow-test",
+        "invocation_id": f"record-{next(_INVOCATIONS)}",
+        "routing_policy_ref": "routing:test:policy:v3",
+        "routing_policy_state": "configured_ref",
+        "prompt_digest": prompt_hash,
+        "prompt_hash": prompt_hash,
+        "tool_schema_hash": "2222222222222222",
+        "response_digest": response_digest,
+        "response_ref": f"llm_response:{response_digest}",
+        "latency_ms": 0.0,
+        "cost": {
+            "status": "unavailable",
+            "currency": "USD",
+            "amount": None,
+            "source": "none",
+            "reason": "provider_cost_not_reported",
+        },
+    }
+    values.update(overrides)
+    if values["replay_state"] == ReplayState.REPLAYED.value:
+        values.setdefault("routing_policy_state", "replay_origin")
+        if "routing_policy_state" not in overrides:
+            values["routing_policy_state"] = "replay_origin"
+    return LLMCallRecord(**values)
 
 
 # ============ 端到端正例 ============
 
 def test_happy_path_record_sealed_and_admissible():
-    gw = _gateway(_profiles_two_strong())
+    persisted = []
+    gw = _gateway(_profiles_two_strong(), record_sink=persisted.append)
     res = gw.complete(_req(difficulty="hard"))
     rec = res.record
     assert rec.provider and rec.model and rec.auth_ref and rec.replay_state
+    assert rec.schema_version == 3
+    assert rec.routing_policy_state == "runtime_digest"
+    assert rec.routing_policy_ref.startswith("routing:runtime:")
+    assert rec.prompt_hash == rec.prompt_digest
+    assert len(rec.tool_schema_hash) == 16
+    assert rec.response_ref == f"llm_response:{rec.response_digest}"
+    assert rec.cost == {
+        "status": "unavailable",
+        "currency": "USD",
+        "amount": None,
+        "source": "none",
+        "reason": "provider_cost_not_reported",
+    }
+    assert rec.latency_ms is not None
     assert rec.auth_ref.startswith("secretref://")
     assert rec.tier_resolved == ModelTier.STRONG.value
     assert gw.verify(res) is True
     assert_admissible_to_graph(res, gw)  # 不抛 = 准入通过
     assert [e.kind for e in res.events][:1] == ["LLMRouteSelected"]
+    assert [(r.record_kind, r.status) for r in persisted] == [
+        ("attempt", "ok"), ("terminal", "ok")
+    ]
+
+
+def test_v3_uses_configured_routing_ref_and_provider_reported_cost():
+    profiles = _profiles_two_strong()
+    pool = _build_pool(profiles, _seed_keystore(profiles))
+    gw = LLMGateway(
+        policy=ModelRoutingPolicy(profiles),
+        credential_pool=pool,
+        client_factory=lambda cred: StubLLMClient(
+            content="costed",
+            raw={"usage": {"input_tokens": 10, "cost_usd": 0.0125}},
+        ),
+        routing_policy_refs={"anthropic": "routing:configured:anthropic:v9"},
+    )
+
+    rec = gw.complete(_req(difficulty="hard")).record
+
+    assert rec.routing_policy_ref == "routing:configured:anthropic:v9"
+    assert rec.routing_policy_state == "configured_ref"
+    assert rec.cost == {
+        "status": "reported",
+        "currency": "USD",
+        "amount": 0.0125,
+        "source": "provider_usage_cost_usd",
+        "reason": "",
+    }
+
+
+@pytest.mark.parametrize(
+    ("field", "value"),
+    [
+        ("routing_policy_ref", ""),
+        ("routing_policy_state", "unresolved_pre_route"),
+        ("prompt_hash", "ffffffffffffffff"),
+        ("tool_schema_hash", ""),
+        ("response_ref", "llm_response:ffffffffffffffff"),
+        ("cost", {}),
+        ("latency_ms", None),
+    ],
+)
+def test_v3_mutated_required_evidence_is_rejected(field, value):
+    rec = copy.deepcopy(_gateway(_profiles_two_strong()).complete(_req(difficulty="hard")).record)
+    setattr(rec, field, value)
+
+    with pytest.raises(LLMRecordError):
+        assert_record_admissible(rec)
+
+
+def test_sealed_legacy_v2_record_cannot_enter_current_graph():
+    gw = _gateway(_profiles_two_strong())
+    legacy = LLMCallRecord(
+        provider="anthropic",
+        model="claude-opus-4",
+        auth_ref="secretref://anthropic/anthropic",
+        replay_state="live",
+        schema_version=2,
+        owner_user_id="owner-test",
+        workflow_id="legacy-workflow",
+        invocation_id="legacy-invocation",
+        prompt_digest="1111111111111111",
+        response_digest="2222222222222222",
+        latency_ms=0.0,
+    )
+    legacy.seal = seal_record(legacy, gw._seal_secret)  # noqa: SLF001 - migration gate probe.
+    from app.llm import GatewaySealedResult
+
+    wrapped = GatewaySealedResult(response=LLMResponse(content="legacy"), record=legacy)
+    assert gw.verify(wrapped) is True
+    with pytest.raises(LLMRecordError, match="schema_version"):
+        assert_admissible_to_graph(wrapped, gw)
 
 
 # ============ 门1：绕过 Gateway → 不可准入（封印）============
@@ -155,8 +289,7 @@ def test_gate_bypass_forged_record_rejected():
     """模拟 role agent 绕过 Gateway 直调 provider + 自造账：未经本 gateway 封印 → 准入门拒。"""
     gw = _gateway(_profiles_two_strong())
     real = gw.complete(_req())
-    forged = LLMCallRecord(provider="anthropic", model="claude-opus-4",
-                           auth_ref="secretref://anthropic/anthropic", replay_state=ReplayState.LIVE.value)
+    forged = _record()
     from app.llm import GatewaySealedResult
     forged_res = GatewaySealedResult(response=LLMResponse(content="x"), record=forged, events=[])
     assert gw.verify(forged_res) is False
@@ -178,7 +311,7 @@ def test_gate_bypass_tampered_seal_detected():
 def test_gate_bypass_mut_paper_door():
     """变异测试（门是不是纸做的）：把准入门里的封印校验摘掉（mut），伪造账就混进来——证明该校验在咬。"""
     gw = _gateway(_profiles_two_strong())
-    forged = LLMCallRecord(provider="p", model="m", auth_ref="secretref://p/p", replay_state="live")
+    forged = _record(provider="p", model="m", auth_ref="secretref://p/p")
     from app.llm import GatewaySealedResult
     forged_res = GatewaySealedResult(response=LLMResponse(content="x"), record=forged, events=[])
 
@@ -202,14 +335,14 @@ def test_gate_missing_required_field_rejected(field):
     kw = dict(provider="anthropic", model="claude-opus-4",
               auth_ref="secretref://anthropic/anthropic", replay_state=ReplayState.LIVE.value)
     kw[field] = ""  # 种坏门：抽掉一个必填
-    rec = LLMCallRecord(**kw)
+    rec = _record(**kw)
     with pytest.raises(LLMRecordError):
         assert_record_admissible(rec)
 
 
 def test_gate_full_record_admissible_and_invalid_replay_state_rejected():
-    rec = LLMCallRecord(provider="openai", model="gpt-4o",
-                        auth_ref="secretref://openai/openai", replay_state=ReplayState.REPLAYED.value)
+    rec = _record(provider="openai", model="gpt-4o",
+                  auth_ref="secretref://openai/openai", replay_state=ReplayState.REPLAYED.value)
     assert_record_admissible(rec)  # 正例：四要素齐
     rec.replay_state = "teleported"  # 非法枚举
     with pytest.raises(LLMRecordError):
@@ -218,7 +351,7 @@ def test_gate_full_record_admissible_and_invalid_replay_state_rejected():
 
 def test_gate_mut_paper_door_missing_field():
     """变异：把必填检查改成『只看 provider』，缺 auth_ref 的账就混过——证明四要素检查在咬。"""
-    rec = LLMCallRecord(provider="anthropic", model="m", auth_ref="", replay_state="live")
+    rec = _record(provider="anthropic", model="m", auth_ref="")
 
     def real_check(r):
         missing = [f for f in ("provider", "model", "auth_ref", "replay_state") if not getattr(r, f)]
@@ -240,24 +373,44 @@ def test_gate_plaintext_secret_in_prompt_blocked():
     """实盘/在册 key 夹在 prompt 里 → 拒发，且 provider 一次都不被调（红线：secret 不进 LLM）。"""
     profiles = _profiles_two_strong()
     stub = StubLLMClient()
-    gw = _gateway(profiles, factory=lambda c: stub, extra_secrets={"binance_mainnet": TRIPWIRE_SECRET})
+    persisted = []
+    gw = _gateway(
+        profiles,
+        factory=lambda c: stub,
+        extra_secrets={"binance_mainnet": TRIPWIRE_SECRET},
+        record_sink=persisted.append,
+    )
     bad = LLMRequest(
         messages=[LLMMessage(role="user", content=f"帮我下单，key 是 {TRIPWIRE_SECRET}")],
         capability=RoleCapabilityRequest(role="reporter"),
+        owner_user_id="owner-test",
+        workflow_id="prompt-guard",
+        invocation_id=f"inv-{next(_INVOCATIONS)}",
     )
-    with pytest.raises(SecretLeakError):
+    with pytest.raises(SecretLeakError) as ei:
         gw.complete(bad)
     assert stub.calls == []  # provider 从未被触达
-    # 报错信息绝不回显 secret
-    try:
-        gw.complete(bad)
-    except SecretLeakError as exc:
-        assert TRIPWIRE_SECRET not in str(exc)
+    assert TRIPWIRE_SECRET not in str(ei.value)
+    assert len(persisted) == 1
+    assert persisted[0].record_kind == "terminal"
+    assert persisted[0].status == "refused"
+    assert persisted[0].failure_stage == "prompt_guard"
+    assert persisted[0].provider == persisted[0].model == persisted[0].auth_ref == ""
+    assert persisted[0].routing_policy_ref == ""
+    assert persisted[0].routing_policy_state == "unresolved_pre_route"
+    assert persisted[0].prompt_hash == persisted[0].prompt_digest
+    assert persisted[0].cost["status"] == "unavailable"
+    assert persisted[0].cost["reason"] == "pre_route_no_provider_response"
+    finished = [event for event in ei.value.events if event.kind == EV_CALL_FINISHED]
+    assert len(finished) == 1
+    assert finished[0].data["call_id"] == persisted[0].call_id
+    assert finished[0].data["status"] == "refused"
+    assert finished[0].data["failure_stage"] == "prompt_guard"
 
 
 def test_gate_plaintext_secret_in_record_rejected():
     """把明文 key 塞进账任一字段 → secret 门必抓（报错不回显 secret）。"""
-    rec = LLMCallRecord(provider="anthropic", model="m", auth_ref="secretref://a/a", replay_state="live")
+    rec = _record(provider="anthropic", model="m", auth_ref="secretref://a/a")
     rec.error_kind = f"boom {TRIPWIRE_SECRET}"  # 种坏门：明文漏进账
     with pytest.raises(SecretLeakError) as ei:
         assert_no_plaintext_secret(rec, [TRIPWIRE_SECRET])
@@ -319,6 +472,157 @@ def test_independence_distinct_provider_satisfied():
     assert verdict.independent is True
 
 
+def test_independence_same_gpt_family_across_providers_is_insufficient():
+    """换 API/provider 和 GPT 版本仍是同一家族，不能冒充双模型独立。"""
+
+    profiles = [
+        LLMModelProfile(
+            provider="gateway_a",
+            model="gpt-5.6-sol-pro",
+            capability_tier=ModelTier.STRONG.value,
+            pool_id="gateway_a",
+        ),
+        LLMModelProfile(
+            provider="gateway_b",
+            model="gpt-4o",
+            capability_tier=ModelTier.STRONG.value,
+            pool_id="gateway_b",
+        ),
+    ]
+    gw = _gateway(profiles)
+    builder = gw.complete(_req(role="factor_engineer", difficulty="hard", session="same-gpt"))
+    verifier_request = _req(
+        role="verifier", difficulty="hard", independence=True, session="same-gpt"
+    )
+    verifier_request.capability.prefer_provider = "gateway_b"
+    verifier = gw.complete(verifier_request)
+
+    assert builder.record.provider == "gateway_a"
+    assert verifier.record.provider == "gateway_b"
+    assert verifier.record.independence.distinct_provider is True
+    assert verifier.record.independence.distinct_model is True
+    assert verifier.record.independence.satisfied is False
+    verdict = evaluate_independence(builder.record, verifier.record)
+    assert verdict.independent is False
+
+
+def test_independence_different_families_on_same_provider_is_insufficient():
+    """共享 provider/operator 也不能满足双重异源的独立性门。"""
+
+    builder = _record(provider="aggregator", model="gpt-5")
+    verifier = _record(
+        provider="aggregator",
+        model="claude-opus-4",
+        prompt_digest="different-context",
+        independence=IndependenceRecord(required=True, satisfied=True),
+    )
+    verdict = evaluate_independence(builder, verifier)
+    assert verdict.independent is False
+    assert "假独立" in verdict.reason
+
+
+def test_independence_unknown_model_families_fail_closed():
+    builder = _record(provider="vendor-a", model="opaque-alpha")
+    verifier = _record(
+        provider="vendor-b",
+        model="opaque-beta",
+        prompt_digest="different-context",
+        independence=IndependenceRecord(required=True, satisfied=True),
+    )
+    verdict = evaluate_independence(builder, verifier)
+    assert verdict.independent is False
+    assert "假独立" in verdict.reason
+
+
+def test_independence_prefers_independent_higher_tier_over_exact_alias():
+    profiles = [
+        LLMModelProfile(
+            provider="anthropic",
+            model="claude-sonnet-4",
+            capability_tier=ModelTier.NORMAL.value,
+            pool_id="anthropic",
+        ),
+        LLMModelProfile(
+            provider="openai",
+            model="gpt-5",
+            capability_tier=ModelTier.STRONG.value,
+            pool_id="openai",
+        ),
+    ]
+    decision = ModelRoutingPolicy(profiles).resolve(
+        RoleCapabilityRequest(independence_required=True),
+        builder_signature=("anthropic", "claude-sonnet-4"),
+    )
+
+    assert decision.profile.provider == "openai"
+    assert decision.profile.model == "gpt-5"
+    assert decision.independence_distinct is True
+    assert decision.tier_resolved == ModelTier.STRONG.value
+    assert decision.degraded is False
+
+
+def test_independence_uses_credential_backed_provider_not_route_label():
+    """Route labels cannot hide that both calls execute through one provider identity."""
+
+    profiles = [
+        LLMModelProfile(
+            provider="profile-a",
+            model="gpt-5",
+            capability_tier=ModelTier.STRONG.value,
+            pool_id="pool-a",
+        ),
+        LLMModelProfile(
+            provider="profile-b",
+            model="claude-opus-4",
+            capability_tier=ModelTier.STRONG.value,
+            pool_id="pool-b",
+        ),
+    ]
+    keystore = SecureKeystore(InMemoryKeystore())
+    pool = LLMCredentialPool(keystore)
+    for pool_id, model in (("pool-a", "gpt-5"), ("pool-b", "claude-opus-4")):
+        keystore.store(
+            KeystoreRecord(
+                name=pool_id,
+                api_key=f"key-{pool_id}-xxxxxxxx",
+                api_secret=f"key-{pool_id}-xxxxxxxx",
+            )
+        )
+        pool.register(
+            pool_id,
+            SecretRef(
+                keystore_name=pool_id,
+                provider="shared-gateway",
+                auth_kind="api_key",
+            ),
+            default_model=model,
+        )
+    gateway = LLMGateway(
+        policy=ModelRoutingPolicy(profiles),
+        credential_pool=pool,
+        client_factory=lambda _credential: StubLLMClient(),
+    )
+
+    builder = gateway.complete(
+        _req(role="factor_engineer", difficulty="hard", session="credential-provider")
+    )
+    verifier = gateway.complete(
+        _req(
+            role="verifier",
+            difficulty="hard",
+            independence=True,
+            session="credential-provider",
+        )
+    )
+
+    assert builder.record.provider == "shared-gateway"
+    assert verifier.record.provider == "shared-gateway"
+    assert verifier.record.model == "claude-opus-4"
+    assert verifier.record.independence.distinct_provider is False
+    assert verifier.record.independence.satisfied is False
+    assert evaluate_independence(builder.record, verifier.record).independent is False
+
+
 def test_independence_single_provider_marked_insufficient():
     """只有一个 provider：verifier 没法独立 → satisfied=False、裁决不独立（绝不假报）。"""
     profiles = [LLMModelProfile(provider="anthropic", model="claude-opus-4",
@@ -328,18 +632,16 @@ def test_independence_single_provider_marked_insufficient():
     verifier = gw.complete(_req(role="verifier", difficulty="hard", independence=True, session="sy"))
     assert verifier.record.provider == builder.record.provider
     assert verifier.record.independence.satisfied is False
-    assert "独立性不足" in verifier.record.independence.reason
+    assert verifier.record.independence.reason == ""  # free text is excluded from durable evidence
     verdict = evaluate_independence(builder.record, verifier.record)
     assert verdict.independent is False
 
 
 def test_gate_verifier_falsely_claims_independent_caught():
     """种坏门：verifier 与 builder 同 provider+model 却把 satisfied 置 True（假独立）→ 裁决必判不独立。"""
-    builder = LLMCallRecord(provider="anthropic", model="claude-opus-4",
-                            auth_ref="secretref://anthropic/anthropic", replay_state="live", prompt_digest="d1")
-    verifier_lie = LLMCallRecord(provider="anthropic", model="claude-opus-4",
-                                 auth_ref="secretref://anthropic/anthropic", replay_state="live", prompt_digest="d2",
-                                 independence=IndependenceRecord(required=True, satisfied=True))  # ← 谎称独立
+    builder = _record(prompt_digest="d1")
+    verifier_lie = _record(prompt_digest="d2",
+                           independence=IndependenceRecord(required=True, satisfied=True))  # ← 谎称独立
     verdict = evaluate_independence(builder, verifier_lie)
     assert verdict.independent is False
     assert "假独立" in verdict.reason
@@ -347,8 +649,8 @@ def test_gate_verifier_falsely_claims_independent_caught():
 
 def test_gate_verifier_missing_context_insufficient():
     """verifier 缺 provider/model/context 记录 → 独立性不足（§7）。"""
-    builder = LLMCallRecord(provider="anthropic", model="opus", auth_ref="r", replay_state="live", prompt_digest="d1")
-    verifier_noctx = LLMCallRecord(provider="", model="", auth_ref="r", replay_state="live", prompt_digest="")
+    builder = _record(provider="anthropic", model="opus", auth_ref="r", prompt_digest="d1")
+    verifier_noctx = _record(provider="", model="", auth_ref="r", prompt_digest="")
     verdict = evaluate_independence(builder, verifier_noctx)
     assert verdict.independent is False
     assert "独立性不足" in verdict.reason
@@ -398,10 +700,22 @@ def test_gate_hard_task_strict_degrade_refuses():
     light_only = [LLMModelProfile(provider="openai", model="gpt-4o-mini",
                                   capability_tier=ModelTier.LIGHT.value, pool_id="openai")]
     stub = StubLLMClient()
-    gw = _gateway(light_only, factory=lambda c: stub, strict_degrade=True)
-    with pytest.raises(DegradedRoutingError):
+    persisted = []
+    gw = _gateway(
+        light_only,
+        factory=lambda c: stub,
+        strict_degrade=True,
+        record_sink=persisted.append,
+    )
+    with pytest.raises(DegradedRoutingError) as caught:
         gw.complete(_req(difficulty="hard"))
     assert stub.calls == []
+    assert [(r.record_kind, r.status, r.failure_stage) for r in persisted] == [
+        ("terminal", "refused", "degrade")
+    ]
+    finished = [event for event in caught.value.events if event.kind == EV_CALL_FINISHED]
+    assert [event.data["call_id"] for event in finished] == [persisted[0].call_id]
+    assert finished[0].data["failure_stage"] == "degrade"
 
 
 def test_gate_mut_paper_door_degrade_not_silenced():
@@ -430,13 +744,19 @@ def test_fallback_on_provider_error_same_tier_no_degrade():
             return _Boom()
         return StubLLMClient(content="from-openai")
 
-    gw = _gateway(profiles, factory=factory)
+    persisted = []
+    gw = _gateway(profiles, factory=factory, record_sink=persisted.append)
     res = gw.complete(_req(difficulty="hard"))
     assert res.record.provider == "openai"
     assert res.record.fallback_used is True
-    assert any("anthropic" in c for c in res.record.fallback_chain)
+    assert [(r.record_kind, r.provider, r.status) for r in res.audit_records] == [
+        ("attempt", "anthropic", "error"),
+        ("attempt", "openai", "ok"),
+        ("terminal", "openai", "ok"),
+    ]
     assert res.record.degraded is False
     assert res.response.content == "from-openai"
+    assert persisted == res.audit_records
 
 
 def test_all_providers_failing_raises_gateway_error():
@@ -448,9 +768,118 @@ def test_all_providers_failing_raises_gateway_error():
         def chat(self, *a, **k):
             raise RuntimeError("upstream down")
 
-    gw = _gateway(profiles, factory=lambda c: _Boom())
-    with pytest.raises(GatewayError):
+    persisted = []
+    gw = _gateway(profiles, factory=lambda c: _Boom(), record_sink=persisted.append)
+    with pytest.raises(GatewayError) as ei:
         gw.complete(_req(difficulty="hard"))
+    assert [(r.record_kind, r.status) for r in persisted] == [
+        ("attempt", "error"), ("attempt", "error"), ("terminal", "error")
+    ]
+    assert ei.value.records == persisted
+    finished = [event for event in ei.value.events if event.kind == EV_CALL_FINISHED]
+    assert [event.data["call_id"] for event in finished] == [
+        record.call_id for record in persisted
+    ]
+    assert [event.data["record_kind"] for event in finished] == [
+        "attempt",
+        "attempt",
+        "terminal",
+    ]
+
+
+def test_durable_sink_requires_stable_key_before_provider_access():
+    stub = StubLLMClient(content="must-not-run")
+    gw = _gateway(_profiles_two_strong(), factory=lambda cred: stub)
+    with pytest.raises(LLMRecordError, match="stable seal_secret"):
+        gw.complete(_req(difficulty="hard"), record_sink=lambda record: None)
+    assert stub.calls == []
+
+
+def test_sink_failure_prevents_successful_response_return():
+    stub = StubLLMClient(content="provider-produced-output")
+
+    def broken_sink(record):
+        raise OSError("disk unavailable")
+
+    gw = _gateway(
+        _profiles_two_strong(),
+        factory=lambda cred: stub,
+        record_sink=broken_sink,
+    )
+    with pytest.raises(OSError, match="disk unavailable"):
+        gw.complete(_req(difficulty="hard"))
+    assert len(stub.calls) == 1
+
+
+def test_credential_materialization_errors_are_typed_and_persisted(monkeypatch):
+    persisted = []
+    gw = _gateway(_profiles_two_strong(), record_sink=persisted.append)
+
+    def materialize_boom(*args, **kwargs):
+        raise ValueError("CREDENTIAL_EXCEPTION_TEXT_MUST_NOT_PERSIST")
+
+    monkeypatch.setattr(gw._pool, "materialize", materialize_boom)  # noqa: SLF001
+    with pytest.raises(GatewayError) as ei:
+        gw.complete(_req(difficulty="hard"))
+    assert [(r.record_kind, r.status, r.failure_stage) for r in persisted] == [
+        ("attempt", "error", "credential"),
+        ("attempt", "error", "credential"),
+        ("terminal", "error", "credential"),
+    ]
+    assert all(r.error_kind in {"ValueError", "all_credentials_unavailable"} for r in persisted)
+    assert "CREDENTIAL_EXCEPTION_TEXT_MUST_NOT_PERSIST" not in json.dumps(
+        [r.to_dict() for r in persisted], ensure_ascii=False
+    )
+    assert ei.value.records == persisted
+
+
+def test_missing_credential_descriptor_still_persists_attempt_and_terminal():
+    profile = LLMModelProfile(
+        provider="anthropic",
+        model="claude-opus-4",
+        capability_tier=ModelTier.STRONG.value,
+        pool_id="missing-pool",
+    )
+    pool = LLMCredentialPool(_seed_keystore([profile]))
+    persisted = []
+    gw = LLMGateway(
+        policy=ModelRoutingPolicy([profile]),
+        credential_pool=pool,
+        client_factory=lambda cred: pytest.fail("provider client must not be built"),
+        seal_secret=_AUDIT_SEAL,
+        record_sink=persisted.append,
+    )
+
+    with pytest.raises(GatewayError) as caught:
+        gw.complete(_req(difficulty="hard"))
+
+    assert [(r.record_kind, r.status, r.failure_stage) for r in persisted] == [
+        ("attempt", "error", "credential"),
+        ("terminal", "error", "credential"),
+    ]
+    assert persisted[0].provider == "anthropic"
+    assert persisted[0].model == "claude-opus-4"
+    assert persisted[0].auth_ref == ""
+    assert caught.value.records == persisted
+
+
+def test_reused_invocation_fails_before_second_provider_access():
+    stub = StubLLMClient(content="stable")
+    persisted = []
+    gw = _gateway(
+        _profiles_two_strong(),
+        factory=lambda cred: stub,
+        record_sink=persisted.append,
+    )
+    request = _req(difficulty="hard")
+    first = gw.complete(request)
+
+    with pytest.raises(LLMRecordError, match="already claimed"):
+        gw.complete(request)
+
+    assert len(stub.calls) == 1
+    assert len(persisted) == 2
+    assert first.record is persisted[-1]
 
 
 def test_fallback_missing_credential_triggers_fallback():
@@ -459,11 +888,20 @@ def test_fallback_missing_credential_triggers_fallback():
     ks = SecureKeystore(InMemoryKeystore())
     # 只给 openai 配 key，anthropic 无 key
     ks.store(KeystoreRecord(name="openai", api_key="key-openai-xxxxxxxx", api_secret="key-openai-xxxxxxxx"))
-    gw = _gateway(profiles, keystore=ks, factory=lambda c: StubLLMClient(content="ok-openai"))
+    persisted = []
+    gw = _gateway(
+        profiles,
+        keystore=ks,
+        factory=lambda c: StubLLMClient(content="ok-openai"),
+        record_sink=persisted.append,
+    )
     res = gw.complete(_req(difficulty="hard"))
     assert res.record.provider == "openai"
     assert res.record.fallback_used is True
-    assert any("no_key" in c for c in res.record.fallback_chain)
+    assert res.audit_records[0].provider == "anthropic"
+    assert res.audit_records[0].error_kind == "no_usable_credential"
+    assert [r.record_kind for r in res.audit_records] == ["attempt", "attempt", "terminal"]
+    assert persisted == res.audit_records
 
 
 # ============ secret 不经异常链 / traceback 漏出（C-S7 Gap1 · GOAL §8 红线）============
@@ -653,15 +1091,25 @@ def test_refallback_resolve_nonrouting_error_no_secret_chain():
 
 # ============ replay_state 如实记录 ============
 
-def test_replay_state_reflected_from_response():
+def test_caller_declared_replay_is_refused_before_provider_access():
     profiles = _profiles_two_strong()
-    gw = _gateway(profiles, factory=lambda c: StubLLMClient(content="r", fixture_key="llmfx-abc123"))
+    stub = StubLLMClient(content="r", fixture_key="llmfx-abc123")
+    persisted = []
+    gw = _gateway(profiles, factory=lambda c: stub, record_sink=persisted.append)
     req = LLMRequest(messages=[LLMMessage(role="user", content="hi")],
                      capability=RoleCapabilityRequest(role="reporter", difficulty="hard"),
+                     owner_user_id="owner-test", workflow_id="replay-test",
+                     invocation_id=f"inv-{next(_INVOCATIONS)}",
                      replay_mode="replay")
-    res = gw.complete(req)
-    assert res.record.replay_state == ReplayState.REPLAYED.value
-    assert res.record.fixture_key == "llmfx-abc123"
+    with pytest.raises(GatewayError, match="verified replay outcome") as caught:
+        gw.complete(req)
+    assert stub.calls == []
+    assert [(r.record_kind, r.status, r.failure_stage) for r in persisted] == [
+        ("terminal", "refused", "replay")
+    ]
+    assert persisted[0].replay_state == ReplayState.LIVE.value
+    assert persisted[0].fixture_key is None
+    assert caught.value.records == persisted
 
 
 # ============ 配置：质量优先 / 成本优先 ============
@@ -677,7 +1125,7 @@ def test_routing_mode_configurable_quality_vs_cost():
 
 
 def test_seal_roundtrip_and_wrong_secret():
-    rec = LLMCallRecord(provider="p", model="m", auth_ref="r", replay_state="live")
+    rec = _record(provider="p", model="m", auth_ref="r")
     s = b"x" * 32
     rec.seal = seal_record(rec, s)
     assert verify_record_seal(rec, s) is True

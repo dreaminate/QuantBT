@@ -58,7 +58,6 @@ import json
 from dataclasses import dataclass, field
 from typing import Any, Sequence
 
-from ..agent.orchestrator.plan import AgentCodeChange, AgentCodeChangeError, AgentPlan
 from ..command.canonical_command import ChannelBypassViolation, CommandError
 from ..llm.call_record import (
     LLMCallRecord,
@@ -386,6 +385,8 @@ def check_agent_code_change(
     以原始字段过 `AgentCodeChange.__post_init__`——缺三者（或声称按理论实现却缺 TIB）→ `AgentCodeChangeError`
     → 本门判违反。种坏门必抓：把 rollback_point / test_result / diff 任一置空 → 本门判违反。
     """
+
+    from ..agent.orchestrator.plan import AgentCodeChange, AgentCodeChangeError
 
     try:
         AgentCodeChange(

@@ -44,6 +44,94 @@ interface Signal {
   published_at_utc: string;
 }
 
+interface RiskDisclosureProfile {
+  profile_ref: string;
+  required_acknowledgement_refs: string[];
+  disclosures: Record<string, { ref: string; text: string }>;
+  failure_modes: Record<string, { ref: string; text: string }>;
+  recommendation: { ref: string; text: string };
+  responsibility_boundary: {
+    ref: string;
+    parties: Record<string, string>;
+  };
+}
+
+interface RiskConsentChallenge {
+  challenge_ref: string;
+  expires_at_utc: string;
+  risk_profile: RiskDisclosureProfile;
+}
+
+interface RiskConsentResult {
+  consent_event_ref: string;
+  user_risk_choice_ref: string;
+  activation_deadline_utc: string;
+  runtime_promotion: Record<string, unknown> & {
+    request_ref: string;
+    subject_ref: string;
+    asset_class: string;
+    source_runtime: string;
+    target_runtime: string;
+    permission_gate_ref: string;
+    order_guard_ref: string;
+    idempotency_key: string;
+    audit_record_ref: string;
+    kill_switch_ref: string;
+    secret_ref: string;
+    responsibility_boundary_ref: string;
+    mock_profile: string;
+    required_evidence_refs: string[];
+  };
+}
+
+interface RuntimePromotionResult {
+  runtime_promotion_ref: string;
+}
+
+function responseError(body: unknown, fallback: string): string {
+  if (body && typeof body === "object" && "detail" in body) {
+    const detail = (body as { detail?: unknown }).detail;
+    return typeof detail === "string" ? detail : (JSON.stringify(detail) ?? String(detail));
+  }
+  return fallback;
+}
+
+function disclosureItems(profile: RiskDisclosureProfile): Array<{ ref: string; text: string }> {
+  return [
+    ...Object.values(profile.disclosures),
+    ...Object.values(profile.failure_modes),
+    profile.recommendation,
+    {
+      ref: profile.responsibility_boundary.ref,
+      text: Object.entries(profile.responsibility_boundary.parties)
+        .map(([party, text]) => `${party}: ${text}`)
+        .join(" "),
+    },
+  ];
+}
+
+export interface FillEconomics {
+  event_ref: string;
+  signal_ref: string;
+  follower_ref: string;
+  symbol: string;
+  side: string;
+  fill_status: string;
+  filled_qty: number;
+  cumulative_filled_qty: number;
+  fill_price: number;
+  commission: number;
+  commission_asset: string;
+  normalized_cost_usdt: number | null;
+  cost_complete: boolean;
+  realized_pnl_delta: number;
+  realized_pnl_complete: boolean;
+  fill_economics_complete: boolean;
+  holding_cost_complete: boolean;
+  total_economics_complete: boolean;
+  occurred_at_utc: string;
+}
+
 const ASSETS = [
   { id: "", label: "全部" },
   { id: "crypto_perp", label: "加密永续" },
@@ -70,6 +158,8 @@ export function CopyTradePage() {
   const [masters, setMasters] = useState<Master[]>([]);
   const [myMaster, setMyMaster] = useState<Master | null>(null);
   const [mySubs, setMySubs] = useState<Subscription[]>([]);
+  const [myFills, setMyFills] = useState<FillEconomics[]>([]);
+  const [fillsError, setFillsError] = useState<string | null>(null);
   const [recentSignals, setRecentSignals] = useState<Signal[]>([]);
   const [becomeOpen, setBecomeOpen] = useState(false);
   const [followOpen, setFollowOpen] = useState<Master | null>(null);
@@ -85,6 +175,24 @@ export function CopyTradePage() {
     if (me) {
       authFetch("/api/copy_trade/me/master").then((r) => r.json()).then(setMyMaster).catch(() => setMyMaster(null));
       authFetch("/api/copy_trade/me/subscriptions").then((r) => r.json()).then(setMySubs).catch(() => setMySubs([]));
+      authFetch("/api/copy_trade/fills?limit=50")
+        .then(async (r) => {
+          if (!r.ok) {
+            const body = await r.json().catch(() => ({}));
+            throw new Error(body.detail || `HTTP ${r.status}`);
+          }
+          const body = await r.json();
+          if (!Array.isArray(body)) throw new Error("成交账本响应格式无效");
+          setMyFills(body as FillEconomics[]);
+          setFillsError(null);
+        })
+        .catch((error: unknown) => {
+          setMyFills([]);
+          setFillsError(error instanceof Error ? error.message : "成交账本不可用");
+        });
+    } else {
+      setMyFills([]);
+      setFillsError(null);
     }
   }, [asset, sortBy, inviteOnly, userId]);
   useEffect(reload, [reload]);
@@ -112,10 +220,13 @@ export function CopyTradePage() {
 
       {/* 我的 master / 我的跟单 简报 */}
       {me && (
-        <div className="cc-grid" style={{ gridTemplateColumns: "1fr 1fr", marginBottom: 20 }}>
-          <MasterSummaryCard master={myMaster} onClickPublish={() => setPublishOpen(true)} />
-          <SubsSummaryCard subs={mySubs} />
-        </div>
+        <>
+          <div className="cc-grid" style={{ gridTemplateColumns: "1fr 1fr", marginBottom: 20 }}>
+            <MasterSummaryCard master={myMaster} onClickPublish={() => setPublishOpen(true)} />
+            <SubsSummaryCard subs={mySubs} />
+          </div>
+          <CopyTradeFillLedger fills={myFills} error={fillsError} />
+        </>
       )}
 
       <div className="cc-row" style={{ gap: 16, marginBottom: 12 }}>
@@ -192,6 +303,58 @@ export function CopyTradePage() {
       {followOpen && <SubscribeModal master={followOpen} onClose={() => { setFollowOpen(null); reload(); }} />}
       {publishOpen && myMaster && <PublishSignalModal onClose={() => { setPublishOpen(false); reload(); }} />}
     </>
+  );
+}
+
+export function CopyTradeFillLedger({ fills, error }: { fills: FillEconomics[]; error: string | null }) {
+  return (
+    <section className="cc-section" aria-label="我的正式成交" style={{ marginBottom: 20 }}>
+      <div className="cc-section-header">
+        <h2 className="cc-section-title">// 我的正式成交</h2>
+      </div>
+      <p className="cc-dim" style={{ fontSize: 11, marginTop: 0 }}>
+        价格、手续费和已实现盈亏来自 HMAC 校验的逐笔成交账本。资金费、借贷等持仓成本尚未归因，因此不会显示“总经济性完整”。
+      </p>
+      {error ? (
+        <div className="cc-card cc-chip--danger" role="alert">成交账本不可用：{error}</div>
+      ) : fills.length === 0 ? (
+        <div className="cc-dim">暂无经正式账本确认的成交。</div>
+      ) : (
+        <table className="cc-table">
+          <thead>
+            <tr>
+              <th>time</th><th>symbol</th><th>side</th><th align="right">qty</th>
+              <th align="right">price</th><th align="right">fee</th><th align="right">realized PnL</th><th>evidence</th>
+            </tr>
+          </thead>
+          <tbody>
+            {fills.map((fill) => (
+              <tr key={fill.event_ref}>
+                <td className="cc-dim" style={{ fontSize: 11 }}>{fill.occurred_at_utc.slice(0, 19)}</td>
+                <td className="cc-mono">{fill.symbol}</td>
+                <td><span className={`cc-chip ${fill.side === "buy" ? "cc-chip--success" : "cc-chip--danger"}`}>{fill.side}</span></td>
+                <td align="right" className="cc-mono">{fill.filled_qty}</td>
+                <td align="right" className="cc-mono">{fill.fill_price.toLocaleString()}</td>
+                <td align="right" className="cc-mono">
+                  {fill.cost_complete && fill.normalized_cost_usdt != null
+                    ? `${fill.normalized_cost_usdt.toFixed(4)} USDT`
+                    : `${fill.commission} ${fill.commission_asset} (未换算)`}
+                </td>
+                <td align="right" className="cc-mono">
+                  {fill.realized_pnl_complete ? fill.realized_pnl_delta.toFixed(4) : "未证明"}
+                </td>
+                <td>
+                  <span className={`cc-chip ${fill.fill_economics_complete ? "cc-chip--success" : "cc-chip--warning"}`}>
+                    {fill.fill_economics_complete ? "逐笔完整" : "逐笔不完整"}
+                  </span>
+                  {!fill.total_economics_complete && <span className="cc-dim" style={{ marginLeft: 6, fontSize: 11 }}>持仓成本未归因</span>}
+                </td>
+              </tr>
+            ))}
+          </tbody>
+        </table>
+      )}
+    </section>
   );
 }
 
@@ -351,15 +514,40 @@ function BecomeMasterModal({ onClose }: { onClose: () => void }) {
   );
 }
 
-function SubscribeModal({ master, onClose }: { master: Master; onClose: () => void }) {
+export function SubscribeModal({ master, onClose }: { master: Master; onClose: () => void }) {
   const [invest, setInvest] = useState("500");
   const [keystoreName, setKeystoreName] = useState("binance_testnet");
-  const [network, setNetwork] = useState("testnet");
+  const [network, setNetwork] = useState<"testnet" | "mainnet">("testnet");
   const [perOrderMax, setPerOrderMax] = useState("100");
   const [dailyLossPct, setDailyLossPct] = useState("5");
+  const [maxPositions, setMaxPositions] = useState("3");
+  const [maxLeverage, setMaxLeverage] = useState("2");
   const [inviteCode, setInviteCode] = useState("");
   const [err, setErr] = useState<string | null>(null);
   const [step, setStep] = useState<"redeem" | "subscribe">(master.is_invite_only ? "redeem" : "subscribe");
+  const [challenge, setChallenge] = useState<RiskConsentChallenge | null>(null);
+  const [acknowledgedRefs, setAcknowledgedRefs] = useState<Set<string>>(new Set());
+  const [secondFactorMode, setSecondFactorMode] = useState<"password" | "totp">("password");
+  const [password, setPassword] = useState("");
+  const [totpCode, setTotpCode] = useState("");
+  const [consent, setConsent] = useState<RiskConsentResult | null>(null);
+  const [testnetRunRef, setTestnetRunRef] = useState("");
+  const [approvalRef, setApprovalRef] = useState("");
+  const [promotion, setPromotion] = useState<RuntimePromotionResult | null>(null);
+  const [busy, setBusy] = useState(false);
+
+  const riskLimits = () => ({
+    invest_amount: Number(invest),
+    binance_keystore_name: keystoreName,
+    per_order_max_usdt: Number(perOrderMax),
+    daily_loss_limit_pct: Number(dailyLossPct) / 100,
+    max_positions: Number(maxPositions),
+    max_leverage: Number(maxLeverage),
+  });
+
+  const secondFactor = () => (
+    secondFactorMode === "totp" ? { totp_code: totpCode } : { password }
+  );
 
   const redeem = async () => {
     setErr(null);
@@ -377,23 +565,133 @@ function SubscribeModal({ master, onClose }: { master: Master; onClose: () => vo
 
   const subscribe = async () => {
     setErr(null);
-    const res = await authFetch(`/api/copy_trade/masters/${master.master_id}/subscribe`, {
-      method: "POST",
-      body: JSON.stringify({
-        invest_amount: Number(invest),
-        binance_keystore_name: keystoreName,
-        binance_network: network,
-        per_order_max_usdt: Number(perOrderMax),
-        daily_loss_limit_pct: Number(dailyLossPct) / 100,
-      }),
-    });
-    const j = await res.json();
-    if (!res.ok) {
-      setErr(j.detail || "subscribe failed");
-      return;
+    setBusy(true);
+    try {
+      const res = await authFetch(`/api/copy_trade/masters/${master.master_id}/subscribe`, {
+        method: "POST",
+        body: JSON.stringify({
+          ...riskLimits(),
+          binance_network: network,
+          ...(network === "mainnet" && consent && promotion ? {
+            runtime_promotion_ref: promotion.runtime_promotion_ref,
+            user_risk_choice_ref: consent.user_risk_choice_ref,
+            user_risk_consent_event_ref: consent.consent_event_ref,
+            ...secondFactor(),
+          } : {}),
+        }),
+      });
+      const body: unknown = await res.json().catch(() => ({}));
+      if (!res.ok) {
+        setErr(responseError(body, "subscribe failed"));
+        return;
+      }
+      onClose();
+    } finally {
+      setBusy(false);
     }
-    onClose();
   };
+
+  const issueRiskChallenge = async () => {
+    setErr(null);
+    setBusy(true);
+    try {
+      const res = await authFetch(`/api/copy_trade/masters/${master.master_id}/risk_consent/challenges`, {
+        method: "POST",
+        body: JSON.stringify({ ...riskLimits(), selected_risk_path: "small_live" }),
+      });
+      const body: unknown = await res.json().catch(() => ({}));
+      if (!res.ok) {
+        setErr(responseError(body, "risk consent challenge failed"));
+        return;
+      }
+      setChallenge(body as RiskConsentChallenge);
+      setAcknowledgedRefs(new Set());
+    } finally {
+      setBusy(false);
+    }
+  };
+
+  const recordRiskConsent = async () => {
+    if (!challenge) return;
+    setErr(null);
+    setBusy(true);
+    try {
+      const res = await authFetch(`/api/copy_trade/masters/${master.master_id}/risk_consents`, {
+        method: "POST",
+        body: JSON.stringify({
+          challenge_ref: challenge.challenge_ref,
+          acknowledged_item_refs: challenge.risk_profile.required_acknowledgement_refs,
+          ...secondFactor(),
+        }),
+      });
+      const body: unknown = await res.json().catch(() => ({}));
+      if (!res.ok) {
+        setErr(responseError(body, "risk consent failed"));
+        return;
+      }
+      setConsent(body as RiskConsentResult);
+    } finally {
+      setBusy(false);
+    }
+  };
+
+  const recordRuntimePromotion = async () => {
+    if (!consent) return;
+    setErr(null);
+    setBusy(true);
+    try {
+      const draft = consent.runtime_promotion;
+      const res = await authFetch("/api/research-os/execution/runtime_promotions", {
+        method: "POST",
+        body: JSON.stringify({
+          request_ref: draft.request_ref,
+          subject_ref: draft.subject_ref,
+          asset_class: draft.asset_class,
+          source_runtime: draft.source_runtime,
+          target_runtime: draft.target_runtime,
+          testnet_run_ref: testnetRunRef.trim(),
+          approval_ref: approvalRef.trim(),
+          permission_gate_ref: draft.permission_gate_ref,
+          order_guard_ref: draft.order_guard_ref,
+          idempotency_key: draft.idempotency_key,
+          audit_record_ref: draft.audit_record_ref,
+          kill_switch_ref: draft.kill_switch_ref,
+          secret_ref: draft.secret_ref,
+          responsibility_boundary_ref: draft.responsibility_boundary_ref,
+          waiver_requests: [],
+          mock_profile: "none",
+          evidence_refs: Array.from(new Set([
+            ...(draft.required_evidence_refs || []),
+            testnetRunRef.trim(),
+            approvalRef.trim(),
+          ])),
+        }),
+      });
+      const body: unknown = await res.json().catch(() => ({}));
+      if (!res.ok) {
+        setErr(responseError(body, "runtime promotion failed"));
+        return;
+      }
+      setPromotion(body as RuntimePromotionResult);
+    } finally {
+      setBusy(false);
+    }
+  };
+
+  const resetMainnetFlow = () => {
+    setChallenge(null);
+    setAcknowledgedRefs(new Set());
+    setConsent(null);
+    setPromotion(null);
+    setTestnetRunRef("");
+    setApprovalRef("");
+    setErr(null);
+  };
+
+  const allRiskItemsAcknowledged = !!challenge
+    && challenge.risk_profile.required_acknowledgement_refs.every((ref) => acknowledgedRefs.has(ref));
+  const hasSecondFactor = secondFactorMode === "totp" ? /^\d{6}$/.test(totpCode) : password.length > 0;
+  const formalInputsLocked = challenge !== null;
 
   return (
     <div className="cc-modal-backdrop">
@@ -412,25 +710,115 @@ function SubscribeModal({ master, onClose }: { master: Master; onClose: () => vo
         )}
         {step === "subscribe" && (
           <>
-            <div className="cc-input-row"><label>本金 (USDT)</label><input className="cc-input" type="number" value={invest} onChange={(e) => setInvest(e.target.value)} /></div>
-            <div className="cc-input-row"><label>keystore 名称</label><input className="cc-input" value={keystoreName} onChange={(e) => setKeystoreName(e.target.value)} placeholder="先去 /trading 写入" /></div>
+            <div className="cc-input-row"><label>本金 (USDT)</label><input className="cc-input" type="number" value={invest} onChange={(e) => setInvest(e.target.value)} disabled={formalInputsLocked} /></div>
+            <div className="cc-input-row"><label>keystore 名称</label><input className="cc-input" value={keystoreName} onChange={(e) => setKeystoreName(e.target.value)} placeholder="先去 /trading 写入" disabled={formalInputsLocked} /></div>
             <div className="cc-input-row">
               <label>network</label>
-              <select className="cc-select" value={network} onChange={(e) => setNetwork(e.target.value)}>
+              <select
+                className="cc-select"
+                value={network}
+                onChange={(e) => {
+                  const selected = e.target.value as "testnet" | "mainnet";
+                  setNetwork(selected);
+                  if (selected === "mainnet" && keystoreName === "binance_testnet") {
+                    setKeystoreName("binance_mainnet");
+                  }
+                  resetMainnetFlow();
+                }}
+                aria-label="network"
+                disabled={formalInputsLocked}
+              >
                 <option value="testnet">testnet</option>
-                <option value="mainnet">mainnet (真钱)</option>
+                {master.asset_class === "crypto_perp" && <option value="mainnet">mainnet · 真钱</option>}
               </select>
             </div>
-            <div className="cc-input-row"><label>单笔上限 USDT</label><input className="cc-input" type="number" value={perOrderMax} onChange={(e) => setPerOrderMax(e.target.value)} /></div>
-            <div className="cc-input-row"><label>日内亏损 %</label><input className="cc-input" type="number" value={dailyLossPct} onChange={(e) => setDailyLossPct(e.target.value)} /></div>
+            <div className="cc-input-row"><label>单笔上限 USDT</label><input className="cc-input" type="number" value={perOrderMax} onChange={(e) => setPerOrderMax(e.target.value)} disabled={formalInputsLocked} /></div>
+            <div className="cc-input-row"><label>日内亏损 %</label><input className="cc-input" type="number" value={dailyLossPct} onChange={(e) => setDailyLossPct(e.target.value)} disabled={formalInputsLocked} /></div>
+            <div className="cc-input-row"><label>最大持仓数</label><input className="cc-input" type="number" min="1" value={maxPositions} onChange={(e) => setMaxPositions(e.target.value)} disabled={formalInputsLocked} /></div>
+            <div className="cc-input-row"><label>最大杠杆</label><input className="cc-input" type="number" min="1" step="0.1" value={maxLeverage} onChange={(e) => setMaxLeverage(e.target.value)} disabled={formalInputsLocked} /></div>
             <div className="cc-dim" style={{ fontSize: 11 }}>
               ⚠ master 发 signal 时走你 keystore 自己下单 + 风控重检。你的 key 永远不会发给 master。
             </div>
+            {network === "mainnet" && !challenge && (
+              <div className="cc-card" style={{ marginTop: 10 }}>
+                <b>1 / 4 · 建立账户绑定的风险挑战</b>
+                <p className="cc-dim" style={{ fontSize: 11 }}>
+                  需要已配置的 Binance mainnet futures key、受信任来源 IP、可验证账户 UID 和可用紧急平仓能力。失败时不会创建同意或订阅。
+                </p>
+                <button type="button" className="cc-btn cc-btn--warning" onClick={issueRiskChallenge} disabled={busy || !keystoreName || Number(invest) <= 0}>
+                  获取正式风险披露 →
+                </button>
+              </div>
+            )}
+            {network === "mainnet" && challenge && !consent && (
+              <div className="cc-card" style={{ marginTop: 10 }} data-testid="copy-trade-risk-consent">
+                <b>2 / 4 · 逐项阅读并确认</b>
+                <p className="cc-dim" style={{ fontSize: 11 }}>
+                  challenge 到期：{challenge.expires_at_utc}。不得用一个总开关代替逐项确认。
+                </p>
+                {disclosureItems(challenge.risk_profile).map((item) => (
+                  <label key={item.ref} style={{ display: "flex", gap: 8, alignItems: "flex-start", margin: "8px 0", fontSize: 12 }}>
+                    <input
+                      type="checkbox"
+                      checked={acknowledgedRefs.has(item.ref)}
+                      onChange={(event) => setAcknowledgedRefs((current) => {
+                        const next = new Set(current);
+                        if (event.target.checked) next.add(item.ref); else next.delete(item.ref);
+                        return next;
+                      })}
+                    />
+                    <span>{item.text}</span>
+                  </label>
+                ))}
+                <div className="cc-input-row">
+                  <label>二次验证</label>
+                  <select className="cc-select" value={secondFactorMode} onChange={(e) => setSecondFactorMode(e.target.value as "password" | "totp")}>
+                    <option value="password">登录密码</option>
+                    <option value="totp">TOTP</option>
+                  </select>
+                </div>
+                {secondFactorMode === "password" ? (
+                  <div className="cc-input-row"><label>password</label><input aria-label="password" className="cc-input" type="password" autoComplete="current-password" value={password} onChange={(e) => setPassword(e.target.value)} /></div>
+                ) : (
+                  <div className="cc-input-row"><label>TOTP</label><input aria-label="TOTP" className="cc-input" inputMode="numeric" maxLength={6} value={totpCode} onChange={(e) => setTotpCode(e.target.value.replace(/\D/g, ""))} /></div>
+                )}
+                <button type="button" className="cc-btn cc-btn--warning" onClick={recordRiskConsent} disabled={busy || !allRiskItemsAcknowledged || !hasSecondFactor}>
+                  持久化风险选择与同意 →
+                </button>
+              </div>
+            )}
+            {network === "mainnet" && consent && !promotion && (
+              <div className="cc-card" style={{ marginTop: 10 }} data-testid="copy-trade-runtime-promotion">
+                <b>3 / 4 · 绑定已有的独立执行证据</b>
+                <p className="cc-dim" style={{ fontSize: 11 }}>
+                  页面不会伪造证据。testnet ref 必须是同一账户主体的终态 reconciliation；approval ref 必须是另一位获授权审批人的 approved live_order gate，不能 self-approve。
+                </p>
+                <div className="cc-input-row"><label>testnet_run_ref</label><input aria-label="testnet_run_ref" className="cc-input" value={testnetRunRef} onChange={(e) => setTestnetRunRef(e.target.value)} /></div>
+                <div className="cc-input-row"><label>approval_ref</label><input aria-label="approval_ref" className="cc-input" value={approvalRef} onChange={(e) => setApprovalRef(e.target.value)} /></div>
+                <button type="button" className="cc-btn cc-btn--warning" onClick={recordRuntimePromotion} disabled={busy || !testnetRunRef.trim() || !approvalRef.trim()}>
+                  记录 testnet → live 晋级 →
+                </button>
+              </div>
+            )}
+            {network === "mainnet" && consent && promotion && (
+              <div className="cc-card" style={{ marginTop: 10 }} data-testid="copy-trade-mainnet-ready">
+                <b>4 / 4 · 后端终检并激活</b>
+                <p className="cc-dim" style={{ fontSize: 11 }}>
+                  consent 激活截止：{consent.activation_deadline_utc}。点击后后端仍会重查账户、凭据、独立审批、testnet 链、日限额、紧急平仓和 reconciler readiness；任一不满足即拒绝。
+                </p>
+                <code style={{ fontSize: 10 }}>{promotion.runtime_promotion_ref}</code>
+              </div>
+            )}
             {err && <div className="cc-chip cc-chip--danger">{err}</div>}
             <div className="cc-modal-actions">
               <button type="button" className="cc-btn" onClick={onClose}>取消</button>
-              <button type="button" className="cc-btn cc-btn--accent" onClick={subscribe} disabled={!keystoreName || Number(invest) <= 0}>
-                确认跟单
+              <button
+                type="button"
+                className="cc-btn cc-btn--accent"
+                onClick={subscribe}
+                disabled={busy || !keystoreName || Number(invest) <= 0 || (network === "mainnet" && (!consent || !promotion || !hasSecondFactor))}
+              >
+                {network === "mainnet" ? "确认真钱跟单" : "确认跟单"}
               </button>
             </div>
           </>

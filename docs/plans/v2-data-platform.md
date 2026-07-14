@@ -44,7 +44,7 @@
 | Agent 工具 | `tool_schema.py` 13 个工具，**仅 3 个接了 handler**；`data.list_sources` 定义了但未接线 | [tool_schema.py:12-140](app/backend/app/agent/tool_schema.py)、[main.py:179-185](app/backend/app/main.py) |
 | Agent 派发 | `handler = self._tools.get(tool_name)`，靠 `register_tool` 注册 | [agent_runtime.py:82-99](app/backend/app/agent/agent_runtime.py) |
 | Agent 上下文 | `build_ai_context` 注入 connector/factor/operator，**不含真实字段**；M14 Agent 甚至没调它 | [ide/ai_context.py:130-159](app/backend/app/ide/ai_context.py) |
-| 配置存储 | 凭证→`~/.quantbt/secrets.yaml`；业务→`data/community.db`（auth/community/billing/ide/copytrade/chat 共用） | [secrets_loader.py:29-163](app/backend/app/security/secrets_loader.py)、[main.py:96-110](app/backend/app/main.py) |
+| 配置存储 | 非交易凭证→`~/.quantbt/secrets.yaml`；Binance→认证 UI/API + 持久加密 keystore；业务→`data/community.db`（auth/community/billing/ide/copytrade/chat 共用） | [secrets_loader.py](../../app/backend/app/security/secrets_loader.py)、[keystore.py](../../app/backend/app/security/keystore.py) |
 
 ---
 

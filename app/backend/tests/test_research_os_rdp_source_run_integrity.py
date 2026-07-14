@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import json
 import hashlib
+from functools import partial
 from types import SimpleNamespace
 
 import pytest
@@ -9,6 +10,8 @@ from fastapi.testclient import TestClient
 
 from app import main
 from app.auth import require_user_dependency
+from app.ide.service import IDEService
+from app.lineage.ids import canonical_json
 from app.research_os import (
     PersistentRDPSourceRunIntegrityStore,
     PersistentRDPStore,
@@ -17,6 +20,12 @@ from app.research_os import (
     RDPSourceFileBundler,
     RuntimeStatus,
     rdp_run_artifact_hash,
+)
+
+RDPOpenPackageMaterializer = partial(RDPOpenPackageMaterializer, owner_user_id="u1")
+RDPSourceFileBundler = partial(RDPSourceFileBundler, owner_user_id="u1")
+PersistentRDPSourceRunIntegrityStore = partial(
+    PersistentRDPSourceRunIntegrityStore, owner_user_id="u1"
 )
 
 
@@ -28,6 +37,7 @@ def _write_run(run_root, run_id: str = "bt1", *, strategy_source: str = STRATEGY
     run_dir.mkdir(parents=True, exist_ok=True)
     run_manifest = {
         "run_id": manifest_run_id if manifest_run_id is not None else run_id,
+        "owner_user_id": "u1",
         "strategy_name": "momentum",
         "status": "completed",
         "market": "crypto_perp",
@@ -108,6 +118,44 @@ def _prepared_package(tmp_path):
     return manifest, materializer, bundler, source_root, run_root, run_dir
 
 
+def _prepared_ide_source_package(tmp_path):
+    strategy_source = (
+        "quantbt.emit_result({"
+        "'equity_curve': ["
+        "{'t': '2026-01-01', 'equity': 1.0, 'net_return': 0.0},"
+        "{'t': '2026-01-02', 'equity': 1.02, 'net_return': 0.02}],"
+        "'metadata': {'market': 'crypto_perp', 'frequency': '1d'}"
+        "})"
+    )
+    run_root = tmp_path / "ide_runs"
+    ide_service = IDEService(tmp_path / "ide.db", run_root=run_root)
+    ide_service.save_strategy("alice", "immutable_rdp_source", strategy_source)
+    ide_run = ide_service.run_strategy(
+        "alice",
+        "immutable_rdp_source",
+        owner_user_id="u1",
+    )
+    assert ide_run.status == "ok"
+    run_dir = run_root / ide_run.run_id
+    ide_ref = f"ide_run:{ide_run.run_id}"
+    manifest = _manifest(
+        asset_refs=(ide_ref,),
+        run_refs=(ide_ref,),
+        artifact_hash=_artifact_hash(run_dir),
+    )
+    materializer = RDPOpenPackageMaterializer(tmp_path / "rdp_packages")
+    materializer.materialize(manifest)
+    bundler = RDPSourceFileBundler(
+        materializer.package_root,
+        tmp_path / "unused_source_root",
+    )
+    bundler.bundle_trusted_text_sources(
+        manifest,
+        source_texts={"source-file:strategy.py": (run_dir / "strategy.py").read_text(encoding="utf-8")},
+    )
+    return manifest, materializer, bundler, ide_service, ide_run, run_root, run_dir
+
+
 def _client_with_source_run_integrity(tmp_path, monkeypatch):
     store = PersistentRDPStore(tmp_path / "rdp_manifests.jsonl")
     materializer = RDPOpenPackageMaterializer(tmp_path / "rdp_packages")
@@ -151,6 +199,166 @@ def test_rdp_source_run_integrity_records_package_source_to_run_and_replays(tmp_
     reloaded = PersistentRDPSourceRunIntegrityStore(store.path)
     replayed = reloaded.records(manifest.package_id)[0]
     assert replayed.integrity_hash == record.integrity_hash
+
+
+def test_rdp_ide_run_integrity_binds_immutable_snapshot_and_replays(tmp_path):
+    manifest, materializer, _bundler, ide_service, ide_run, run_root, run_dir = (
+        _prepared_ide_source_package(tmp_path)
+    )
+    # Current draft drift is irrelevant: the package and integrity proof bind the frozen run snapshot.
+    ide_service.save_strategy(
+        "alice",
+        "immutable_rdp_source",
+        "quantbt.emit_result({'equity_curve': [{'t': 'changed', 'equity': 9}]})",
+    )
+    store = PersistentRDPSourceRunIntegrityStore(
+        tmp_path / "rdp_source_run_integrity.jsonl"
+    )
+
+    record = store.record_integrity(
+        manifest,
+        package_root=materializer.package_root,
+        run_root=run_root,
+        run_id=ide_run.run_id,
+        attested_by="u1",
+        attested_at="2026-07-13T00:00:00+00:00",
+    )
+
+    assert record.run_ref == f"ide_run:{ide_run.run_id}"
+    assert record.bundled_source_sha256 == record.run_strategy_sha256
+    assert record.artifact_hash == _artifact_hash(run_dir)
+    assert {path.name for path in run_dir.iterdir() if path.is_file()} >= {
+        "run.json",
+        "strategy.py",
+        "portfolio.csv",
+        "result.json",
+    }
+    replayed = PersistentRDPSourceRunIntegrityStore(store.path).records(manifest.package_id)
+    assert replayed == [record]
+
+
+@pytest.mark.parametrize(
+    "artifact_name",
+    ["strategy.py", "result.json", "portfolio.csv"],
+)
+def test_rdp_ide_run_integrity_rejects_mutated_snapshot_without_event(tmp_path, artifact_name):
+    manifest, materializer, _bundler, _ide_service, ide_run, run_root, run_dir = (
+        _prepared_ide_source_package(tmp_path)
+    )
+    (run_dir / artifact_name).write_text("mutated\n", encoding="utf-8")
+    store = PersistentRDPSourceRunIntegrityStore(
+        tmp_path / "rdp_source_run_integrity.jsonl"
+    )
+
+    with pytest.raises(ValueError, match="does not match|invalid"):
+        store.record_integrity(
+            manifest,
+            package_root=materializer.package_root,
+            run_root=run_root,
+            run_id=ide_run.run_id,
+            attested_by="u1",
+        )
+    assert store.records(manifest.package_id) == []
+    assert not store.path.exists()
+
+
+@pytest.mark.parametrize(
+    ("field", "value", "error"),
+    [
+        ("owner_user_id", "u2", "source owner"),
+        ("ide_run_id", "ide_other", "source binding"),
+    ],
+)
+def test_rdp_ide_run_integrity_rejects_owner_or_source_id_drift_without_event(
+    tmp_path,
+    field,
+    value,
+    error,
+):
+    manifest, materializer, _bundler, _ide_service, ide_run, run_root, run_dir = (
+        _prepared_ide_source_package(tmp_path)
+    )
+    run_manifest = json.loads((run_dir / "run.json").read_text(encoding="utf-8"))
+    run_manifest["source"][field] = value
+    (run_dir / "run.json").write_text(
+        canonical_json(run_manifest) + "\n",
+        encoding="utf-8",
+    )
+    store = PersistentRDPSourceRunIntegrityStore(
+        tmp_path / "rdp_source_run_integrity.jsonl"
+    )
+
+    with pytest.raises(ValueError, match=error):
+        store.record_integrity(
+            manifest,
+            package_root=materializer.package_root,
+            run_root=run_root,
+            run_id=ide_run.run_id,
+            attested_by="u1",
+        )
+    assert store.records(manifest.package_id) == []
+    assert not store.path.exists()
+
+
+def test_rdp_ide_run_integrity_rejects_mutated_bundled_source_without_event(tmp_path):
+    manifest, materializer, _bundler, _ide_service, ide_run, run_root, _run_dir = (
+        _prepared_ide_source_package(tmp_path)
+    )
+    package_dir = materializer.package_root / "_owners" / hashlib.sha256(b"u1").hexdigest() / manifest.package_id
+    index = json.loads((package_dir / "source_files_index.json").read_text(encoding="utf-8"))
+    bundled_path = package_dir / index["source_files"][0]["bundled_path"]
+    bundled_path.write_text("mutated package source\n", encoding="utf-8")
+    store = PersistentRDPSourceRunIntegrityStore(
+        tmp_path / "rdp_source_run_integrity.jsonl"
+    )
+
+    with pytest.raises(ValueError, match="bundled source hash"):
+        store.record_integrity(
+            manifest,
+            package_root=materializer.package_root,
+            run_root=run_root,
+            run_id=ide_run.run_id,
+            attested_by="u1",
+        )
+    assert store.records(manifest.package_id) == []
+    assert not store.path.exists()
+
+
+@pytest.mark.parametrize("run_owner", [None, "u2"])
+def test_rdp_source_run_integrity_rejects_ownerless_or_foreign_run_without_event(
+    tmp_path,
+    run_owner,
+):
+    run_root = tmp_path / "runs"
+    run_dir = _write_run(run_root)
+    run_manifest = json.loads((run_dir / "run.json").read_text(encoding="utf-8"))
+    if run_owner is None:
+        run_manifest.pop("owner_user_id", None)
+    else:
+        run_manifest["owner_user_id"] = run_owner
+    (run_dir / "run.json").write_text(
+        json.dumps(run_manifest, ensure_ascii=False, indent=2), encoding="utf-8"
+    )
+    manifest = _manifest(artifact_hash=_artifact_hash(run_dir))
+    materializer = RDPOpenPackageMaterializer(tmp_path / "rdp_packages")
+    source_root = tmp_path / "source_root"
+    source_root.mkdir()
+    bundler = RDPSourceFileBundler(materializer.package_root, source_root)
+    _materialize_and_bundle(materializer, bundler, manifest, source_root)
+    store = PersistentRDPSourceRunIntegrityStore(
+        tmp_path / "rdp_source_run_integrity.jsonl"
+    )
+
+    with pytest.raises(ValueError, match="run.json is not owned by the package owner"):
+        store.record_integrity(
+            manifest,
+            package_root=materializer.package_root,
+            run_root=run_root,
+            run_id="bt1",
+            attested_by="u1",
+        )
+    assert store.records(manifest.package_id) == []
+    assert not store.path.exists()
 
 
 def test_rdp_source_run_integrity_requires_source_bundle(tmp_path):
@@ -262,7 +470,11 @@ def test_rdp_source_run_integrity_api_records_attestation(tmp_path, monkeypatch)
         monkeypatch,
     )
     run_dir = _write_run(run_root)
-    manifest = store.record_manifest(_manifest(artifact_hash=_artifact_hash(run_dir)))
+    manifest = store.record_manifest(
+        _manifest(artifact_hash=_artifact_hash(run_dir)),
+        owner_user_id="u1",
+        recorded_by="u1",
+    )
     _materialize_and_bundle(materializer, bundler, manifest, source_root)
     try:
         response = client.post(
@@ -276,6 +488,68 @@ def test_rdp_source_run_integrity_api_records_attestation(tmp_path, monkeypatch)
         assert body["artifact_hash"] == manifest.artifact_hash
         assert body["integrity_hash"].startswith("sha16:")
         assert integrity_store.records(manifest.package_id)
+    finally:
+        main.app.dependency_overrides.pop(require_user_dependency, None)
+
+
+def test_rdp_ide_integrity_api_uses_ide_run_root_and_exact_server_run_id(
+    tmp_path,
+    monkeypatch,
+):
+    client, store, materializer, bundler, integrity_store, _source_root, run_root = (
+        _client_with_source_run_integrity(tmp_path, monkeypatch)
+    )
+    ide_service = IDEService(
+        tmp_path / "ide.db",
+        run_root=tmp_path / "ide_runs",
+    )
+    monkeypatch.setattr(main, "IDE_SERVICE", ide_service)
+    strategy_source = (
+        "quantbt.emit_result({'equity_curve': ["
+        "{'t': '2026-01-01', 'equity': 1.0},"
+        "{'t': '2026-01-02', 'equity': 1.1}]})"
+    )
+    ide_service.save_strategy("u1", "integrity_api", strategy_source)
+    ide_run = ide_service.run_strategy(
+        "u1",
+        "integrity_api",
+        owner_user_id="u1",
+    )
+    ide_run_dir = ide_service.run_root / ide_run.run_id
+    ide_ref = f"ide_run:{ide_run.run_id}"
+    manifest = store.record_manifest(
+        _manifest(
+            asset_refs=(ide_ref,),
+            run_refs=(ide_ref,),
+            source_file_refs=("source_file:strategy.py",),
+            artifact_hash=_artifact_hash(ide_run_dir),
+        ),
+        owner_user_id="u1",
+        recorded_by="u1",
+    )
+    materializer.materialize(manifest)
+    bundler.bundle_trusted_text_sources(
+        manifest,
+        source_texts={"source_file:strategy.py": strategy_source},
+    )
+    assert run_root != ide_service.run_root
+
+    try:
+        response = client.post(
+            f"/api/research-os/rdp/manifests/{manifest.package_id}/source_run_integrity_attestations",
+            json={},
+        )
+        assert response.status_code == 200, response.text
+        assert response.json()["run_id"] == ide_run.run_id
+        assert response.json()["run_ref"] == ide_ref
+        assert integrity_store.records(manifest.package_id)
+
+        conflict = client.post(
+            f"/api/research-os/rdp/manifests/{manifest.package_id}/source_run_integrity_attestations",
+            json={"run_id": "different"},
+        )
+        assert conflict.status_code == 422
+        assert "conflicts" in conflict.json()["detail"]
     finally:
         main.app.dependency_overrides.pop(require_user_dependency, None)
 

@@ -17,6 +17,7 @@ from __future__ import annotations
 import json
 import sys
 import tempfile
+from datetime import UTC, datetime, timedelta
 from pathlib import Path
 
 import pandas as pd
@@ -38,6 +39,8 @@ from app.delivery import (
 )
 from app.lineage.ledger import Ledger
 from app.paper.desk import PaperDeskService
+from app.paper.testnet_provider import TESTNET_SOURCE
+from app.verification import Verifier
 from run_detail_research_export import (
     OverviewRow,
     build_overview_rows,
@@ -102,13 +105,48 @@ def _tmp_eqlog(name: str) -> Path:
 
 
 def _eligible_run(svc: PaperDeskService, run_id: str, creator="alice"):
-    """注册一条【4 门全过】的 paper run（除 RDP 外无阻塞），便于隔离 RDP 闸效果。"""
+    """注册一条【5 门全过】的 paper run（除 RDP 外无阻塞），便于隔离 RDP 闸效果。"""
 
-    svc.register_run(
+    record = svc.register_run(
         run_id=run_id, name=run_id, origin="o", market="crypto", symbols=["BTCUSDT"],
         bench="BTC", creator=creator, equity_log_path=_tmp_eqlog(run_id), simulate=False,
         days_running=30, paper_excess_return=0.02, backtest_annual=0.2, paper_annual=0.18,
     )
+    record.simulated_source = TESTNET_SOURCE
+    record.provider_kind = "testnet"
+    record.degrade_reason = None
+    return record
+
+
+def _authorize_exact_promotion(
+    svc: PaperDeskService, gate, *, reviewer: str = "bob"
+) -> str:
+    endorsement = Verifier().reconcile(
+        target_ref=gate.verification_target_ref,
+        claims={"promotion_snapshot": 1.0},
+        recomputed={"promotion_snapshot": 1.0},
+        generator_model="paper-builder-model",
+        checker_model="paper-reviewer-model",
+        generator_seed=1,
+        checker_seed=2,
+        generator_slice="builder-slice",
+        checker_slice="reviewer-slice",
+        replay_ref=f"paper_fixture:{gate.gate_id}",
+    )
+    svc.configure_promotion_endorsement_lookup(
+        lambda ref: endorsement if ref == endorsement.verdict_id else None
+    )
+    svc.configure_promotion_reviewer_authority(
+        lambda actor: "paper_verifier_authority:sha256:test" if actor == reviewer else None
+    )
+    svc.grant_promotion_reviewer(
+        gate.gate_id,
+        owner_user_id=gate.creator,
+        reviewer_user_id=reviewer,
+        permissions=("approve",),
+        expires_at_utc=(datetime.now(UTC) + timedelta(hours=1)).isoformat(),
+    )
+    return endorsement.verdict_id
 
 
 # ════════════════ ① paper desk promote：残缺 RDP → 拒晋级（端到端 + MUT 差量）════════════════
@@ -118,10 +156,11 @@ def test_paperdesk_promote_with_incomplete_rdp_rejected():
     svc = PaperDeskService()
     _eligible_run(svc, "pd_incomplete")
     gate = svc.open_promotion_gate("pd_incomplete", creator="alice")
+    endorsement_ref = _authorize_exact_promotion(svc, gate)
     rdp = _incomplete_rdp(asset_ref="run:pd_incomplete")
     with pytest.raises(RDPRejected):
         svc.approve_promotion(
-            gate.gate_id, approver="bob", endorsement_ref="verdict_1",
+            gate.gate_id, approver="bob", endorsement_ref=endorsement_ref,
             reason="异模型对账一致，超额稳定，适用域已核",
             rdp=rdp, promotion_claim=_claim(rdp),
         )
@@ -142,16 +181,18 @@ def test_paperdesk_promote_rdp_enforcement_is_load_bearing_mut():
     # A：不带 RDP → 既有行为不变，晋级成功（基线锚）。
     _eligible_run(svc, "pd_none")
     g_a = svc.open_promotion_gate("pd_none", creator="alice")
-    out = svc.approve_promotion(g_a.gate_id, approver="bob", endorsement_ref="v1",
+    endorsement_a = _authorize_exact_promotion(svc, g_a)
+    out = svc.approve_promotion(g_a.gate_id, approver="bob", endorsement_ref=endorsement_a,
                                 reason="异模型对账一致超额稳定适用域已核")
     assert out.decision == "approved" and svc.get("pd_none").promoted is True
 
     # B：带残缺 RDP → 同样合规人审却被 RDP 闸拒（与 A 唯一差量 = RDP）。
     _eligible_run(svc, "pd_bad")
     g_b = svc.open_promotion_gate("pd_bad", creator="alice")
+    endorsement_b = _authorize_exact_promotion(svc, g_b)
     bad = _incomplete_rdp(asset_ref="run:pd_bad")
     with pytest.raises(RDPRejected):
-        svc.approve_promotion(g_b.gate_id, approver="bob", endorsement_ref="v1",
+        svc.approve_promotion(g_b.gate_id, approver="bob", endorsement_ref=endorsement_b,
                               reason="异模型对账一致超额稳定适用域已核",
                               rdp=bad, promotion_claim=_claim(bad))
     assert svc.get("pd_bad").promoted is False
@@ -163,8 +204,9 @@ def test_paperdesk_promote_require_rdp_but_none_rejected():
     svc = PaperDeskService()
     _eligible_run(svc, "pd_require")
     gate = svc.open_promotion_gate("pd_require", creator="alice")
+    endorsement_ref = _authorize_exact_promotion(svc, gate)
     with pytest.raises(RDPRejected):
-        svc.approve_promotion(gate.gate_id, approver="bob", endorsement_ref="v1",
+        svc.approve_promotion(gate.gate_id, approver="bob", endorsement_ref=endorsement_ref,
                               reason="异模型对账一致超额稳定适用域已核", require_rdp=True)
     assert svc.get("pd_require").promoted is False
 
@@ -175,10 +217,11 @@ def test_paperdesk_promote_with_complete_rdp_and_claim_succeeds():
     svc = PaperDeskService()
     _eligible_run(svc, "pd_ok")
     gate = svc.open_promotion_gate("pd_ok", creator="alice")
+    endorsement_ref = _authorize_exact_promotion(svc, gate)
     rdp = _complete_rdp(run_id="pd_ok", asset_ref="run:pd_ok")
     assert validate_rdp(rdp).ok, "前置：构造的 RDP 应过门1-3"
     out = svc.approve_promotion(
-        gate.gate_id, approver="bob", endorsement_ref="verdict_1",
+        gate.gate_id, approver="bob", endorsement_ref=endorsement_ref,
         reason="异模型对账一致，超额稳定，适用域已核",
         rdp=rdp, promotion_claim=_claim(rdp),
     )
@@ -191,10 +234,11 @@ def test_paperdesk_promote_rdp_asset_mismatch_rejected():
     svc = PaperDeskService()
     _eligible_run(svc, "pd_mismatch")
     gate = svc.open_promotion_gate("pd_mismatch", creator="alice")
+    endorsement_ref = _authorize_exact_promotion(svc, gate)
     rdp = _complete_rdp(run_id="pd_mismatch", asset_ref="run:pd_mismatch")
     wrong_claim = _claim(rdp, asset_ref="run:some_other_asset")  # asset_ref 与 RDP 不符
     with pytest.raises(RDPRejected):
-        svc.approve_promotion(gate.gate_id, approver="bob", endorsement_ref="v1",
+        svc.approve_promotion(gate.gate_id, approver="bob", endorsement_ref=endorsement_ref,
                               reason="异模型对账一致超额稳定适用域已核",
                               rdp=rdp, promotion_claim=wrong_claim)
     assert svc.get("pd_mismatch").promoted is False

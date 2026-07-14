@@ -13,19 +13,27 @@ one shared runtime contract instead of ad hoc status booleans.
 from __future__ import annotations
 
 import json
-from dataclasses import asdict, dataclass, field, is_dataclass
+import os
+import threading
+from contextlib import contextmanager
+from dataclasses import asdict, dataclass, field, is_dataclass, replace
 from datetime import UTC, datetime
 from enum import Enum
 from pathlib import Path
-from typing import Any, Mapping, Sequence
+from typing import Any, Callable, Mapping, Sequence
 
 from ..lineage.ids import content_hash
 from ..lineage.spine import (
     ConsistencyCheck as SpineConsistencyCheck,
+    MathematicalSpineChainRecord as CanonicalMathematicalSpineChainRecord,
     MathematicalArtifact as SpineMathematicalArtifact,
     MethodologyChoiceRecord as SpineMethodologyChoiceRecord,
     TheoryImplementationBinding as SpineTheoryImplementationBinding,
+    canonical_mathematical_spine_chain_ref as canonical_lineage_chain_ref,
+    mathematical_spine_chain_from_dict as lineage_chain_from_dict,
 )
+from ..lineage.spine_ledger import SpineLedger
+from ..cross_process_lock import acquire_exclusive_fd
 from .canvas_layout import CanvasLayoutRecord, validate_canvas_layout_record
 from .desk_projection import CanvasMutationRecord
 
@@ -90,6 +98,36 @@ def _carries_goal_closure_seed(serialized: str) -> bool:
 
 class ResearchGraphError(ValueError):
     """Research Graph command or guard rejected a mutation."""
+
+
+class ResearchGraphDurabilityError(ResearchGraphError):
+    """A failed append could not be rolled back to a known durable boundary."""
+
+
+_RESEARCH_GRAPH_PROCESS_WRITE_LOCK = threading.RLock()
+_PLATFORM_IMMUTABLE_BINDING_ENTRYPOINT_PREFIXES = (
+    "api:research_os.platform.spine_bindings.",
+    "api:research_os.platform.business_attestations.",
+)
+
+
+@contextmanager
+def _persistent_research_graph_write_lock(path: Path):
+    """Serialize refresh/check/append for every writer of one Graph log."""
+
+    with _RESEARCH_GRAPH_PROCESS_WRITE_LOCK:
+        lock_path = Path(str(path) + ".write.lock")
+        lock_path.parent.mkdir(parents=True, exist_ok=True)
+        fd = os.open(lock_path, os.O_RDWR | os.O_CREAT, 0o600)
+        held = None
+        try:
+            os.chmod(lock_path, 0o600)
+            held = acquire_exclusive_fd(fd, timeout_seconds=30.0)
+            yield
+        finally:
+            if held is not None:
+                held.release()
+            os.close(fd)
 
 
 class QROType(str, Enum):
@@ -467,42 +505,7 @@ class TheoryImplementationBinding:
         return value == ConsistencyStatus.ACCEPTED.value
 
 
-@dataclass(frozen=True)
-class MathematicalSpineChainRecord:
-    chain_ref: str
-    data_semantics_ref: str
-    factor_ref: str
-    model_ref: str
-    forecast_ref: str
-    signal_contract_ref: str
-    strategy_book_ref: str
-    portfolio_policy_ref: str
-    risk_policy_ref: str
-    execution_policy_ref: str
-    backtest_run_ref: str
-    attribution_ref: str
-    monitor_ref: str
-    theory_binding_refs: tuple[str, ...]
-    consistency_check_refs: tuple[str, ...]
-    methodology_choice_ref: str
-    responsibility_boundary_ref: str
-    evidence_refs: tuple[str, ...]
-    validation_refs: tuple[str, ...]
-    consistency_verdict: ConsistencyStatus | str
-    target_runtime: RuntimeStatus | str = RuntimeStatus.OFFLINE
-    recorded_by: str = ""
-    silent_mock_fallback_used: bool = False
-    chain_version: str = "math_spine_chain.v1"
-    created_at: str = field(default_factory=_now)
-
-    def __post_init__(self) -> None:
-        for field_name in (
-            "theory_binding_refs",
-            "consistency_check_refs",
-            "evidence_refs",
-            "validation_refs",
-        ):
-            object.__setattr__(self, field_name, tuple(str(v) for v in _as_tuple(getattr(self, field_name))))
+MathematicalSpineChainRecord = CanonicalMathematicalSpineChainRecord
 
 
 @dataclass(frozen=True)
@@ -603,54 +606,52 @@ def validate_mathematical_spine_chain(record: MathematicalSpineChainRecord) -> M
 
 
 def mathematical_spine_chain_from_dict(data: dict[str, Any]) -> MathematicalSpineChainRecord:
-    return MathematicalSpineChainRecord(
-        chain_ref=str(data.get("chain_ref") or ""),
-        data_semantics_ref=str(data.get("data_semantics_ref") or ""),
-        factor_ref=str(data.get("factor_ref") or ""),
-        model_ref=str(data.get("model_ref") or ""),
-        forecast_ref=str(data.get("forecast_ref") or ""),
-        signal_contract_ref=str(data.get("signal_contract_ref") or ""),
-        strategy_book_ref=str(data.get("strategy_book_ref") or ""),
-        portfolio_policy_ref=str(data.get("portfolio_policy_ref") or ""),
-        risk_policy_ref=str(data.get("risk_policy_ref") or ""),
-        execution_policy_ref=str(data.get("execution_policy_ref") or ""),
-        backtest_run_ref=str(data.get("backtest_run_ref") or ""),
-        attribution_ref=str(data.get("attribution_ref") or ""),
-        monitor_ref=str(data.get("monitor_ref") or ""),
-        theory_binding_refs=tuple(str(v) for v in _as_tuple(data.get("theory_binding_refs"))),
-        consistency_check_refs=tuple(str(v) for v in _as_tuple(data.get("consistency_check_refs"))),
-        methodology_choice_ref=str(data.get("methodology_choice_ref") or ""),
-        responsibility_boundary_ref=str(data.get("responsibility_boundary_ref") or ""),
-        evidence_refs=tuple(str(v) for v in _as_tuple(data.get("evidence_refs"))),
-        validation_refs=tuple(str(v) for v in _as_tuple(data.get("validation_refs"))),
-        consistency_verdict=data.get("consistency_verdict") or ConsistencyStatus.UNBOUND.value,
-        target_runtime=data.get("target_runtime") or RuntimeStatus.OFFLINE.value,
-        recorded_by=str(data.get("recorded_by") or ""),
-        silent_mock_fallback_used=bool(data.get("silent_mock_fallback_used", False)),
-        chain_version=str(data.get("chain_version") or "math_spine_chain.v1"),
-        created_at=str(data.get("created_at") or _now()),
-    )
+    return lineage_chain_from_dict(data)
 
 
 def _chain_decision_message(decision: MathematicalSpineChainDecision) -> str:
     return "; ".join(f"{v.code}:{v.field}" for v in decision.violations) or "mathematical spine chain rejected"
 
 
-def _chain_event_row(record: MathematicalSpineChainRecord) -> dict[str, Any]:
+def _chain_event_row(
+    record: MathematicalSpineChainRecord,
+    *,
+    schema_version: int = 2,
+) -> dict[str, Any]:
     return {
-        "schema_version": 1,
+        "schema_version": schema_version,
         "event_type": "mathematical_spine_chain_recorded",
         "chain": _stable_for_hash(record),
     }
 
 
-class PersistentMathematicalSpineChainRegistry:
-    """Append-only registry for full-chain Mathematical Spine binding records."""
+def canonical_mathematical_spine_chain_ref(
+    record: MathematicalSpineChainRecord,
+) -> str:
+    return canonical_lineage_chain_ref(record)
 
-    def __init__(self, path: str | Path) -> None:
+
+class PersistentMathematicalSpineChainRegistry:
+    """Append-only chain projection backed by the canonical Spine ledger."""
+
+    def __init__(
+        self,
+        path: str | Path,
+        spine_ledger: SpineLedger | None = None,
+        *,
+        external_ref_resolver: Callable[[str, str, str], bool] | None = None,
+        current_hash_resolver: Callable[[str, str, str], str | None] | None = None,
+    ) -> None:
         self._path = Path(path)
         self._path.parent.mkdir(parents=True, exist_ok=True)
+        self._spine_ledger = spine_ledger
+        self._external_ref_resolver = external_ref_resolver
+        self._current_hash_resolver = current_hash_resolver
         self._chains: dict[str, MathematicalSpineChainRecord] = {}
+        if self._spine_ledger is not None:
+            self._chains = {
+                record.chain_ref: record for record in self._spine_ledger.chains()
+            }
         self._load_existing()
 
     @property
@@ -666,7 +667,25 @@ class PersistentMathematicalSpineChainRegistry:
                     continue
                 try:
                     row = json.loads(line)
-                    self._apply_row(row, persist=False)
+                    if self._spine_ledger is None:
+                        self._apply_row(row, persist=False)
+                        continue
+                    if row.get("schema_version") != 2:
+                        raise ValueError(
+                            "legacy Mathematical Spine chain schema requires explicit quarantine/migration"
+                        )
+                    raw = row.get("chain")
+                    if not isinstance(raw, dict):
+                        raise ValueError("Mathematical Spine chain event missing chain")
+                    projected = mathematical_spine_chain_from_dict(raw)
+                    canonical = self._spine_ledger.chain(
+                        projected.chain_ref,
+                        owner=projected.recorded_by,
+                    )
+                    if canonical != projected:
+                        raise ValueError(
+                            "Mathematical Spine JSONL projection differs from canonical SQLite"
+                        )
                 except Exception as exc:  # noqa: BLE001 - bad spine history must block startup.
                     raise ValueError(f"invalid persisted Mathematical Spine chain at {self._path}:{line_no}") from exc
 
@@ -674,9 +693,30 @@ class PersistentMathematicalSpineChainRegistry:
         with self._path.open("a", encoding="utf-8") as fh:
             fh.write(json.dumps(row, ensure_ascii=False, sort_keys=True, separators=(",", ":")) + "\n")
             fh.flush()
+            os.fsync(fh.fileno())
+
+    def set_resolvers(
+        self,
+        *,
+        external_ref_resolver: Callable[[str, str, str], bool] | None,
+        current_hash_resolver: Callable[[str, str, str], str | None] | None,
+    ) -> None:
+        self._external_ref_resolver = external_ref_resolver
+        self._current_hash_resolver = current_hash_resolver
+
+    def _strict_decision(self, record: MathematicalSpineChainRecord):
+        if self._spine_ledger is None:
+            raise ValueError("canonical Mathematical Spine ledger is unavailable")
+        return self._spine_ledger.validate_chain_backing(
+            record,
+            owner=record.recorded_by,
+            external_ref_resolver=self._external_ref_resolver,
+            current_hash_resolver=self._current_hash_resolver,
+        )
 
     def _apply_row(self, row: dict[str, Any], *, persist: bool) -> MathematicalSpineChainRecord:
-        if row.get("schema_version") != 1:
+        schema_version = row.get("schema_version")
+        if schema_version not in {1, 2}:
             raise ValueError("unsupported Mathematical Spine chain schema_version")
         if row.get("event_type") != "mathematical_spine_chain_recorded":
             raise ValueError(f"unknown Mathematical Spine chain event_type={row.get('event_type')!r}")
@@ -687,13 +727,51 @@ class PersistentMathematicalSpineChainRegistry:
         decision = validate_mathematical_spine_chain(record)
         if not decision.accepted:
             raise ValueError(_chain_decision_message(decision))
-        self._chains[record.chain_ref] = record
+        if schema_version == 2 and record.chain_ref != canonical_mathematical_spine_chain_ref(record):
+            residual_goal_closure = (
+                not persist
+                and self._spine_ledger is None
+                and _carries_goal_closure_seed(
+                    json.dumps(row, ensure_ascii=False, sort_keys=True, default=str)
+                )
+            )
+            if not residual_goal_closure:
+                raise ValueError("Mathematical Spine chain identity mismatch")
+        existing = self._chains.get(record.chain_ref)
+        if existing is not None:
+            if existing != record:
+                raise ValueError("Mathematical Spine chain identity collision")
+            return existing
         if persist:
-            self._append_event(_chain_event_row(record))
+            self._append_event(
+                _chain_event_row(record, schema_version=int(schema_version))
+            )
+        self._chains[record.chain_ref] = record
         return record
 
     def record_chain(self, record: MathematicalSpineChainRecord) -> MathematicalSpineChainRecord:
-        row = _chain_event_row(record)
+        if self._spine_ledger is not None:
+            record = replace(
+                record,
+                chain_ref="",
+                consistency_verdict=ConsistencyStatus.ACCEPTED.value,
+            )
+            record = replace(
+                record,
+                chain_ref=canonical_mathematical_spine_chain_ref(record),
+            )
+            strict = self._strict_decision(record)
+            if not strict.accepted:
+                raise ValueError(
+                    "; ".join(
+                        f"{violation.code}:{violation.field}:{violation.ref}"
+                        for violation in strict.violations
+                    )
+                )
+        row = _chain_event_row(
+            record,
+            schema_version=2 if self._spine_ledger is not None else 1,
+        )
         # SA-4 write门：拒任何 id/内容携 goal_closure 占位 token 的链（自证闭合种子≠真绑定）。
         # 扫描的是即将持久化的整行（含每个 ref 字段），故 token 藏在任一字段都抓得到。fail-closed。
         if _carries_goal_closure_seed(json.dumps(row, ensure_ascii=False, sort_keys=True, default=str)):
@@ -701,13 +779,61 @@ class PersistentMathematicalSpineChainRegistry:
                 "mathematical spine chain rejected: goal_closure placeholder seed is not a real "
                 "Mathematical Spine binding (SA-4 write門 fail-closes self-certifying closure seeds)"
             )
+        if self._spine_ledger is not None:
+            persisted = self._spine_ledger.record_chain(
+                record,
+                owner=record.recorded_by,
+            )
+            self._chains[persisted.chain_ref] = persisted
+            return persisted
         return self._apply_row(row, persist=True)
 
     def chain(self, chain_ref: str) -> MathematicalSpineChainRecord:
+        if self._spine_ledger is not None:
+            return self._spine_ledger.chain(chain_ref)
         return self._chains[chain_ref]
 
-    def chains(self) -> list[MathematicalSpineChainRecord]:
-        return list(self._chains.values())
+    def verified_chain(
+        self,
+        chain_ref: str,
+        *,
+        owner: str | None = None,
+    ) -> MathematicalSpineChainRecord:
+        record = self.chain(chain_ref)
+        if record.chain_ref != chain_ref:
+            raise KeyError(chain_ref)
+        if owner is not None and record.recorded_by != owner:
+            raise KeyError(chain_ref)
+        strict = self._strict_decision(record)
+        if not strict.accepted:
+            raise ValueError(
+                "; ".join(
+                    f"{violation.code}:{violation.field}:{violation.ref}"
+                    for violation in strict.violations
+                )
+            )
+        return record
+
+    def verified_chain_record_refs(
+        self,
+        chain_ref: str,
+        *,
+        owner: str,
+    ):
+        """Return the canonical typed record closure for a currently verified chain."""
+
+        record = self.verified_chain(chain_ref, owner=owner)
+        if self._spine_ledger is None:
+            raise ValueError("canonical Mathematical Spine ledger is unavailable")
+        return self._spine_ledger.chain_record_refs(record, owner=owner)
+
+    def chains(self, *, owner: str | None = None) -> list[MathematicalSpineChainRecord]:
+        if self._spine_ledger is not None:
+            return self._spine_ledger.chains(owner=owner)
+        records = list(self._chains.values())
+        if owner is not None:
+            records = [record for record in records if record.recorded_by == owner]
+        return records
 
 
 @dataclass(frozen=True)
@@ -752,6 +878,22 @@ class QRORecord:
     mock_profile: str = "none"
 
     def __post_init__(self) -> None:
+        # QRO contracts cross the append-only JSONL boundary.  Canonicalize
+        # them at construction time so the in-memory command and its replayed
+        # durable form have the same nested sequence/enumeration shape.  A
+        # tuple otherwise becomes a list during JSON decoding and makes an
+        # unchanged command fail the exact-current-head equality check after
+        # ``PersistentResearchGraphStore.refresh()``.
+        object.__setattr__(
+            self,
+            "input_contract",
+            _stable_for_hash(dict(self.input_contract)),
+        )
+        object.__setattr__(
+            self,
+            "output_contract",
+            _stable_for_hash(dict(self.output_contract)),
+        )
         object.__setattr__(self, "lineage", tuple(self.lineage))
         object.__setattr__(self, "assumptions", tuple(self.assumptions))
         object.__setattr__(self, "known_limits", tuple(self.known_limits))
@@ -1300,6 +1442,63 @@ def _command_from_json(value: dict[str, Any]) -> ResearchGraphCommand:
     )
 
 
+def _atomic_rewrite_research_graph_rows(
+    path: Path,
+    rows: Sequence[dict[str, Any]],
+) -> None:
+    """Reject physical history rewrites for the append-only Graph log."""
+
+    del path, rows
+    raise ResearchGraphError(
+        "Research Graph command log is append-only; rewrite is unsupported"
+    )
+
+
+def _research_graph_command_projection_key(
+    command: ResearchGraphCommand,
+) -> tuple[str, str]:
+    """Return the logical projection slot controlled by one command."""
+
+    spec = _COMMAND_RECORD_FIELD.get(command.command_type)
+    if spec is None:
+        raise ResearchGraphError(
+            f"Research Graph rollback command_type unsupported: {command.command_type!r}"
+        )
+    field_name, record_type = spec
+    record = command.payload.get(field_name)
+    if not isinstance(record, record_type):
+        raise ResearchGraphError(
+            f"Research Graph rollback command {command.command_type!r} requires "
+            f"payload[{field_name!r}] as {record_type.__name__}"
+        )
+    key_field = {
+        "upsert_qro": "qro_id",
+        "tombstone_qro": "qro_id",
+        "apply_graph_patch": "application_ref",
+        "set_canvas_parameter": "parameter_ref",
+        "record_canvas_mutation": "command_ref",
+        "record_canvas_layout": "layout_ref",
+        "record_graph_edge": "edge_ref",
+        "delete_graph_edge": "edge_ref",
+        "record_methodology_choice": "choice_id",
+        "record_responsibility_disclosure": "disclosure_id",
+        "record_theory_binding": "binding_id",
+        "record_consistency_check": "check_id",
+    }[command.command_type]
+    family = {
+        "upsert_qro": "qro",
+        "tombstone_qro": "qro",
+        "record_graph_edge": "graph_edge",
+        "delete_graph_edge": "graph_edge",
+    }.get(command.command_type, command.command_type)
+    projection_ref = str(getattr(record, key_field, "") or "").strip()
+    if not projection_ref:
+        raise ResearchGraphError(
+            f"Research Graph rollback command is missing projection identity {key_field!r}"
+        )
+    return family, projection_ref
+
+
 class ResearchGraphStore:
     """In-memory Research Graph command applier.
 
@@ -1308,6 +1507,7 @@ class ResearchGraphStore:
     """
 
     def __init__(self) -> None:
+        self._write_lock = threading.RLock()
         self._commands: list[ResearchGraphCommand] = []
         self._qros: dict[str, QRORecord] = {}
         self._projection_index: dict[str, ResearchGraphProjectionRecord] = {}
@@ -1323,12 +1523,170 @@ class ResearchGraphStore:
         self._bindings: dict[str, TheoryImplementationBinding] = {}
         self._checks: dict[str, ConsistencyCheck] = {}
 
+    def _require_canvas_command_ownership(
+        self,
+        command: ResearchGraphCommand,
+        record: Any,
+        *qro_ids: str,
+    ) -> tuple[QRORecord, ...]:
+        """Enforce Canvas ownership at the command-store trust boundary."""
+
+        actor = str(command.actor or "").strip()
+        if not actor:
+            raise ResearchGraphError("Canvas command actor is required")
+        if hasattr(record, "actor") and str(getattr(record, "actor") or "").strip() != actor:
+            raise ResearchGraphError("Canvas command actor does not match the mutation record actor")
+        qros: list[QRORecord] = []
+        for qro_id in qro_ids:
+            qro = self._qros.get(qro_id)
+            if qro is None or qro_id in self._qro_tombstones:
+                raise ResearchGraphError(f"Canvas mutation target QRO not found: {qro_id}")
+            if str(qro.owner or "") != actor:
+                raise ResearchGraphError("Canvas mutation target belongs to a different owner")
+            qros.append(qro)
+        return tuple(qros)
+
     def apply(self, command: ResearchGraphCommand) -> str:
+        with self._write_lock:
+            return self._apply_unlocked(command)
+
+    def _prepare_exact_command_rollback_unlocked(
+        self,
+        command: ResearchGraphCommand,
+    ) -> ResearchGraphStore | None:
+        matches = [
+            (index, existing)
+            for index, existing in enumerate(self._commands)
+            if existing.command_id == command.command_id
+        ]
+        if not matches:
+            return None
+        if len(matches) != 1:
+            raise ResearchGraphError(
+                "Research Graph rollback command identity is not unique"
+            )
+        target_index, persisted = matches[0]
+        if persisted != command:
+            raise ResearchGraphError(
+                "Research Graph rollback command identity mismatch"
+            )
+        target_key = _research_graph_command_projection_key(persisted)
+        later_same_projection = tuple(
+            existing.command_id
+            for existing in self._commands[target_index + 1 :]
+            if _research_graph_command_projection_key(existing) == target_key
+        )
+        if later_same_projection:
+            raise ResearchGraphError(
+                "Research Graph rollback command is not the current projection head:"
+                + ",".join(later_same_projection)
+            )
+
+        replayed = ResearchGraphStore()
+        try:
+            for index, existing in enumerate(self._commands):
+                if index != target_index:
+                    replayed.apply(existing)
+        except Exception as exc:
+            raise ResearchGraphError(
+                "Research Graph rollback refused because a later command depends "
+                f"on {command.command_id!r}"
+            ) from exc
+        return replayed
+
+    def _publish_replayed_state_unlocked(self, replayed: ResearchGraphStore) -> None:
+        write_lock = self._write_lock
+        self.__dict__.update(replayed.__dict__)
+        self._write_lock = write_lock
+
+    def rollback_exact_command(self, command: ResearchGraphCommand) -> bool:
+        """Reject command deletion; Research Graph history is append-only."""
+
+        del command
+        raise ResearchGraphError(
+            "Research Graph command log is append-only; rollback is unsupported"
+        )
+
+    def _assert_current_qro_command_unlocked(
+        self,
+        *,
+        expected_command_ref: str,
+        command: ResearchGraphCommand,
+    ) -> None:
+        expected = str(expected_command_ref or "").strip()
+        if not expected or expected != str(expected_command_ref or ""):
+            raise ResearchGraphError(
+                "expected current Research Graph command ref is required"
+            )
+        qro = command.payload.get("qro")
+        if command.command_type != "upsert_qro" or not isinstance(qro, QRORecord):
+            raise ResearchGraphError(
+                "compare-and-append requires an upsert_qro command"
+            )
+        projection = self._projection_index.get(qro.qro_id)
+        actual = str(getattr(projection, "command_id", "") or "")
+        if actual != expected:
+            raise ResearchGraphError(
+                "Research Graph current-head conflict:"
+                f"expected={expected}:actual={actual or '<missing>'}"
+            )
+
+    def apply_if_current(
+        self,
+        expected_command_ref: str,
+        command: ResearchGraphCommand,
+    ) -> str:
+        """Atomically append one QRO command only if its current head is expected."""
+
+        with self._write_lock:
+            self._assert_current_qro_command_unlocked(
+                expected_command_ref=expected_command_ref,
+                command=command,
+            )
+            return self.apply(command)
+
+    def _apply_unlocked(self, command: ResearchGraphCommand) -> str:
+        duplicate_commands = tuple(
+            item
+            for item in self._commands
+            if item.command_id == command.command_id
+        )
+        if duplicate_commands:
+            if len(duplicate_commands) != 1 or duplicate_commands[0] != command:
+                raise ResearchGraphError(
+                    "Research Graph command identity collision"
+                )
+            return command.command_id
         ctype = command.command_type
         if ctype == "upsert_qro":
             qro = command.payload.get("qro")
             if not isinstance(qro, QRORecord):
                 raise ResearchGraphError("upsert_qro requires payload['qro'] as QRORecord")
+            current_projection = self._projection_index.get(qro.qro_id)
+            current_command = next(
+                (
+                    item
+                    for item in reversed(self._commands)
+                    if current_projection is not None
+                    and item.command_id == current_projection.command_id
+                ),
+                None,
+            )
+            if current_command is not None and any(
+                str(ref).startswith(prefix)
+                for ref in tuple(current_command.tool_record_refs or ())
+                for prefix in _PLATFORM_IMMUTABLE_BINDING_ENTRYPOINT_PREFIXES
+            ):
+                raise ResearchGraphError(
+                    "platform-bound QRO is immutable; create a governed fork/new QRO"
+                )
+            if _enum_text(command.source) == EntrySource.CANVAS.value:
+                actor = str(command.actor or "").strip()
+                if not actor or str(qro.owner or "") != actor:
+                    raise ResearchGraphError("Canvas QRO upsert belongs to a different owner")
+                existing = self._qros.get(qro.qro_id)
+                if existing is not None and str(existing.owner or "") != actor:
+                    raise ResearchGraphError("Canvas QRO upsert cannot transfer ownership")
             self._qros[qro.qro_id] = qro
             self._projection_index[qro.qro_id] = ResearchGraphProjectionRecord.from_qro_command(
                 command=command,
@@ -1338,9 +1696,12 @@ class ResearchGraphStore:
             record = command.payload.get("qro_tombstone")
             if not isinstance(record, QROTombstoneRecord):
                 raise ResearchGraphError("tombstone_qro requires QROTombstoneRecord")
-            qro = self._qros.get(record.qro_id)
-            if qro is None:
-                raise ResearchGraphError(f"QRO not found: {record.qro_id}")
+            if _enum_text(command.source) == EntrySource.CANVAS.value:
+                (qro,) = self._require_canvas_command_ownership(command, record, record.qro_id)
+            else:
+                qro = self._qros.get(record.qro_id)
+                if qro is None:
+                    raise ResearchGraphError(f"QRO not found: {record.qro_id}")
             if _enum_text(qro.runtime_status) == RuntimeStatus.LIVE.value:
                 raise ResearchGraphError("cannot tombstone live QRO; fork a draft/offline asset first")
             self._qro_tombstones[record.qro_id] = record
@@ -1348,9 +1709,12 @@ class ResearchGraphStore:
             record = command.payload.get("patch_application")
             if not isinstance(record, GraphPatchApplicationRecord):
                 raise ResearchGraphError("apply_graph_patch requires GraphPatchApplicationRecord")
-            qro = self._qros.get(record.target_qro_id)
-            if qro is None or record.target_qro_id in self._qro_tombstones:
-                raise ResearchGraphError(f"graph patch target QRO not found: {record.target_qro_id}")
+            if _enum_text(command.source) == EntrySource.CANVAS.value:
+                (qro,) = self._require_canvas_command_ownership(command, record, record.target_qro_id)
+            else:
+                qro = self._qros.get(record.target_qro_id)
+                if qro is None or record.target_qro_id in self._qro_tombstones:
+                    raise ResearchGraphError(f"graph patch target QRO not found: {record.target_qro_id}")
             if _enum_text(qro.runtime_status) == RuntimeStatus.LIVE.value:
                 raise ResearchGraphError("cannot apply graph patch to live QRO; fork a draft/offline asset first")
             self._graph_patch_applications[record.application_ref] = record
@@ -1358,9 +1722,12 @@ class ResearchGraphStore:
             record = command.payload.get("parameter_value")
             if not isinstance(record, CanvasParameterValueRecord):
                 raise ResearchGraphError("set_canvas_parameter requires CanvasParameterValueRecord")
-            qro = self._qros.get(record.target_qro_id)
-            if qro is None or record.target_qro_id in self._qro_tombstones:
-                raise ResearchGraphError(f"canvas parameter target QRO not found: {record.target_qro_id}")
+            if _enum_text(command.source) == EntrySource.CANVAS.value:
+                (qro,) = self._require_canvas_command_ownership(command, record, record.target_qro_id)
+            else:
+                qro = self._qros.get(record.target_qro_id)
+                if qro is None or record.target_qro_id in self._qro_tombstones:
+                    raise ResearchGraphError(f"canvas parameter target QRO not found: {record.target_qro_id}")
             if _enum_text(qro.qro_type) != record.target_asset_type:
                 raise ResearchGraphError(
                     f"canvas parameter target_asset_type mismatch: expected {_enum_text(qro.qro_type)}, got {record.target_asset_type}"
@@ -1372,12 +1739,16 @@ class ResearchGraphStore:
             record = command.payload.get("mutation")
             if not isinstance(record, CanvasMutationRecord):
                 raise ResearchGraphError("record_canvas_mutation requires CanvasMutationRecord")
+            if _enum_text(command.source) == EntrySource.CANVAS.value:
+                self._require_canvas_command_ownership(command, record, record.target_ref)
             self._canvas_mutations[record.command_ref] = record
         elif ctype == "record_canvas_layout":
             record = command.payload.get("layout")
             if not isinstance(record, CanvasLayoutRecord):
                 raise ResearchGraphError("record_canvas_layout requires CanvasLayoutRecord")
             validate_canvas_layout_record(record)
+            if _enum_text(command.source) == EntrySource.CANVAS.value:
+                self._require_canvas_command_ownership(command, record, record.qro_id)
             self._canvas_layouts[record.layout_ref] = record
         elif ctype == "record_graph_edge":
             record = command.payload.get("edge")
@@ -1387,6 +1758,13 @@ class ResearchGraphStore:
                 raise ResearchGraphError(f"graph edge source QRO not found: {record.from_qro_id}")
             if record.to_qro_id not in self._qros:
                 raise ResearchGraphError(f"graph edge target QRO not found: {record.to_qro_id}")
+            if _enum_text(command.source) == EntrySource.CANVAS.value:
+                self._require_canvas_command_ownership(
+                    command,
+                    record,
+                    record.from_qro_id,
+                    record.to_qro_id,
+                )
             self._graph_edges[record.edge_ref] = record
         elif ctype == "delete_graph_edge":
             record = command.payload.get("edge_deletion")
@@ -1394,6 +1772,14 @@ class ResearchGraphStore:
                 raise ResearchGraphError("delete_graph_edge requires ResearchGraphEdgeDeletionRecord")
             if record.edge_ref not in self._graph_edges:
                 raise ResearchGraphError(f"graph edge not found: {record.edge_ref}")
+            if _enum_text(command.source) == EntrySource.CANVAS.value:
+                edge = self._graph_edges[record.edge_ref]
+                self._require_canvas_command_ownership(
+                    command,
+                    record,
+                    edge.from_qro_id,
+                    edge.to_qro_id,
+                )
             self._graph_edge_deletions[record.edge_ref] = record
         elif ctype == "record_methodology_choice":
             record = command.payload.get("choice")
@@ -1542,8 +1928,13 @@ class PersistentResearchGraphStore(ResearchGraphStore):
         return self._path
 
     def _load_existing(self) -> None:
+        fresh = ResearchGraphStore()
         if not self._path.exists():
+            write_lock = self._write_lock
+            self.__dict__.update(fresh.__dict__)
+            self._write_lock = write_lock
             return
+        seen_command_refs: set[str] = set()
         with self._path.open("r", encoding="utf-8") as fh:
             for line_no, line in enumerate(fh, start=1):
                 if not line.strip():
@@ -1551,13 +1942,70 @@ class PersistentResearchGraphStore(ResearchGraphStore):
                 try:
                     row = json.loads(line)
                     command = _command_from_json(row)
-                    super().apply(command)
+                    if command.command_id in seen_command_refs:
+                        raise ResearchGraphError(
+                            "persisted Research Graph command id is duplicated"
+                        )
+                    seen_command_refs.add(command.command_id)
+                    fresh.apply(command)
                 except Exception as exc:  # noqa: BLE001 - startup must report the exact bad row.
                     raise ResearchGraphError(
                         f"invalid persisted Research Graph command at {self._path}:{line_no}"
                     ) from exc
+        write_lock = self._write_lock
+        self.__dict__.update(fresh.__dict__)
+        self._write_lock = write_lock
 
-    def apply(self, command: ResearchGraphCommand) -> str:
+    def refresh(self) -> None:
+        """Replace the in-memory projection with a fresh replay of the log."""
+
+        with _persistent_research_graph_write_lock(self._path):
+            with self._write_lock:
+                self._load_existing()
+
+    def _publish_projection_unlocked(self, fresh: ResearchGraphStore) -> None:
+        write_lock = self._write_lock
+        path = self._path
+        self.__dict__.update(fresh.__dict__)
+        self._write_lock = write_lock
+        self._path = path
+
+    def _append_command_row_unlocked(self, row: dict[str, Any]) -> None:
+        payload = (
+            json.dumps(
+                row,
+                ensure_ascii=False,
+                sort_keys=True,
+                separators=(",", ":"),
+            )
+            + "\n"
+        ).encode("utf-8")
+        with self._path.open("a+b") as fh:
+            fh.seek(0, os.SEEK_END)
+            original_size = fh.tell()
+            try:
+                written = fh.write(payload)
+                if written != len(payload):
+                    raise OSError(
+                        "Research Graph append wrote a partial event"
+                    )
+                fh.flush()
+                os.fsync(fh.fileno())
+            except Exception as exc:
+                try:
+                    fh.seek(original_size, os.SEEK_SET)
+                    fh.truncate()
+                    fh.flush()
+                    os.fsync(fh.fileno())
+                except Exception as rollback_exc:
+                    raise ResearchGraphDurabilityError(
+                        "Research Graph append failed and tail rollback failed:"
+                        f"append={type(exc).__name__}:{exc}:"
+                        f"rollback={type(rollback_exc).__name__}:{rollback_exc}"
+                    ) from rollback_exc
+                raise
+
+    def _persist_command_unlocked(self, command: ResearchGraphCommand) -> str:
         row = _command_to_json(command)
         # SA-4 write门：拒任何 id/内容携 goal_closure 占位 token 的 research-graph 命令。
         # 在 super().apply（内存）与落盘之前拒 → 既不污染内存也不留半行（原子 fail-closed）。
@@ -1567,11 +2015,62 @@ class PersistentResearchGraphStore(ResearchGraphStore):
                 "research graph command rejected: goal_closure placeholder seed is not a real "
                 "research-graph command (SA-4 write門 fail-closes self-certifying closure seeds)"
             )
-        command_id = super().apply(command)
-        with self._path.open("a", encoding="utf-8") as fh:
-            fh.write(json.dumps(row, ensure_ascii=False, sort_keys=True, separators=(",", ":")) + "\n")
-            fh.flush()
+        duplicate_commands = tuple(
+            item
+            for item in self._commands
+            if item.command_id == command.command_id
+        )
+        if duplicate_commands:
+            if len(duplicate_commands) != 1 or duplicate_commands[0] != command:
+                raise ResearchGraphError(
+                    "Research Graph command identity collision"
+                )
+            return command.command_id
+        projected = ResearchGraphStore()
+        for existing in self._commands:
+            projected.apply(existing)
+        command_id = projected.apply(command)
+        try:
+            self._append_command_row_unlocked(row)
+            self._publish_projection_unlocked(projected)
+        except Exception as exc:
+            try:
+                self._load_existing()
+            except Exception as observation_exc:
+                raise ResearchGraphDurabilityError(
+                    "Research Graph append/publish failed and durable state "
+                    "could not be observed:"
+                    f"append={type(exc).__name__}:{exc}:"
+                    f"observation={type(observation_exc).__name__}:"
+                    f"{observation_exc}"
+                ) from observation_exc
+            raise
         return command_id
+
+    def apply(self, command: ResearchGraphCommand) -> str:
+        with _persistent_research_graph_write_lock(self._path):
+            with self._write_lock:
+                self._load_existing()
+                return self._persist_command_unlocked(command)
+
+    def apply_if_current(
+        self,
+        expected_command_ref: str,
+        command: ResearchGraphCommand,
+    ) -> str:
+        with _persistent_research_graph_write_lock(self._path):
+            with self._write_lock:
+                self._load_existing()
+                self._assert_current_qro_command_unlocked(
+                    expected_command_ref=expected_command_ref,
+                    command=command,
+                )
+                return self._persist_command_unlocked(command)
+
+    def rollback_exact_command(self, command: ResearchGraphCommand) -> bool:
+        """Reject durable deletion; the persisted command log is append-only."""
+
+        return super().rollback_exact_command(command)
 
 
 @dataclass(frozen=True)

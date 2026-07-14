@@ -1,7 +1,12 @@
 from __future__ import annotations
 
+import json
+from concurrent.futures import ThreadPoolExecutor
+from contextlib import contextmanager
+from dataclasses import replace
 from types import SimpleNamespace
 
+import pytest
 from fastapi.testclient import TestClient
 
 from app import main as app_main
@@ -29,8 +34,12 @@ from app.research_os import (
     PersistentExecutionVenueEventRegistry,
     PersistentExecutionVenueSafetyAttestationRegistry,
     PersistentCompilerIRStore,
+    PersistentEntrypointEvidenceRegistry,
     PersistentGoalEntrypointCoverageRegistry,
+    PersistentGoalValidationReceiptRegistry,
+    PersistentResearchGraphStore,
     PersistentRuntimePromotionRegistry,
+    PersistentUserRiskChoiceRegistry,
     PersistentSignalValidationRegistry,
     ResearchGraphStore,
     RuntimePromotionRecord,
@@ -39,30 +48,75 @@ from app.research_os import (
     SignalPerformanceValidationRecord,
     SignalValidationVerdict,
     UserRiskChoiceRecord,
+    execution_client_order_ref_hash,
+    reconcile_execution_venue_events,
     validate_execution_order_materialization,
     validate_execution_order_intent,
     validate_execution_order_submission,
+    validate_execution_reconciliation,
     validate_execution_submit_request,
     validate_execution_venue_capability,
     validate_execution_venue_connectivity_check,
     validate_execution_venue_safety_attestation,
+    validate_execution_venue_event,
     validate_drift_triggered_action,
     validate_execution_boundary,
     validate_execution_math_claim,
     validate_halt_recovery,
     validate_runtime_promotion,
+    validate_runtime_promotion_record,
     validate_user_risk_choice,
 )
+from app.research_os.goal_proof_ledger import GoalProofLedger
+from app.research_os.ref_resolution import build_real_ref_resolver
 
 
 def _codes(decision) -> set[str]:
     return {violation.code for violation in decision.violations}
 
 
-def _patch_compiler_coverage(tmp_path, monkeypatch):
-    compiler_store = PersistentCompilerIRStore(tmp_path / "compiler_ir.jsonl")
-    coverage_store = PersistentGoalEntrypointCoverageRegistry(tmp_path / "goal_entrypoint_coverage.jsonl")
+def _patch_compiler_coverage(tmp_path, monkeypatch, *, graph=None):
+    graph = graph if graph is not None else app_main.RESEARCH_GRAPH_STORE
+    proof_ledger = GoalProofLedger(tmp_path / "goal_proof_ledger")
+    compiler_store = PersistentCompilerIRStore(
+        tmp_path / "compiler_ir.jsonl",
+        proof_ledger=proof_ledger,
+        legacy_read_only=True,
+    )
+    validations = PersistentGoalValidationReceiptRegistry(
+        tmp_path / "goal_validation_receipts.jsonl",
+        proof_ledger=proof_ledger,
+        legacy_read_only=True,
+    )
+    evidence = PersistentEntrypointEvidenceRegistry(
+        tmp_path / "entrypoint_evidence.jsonl",
+        research_graph_store=graph,
+        compiler_store=compiler_store,
+        validation_receipt_registry=validations,
+        proof_ledger=proof_ledger,
+        legacy_read_only=True,
+    )
+    coverage_store = PersistentGoalEntrypointCoverageRegistry(
+        tmp_path / "goal_entrypoint_coverage.jsonl",
+        proof_ledger=proof_ledger,
+        legacy_read_only=True,
+    )
+    coverage_store.set_ref_resolver(
+        build_real_ref_resolver(
+            research_graph_store=graph,
+            lifecycle_registry=None,
+            governance_registry=None,
+            rag_index=None,
+            spine_chain_registry=None,
+            compiler_store=compiler_store,
+            goal_validation_receipt_registry=validations,
+            platform_source_evidence_registry=evidence,
+        )
+    )
+    monkeypatch.setattr(app_main, "RESEARCH_GRAPH_STORE", graph)
     monkeypatch.setattr(app_main, "COMPILER_IR_STORE", compiler_store)
+    monkeypatch.setattr(app_main, "GOAL_VALIDATION_RECEIPT_REGISTRY", validations)
+    monkeypatch.setattr(app_main, "ENTRYPOINT_EVIDENCE_REGISTRY", evidence)
     monkeypatch.setattr(app_main, "GOAL_ENTRYPOINT_COVERAGE_REGISTRY", coverage_store)
     return compiler_store, coverage_store
 
@@ -102,10 +156,14 @@ class _AcceptedMarketDataUseRegistry:
     def __init__(self, accepted_ref: str = "market_data_use:accepted") -> None:
         self.accepted_ref = accepted_ref
 
-    def use_validation(self, validation_ref: str):
+    def use_validation(self, validation_ref: str, *, owner_user_id: str):
         if validation_ref != self.accepted_ref:
             raise KeyError(f"unknown market data use validation: {validation_ref}")
-        return SimpleNamespace(validation_ref=validation_ref, accepted=True)
+        return SimpleNamespace(
+            validation_ref=validation_ref,
+            accepted=True,
+            recorded_by=owner_user_id,
+        )
 
 
 def _live_request(**overrides) -> RuntimePromotionRequest:
@@ -156,7 +214,7 @@ def _runtime_promotion(**overrides) -> RuntimePromotionRecord:
 
 def _risk_choice(**overrides) -> UserRiskChoiceRecord:
     data = {
-        "choice_ref": "risk_choice:001",
+        "choice_ref": "",
         "selected_risk_path": "small_live",
         "cost_disclosure_ref": "cost:001",
         "leverage_disclosure_ref": "leverage:001",
@@ -164,11 +222,21 @@ def _risk_choice(**overrides) -> UserRiskChoiceRecord:
         "borrow_disclosure_ref": "borrow:001",
         "funding_disclosure_ref": "funding:001",
         "slippage_disclosure_ref": "slippage:001",
+        "impact_disclosure_ref": "impact:001",
         "liquidation_disclosure_ref": "liquidation:001",
         "regulation_disclosure_ref": "regulation:001",
         "failure_mode_refs": ("failure:venue_down", "failure:gap_risk"),
         "recommendation_ref": "recommendation:paper_first",
         "responsibility_boundary_ref": "responsibility:live:001",
+        "owner_user_id": "risk-owner",
+        "master_id": "risk-master",
+        "follower_id": "risk-owner::risk-master",
+        "account_binding_ref": "exchange_account_uid_risk",
+        "subject_ref": "copy_trade_subject:risk",
+        "runtime_request_ref": "copy_trade_runtime_request:risk",
+        "asset_class": "crypto_perp",
+        "risk_disclosure_profile_ref": "copy_trade_risk_profile:risk",
+        "actor_source": "user_manual",
     }
     data.update(overrides)
     return UserRiskChoiceRecord(**data)
@@ -409,7 +477,7 @@ def _submit_request(**overrides) -> ExecutionSubmitRequestRecord:
         "order_payload_hash": "sha256:order_payload_hash",
         "submit_request_schema_ref": "schema:submit_request:v1",
         "submit_request_hash": "sha256:submit_request_hash",
-        "client_order_ref_hash": "sha256:client_order_ref",
+        "client_order_ref_hash": execution_client_order_ref_hash("client_order:idempotent"),
         "kill_switch_ref": "kill_switch:001",
         "secret_ref": "secretref:binance:testnet",
         "responsibility_boundary_ref": "responsibility:testnet_order",
@@ -439,6 +507,7 @@ def _submission(**overrides) -> ExecutionOrderSubmissionRecord:
         "venue_capability_ref": None,
         "submit_request_ref": None,
         "submission_status": "recorded",
+        "client_order_ref_hash": execution_client_order_ref_hash("client_order:idempotent"),
         "evidence_refs": ("evidence:submission_ready",),
         "recorded_by": "tester",
     }
@@ -458,7 +527,6 @@ def _signal_validation(verdict=SignalValidationVerdict.ACCEPTED) -> SignalPerfor
         evidence_refs=("evidence:signal_validation",),
         verdict=verdict,
         recorded_by="tester",
-        validation_id="signal_validation:accepted",
     )
 
 
@@ -588,10 +656,68 @@ def test_execution_order_intent_registry_persists_and_replays(tmp_path):
     assert reloaded.intents()[0].order_intent_ref == record.order_intent_ref
 
 
+def test_execution_order_intent_identity_is_owner_scoped(tmp_path):
+    registry = PersistentExecutionOrderIntentRegistry(tmp_path / "execution_order_intents.jsonl")
+    alice = _order_intent(recorded_by="alice", order_intent_ref="")
+    bob = _order_intent(recorded_by="bob", order_intent_ref="")
+
+    assert alice.order_intent_ref != bob.order_intent_ref
+    recorded_alice = registry.record_intent(
+        alice,
+        known_signal_validation_refs={"signal_validation:accepted"},
+    )
+    recorded_bob = registry.record_intent(
+        bob,
+        known_signal_validation_refs={"signal_validation:accepted"},
+    )
+
+    assert {record.recorded_by for record in registry.intents()} == {"alice", "bob"}
+    assert recorded_alice.order_intent_ref != recorded_bob.order_intent_ref
+
+
+def test_execution_order_intent_api_ignores_foreign_caller_supplied_identity(
+    tmp_path,
+    monkeypatch,
+):
+    signal_validations = PersistentSignalValidationRegistry(tmp_path / "signal_validations.jsonl")
+    validation = signal_validations.record_validation(
+        replace(_signal_validation(), recorded_by="alice", validation_id=""),
+        owner_user_id="alice",
+        known_signal_refs={"sig::validated"},
+    )
+    order_intents = PersistentExecutionOrderIntentRegistry(tmp_path / "execution_order_intents.jsonl")
+    monkeypatch.setattr(app_main, "SIGNAL_VALIDATIONS", signal_validations)
+    monkeypatch.setattr(app_main, "EXECUTION_ORDER_INTENTS", order_intents)
+    monkeypatch.setattr(app_main, "MARKET_DATA_REGISTRY", _AcceptedMarketDataUseRegistry())
+    monkeypatch.setattr(app_main, "RESEARCH_GRAPH_STORE", ResearchGraphStore())
+    _patch_compiler_coverage(tmp_path, monkeypatch)
+    current_owner = {"value": "alice"}
+    app_main.app.dependency_overrides[require_user_dependency] = lambda: SimpleNamespace(
+        user_id=current_owner["value"],
+        username=current_owner["value"],
+    )
+    try:
+        client = TestClient(app_main.app)
+        payload = _order_intent(signal_validation_ref=validation.validation_id).to_dict()
+        alice = client.post("/api/research-os/execution/order_intents", json=payload)
+        assert alice.status_code == 200, alice.text
+
+        current_owner["value"] = "bob"
+        forged = {**payload, "order_intent_ref": alice.json()["order_intent_ref"]}
+        bob = client.post("/api/research-os/execution/order_intents", json=forged)
+
+        assert bob.status_code == 422, bob.text
+        assert "unknown signal validation" in bob.text
+        assert {record.recorded_by for record in order_intents.intents()} == {"alice"}
+    finally:
+        app_main.app.dependency_overrides.pop(require_user_dependency, None)
+
+
 def test_execution_order_intent_api_records_without_placing_order(tmp_path, monkeypatch):
     signal_validations = PersistentSignalValidationRegistry(tmp_path / "signal_validations.jsonl")
     validation = signal_validations.record_validation(
         _signal_validation(),
+        owner_user_id="tester",
         known_signal_refs={"sig::validated"},
     )
     order_intents = PersistentExecutionOrderIntentRegistry(tmp_path / "execution_order_intents.jsonl")
@@ -621,6 +747,7 @@ def test_execution_order_intent_api_records_without_placing_order(tmp_path, monk
         assert qro.output_contract["place_order_called"] is False
         assert qro.input_contract["market_data_use_validation_ref"] == "market_data_use:accepted"
         assert qro.output_contract["market_data_use_validation_ref"] == "market_data_use:accepted"
+        assert qro.output_contract["execution_boundary_ref"] == qro.output_contract["execution_policy_ref"]
         assert "quantity" not in qro.output_contract
         assert "raw_order" not in qro.output_contract
 
@@ -640,6 +767,7 @@ def test_execution_order_intent_api_rejects_raw_quantity_without_write(tmp_path,
     signal_validations = PersistentSignalValidationRegistry(tmp_path / "signal_validations.jsonl")
     validation = signal_validations.record_validation(
         _signal_validation(),
+        owner_user_id="tester",
         known_signal_refs={"sig::validated"},
     )
     order_intent_path = tmp_path / "execution_order_intents.jsonl"
@@ -665,6 +793,7 @@ def test_execution_order_intent_api_rejects_unknown_market_data_use_ref_without_
     signal_validations = PersistentSignalValidationRegistry(tmp_path / "signal_validations.jsonl")
     validation = signal_validations.record_validation(
         _signal_validation(),
+        owner_user_id="tester",
         known_signal_refs={"sig::validated"},
     )
     order_intent_path = tmp_path / "execution_order_intents.jsonl"
@@ -922,8 +1051,8 @@ def test_execution_order_materialization_api_rejects_unknown_order_intent_withou
                 runtime_promotion_ref=runtime_promotion.runtime_promotion_ref,
             ).to_dict(),
         )
-        assert response.status_code == 422
-        assert "unknown execution order intent" in response.text
+        assert response.status_code == 404
+        assert response.json()["detail"] == "execution record not found"
         assert not materialization_path.exists()
         assert graph.commands() == []
     finally:
@@ -1511,8 +1640,8 @@ def test_execution_venue_safety_attestation_api_rejects_unknown_connectivity_che
             venue_connectivity_check_ref="venue_connectivity_check_unknown",
         ).to_dict()
         response = client.post("/api/research-os/execution/venue_safety_attestations", json=payload)
-        assert response.status_code == 422
-        assert "unknown execution venue connectivity check" in response.text
+        assert response.status_code == 404
+        assert response.json()["detail"] == "execution record not found"
         assert not attestation_path.exists()
         assert graph.commands() == []
     finally:
@@ -2189,8 +2318,8 @@ def test_execution_order_submission_api_rejects_unknown_order_intent_without_wri
                 runtime_promotion_ref=runtime_promotion.runtime_promotion_ref,
             ).to_dict(),
         )
-        assert response.status_code == 422
-        assert "unknown execution order intent" in response.text
+        assert response.status_code == 404
+        assert response.json()["detail"] == "execution record not found"
         assert not submission_path.exists()
         assert graph.commands() == []
     finally:
@@ -2333,9 +2462,10 @@ def _record_submitted_submission(
         "order_materialization_ref": materialization.materialization_ref,
         "venue_capability_ref": capability.venue_capability_ref,
         "submit_request_ref": submit_request.submit_request_ref,
-        "submission_status": "submitted",
+        "submission_status": "accepted",
         "venue_order_ref": "venue_order:recorded_ack",
         "ack_ref": "ack:recorded_submission",
+        "client_order_ref_hash": submit_request.client_order_ref_hash,
         "evidence_refs": ("evidence:recorded_submission",),
     }
     data.update(overrides)
@@ -2858,7 +2988,8 @@ def test_execution_venue_event_run_calls_injected_ingester(tmp_path, monkeypatch
                 "event_kind": "accepted",
                 "status": "accepted",
                 "venue_order_ref": submission.venue_order_ref,
-                "ack_ref": "ack:fake_venue_event",
+                "client_order_ref": "client_order:idempotent",
+                "ack_ref": submission.ack_ref,
                 "raw_event_hash": "sha256:fake_venue_event",
                 "evidence_refs": ["evidence:fake_venue_event_ingester_called"],
             }
@@ -2973,7 +3104,10 @@ def test_execution_venue_event_run_rejects_incomplete_fill_without_write(tmp_pat
                 "event_kind": "filled",
                 "status": "filled",
                 "venue_order_ref": submission.venue_order_ref,
+                "client_order_ref": "client_order:idempotent",
                 "fill_ref": "fill:missing_refs",
+                "raw_event_hash": "sha256:incomplete_fill",
+                "evidence_refs": ["evidence:incomplete_fill"],
             }
 
     monkeypatch.setattr(app_main, "EXECUTION_VENUE_EVENT_INGESTER", _IncompleteFillIngester())
@@ -2998,10 +3132,19 @@ def test_execution_venue_event_run_rejects_incomplete_fill_without_write(tmp_pat
 def test_execution_venue_event_registry_persists_and_replays(tmp_path):
     path = tmp_path / "execution_venue_events.jsonl"
     registry = PersistentExecutionVenueEventRegistry(path)
+    submission = _submission(
+        submit_enabled=True,
+        submission_status="accepted",
+        venue_order_ref="venue_order:abc",
+        ack_ref="ack:abc",
+        client_order_ref_hash=execution_client_order_ref_hash("client_order:idempotent"),
+    )
     record = registry.record_event(
-        _venue_event(),
+        _venue_event(submission_ref=submission.submission_ref),
         known_order_intent_refs={"order_intent:recorded"},
         known_runtime_promotion_refs={"runtime_promotion:recorded"},
+        known_submission_refs={submission.submission_ref},
+        submission=submission,
     )
 
     reloaded = PersistentExecutionVenueEventRegistry(path)
@@ -3010,21 +3153,215 @@ def test_execution_venue_event_registry_persists_and_replays(tmp_path):
     assert reloaded.events()[0].venue_event_ref == record.venue_event_ref
 
 
-def test_execution_venue_event_api_records_qro_without_calling_venue(tmp_path, monkeypatch):
-    order_intents = PersistentExecutionOrderIntentRegistry(tmp_path / "execution_order_intents.jsonl")
-    order_intent = order_intents.record_intent(
-        _order_intent(),
-        known_signal_validation_refs={"signal_validation:accepted"},
+def test_v2_formal_identities_reject_forged_or_stale_refs():
+    promotion = _runtime_promotion()
+    assert not validate_runtime_promotion_record(
+        replace(promotion, runtime_promotion_ref="runtime_promotion_v2_forged")
+    ).accepted
+    assert not validate_runtime_promotion_record(
+        replace(promotion, idempotency_key="idem:mutated", runtime_promotion_ref=promotion.runtime_promotion_ref)
+    ).accepted
+
+    submission = _submission()
+    mutated_submission = replace(
+        submission,
+        audit_record_ref="audit:mutated",
+        submission_ref=submission.submission_ref,
     )
-    runtime_promotions = PersistentRuntimePromotionRegistry(tmp_path / "runtime_promotions.jsonl")
-    runtime_promotion = runtime_promotions.record_promotion(_runtime_promotion())
+    assert "order_submission_content_identity_mismatch" in _codes(
+        validate_execution_order_submission(mutated_submission)
+    )
+
+
+def test_v2_registry_is_idempotent_across_concurrent_writers(tmp_path):
+    path = tmp_path / "runtime_promotions.jsonl"
+    record = _runtime_promotion()
+    first = PersistentRuntimePromotionRegistry(path)
+    second = PersistentRuntimePromotionRegistry(path)
+    with ThreadPoolExecutor(max_workers=2) as pool:
+        results = list(pool.map(lambda registry: registry.record_promotion(record), (first, second)))
+    assert [item.runtime_promotion_ref for item in results] == [record.runtime_promotion_ref] * 2
+    assert len(path.read_text(encoding="utf-8").splitlines()) == 1
+
+    with pytest.raises(ValueError, match="identity collision"):
+        first.record_promotion(
+            replace(record, idempotency_key="idem:conflict", runtime_promotion_ref=record.runtime_promotion_ref)
+        )
+
+
+def test_strict_event_rejects_impossible_parent_state():
+    submission = _submission(
+        submit_enabled=True,
+        submission_status="rejected",
+        ack_ref="ack:rejected",
+        client_order_ref_hash=execution_client_order_ref_hash("client_order:idempotent"),
+    )
+    event = _venue_event(
+        submission_ref=submission.submission_ref,
+        event_kind="accepted",
+        status="accepted",
+        ack_ref=submission.ack_ref,
+    )
+    decision = validate_execution_venue_event(
+        event,
+        known_submission_refs={submission.submission_ref},
+        submission=submission,
+    )
+    assert "venue_event_submission_state_mismatch" in _codes(decision)
+
+
+def test_strict_reconciliation_rejects_asserted_status_not_derived_from_events():
+    submission = _submission(
+        submit_enabled=True,
+        submission_status="accepted",
+        venue_order_ref="venue_order:abc",
+        ack_ref="ack:abc",
+        client_order_ref_hash=execution_client_order_ref_hash("client_order:idempotent"),
+    )
+    event = _venue_event(submission_ref=submission.submission_ref)
+    canonical = reconcile_execution_venue_events(
+        order_intent_ref=event.order_intent_ref,
+        runtime_promotion_ref=event.runtime_promotion_ref,
+        submission_ref=submission.submission_ref,
+        venue_order_ref=event.venue_order_ref,
+        audit_record_ref="audit:canonical",
+        events=(event,),
+    )
+    forged = replace(
+        canonical,
+        status="reconciled",
+        discrepancy_refs=(),
+        action_required=False,
+        reconciliation_ref="",
+    )
+    decision = validate_execution_reconciliation(
+        forged,
+        known_venue_event_refs={event.venue_event_ref},
+        known_submission_refs={submission.submission_ref},
+        submission=submission,
+        venue_events=(event,),
+    )
+    assert "execution_reconcile_not_canonical" in _codes(decision)
+
+
+def test_legacy_v1_event_replays_read_only_but_cannot_parent_a_strict_chain(tmp_path):
+    path = tmp_path / "legacy_events.jsonl"
+    legacy = replace(
+        _venue_event(),
+        submission_ref=None,
+        venue_event_ref="venue_event_legacy_v1",
+    )
+    path.write_text(
+        json.dumps(
+            {
+                "schema_version": 1,
+                "event_type": "execution_venue_event_recorded",
+                "venue_event": legacy.to_dict(),
+            },
+            sort_keys=True,
+        )
+        + "\n",
+        encoding="utf-8",
+    )
+    registry = PersistentExecutionVenueEventRegistry(path)
+    assert registry.event("venue_event_legacy_v1").submission_ref is None
+
+    legacy_submission = _submission(
+        submission_ref="order_submission_legacy_v1",
+        submit_enabled=True,
+        submission_status="accepted",
+        venue_order_ref="venue_order:abc",
+        ack_ref="ack:abc",
+        client_order_ref_hash=execution_client_order_ref_hash("client_order:idempotent"),
+    )
+    with pytest.raises(ValueError, match="legacy_submission_parent"):
+        registry.record_event(
+            _venue_event(submission_ref=legacy_submission.submission_ref),
+            known_order_intent_refs={legacy_submission.order_intent_ref},
+            known_runtime_promotion_refs={legacy_submission.runtime_promotion_ref},
+            known_submission_refs={legacy_submission.submission_ref},
+            submission=legacy_submission,
+        )
+
+
+def test_legacy_rows_cannot_forge_reserved_v2_identity_namespaces(tmp_path):
+    """Persisted schema provenance, not a caller-chosen ref prefix, defines v2 trust."""
+
+    promotion = _runtime_promotion()
+    submission = _submission()
+    event = _venue_event()
+    reconciliation = reconcile_execution_venue_events(
+        order_intent_ref=event.order_intent_ref,
+        runtime_promotion_ref=event.runtime_promotion_ref,
+        submission_ref=event.submission_ref,
+        venue_order_ref=event.venue_order_ref,
+        audit_record_ref="audit:legacy-v2-forgery",
+        events=(event,),
+    )
+    cases = (
+        (
+            "runtime_promotions.jsonl",
+            "runtime_promotion_recorded",
+            "runtime_promotion",
+            promotion,
+            PersistentRuntimePromotionRegistry,
+            "runtime_promotion_v2_",
+        ),
+        (
+            "submissions.jsonl",
+            "execution_order_submission_recorded",
+            "order_submission",
+            submission,
+            PersistentExecutionOrderSubmissionRegistry,
+            "order_submission_v2_",
+        ),
+        (
+            "events.jsonl",
+            "execution_venue_event_recorded",
+            "venue_event",
+            event,
+            PersistentExecutionVenueEventRegistry,
+            "venue_event_v2_",
+        ),
+        (
+            "reconciliations.jsonl",
+            "execution_reconciliation_recorded",
+            "reconciliation",
+            reconciliation,
+            PersistentExecutionReconciliationRegistry,
+            "execution_reconcile_v2_",
+        ),
+    )
+
+    for filename, event_type, payload_key, record, registry_type, prefix in cases:
+        ref = next(
+            str(value)
+            for name, value in record.to_dict().items()
+            if name.endswith("_ref") and str(value).startswith(prefix)
+        )
+        assert ref.startswith(prefix)
+        path = tmp_path / filename
+        path.write_text(
+            json.dumps(
+                {
+                    "schema_version": 1,
+                    "event_type": event_type,
+                    payload_key: record.to_dict(),
+                },
+                sort_keys=True,
+            )
+            + "\n",
+            encoding="utf-8",
+        )
+        with pytest.raises(ValueError, match="invalid persisted") as exc_info:
+            registry_type(path)
+        assert "cannot claim reserved v2 identity" in str(exc_info.value.__cause__)
+
+
+def test_execution_venue_event_api_records_qro_without_calling_venue(tmp_path, monkeypatch):
+    submission, graph = _submitted_ingester_state(tmp_path, monkeypatch)
     venue_events = PersistentExecutionVenueEventRegistry(tmp_path / "execution_venue_events.jsonl")
-    graph = ResearchGraphStore()
-    monkeypatch.setattr(app_main, "EXECUTION_ORDER_INTENTS", order_intents)
-    monkeypatch.setattr(app_main, "RUNTIME_PROMOTIONS", runtime_promotions)
     monkeypatch.setattr(app_main, "EXECUTION_VENUE_EVENTS", venue_events)
-    monkeypatch.setattr(app_main, "RESEARCH_GRAPH_STORE", graph)
-    _patch_compiler_coverage(tmp_path, monkeypatch)
     app_main.app.dependency_overrides[require_user_dependency] = lambda: SimpleNamespace(
         user_id="tester",
         username="tester",
@@ -3032,8 +3369,14 @@ def test_execution_venue_event_api_records_qro_without_calling_venue(tmp_path, m
     try:
         client = TestClient(app_main.app)
         payload = _venue_event(
-            order_intent_ref=order_intent.order_intent_ref,
-            runtime_promotion_ref=runtime_promotion.runtime_promotion_ref,
+            order_intent_ref=submission.order_intent_ref,
+            runtime_promotion_ref=submission.runtime_promotion_ref,
+            submission_ref=submission.submission_ref,
+            venue_ref=submission.venue_ref,
+            venue_order_ref=submission.venue_order_ref,
+            ack_ref=submission.ack_ref,
+            order_guard_ref=submission.order_guard_ref,
+            idempotency_key=submission.idempotency_key,
         ).to_dict()
         response = client.post("/api/research-os/execution/venue_events", json=payload)
         assert response.status_code == 200, response.text
@@ -3056,8 +3399,9 @@ def test_execution_venue_event_api_records_qro_without_calling_venue(tmp_path, m
         summary = client.get("/api/research-os/execution/venue_events/summary")
         assert summary.status_code == 200
         row = summary.json()["venue_events"][0]
-        assert row["order_intent_ref"] == order_intent.order_intent_ref
-        assert row["runtime_promotion_ref"] == runtime_promotion.runtime_promotion_ref
+        assert row["order_intent_ref"] == submission.order_intent_ref
+        assert row["runtime_promotion_ref"] == submission.runtime_promotion_ref
+        assert row["submission_ref"] == submission.submission_ref
         assert "raw_order" not in row
         assert "filled_qty" not in row
     finally:
@@ -3065,19 +3409,9 @@ def test_execution_venue_event_api_records_qro_without_calling_venue(tmp_path, m
 
 
 def test_execution_venue_event_api_rejects_invalid_fill_without_write(tmp_path, monkeypatch):
-    order_intents = PersistentExecutionOrderIntentRegistry(tmp_path / "execution_order_intents.jsonl")
-    order_intent = order_intents.record_intent(
-        _order_intent(),
-        known_signal_validation_refs={"signal_validation:accepted"},
-    )
-    runtime_promotions = PersistentRuntimePromotionRegistry(tmp_path / "runtime_promotions.jsonl")
-    runtime_promotion = runtime_promotions.record_promotion(_runtime_promotion())
+    submission, graph = _submitted_ingester_state(tmp_path, monkeypatch)
     venue_event_path = tmp_path / "execution_venue_events.jsonl"
-    graph = ResearchGraphStore()
-    monkeypatch.setattr(app_main, "EXECUTION_ORDER_INTENTS", order_intents)
-    monkeypatch.setattr(app_main, "RUNTIME_PROMOTIONS", runtime_promotions)
     monkeypatch.setattr(app_main, "EXECUTION_VENUE_EVENTS", PersistentExecutionVenueEventRegistry(venue_event_path))
-    monkeypatch.setattr(app_main, "RESEARCH_GRAPH_STORE", graph)
     app_main.app.dependency_overrides[require_user_dependency] = lambda: SimpleNamespace(
         user_id="tester",
         username="tester",
@@ -3085,8 +3419,14 @@ def test_execution_venue_event_api_rejects_invalid_fill_without_write(tmp_path, 
     try:
         client = TestClient(app_main.app)
         payload = _venue_event(
-            order_intent_ref=order_intent.order_intent_ref,
-            runtime_promotion_ref=runtime_promotion.runtime_promotion_ref,
+            order_intent_ref=submission.order_intent_ref,
+            runtime_promotion_ref=submission.runtime_promotion_ref,
+            submission_ref=submission.submission_ref,
+            venue_ref=submission.venue_ref,
+            venue_order_ref=submission.venue_order_ref,
+            ack_ref=submission.ack_ref,
+            order_guard_ref=submission.order_guard_ref,
+            idempotency_key=submission.idempotency_key,
             price_ref=None,
         ).to_dict()
         response = client.post("/api/research-os/execution/venue_events", json=payload)
@@ -3130,19 +3470,12 @@ def test_execution_venue_event_api_rejects_raw_event_payload_without_write(tmp_p
 
 
 def _reconciliation_test_state(tmp_path, monkeypatch):
-    order_intents = PersistentExecutionOrderIntentRegistry(tmp_path / "execution_order_intents.jsonl")
-    order_intent = order_intents.record_intent(
-        _order_intent(),
-        known_signal_validation_refs={"signal_validation:accepted"},
-    )
-    runtime_promotions = PersistentRuntimePromotionRegistry(tmp_path / "runtime_promotions.jsonl")
-    runtime_promotion = runtime_promotions.record_promotion(_runtime_promotion())
+    submission, graph = _submitted_ingester_state(tmp_path, monkeypatch)
+    order_intent = app_main.EXECUTION_ORDER_INTENTS.intent(submission.order_intent_ref)
+    runtime_promotion = app_main.RUNTIME_PROMOTIONS.promotion(submission.runtime_promotion_ref)
     venue_events = PersistentExecutionVenueEventRegistry(tmp_path / "execution_venue_events.jsonl")
     reconciliations = PersistentExecutionReconciliationRegistry(tmp_path / "execution_reconciliations.jsonl")
     reconciliation_actions = PersistentExecutionReconciliationActionRegistry(tmp_path / "execution_reconciliation_actions.jsonl")
-    graph = ResearchGraphStore()
-    monkeypatch.setattr(app_main, "EXECUTION_ORDER_INTENTS", order_intents)
-    monkeypatch.setattr(app_main, "RUNTIME_PROMOTIONS", runtime_promotions)
     monkeypatch.setattr(app_main, "EXECUTION_VENUE_EVENTS", venue_events)
     monkeypatch.setattr(app_main, "EXECUTION_RECONCILIATIONS", reconciliations)
     monkeypatch.setattr(app_main, "EXECUTION_RECONCILIATION_ACTIONS", reconciliation_actions)
@@ -3151,22 +3484,38 @@ def _reconciliation_test_state(tmp_path, monkeypatch):
     return order_intent, runtime_promotion, venue_events, graph
 
 
+def _record_reconciliation_event(venue_events, order_intent, runtime_promotion, **overrides):
+    submission = app_main.EXECUTION_ORDER_SUBMISSIONS.submissions()[0]
+    record = _venue_event(
+        order_intent_ref=order_intent.order_intent_ref,
+        runtime_promotion_ref=runtime_promotion.runtime_promotion_ref,
+        submission_ref=submission.submission_ref,
+        venue_ref=submission.venue_ref,
+        venue_order_ref=submission.venue_order_ref,
+        client_order_ref="client_order:idempotent",
+        ack_ref=submission.ack_ref,
+        order_guard_ref=submission.order_guard_ref,
+        idempotency_key=submission.idempotency_key,
+        **overrides,
+    )
+    return venue_events.record_event(
+        record,
+        known_order_intent_refs={order_intent.order_intent_ref},
+        known_runtime_promotion_refs={runtime_promotion.runtime_promotion_ref},
+        known_submission_refs={submission.submission_ref},
+        submission=submission,
+    )
+
+
 def test_execution_reconciliation_api_closes_filled_reconciled_events_without_calling_venue(tmp_path, monkeypatch):
     order_intent, runtime_promotion, venue_events, graph = _reconciliation_test_state(tmp_path, monkeypatch)
-    venue_events.record_event(
-        _venue_event(order_intent_ref=order_intent.order_intent_ref, runtime_promotion_ref=runtime_promotion.runtime_promotion_ref),
-        known_order_intent_refs={order_intent.order_intent_ref},
-        known_runtime_promotion_refs={runtime_promotion.runtime_promotion_ref},
-    )
-    venue_events.record_event(
-        _venue_event(
-            order_intent_ref=order_intent.order_intent_ref,
-            runtime_promotion_ref=runtime_promotion.runtime_promotion_ref,
-            event_kind="reconciled",
-            status="reconciled",
-        ),
-        known_order_intent_refs={order_intent.order_intent_ref},
-        known_runtime_promotion_refs={runtime_promotion.runtime_promotion_ref},
+    _record_reconciliation_event(venue_events, order_intent, runtime_promotion)
+    _record_reconciliation_event(
+        venue_events,
+        order_intent,
+        runtime_promotion,
+        event_kind="reconciled",
+        status="reconciled",
     )
     app_main.app.dependency_overrides[require_user_dependency] = lambda: SimpleNamespace(
         user_id="tester",
@@ -3179,7 +3528,8 @@ def test_execution_reconciliation_api_closes_filled_reconciled_events_without_ca
             json={
                 "order_intent_ref": order_intent.order_intent_ref,
                 "runtime_promotion_ref": runtime_promotion.runtime_promotion_ref,
-                "venue_order_ref": "venue_order:abc",
+                "submission_ref": app_main.EXECUTION_ORDER_SUBMISSIONS.submissions()[0].submission_ref,
+                "venue_order_ref": app_main.EXECUTION_ORDER_SUBMISSIONS.submissions()[0].venue_order_ref,
                 "audit_record_ref": "audit:reconcile:001",
             },
         )
@@ -3209,11 +3559,7 @@ def test_execution_reconciliation_api_closes_filled_reconciled_events_without_ca
 
 def test_execution_reconciliation_api_records_missing_reconcile_as_action_required(tmp_path, monkeypatch):
     order_intent, runtime_promotion, venue_events, graph = _reconciliation_test_state(tmp_path, monkeypatch)
-    venue_events.record_event(
-        _venue_event(order_intent_ref=order_intent.order_intent_ref, runtime_promotion_ref=runtime_promotion.runtime_promotion_ref),
-        known_order_intent_refs={order_intent.order_intent_ref},
-        known_runtime_promotion_refs={runtime_promotion.runtime_promotion_ref},
-    )
+    _record_reconciliation_event(venue_events, order_intent, runtime_promotion)
     app_main.app.dependency_overrides[require_user_dependency] = lambda: SimpleNamespace(
         user_id="tester",
         username="tester",
@@ -3225,7 +3571,8 @@ def test_execution_reconciliation_api_records_missing_reconcile_as_action_requir
             json={
                 "order_intent_ref": order_intent.order_intent_ref,
                 "runtime_promotion_ref": runtime_promotion.runtime_promotion_ref,
-                "venue_order_ref": "venue_order:abc",
+                "submission_ref": app_main.EXECUTION_ORDER_SUBMISSIONS.submissions()[0].submission_ref,
+                "venue_order_ref": app_main.EXECUTION_ORDER_SUBMISSIONS.submissions()[0].venue_order_ref,
                 "audit_record_ref": "audit:reconcile:002",
             },
         )
@@ -3257,6 +3604,7 @@ def test_execution_reconciliation_api_rejects_unknown_order_intent_without_write
             json={
                 "order_intent_ref": "order_intent:missing",
                 "runtime_promotion_ref": _runtime_promotion.runtime_promotion_ref,
+                "submission_ref": app_main.EXECUTION_ORDER_SUBMISSIONS.submissions()[0].submission_ref,
                 "audit_record_ref": "audit:reconcile:reject",
             },
         )
@@ -3270,11 +3618,7 @@ def test_execution_reconciliation_api_rejects_unknown_order_intent_without_write
 
 def test_execution_reconciliation_batch_worker_is_idempotent(tmp_path, monkeypatch):
     order_intent, runtime_promotion, venue_events, graph = _reconciliation_test_state(tmp_path, monkeypatch)
-    venue_events.record_event(
-        _venue_event(order_intent_ref=order_intent.order_intent_ref, runtime_promotion_ref=runtime_promotion.runtime_promotion_ref),
-        known_order_intent_refs={order_intent.order_intent_ref},
-        known_runtime_promotion_refs={runtime_promotion.runtime_promotion_ref},
-    )
+    _record_reconciliation_event(venue_events, order_intent, runtime_promotion)
     app_main.app.dependency_overrides[require_user_dependency] = lambda: SimpleNamespace(
         user_id="tester",
         username="tester",
@@ -3312,11 +3656,7 @@ def test_execution_reconciliation_batch_worker_is_idempotent(tmp_path, monkeypat
 
 def test_execution_reconciliation_action_api_records_follow_up_without_calling_venue(tmp_path, monkeypatch):
     order_intent, runtime_promotion, venue_events, graph = _reconciliation_test_state(tmp_path, monkeypatch)
-    venue_events.record_event(
-        _venue_event(order_intent_ref=order_intent.order_intent_ref, runtime_promotion_ref=runtime_promotion.runtime_promotion_ref),
-        known_order_intent_refs={order_intent.order_intent_ref},
-        known_runtime_promotion_refs={runtime_promotion.runtime_promotion_ref},
-    )
+    _record_reconciliation_event(venue_events, order_intent, runtime_promotion)
     app_main.app.dependency_overrides[require_user_dependency] = lambda: SimpleNamespace(
         user_id="tester",
         username="tester",
@@ -3328,7 +3668,8 @@ def test_execution_reconciliation_action_api_records_follow_up_without_calling_v
             json={
                 "order_intent_ref": order_intent.order_intent_ref,
                 "runtime_promotion_ref": runtime_promotion.runtime_promotion_ref,
-                "venue_order_ref": "venue_order:abc",
+                "submission_ref": app_main.EXECUTION_ORDER_SUBMISSIONS.submissions()[0].submission_ref,
+                "venue_order_ref": app_main.EXECUTION_ORDER_SUBMISSIONS.submissions()[0].venue_order_ref,
                 "audit_record_ref": "audit:reconcile:action",
             },
         )
@@ -3342,7 +3683,7 @@ def test_execution_reconciliation_action_api_records_follow_up_without_calling_v
                 "reconciliation_ref": reconciliation_body["reconciliation_ref"],
                 "action_kind": "request_missing_reconcile",
                 "action_status": "open",
-                "action_owner_ref": "ops:execution-monitor",
+                    "action_owner_ref": "execution-owner:tester",
                 "audit_record_ref": "audit:reconcile_action:001",
                 "remediation_ref": "remediation:request_missing_reconcile:001",
                 "evidence_refs": ["evidence:monitor:missing_reconcile"],
@@ -3374,20 +3715,13 @@ def test_execution_reconciliation_action_api_records_follow_up_without_calling_v
 def test_execution_reconciliation_action_api_rejects_clean_reconciliation_without_write(tmp_path, monkeypatch):
     order_intent, runtime_promotion, venue_events, graph = _reconciliation_test_state(tmp_path, monkeypatch)
     actions_path = tmp_path / "execution_reconciliation_actions.jsonl"
-    venue_events.record_event(
-        _venue_event(order_intent_ref=order_intent.order_intent_ref, runtime_promotion_ref=runtime_promotion.runtime_promotion_ref),
-        known_order_intent_refs={order_intent.order_intent_ref},
-        known_runtime_promotion_refs={runtime_promotion.runtime_promotion_ref},
-    )
-    venue_events.record_event(
-        _venue_event(
-            order_intent_ref=order_intent.order_intent_ref,
-            runtime_promotion_ref=runtime_promotion.runtime_promotion_ref,
-            event_kind="reconciled",
-            status="reconciled",
-        ),
-        known_order_intent_refs={order_intent.order_intent_ref},
-        known_runtime_promotion_refs={runtime_promotion.runtime_promotion_ref},
+    _record_reconciliation_event(venue_events, order_intent, runtime_promotion)
+    _record_reconciliation_event(
+        venue_events,
+        order_intent,
+        runtime_promotion,
+        event_kind="reconciled",
+        status="reconciled",
     )
     app_main.app.dependency_overrides[require_user_dependency] = lambda: SimpleNamespace(
         user_id="tester",
@@ -3400,7 +3734,8 @@ def test_execution_reconciliation_action_api_rejects_clean_reconciliation_withou
             json={
                 "order_intent_ref": order_intent.order_intent_ref,
                 "runtime_promotion_ref": runtime_promotion.runtime_promotion_ref,
-                "venue_order_ref": "venue_order:abc",
+                "submission_ref": app_main.EXECUTION_ORDER_SUBMISSIONS.submissions()[0].submission_ref,
+                "venue_order_ref": app_main.EXECUTION_ORDER_SUBMISSIONS.submissions()[0].venue_order_ref,
                 "audit_record_ref": "audit:reconcile:clean",
             },
         )
@@ -3429,11 +3764,7 @@ def test_execution_reconciliation_action_api_rejects_clean_reconciliation_withou
 
 def test_execution_reconciliation_action_batch_worker_is_idempotent(tmp_path, monkeypatch):
     order_intent, runtime_promotion, venue_events, graph = _reconciliation_test_state(tmp_path, monkeypatch)
-    venue_events.record_event(
-        _venue_event(order_intent_ref=order_intent.order_intent_ref, runtime_promotion_ref=runtime_promotion.runtime_promotion_ref),
-        known_order_intent_refs={order_intent.order_intent_ref},
-        known_runtime_promotion_refs={runtime_promotion.runtime_promotion_ref},
-    )
+    _record_reconciliation_event(venue_events, order_intent, runtime_promotion)
     app_main.app.dependency_overrides[require_user_dependency] = lambda: SimpleNamespace(
         user_id="tester",
         username="tester",
@@ -3451,7 +3782,7 @@ def test_execution_reconciliation_action_batch_worker_is_idempotent(tmp_path, mo
             "/api/research-os/execution/reconciliation_actions/run_pending",
             json={
                 "audit_record_ref": "audit:reconcile_action:batch",
-                "action_owner_ref": "ops:execution-monitor",
+                "action_owner_ref": "execution-owner:tester",
                 "evidence_refs": ["evidence:monitor:batch"],
             },
         )
@@ -3483,6 +3814,781 @@ def test_execution_reconciliation_action_batch_worker_is_idempotent(tmp_path, mo
         app_main.app.dependency_overrides.pop(require_user_dependency, None)
 
 
+def test_execution_reconciliation_action_batch_repairs_post_append_qro_failure(
+    tmp_path,
+    monkeypatch,
+):
+    order_intent, runtime_promotion, venue_events, graph = _reconciliation_test_state(
+        tmp_path,
+        monkeypatch,
+    )
+    _record_reconciliation_event(venue_events, order_intent, runtime_promotion)
+    app_main.app.dependency_overrides[require_user_dependency] = lambda: SimpleNamespace(
+        user_id="tester",
+        username="tester",
+    )
+    try:
+        client = TestClient(app_main.app)
+        reconciliation = client.post(
+            "/api/research-os/execution/reconciliations/run_pending",
+            json={"audit_record_ref": "audit:reconcile:qro_repair_source"},
+        )
+        assert reconciliation.status_code == 200, reconciliation.text
+        assert reconciliation.json()["created_count"] == 1
+
+        original = app_main._record_execution_reconciliation_action_qro
+
+        def fail_after_action_append(*_args, **_kwargs):
+            raise RuntimeError("injected action QRO failure after durable append")
+
+        monkeypatch.setattr(
+            app_main,
+            "_record_execution_reconciliation_action_qro",
+            fail_after_action_append,
+        )
+        graph_count = len(graph.commands())
+        with pytest.raises(RuntimeError, match="injected action QRO failure"):
+            client.post(
+                "/api/research-os/execution/reconciliation_actions/run_pending",
+                json={"audit_record_ref": "audit:reconcile_action:qro_repair"},
+            )
+        assert len(app_main.EXECUTION_RECONCILIATION_ACTIONS.actions()) == 1
+        assert len(graph.commands()) == graph_count
+
+        monkeypatch.setattr(
+            app_main,
+            "EXECUTION_RECONCILIATION_ACTIONS",
+            PersistentExecutionReconciliationActionRegistry(
+                tmp_path / "execution_reconciliation_actions.jsonl"
+            ),
+        )
+        restarted_graph = ResearchGraphStore()
+        _patch_compiler_coverage(
+            tmp_path,
+            monkeypatch,
+            graph=restarted_graph,
+        )
+        monkeypatch.setattr(
+            app_main,
+            "_record_execution_reconciliation_action_qro",
+            original,
+        )
+        retry = client.post(
+            "/api/research-os/execution/reconciliation_actions/run_pending",
+            json={"audit_record_ref": "audit:reconcile_action:qro_repair"},
+        )
+
+        assert retry.status_code == 200, retry.text
+        body = retry.json()
+        assert body["created_count"] == 0
+        assert body["repaired_count"] == 1
+        assert body["skipped_count"] == 0
+        assert len(app_main.EXECUTION_RECONCILIATION_ACTIONS.actions()) == 1
+        assert len(restarted_graph.commands()) == 1
+        assert body["repaired"][0]["qro_id"].startswith("qro_")
+        _assert_compiler_coverage(
+            body["repaired"][0],
+            entrypoint_ref="api:research_os.execution.reconciliation_actions",
+        )
+    finally:
+        app_main.app.dependency_overrides.pop(require_user_dependency, None)
+
+
+def test_execution_reconciliation_action_batch_repairs_graph_without_compiler_after_restart(
+    tmp_path,
+    monkeypatch,
+):
+    order_intent, runtime_promotion, venue_events, _graph = _reconciliation_test_state(
+        tmp_path,
+        monkeypatch,
+    )
+    graph_path = tmp_path / "reconciliation_action_graph.jsonl"
+    _patch_compiler_coverage(
+        tmp_path,
+        monkeypatch,
+        graph=PersistentResearchGraphStore(graph_path),
+    )
+    _record_reconciliation_event(venue_events, order_intent, runtime_promotion)
+    app_main.app.dependency_overrides[require_user_dependency] = lambda: SimpleNamespace(
+        user_id="tester",
+        username="tester",
+    )
+    try:
+        client = TestClient(app_main.app)
+        reconciliation = client.post(
+            "/api/research-os/execution/reconciliations/run_pending",
+            json={"audit_record_ref": "audit:reconcile:compiler_repair_source"},
+        )
+        assert reconciliation.status_code == 200, reconciliation.text
+
+        original_compile = app_main._compile_execution_boundary_qro
+
+        def fail_action_compiler(*args, **kwargs):
+            if kwargs.get("entrypoint_ref") == app_main._RECONCILIATION_ACTION_ENTRYPOINT:
+                raise RuntimeError("injected action compiler failure after graph append")
+            return original_compile(*args, **kwargs)
+
+        monkeypatch.setattr(app_main, "_compile_execution_boundary_qro", fail_action_compiler)
+        with pytest.raises(RuntimeError, match="injected action compiler failure"):
+            client.post(
+                "/api/research-os/execution/reconciliation_actions/run_pending",
+                json={"audit_record_ref": "audit:reconcile_action:compiler_repair"},
+            )
+        assert len(app_main.EXECUTION_RECONCILIATION_ACTIONS.actions()) == 1
+        assert len(
+            app_main.RESEARCH_GRAPH_STORE.projection_index(
+                lineage_token=app_main.EXECUTION_RECONCILIATION_ACTIONS.actions()[0].action_ref
+            )
+        ) == 1
+
+        monkeypatch.setattr(
+            app_main,
+            "EXECUTION_RECONCILIATION_ACTIONS",
+            PersistentExecutionReconciliationActionRegistry(
+                tmp_path / "execution_reconciliation_actions.jsonl"
+            ),
+        )
+        _patch_compiler_coverage(
+            tmp_path,
+            monkeypatch,
+            graph=PersistentResearchGraphStore(graph_path),
+        )
+        monkeypatch.setattr(app_main, "_compile_execution_boundary_qro", original_compile)
+        retry = client.post(
+            "/api/research-os/execution/reconciliation_actions/run_pending",
+            json={"audit_record_ref": "audit:reconcile_action:compiler_repair"},
+        )
+
+        assert retry.status_code == 200, retry.text
+        body = retry.json()
+        assert body["created_count"] == 0
+        assert body["repaired_count"] == 1
+        assert body["skipped_count"] == 0
+        assert len(app_main.EXECUTION_RECONCILIATION_ACTIONS.actions()) == 1
+        assert app_main._execution_reconciliation_action_delivery_refs(
+            app_main.EXECUTION_RECONCILIATION_ACTIONS.actions()[0]
+        ) == {
+            key: body["repaired"][0][key]
+            for key in (
+                "qro_id",
+                "research_graph_command_id",
+                "compiler_ir_ref",
+                "compiler_pass_ref",
+                "entrypoint_coverage_ref",
+            )
+        }
+    finally:
+        app_main.app.dependency_overrides.pop(require_user_dependency, None)
+
+
+def test_formal_execution_http_scope_hides_foreign_testnet_submission_and_events(
+    tmp_path,
+    monkeypatch,
+):
+    owned_submission, _graph = _submitted_ingester_state(tmp_path, monkeypatch)
+    order_intent = app_main.EXECUTION_ORDER_INTENTS.intent(owned_submission.order_intent_ref)
+    runtime_promotion = app_main.RUNTIME_PROMOTIONS.promotion(
+        owned_submission.runtime_promotion_ref
+    )
+    materialization = app_main.EXECUTION_ORDER_MATERIALIZATIONS.materialization(
+        owned_submission.order_materialization_ref
+    )
+    capability = app_main.EXECUTION_VENUE_CAPABILITIES.capability(
+        owned_submission.venue_capability_ref
+    )
+    submit_request = app_main.EXECUTION_SUBMIT_REQUESTS.request(
+        owned_submission.submit_request_ref
+    )
+    foreign_submission = _record_submitted_submission(
+        app_main.EXECUTION_ORDER_SUBMISSIONS,
+        order_intent,
+        runtime_promotion,
+        materialization,
+        capability,
+        submit_request,
+        recorded_by="bob",
+    )
+    venue_events = PersistentExecutionVenueEventRegistry(
+        tmp_path / "owner_scoped_execution_venue_events.jsonl"
+    )
+    monkeypatch.setattr(app_main, "EXECUTION_VENUE_EVENTS", venue_events)
+    for submission, owner in (
+        (owned_submission, "tester"),
+        (foreign_submission, "bob"),
+    ):
+        event = _venue_event(
+            order_intent_ref=submission.order_intent_ref,
+            runtime_promotion_ref=submission.runtime_promotion_ref,
+            submission_ref=submission.submission_ref,
+            venue_ref=submission.venue_ref,
+            venue_order_ref=submission.venue_order_ref,
+            ack_ref=submission.ack_ref,
+            order_guard_ref=submission.order_guard_ref,
+            idempotency_key=submission.idempotency_key,
+            recorded_by=owner,
+        )
+        venue_events.record_event(
+            event,
+            known_order_intent_refs={submission.order_intent_ref},
+            known_runtime_promotion_refs={submission.runtime_promotion_ref},
+            known_submission_refs={submission.submission_ref},
+            submission=submission,
+        )
+
+    app_main.app.dependency_overrides[require_user_dependency] = lambda: SimpleNamespace(
+        user_id="tester",
+        username="bob",
+    )
+    try:
+        client = TestClient(app_main.app)
+        submissions = client.get(
+            "/api/research-os/execution/order_submissions/summary"
+        )
+        assert submissions.status_code == 200, submissions.text
+        assert submissions.json()["user"] == "tester"
+        assert [
+            row["submission_ref"] for row in submissions.json()["order_submissions"]
+        ] == [owned_submission.submission_ref]
+
+        events = client.get("/api/research-os/execution/venue_events/summary")
+        assert events.status_code == 200, events.text
+        assert [row["submission_ref"] for row in events.json()["venue_events"]] == [
+            owned_submission.submission_ref
+        ]
+
+        foreign_payload = _venue_event(
+            order_intent_ref=foreign_submission.order_intent_ref,
+            runtime_promotion_ref=foreign_submission.runtime_promotion_ref,
+            submission_ref=foreign_submission.submission_ref,
+            venue_ref=foreign_submission.venue_ref,
+            venue_order_ref=foreign_submission.venue_order_ref,
+            ack_ref=foreign_submission.ack_ref,
+            order_guard_ref=foreign_submission.order_guard_ref,
+            idempotency_key=foreign_submission.idempotency_key,
+            recorded_by="tester",
+            event_kind="accepted",
+            status="accepted",
+            fill_ref=None,
+            quantity_ref=None,
+            price_ref=None,
+            fee_ref=None,
+        ).to_dict()
+        denied = client.post(
+            "/api/research-os/execution/venue_events",
+            json=foreign_payload,
+        )
+        assert denied.status_code == 404
+        assert denied.json()["detail"] == "execution record not found"
+
+        missing_parent_payload = {
+            **foreign_payload,
+            "order_intent_ref": "order_intent_missing_owner_oracle",
+            "runtime_promotion_ref": "runtime_promotion_missing_owner_oracle",
+        }
+        missing_parent = client.post(
+            "/api/research-os/execution/venue_events",
+            json=missing_parent_payload,
+        )
+        assert missing_parent.status_code == denied.status_code
+        assert missing_parent.json() == denied.json()
+    finally:
+        app_main.app.dependency_overrides.pop(require_user_dependency, None)
+
+
+def test_formal_execution_pre_submission_parent_is_owner_scoped(
+    tmp_path,
+    monkeypatch,
+):
+    (
+        order_intent,
+        runtime_promotion,
+        materializations,
+        _safety,
+        _capabilities,
+        _submissions,
+        graph,
+    ) = _submission_test_state(tmp_path, monkeypatch)
+    app_main.app.dependency_overrides[require_user_dependency] = lambda: SimpleNamespace(
+        user_id="bob",
+        username="tester",
+    )
+    try:
+        response = TestClient(app_main.app).post(
+            "/api/research-os/execution/order_materializations",
+            json=_materialization(
+                order_intent_ref=order_intent.order_intent_ref,
+                runtime_promotion_ref=runtime_promotion.runtime_promotion_ref,
+                materialize_enabled=False,
+                recorded_by="bob",
+            ).to_dict(),
+        )
+        assert response.status_code == 404
+        assert response.json()["detail"] == "execution record not found"
+        missing = TestClient(app_main.app).post(
+            "/api/research-os/execution/order_materializations",
+            json=_materialization(
+                order_intent_ref="order_intent_missing_owner_probe",
+                runtime_promotion_ref=runtime_promotion.runtime_promotion_ref,
+                materialize_enabled=False,
+                recorded_by="bob",
+            ).to_dict(),
+        )
+        assert missing.status_code == 404
+        assert missing.json()["detail"] == response.json()["detail"]
+        assert materializations.materializations() == []
+        assert graph.commands() == []
+    finally:
+        app_main.app.dependency_overrides.pop(require_user_dependency, None)
+
+
+def test_order_submission_runner_hides_foreign_live_and_missing_refs_equally(monkeypatch):
+    foreign = SimpleNamespace(
+        submit_request_ref="submit-request-foreign-live",
+        submit_request_mode="live",
+        recorded_by="alice",
+    )
+
+    class Requests:
+        @staticmethod
+        def request(ref: str):
+            if ref == foreign.submit_request_ref:
+                return foreign
+            raise KeyError(ref)
+
+    class Submitter:
+        def __init__(self) -> None:
+            self.calls = 0
+
+        def submit_guarded_order(self, **_kwargs):
+            self.calls += 1
+            return {}
+
+    submitter = Submitter()
+    monkeypatch.setattr(app_main, "EXECUTION_SUBMIT_REQUESTS", Requests())
+    monkeypatch.setattr(app_main, "EXECUTION_ORDER_SUBMITTER", submitter)
+    app_main.app.dependency_overrides[require_user_dependency] = lambda: SimpleNamespace(
+        user_id="bob",
+        username="alice",
+    )
+    try:
+        client = TestClient(app_main.app)
+        foreign_response = client.post(
+            "/api/research-os/execution/order_submissions/run",
+            json={"submit_request_ref": foreign.submit_request_ref},
+        )
+        missing_response = client.post(
+            "/api/research-os/execution/order_submissions/run",
+            json={"submit_request_ref": "submit-request-missing"},
+        )
+        assert foreign_response.status_code == missing_response.status_code == 404
+        assert foreign_response.json()["detail"] == missing_response.json()["detail"] == (
+            "execution record not found"
+        )
+        assert submitter.calls == 0
+    finally:
+        app_main.app.dependency_overrides.pop(require_user_dependency, None)
+
+
+def test_reconciliation_action_rejects_stale_owned_head(tmp_path, monkeypatch):
+    order_intent, runtime_promotion, venue_events, _graph = _reconciliation_test_state(
+        tmp_path,
+        monkeypatch,
+    )
+    _record_reconciliation_event(venue_events, order_intent, runtime_promotion)
+    submission = app_main.EXECUTION_ORDER_SUBMISSIONS.submissions()[0]
+    app_main.app.dependency_overrides[require_user_dependency] = lambda: SimpleNamespace(
+        user_id="tester",
+        username="tester",
+    )
+    try:
+        client = TestClient(app_main.app)
+        first = client.post(
+            "/api/research-os/execution/reconciliations",
+            json={
+                "order_intent_ref": order_intent.order_intent_ref,
+                "runtime_promotion_ref": runtime_promotion.runtime_promotion_ref,
+                "submission_ref": submission.submission_ref,
+                "venue_order_ref": submission.venue_order_ref,
+                "audit_record_ref": "audit:reconcile:stale-head-1",
+            },
+        )
+        assert first.status_code == 200, first.text
+        stale_ref = first.json()["reconciliation_ref"]
+
+        _record_reconciliation_event(
+            venue_events,
+            order_intent,
+            runtime_promotion,
+            event_kind="reconciled",
+            status="reconciled",
+        )
+        second = client.post(
+            "/api/research-os/execution/reconciliations",
+            json={
+                "order_intent_ref": order_intent.order_intent_ref,
+                "runtime_promotion_ref": runtime_promotion.runtime_promotion_ref,
+                "submission_ref": submission.submission_ref,
+                "venue_order_ref": submission.venue_order_ref,
+                "audit_record_ref": "audit:reconcile:stale-head-2",
+            },
+        )
+        assert second.status_code == 200, second.text
+
+        denied = client.post(
+            "/api/research-os/execution/reconciliation_actions",
+            json={
+                "reconciliation_ref": stale_ref,
+                "action_kind": "request_missing_reconcile",
+                "action_status": "open",
+                "audit_record_ref": "audit:stale-action",
+            },
+        )
+        assert denied.status_code == 409
+        assert denied.json()["detail"] == "formal reconciliation is stale"
+
+        summary = client.get("/api/research-os/execution/reconciliations/summary")
+        assert summary.status_code == 200, summary.text
+        rows = summary.json()["reconciliations"]
+        assert len(rows) == 2
+        assert [row["reconciliation_ref"] for row in rows if row["is_current_head"]] == [
+            second.json()["reconciliation_ref"]
+        ]
+    finally:
+        app_main.app.dependency_overrides.pop(require_user_dependency, None)
+
+
+def test_reconciliation_action_append_holds_shared_head_mutation_guard(tmp_path, monkeypatch):
+    order_intent, runtime_promotion, venue_events, _graph = _reconciliation_test_state(
+        tmp_path,
+        monkeypatch,
+    )
+    _record_reconciliation_event(venue_events, order_intent, runtime_promotion)
+    submission = app_main.EXECUTION_ORDER_SUBMISSIONS.submissions()[0]
+    app_main.app.dependency_overrides[require_user_dependency] = lambda: SimpleNamespace(
+        user_id="tester",
+        username="tester",
+    )
+    try:
+        client = TestClient(app_main.app)
+        reconciliation = client.post(
+            "/api/research-os/execution/reconciliations",
+            json={
+                "order_intent_ref": order_intent.order_intent_ref,
+                "runtime_promotion_ref": runtime_promotion.runtime_promotion_ref,
+                "submission_ref": submission.submission_ref,
+                "venue_order_ref": submission.venue_order_ref,
+                "audit_record_ref": "audit:reconcile:guarded-action",
+            },
+        )
+        assert reconciliation.status_code == 200, reconciliation.text
+        assert reconciliation.json()["action_required"] is True
+
+        held = {"value": False, "observed_at_append": False}
+        original_guard = app_main.EXECUTION_RECONCILIATIONS.mutation_guard
+        original_record_action = app_main.EXECUTION_RECONCILIATION_ACTIONS.record_action
+
+        @contextmanager
+        def observed_guard():
+            with original_guard():
+                held["value"] = True
+                try:
+                    yield
+                finally:
+                    held["value"] = False
+
+        def observed_record_action(*args, **kwargs):
+            held["observed_at_append"] = held["value"]
+            return original_record_action(*args, **kwargs)
+
+        monkeypatch.setattr(
+            app_main.EXECUTION_RECONCILIATIONS,
+            "mutation_guard",
+            observed_guard,
+        )
+        monkeypatch.setattr(
+            app_main.EXECUTION_RECONCILIATION_ACTIONS,
+            "record_action",
+            observed_record_action,
+        )
+        response = client.post(
+            "/api/research-os/execution/reconciliation_actions",
+            json={
+                "reconciliation_ref": reconciliation.json()["reconciliation_ref"],
+                "action_kind": "request_missing_reconcile",
+                "action_status": "open",
+                "audit_record_ref": "audit:guarded-action",
+            },
+        )
+        assert response.status_code == 200, response.text
+        assert held["observed_at_append"] is True
+        assert held["value"] is False
+    finally:
+        app_main.app.dependency_overrides.pop(require_user_dependency, None)
+
+
+def test_reconciliation_mutation_guard_is_reentrant_for_same_lock_path(tmp_path):
+    registry = PersistentExecutionReconciliationRegistry(
+        tmp_path / "execution_reconciliations.jsonl"
+    )
+
+    with registry.mutation_guard():
+        with registry.mutation_guard():
+            pass
+
+
+def test_reconciliation_duplicate_event_set_cannot_poison_current_head(tmp_path, monkeypatch):
+    order_intent, runtime_promotion, venue_events, _graph = _reconciliation_test_state(
+        tmp_path,
+        monkeypatch,
+    )
+    _record_reconciliation_event(venue_events, order_intent, runtime_promotion)
+    submission = app_main.EXECUTION_ORDER_SUBMISSIONS.submissions()[0]
+    app_main.app.dependency_overrides[require_user_dependency] = lambda: SimpleNamespace(
+        user_id="tester",
+        username="tester",
+    )
+    try:
+        client = TestClient(app_main.app)
+        base = {
+            "order_intent_ref": order_intent.order_intent_ref,
+            "runtime_promotion_ref": runtime_promotion.runtime_promotion_ref,
+            "submission_ref": submission.submission_ref,
+            "venue_order_ref": submission.venue_order_ref,
+        }
+        first = client.post(
+            "/api/research-os/execution/reconciliations",
+            json={**base, "audit_record_ref": "audit:reconcile:canonical-a"},
+        )
+        duplicate = client.post(
+            "/api/research-os/execution/reconciliations",
+            json={**base, "audit_record_ref": "audit:reconcile:canonical-b"},
+        )
+
+        assert first.status_code == 200, first.text
+        assert duplicate.status_code == 422
+        assert "event set already has a canonical record" in duplicate.text
+        summary = client.get("/api/research-os/execution/reconciliations/summary")
+        assert summary.status_code == 200, summary.text
+        rows = summary.json()["reconciliations"]
+        assert len(rows) == 1
+        assert rows[0]["is_current_head"] is True
+        assert rows[0]["reconciliation_ref"] == first.json()["reconciliation_ref"]
+    finally:
+        app_main.app.dependency_overrides.pop(require_user_dependency, None)
+
+
+def test_live_formal_owner_requires_hmac_client_and_account_authority(
+    monkeypatch,
+):
+    client_order_id = "copy-live-owner-1"
+    submission = SimpleNamespace(
+        submission_ref="order_submission_v2_live_owner",
+        submission_mode="live",
+        submission_status="accepted",
+        client_order_ref_hash=execution_client_order_ref_hash(client_order_id),
+        order_intent_ref="order_intent_live_owner",
+        runtime_promotion_ref="runtime_promotion_live_owner",
+        order_materialization_ref="materialization_live_owner",
+        venue_capability_ref="capability_live_owner",
+        submit_request_ref="submit_request_live_owner",
+        venue_order_ref="venue-order-live-owner",
+        ack_ref="ack-live-owner",
+        recorded_by="copy_trade_signal_relayer",
+    )
+    binding = app_main.FormalSubmissionRiskBinding(
+        submission_ref=submission.submission_ref,
+        reservation_ref="reservation-live-owner",
+        binding_event_id="risk-event-live-owner",
+        outcome_state="submission_accepted",
+        follower_id="alice::master-live-owner",
+        account_binding_ref="exchange-account-live-owner",
+        signal_id="signal-live-owner",
+        risk_check_ref="risk-check-live-owner",
+        snapshot_ref="snapshot-live-owner",
+        client_order_id=client_order_id,
+        venue_order_ref=submission.venue_order_ref,
+        ack_ref=submission.ack_ref,
+        reason_ref="",
+        order_request_context={
+            "client_order_id": client_order_id,
+            "order_intent_ref": submission.order_intent_ref,
+            "runtime_promotion_ref": submission.runtime_promotion_ref,
+            "order_materialization_ref": submission.order_materialization_ref,
+            "venue_capability_ref": submission.venue_capability_ref,
+            "submit_request_ref": submission.submit_request_ref,
+        },
+    )
+    monkeypatch.setattr(
+        app_main,
+        "ACCOUNT_HALT_BARRIER",
+        SimpleNamespace(
+            snapshot=lambda account_ref: SimpleNamespace(
+                owner_user_id="alice"
+            )
+            if account_ref == "exchange-account-live-owner"
+            else None
+        ),
+    )
+    monkeypatch.setattr(
+        app_main,
+        "COPY_TRADE_SERVICE",
+        SimpleNamespace(get_follower=lambda _follower_id: None),
+    )
+
+    assert app_main._formal_submission_owner(
+        submission,
+        live_bindings={submission.submission_ref: binding},
+    ) == "alice"
+    assert app_main._formal_submission_owner(submission, live_bindings={}) is None
+
+    changed_hash = SimpleNamespace(
+        **{
+            **submission.__dict__,
+            "client_order_ref_hash": execution_client_order_ref_hash("foreign-client"),
+        }
+    )
+    with pytest.raises(app_main.HTTPException) as caught:
+        app_main._formal_submission_owner(
+            changed_hash,
+            live_bindings={submission.submission_ref: binding},
+        )
+    assert caught.value.status_code == 503
+    assert caught.value.detail == "formal execution owner authority unavailable"
+
+
+def test_live_formal_http_event_ingester_is_coordinator_only(monkeypatch):
+    client_order_id = "copy-live-http-owner-1"
+    submission = SimpleNamespace(
+        submission_ref="order_submission_v2_live_http_owner",
+        submission_mode="live",
+        submission_status="accepted",
+        client_order_ref_hash=execution_client_order_ref_hash(client_order_id),
+        order_intent_ref="order_intent_live_http_owner",
+        runtime_promotion_ref="runtime_promotion_live_http_owner",
+        order_materialization_ref="materialization_live_http_owner",
+        venue_capability_ref="capability_live_http_owner",
+        submit_request_ref="submit_request_live_http_owner",
+        venue_order_ref="venue-order-live-http-owner",
+        ack_ref="ack-live-http-owner",
+        recorded_by="copy_trade_signal_relayer",
+    )
+    binding = app_main.FormalSubmissionRiskBinding(
+        submission_ref=submission.submission_ref,
+        reservation_ref="reservation-live-http-owner",
+        binding_event_id="risk-event-live-http-owner",
+        outcome_state="submission_accepted",
+        follower_id="alice::master-live-http-owner",
+        account_binding_ref="exchange-account-live-http-owner",
+        signal_id="signal-live-http-owner",
+        risk_check_ref="risk-check-live-http-owner",
+        snapshot_ref="snapshot-live-http-owner",
+        client_order_id=client_order_id,
+        venue_order_ref=submission.venue_order_ref,
+        ack_ref=submission.ack_ref,
+        reason_ref="",
+        order_request_context={
+            "client_order_id": client_order_id,
+            "order_intent_ref": submission.order_intent_ref,
+            "runtime_promotion_ref": submission.runtime_promotion_ref,
+            "order_materialization_ref": submission.order_materialization_ref,
+            "venue_capability_ref": submission.venue_capability_ref,
+            "submit_request_ref": submission.submit_request_ref,
+        },
+    )
+
+    class _SubmissionStore:
+        def refresh(self):
+            return None
+
+        def submission(self, ref):
+            if ref != submission.submission_ref:
+                raise KeyError(ref)
+            return submission
+
+        def submissions(self):
+            return [submission]
+
+    class _NeverIngester:
+        calls = 0
+
+        def ingest_event(self, **_kwargs):
+            self.calls += 1
+            raise AssertionError("live HTTP must not reach the generic ingester")
+
+    ingester = _NeverIngester()
+    monkeypatch.setattr(app_main, "EXECUTION_ORDER_SUBMISSIONS", _SubmissionStore())
+    monkeypatch.setattr(
+        app_main,
+        "FOLLOWER_RISK_STATE",
+        SimpleNamespace(verified_formal_submission_bindings=lambda: (binding,)),
+    )
+    monkeypatch.setattr(
+        app_main,
+        "ACCOUNT_HALT_BARRIER",
+        SimpleNamespace(
+            snapshot=lambda _account_ref: SimpleNamespace(owner_user_id="alice")
+        ),
+    )
+    monkeypatch.setattr(
+        app_main,
+        "COPY_TRADE_SERVICE",
+        SimpleNamespace(get_follower=lambda _follower_id: None),
+    )
+    monkeypatch.setattr(app_main, "EXECUTION_VENUE_EVENT_INGESTER", ingester)
+    app_main.app.dependency_overrides[require_user_dependency] = lambda: SimpleNamespace(
+        user_id="alice",
+        username="mutable-display-name",
+    )
+    try:
+        response = TestClient(app_main.app).post(
+            "/api/research-os/execution/venue_events/run",
+            json={"submission_ref": submission.submission_ref},
+        )
+        assert response.status_code == 409
+        assert response.json()["detail"] == (
+            "live formal venue event ingestion is coordinator-managed"
+        )
+        assert ingester.calls == 0
+    finally:
+        app_main.app.dependency_overrides.pop(require_user_dependency, None)
+
+
+def test_incomparable_reconciliation_heads_fail_closed() -> None:
+    left = SimpleNamespace(
+        submission_ref="submission-head-conflict",
+        reconciliation_ref="reconciliation-left",
+        event_refs=("event-a",),
+    )
+    right = SimpleNamespace(
+        submission_ref="submission-head-conflict",
+        reconciliation_ref="reconciliation-right",
+        event_refs=("event-b",),
+    )
+    with pytest.raises(app_main.HTTPException) as caught:
+        app_main._current_formal_reconciliation_heads((left, right))
+    assert caught.value.status_code == 503
+    assert caught.value.detail == "formal reconciliation head is ambiguous"
+
+
+def test_equal_reconciliation_event_sets_choose_stable_historical_head() -> None:
+    common = {
+        "submission_ref": "submission-head-equal",
+        "event_refs": ("event-a",),
+        "order_intent_ref": "intent-a",
+        "runtime_promotion_ref": "promotion-a",
+        "venue_order_ref": "venue-order-a",
+        "status": "needs_reconcile",
+        "action_required": True,
+        "discrepancy_refs": ("missing_terminal_reconciliation",),
+    }
+    left = SimpleNamespace(reconciliation_ref="reconciliation-b", **common)
+    right = SimpleNamespace(reconciliation_ref="reconciliation-a", **common)
+
+    heads = app_main._current_formal_reconciliation_heads((left, right))
+
+    assert heads["submission-head-equal"].reconciliation_ref == "reconciliation-a"
+
+
 def test_user_risk_choice_requires_responsibility_boundary_and_disclosures():
     decision = validate_user_risk_choice(
         _risk_choice(cost_disclosure_ref=None, failure_mode_refs=(), responsibility_boundary_ref=None)
@@ -3492,6 +4598,23 @@ def test_user_risk_choice_requires_responsibility_boundary_and_disclosures():
         "risk_choice_missing_responsibility_boundary",
         "risk_choice_missing_failure_modes",
     }
+
+
+def test_user_risk_choice_registry_is_owner_scoped_durable_and_content_bound(tmp_path):
+    path = tmp_path / "user_risk_choices.jsonl"
+    registry = PersistentUserRiskChoiceRegistry(path)
+    recorded = registry.record_choice(_risk_choice())
+    assert recorded.choice_ref.startswith("user_risk_choice_v2_")
+    assert registry.record_choice(_risk_choice()).choice_ref == recorded.choice_ref
+
+    reopened = PersistentUserRiskChoiceRegistry(path)
+    assert reopened.choice_for_owner(recorded.choice_ref, "risk-owner") == recorded
+    with pytest.raises(PermissionError, match="different owner"):
+        reopened.choice_for_owner(recorded.choice_ref, "other-owner")
+
+    forged = replace(recorded, choice_ref="user_risk_choice_v2_" + "0" * 64)
+    with pytest.raises(ValueError, match="content_identity_mismatch"):
+        registry.record_choice(forged)
 
 
 def test_complete_execution_boundary_contract_accepts_small_live_step():

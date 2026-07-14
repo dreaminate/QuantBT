@@ -145,3 +145,22 @@ permission_check: {path: /perm, method: GET}
     venue = GenericTradingVenue(cfg, http=session)
     with pytest.raises(PermissionError, match="withdraw"):
         venue.assert_safe_startup()
+
+
+def test_generic_trading_rejects_missing_permission_check_instead_of_false_ok() -> None:
+    cfg = GenericTradingConfig(
+        venue_name="unchecked",
+        base_url="https://invalid",
+        place_order={"path": "/place"},
+        cancel_order={"path": "/cancel", "method": "DELETE"},
+        get_balance={"path": "/bal", "method": "GET"},
+        get_position={"path": "/pos", "method": "GET"},
+    )
+
+    with pytest.raises(PermissionError, match="permission_check"):
+        GenericTradingVenue(cfg).assert_safe_startup()
+
+
+def test_execution_venue_default_health_check_is_not_a_hardcoded_success() -> None:
+    with pytest.raises(NotImplementedError, match="venue-native health check"):
+        PaperVenue().health_check()

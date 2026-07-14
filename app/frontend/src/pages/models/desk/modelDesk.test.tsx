@@ -76,7 +76,7 @@ describe("M1 对抗① · 晋级审批门（缺字段禁止提交，对齐后端
     fireEvent.click(screen.getByText(/模型库注册表/));
     // lgbm_rank_6f 处于 staging，可晋级到 production
     fireEvent.click(screen.getByText(/晋级 → production/));
-    const approve = screen.getByText("✓ 批准晋级") as HTMLButtonElement;
+    const approve = screen.getByText("DEMO · 未提交后端") as HTMLButtonElement;
     expect(approve.disabled).toBe(true);
     // 阻止原因列出（approver 必填）
     expect(screen.getByText(/approver 必填/)).toBeInTheDocument();
@@ -89,22 +89,22 @@ describe("M1 对抗① · 晋级审批门（缺字段禁止提交，对齐后端
     fireEvent.change(screen.getByLabelText("approver"), { target: { value: "dreaminate" } });
     fireEvent.change(screen.getByLabelText("reason"), { target: { value: "looks good" } });
     fireEvent.click(screen.getByLabelText("risk_restated"));
-    const approve = screen.getByText("✓ 批准晋级") as HTMLButtonElement;
+    const approve = screen.getByText("DEMO · 未提交后端") as HTMLButtonElement;
     expect(approve.disabled).toBe(true);
     expect(screen.getByText(/禁止自批/)).toBeInTheDocument();
   });
 
-  it("UI：approver≠creator + reason + risk_restated 齐 → 批准放行、提交成功", () => {
+  it("UI：表单齐全仅完成 DEMO 校验，仍不提交后端或报告成功", () => {
     renderWithDesk(<ModelDeskPage />, { route: "/models" });
     fireEvent.click(screen.getByText(/模型库注册表/));
     fireEvent.click(screen.getByText(/晋级 → production/));
     fireEvent.change(screen.getByLabelText("approver"), { target: { value: "reviewer-2" } });
     fireEvent.change(screen.getByLabelText("reason"), { target: { value: "staging 实测达标" } });
     fireEvent.click(screen.getByLabelText("risk_restated"));
-    const approve = screen.getByText("✓ 批准晋级") as HTMLButtonElement;
-    expect(approve.disabled).toBe(false);
-    fireEvent.click(approve);
-    expect(screen.getByText(/晋级请求已提交审批/)).toBeInTheDocument();
+    const approve = screen.getByText("DEMO · 未提交后端") as HTMLButtonElement;
+    expect(approve.disabled).toBe(true);
+    expect(screen.getByTestId("promote-demo-only")).toHaveTextContent(/未调用后端晋级端点/);
+    expect(screen.queryByText(/晋级请求已提交审批/)).toBeNull();
   });
 });
 

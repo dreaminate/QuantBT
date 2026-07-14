@@ -3,7 +3,7 @@
 把已建引擎拼成模拟台一层：
 - 多 run 注册表：每个 run = 一个 PaperScheduler(PaperVenue) 实例（复用 scheduler.py / paper_venue.py）。
 - 持仓 / 成交 / 余额 / 净值：直接读 venue.snapshot / ExecutionAuditLog(paper_fill) / equity log，不另存第二份。
-- 晋级判定聚合：4 门（≥28 天 / 模拟段超额>0 / 风险门 0 违规 / 实盘衰减<阈值）只读派生，绝不在此自动晋级。
+- 晋级判定聚合：5 门（≥28 天 / 模拟段超额>0 / 风险门 0 违规 / 实盘衰减<阈值 / 未降级 testnet 实时数据源）只读派生，绝不在此自动晋级。
 - 人工审批晋级：approver≠creator + 验证背书（INV-5），复用 approval 异常族；动钱/晋级永不暴露为 agent tool。
 - 风险门发布冻结哈希 + append-only 违规链：门限发布时 content_hash 冻结；会话内改门请求被拒并入哈希链
   （hash 链=前一条 hash + 本条内容，篡改/重排即断链）。本地门=防篡改【证据】非防篡改（TCB 诚实声明）。
@@ -15,8 +15,11 @@
 
 from __future__ import annotations
 
+import hashlib
 import threading
-from collections.abc import Callable
+import uuid
+from collections.abc import Callable, Iterator
+from contextlib import contextmanager
 from dataclasses import dataclass, field
 from datetime import UTC, datetime
 from pathlib import Path
@@ -25,7 +28,7 @@ from typing import Any, Literal
 from ..delivery import PromotionClaim, RDPManifest, require_promotion_rdp
 from ..execution.base import ExecutionAuditLog
 from ..execution.paper_venue import PaperVenue
-from ..lineage.ids import content_hash
+from ..lineage.ids import canonical_json, content_hash
 from .replay_provider import (
     ReplayBarProvider,
     make_bar_provider,
@@ -35,6 +38,7 @@ from .replay_provider import (
 from .scheduler import MarketKind, PaperScheduler, PaperSchedulerConfig
 from .testnet_provider import (
     DEFAULT_TESTNET_KEYSTORE_NAME,
+    TESTNET_SOURCE,
     TestnetBarProvider,
     TestnetMarketClient,
     make_testnet_provider,
@@ -95,6 +99,18 @@ class RiskGateMutationForbidden(Exception):
     """会话内试图改已冻结风险门：拒绝并入违规链（会话外不可改）。"""
 
 
+class RiskEvidenceCorrupted(RuntimeError):
+    """风险证据链已损坏；禁止继续追加或把残链重新锚定。"""
+
+
+class PromotionReviewerUnauthorized(PermissionError):
+    """当前认证主体没有这一个晋级门的有效 reviewer grant。"""
+
+
+class PromotionEndorsementRejected(ValueError):
+    """晋级背书不存在、已篡改、未绑定本门或不是可放行裁决。"""
+
+
 # ════════════════════════════════════════════════════════════════════
 # 风险门：发布冻结哈希 + append-only 违规哈希链
 # ════════════════════════════════════════════════════════════════════
@@ -110,11 +126,21 @@ class FrozenRiskGate:
         self._frozen: dict[str, str] = {}            # run_id → 冻结门内容哈希
         self._limits: dict[str, dict[str, Any]] = {} # run_id → 发布时门限快照（只读）
         self._chain: dict[str, list[dict[str, Any]]] = {}  # run_id → 违规/事件链
+        # 独立保存已提交链头和长度，令整条链被截断/清空也不能重新变成“完整”。
+        self._chain_anchors: dict[str, tuple[int, str]] = {}
 
     def publish(self, run_id: str, limits: dict[str, Any]) -> str:
         """发布并冻结门限；返回冻结哈希。重复 publish 同 run 视为新发布世代（覆盖冻结）。"""
 
         with self._lock:
+            if (
+                run_id in self._frozen
+                or run_id in self._chain
+                or run_id in self._chain_anchors
+            ) and not self._verify_chain_locked(run_id):
+                raise RiskEvidenceCorrupted(
+                    "risk evidence chain is corrupted; refusing to publish over it"
+                )
             frozen = content_hash({"run_id": run_id, "limits": limits})
             self._frozen[run_id] = frozen
             self._limits[run_id] = dict(limits)
@@ -162,19 +188,57 @@ class FrozenRiskGate:
             return sum(1 for e in self._chain.get(run_id, []) if e.get("kind") == "violation")
 
     def verify_chain(self, run_id: str) -> bool:
-        """复算整链 hash；任一断裂返 False（篡改/重排自证）。"""
+        """复算整链 hash；篡改、重排、截断或清空均返 False。"""
 
         with self._lock:
-            prev = ""
-            for e in self._chain.get(run_id, []):
-                recomputed = content_hash({"prev": prev, "entry": _chain_body(e)})
-                if recomputed != e.get("chain_hash"):
-                    return False
-                prev = e["chain_hash"]
-            return True
+            return self._verify_chain_locked(run_id)
+
+    def promotion_snapshot(self, run_id: str) -> tuple[int, bool]:
+        """原子读取晋级所需的违规数与证据链完整性。"""
+
+        with self._lock:
+            chain = self._chain.get(run_id, [])
+            violations = sum(1 for e in chain if e.get("kind") == "violation")
+            return violations, self._verify_chain_locked(run_id)
+
+    @contextmanager
+    def promotion_guard(self) -> Iterator[None]:
+        """在最终晋级复核与翻态期间阻止风险历史并发写入。"""
+
+        with self._lock:
+            yield
+
+    def _verify_chain_locked(self, run_id: str) -> bool:
+        chain = self._chain.get(run_id, [])
+        anchor = self._chain_anchors.get(run_id)
+        if run_id not in self._frozen or anchor is None or not chain:
+            return False
+        prev = ""
+        for expected_seq, entry in enumerate(chain):
+            try:
+                recomputed = content_hash({"prev": prev, "entry": _chain_body(entry)})
+            except (KeyError, TypeError):
+                return False
+            if (
+                entry.get("seq") != expected_seq
+                or entry.get("prev_hash") != prev
+                or recomputed != entry.get("chain_hash")
+            ):
+                return False
+            prev = str(entry["chain_hash"])
+        return anchor == (len(chain), prev)
 
     def _append(self, run_id: str, *, kind: str, detail: str, payload: dict[str, Any]) -> dict[str, Any]:
         chain = self._chain.setdefault(run_id, [])
+        anchor = self._chain_anchors.get(run_id)
+        if anchor is not None and not self._verify_chain_locked(run_id):
+            raise RiskEvidenceCorrupted(
+                "risk evidence chain is corrupted; refusing to append or re-anchor it"
+            )
+        if anchor is None and (chain or kind != "gate_published"):
+            raise RiskEvidenceCorrupted(
+                "risk evidence chain anchor is missing; refusing to append or re-anchor it"
+            )
         prev = chain[-1]["chain_hash"] if chain else ""
         body = {
             "seq": len(chain),
@@ -187,6 +251,7 @@ class FrozenRiskGate:
         entry["prev_hash"] = prev
         entry["chain_hash"] = content_hash({"prev": prev, "entry": body})
         chain.append(entry)
+        self._chain_anchors[run_id] = (len(chain), entry["chain_hash"])
         return dict(entry)
 
 
@@ -206,9 +271,14 @@ class PromotionGate:
     creator: str
     checks: list[dict[str, Any]]
     eligible: bool
-    decision: Literal["pending", "approved"] = "pending"
+    verification_target_ref: str
+    decision: Literal["pending", "approved", "superseded"] = "pending"
     approver: str | None = None
     endorsement_ref: str | None = None   # 验证背书（verdict_id / 验证记录引用）——INV-5 必填
+    endorsement_evidence_sha256: str | None = None
+    reviewer_grant_id: str | None = None
+    reviewer_grant_record_sha256: str | None = None
+    reviewer_authority_ref: str | None = None
     reason: str | None = None
     decided_at_utc: str | None = None
     created_at_utc: str = field(default_factory=lambda: datetime.now(UTC).isoformat())
@@ -217,33 +287,126 @@ class PromotionGate:
         return {
             "gate_id": self.gate_id, "run_id": self.run_id, "creator": self.creator,
             "checks": self.checks, "eligible": self.eligible, "decision": self.decision,
+            "verification_target_ref": self.verification_target_ref,
             "approver": self.approver, "endorsement_ref": self.endorsement_ref,
+            "endorsement_evidence_sha256": self.endorsement_evidence_sha256,
+            "reviewer_grant_id": self.reviewer_grant_id,
+            "reviewer_grant_record_sha256": self.reviewer_grant_record_sha256,
+            "reviewer_authority_ref": self.reviewer_authority_ref,
             "reason": self.reason, "decided_at_utc": self.decided_at_utc,
             "created_at_utc": self.created_at_utc,
         }
+
+
+@dataclass(frozen=True)
+class PaperPromotionReviewerGrant:
+    """会话内 exact-gate reviewer authority；身份来自认证主体而不是请求别名。"""
+
+    grant_id: str
+    gate_id: str
+    run_id: str
+    verification_target_ref: str
+    owner_user_id: str
+    reviewer_user_id: str
+    permissions: tuple[str, ...]
+    expires_at_utc: str
+    issued_at_utc: str
+    record_sha256: str
+
+    def to_dict(self) -> dict[str, Any]:
+        return {
+            "grant_id": self.grant_id,
+            "gate_id": self.gate_id,
+            "run_id": self.run_id,
+            "verification_target_ref": self.verification_target_ref,
+            "owner_user_id": self.owner_user_id,
+            "reviewer_user_id": self.reviewer_user_id,
+            "permissions": list(self.permissions),
+            "expires_at_utc": self.expires_at_utc,
+            "issued_at_utc": self.issued_at_utc,
+            "record_sha256": self.record_sha256,
+        }
+
+
+def _sha256_ref(kind: str, payload: Any) -> str:
+    digest = hashlib.sha256(canonical_json(payload).encode("utf-8")).hexdigest()
+    return f"{kind}:sha256:{digest}"
+
+
+def _promotion_verification_target(
+    *, gate_id: str, run_id: str, creator: str, checks: list[dict[str, Any]]
+) -> str:
+    return _sha256_ref(
+        "paper_promotion_target",
+        {
+            "schema": "paper_promotion_target.v1",
+            "gate_id": gate_id,
+            "run_id": run_id,
+            "creator": creator,
+            "checks": checks,
+        },
+    )
+
+
+def _actor(value: Any, field_name: str) -> str:
+    normalized = str(value or "").strip()
+    if not normalized:
+        raise PromotionReviewerUnauthorized(f"{field_name} is required")
+    return normalized
+
+
+def _parse_future_utc(value: Any) -> str:
+    raw = str(value or "").strip()
+    try:
+        parsed = datetime.fromisoformat(raw)
+    except ValueError as exc:
+        raise PromotionReviewerUnauthorized("reviewer grant expiry must be ISO-8601") from exc
+    if parsed.tzinfo is None or parsed.utcoffset() is None:
+        raise PromotionReviewerUnauthorized("reviewer grant expiry must include a timezone")
+    normalized = parsed.astimezone(UTC)
+    if normalized <= datetime.now(UTC):
+        raise PromotionReviewerUnauthorized("reviewer grant expiry must be in the future")
+    return normalized.isoformat()
 
 
 def aggregate_promotion_checks(
     rec: PaperRunRecord, risk: FrozenRiskGate, *, min_days: int = PROMO_MIN_DAYS,
     max_decay: float = PROMO_MAX_DECAY,
 ) -> tuple[list[dict[str, Any]], bool]:
-    """4 门聚合（只读派生）：≥28 天 / 模拟段超额>0 / 风险门 0 违规 / 实盘衰减<阈值。
+    """5 门聚合（只读派生）：运行指标 4 门 + 未降级 Binance testnet 实时数据源。
 
-    返回 (checks, eligible)。eligible = 4 门全过。绝不在此晋级——这只是判定，不是动作。
+    返回 (checks, eligible)。eligible = 5 门全过。回放/合成/降级/来源缺失均 fail closed。
+    绝不在此晋级——这只是判定，不是动作。
     """
 
     decay = _decay(rec.backtest_annual, rec.paper_annual)
-    violations = risk.violation_count(rec.run_id)
+    violations, risk_chain_intact = risk.promotion_snapshot(rec.run_id)
+    source_eligible = (
+        rec.market == "crypto"
+        and rec.simulated_source == TESTNET_SOURCE
+        and rec.provider_kind == "testnet"
+        and rec.degrade_reason is None
+    )
+    source_value = f"{rec.simulated_source or 'missing'} · provider={rec.provider_kind or 'missing'}"
+    if rec.degrade_reason:
+        source_value += f" · degraded={rec.degrade_reason}"
     checks = [
         {"key": "days", "label": "模拟运行满 1 个月（≥28 天）",
          "value": f"{rec.days_running} / {min_days} 天", "passed": rec.days_running >= min_days},
         {"key": "excess", "label": "模拟段年化 > 基准",
          "value": f"{rec.paper_excess_return:+.2%}", "passed": rec.paper_excess_return > 0},
-        {"key": "zero_violation", "label": "风险门 0 违规",
-         "value": ("全绿" if violations == 0 else f"{violations} 违规"), "passed": violations == 0},
+        {"key": "zero_violation", "label": "风险门 0 违规且证据链完整",
+         "value": (
+             "全绿" if risk_chain_intact and violations == 0
+             else "证据链损坏" if not risk_chain_intact
+             else f"{violations} 违规"
+         ),
+         "passed": risk_chain_intact and violations == 0},
         {"key": "decay", "label": f"实盘衰减 < {max_decay:.0%}",
          "value": (f"{decay:+.0%}" if decay is not None else "n/a"),
          "passed": decay is not None and decay > -max_decay},
+        {"key": "data_source", "label": "晋级数据源 · 加密市场 Binance testnet 实时 bar",
+         "value": source_value, "passed": source_eligible},
     ]
     eligible = all(c["passed"] for c in checks)
     return checks, eligible
@@ -264,9 +427,31 @@ class PaperDeskService:
         self._lock = threading.RLock()
         self._runs: dict[str, PaperRunRecord] = {}
         self._gates: dict[str, PromotionGate] = {}
+        self._reviewer_grants: dict[str, PaperPromotionReviewerGrant] = {}
+        self._endorsement_lookup: Callable[[str | None], Any] | None = None
+        self._reviewer_authority_lookup: Callable[[str], str | None] | None = None
         self.risk = FrozenRiskGate()
-        self._gate_seq = 0
         self._keystore: Any = None  # 惰性 SecureKeystore（仅 testnet provider 查 key 名存在性用，不 fetch 本体）
+
+    def configure_promotion_endorsement_lookup(
+        self, lookup: Callable[[str | None], Any]
+    ) -> None:
+        """接权威 VerdictStore 读路径；未配置时审批 fail closed。"""
+
+        if not callable(lookup):
+            raise TypeError("promotion endorsement lookup must be callable")
+        with self._lock:
+            self._endorsement_lookup = lookup
+
+    def configure_promotion_reviewer_authority(
+        self, lookup: Callable[[str], str | None]
+    ) -> None:
+        """接机器侧 verifier allowlist；普通请求不能自行扩充该信任根。"""
+
+        if not callable(lookup):
+            raise TypeError("promotion reviewer authority lookup must be callable")
+        with self._lock:
+            self._reviewer_authority_lookup = lookup
 
     def _resolve_keystore(self) -> Any:
         """惰性打开 SecureKeystore（仅供 testnet provider 查 **key 名存在性**，绝不 fetch 明文 secret）。
@@ -538,21 +723,219 @@ class PaperDeskService:
             "run_id": run_id, "checks": checks, "eligible": eligible,
             "promoted": rec.promoted, "gate_id": rec.promotion_gate_id,
             "days_running": rec.days_running,
+            "simulated_source": rec.simulated_source,
+            "provider_kind": rec.provider_kind,
+            "degrade_reason": rec.degrade_reason,
         }
 
     def open_promotion_gate(self, run_id: str, *, creator: str) -> PromotionGate:
         """开晋级判定门（pending）。仅判定+落门，绝不翻态——晋级是后续人工动作。"""
 
         with self._lock:
+            creator_id = _actor(creator, "creator")
             rec = self.get(run_id)
+            run_owner = _actor(rec.creator, "run creator")
+            if creator_id.casefold() != run_owner.casefold():
+                raise PromotionReviewerUnauthorized(
+                    "only the authenticated paper run owner can open a promotion gate"
+                )
+            if rec.promoted:
+                from ..approval.schema import GateStateError
+
+                raise GateStateError(
+                    "paper run is already promoted; a new pending promotion gate is not allowed"
+                )
             checks, eligible = aggregate_promotion_checks(rec, self.risk)
-            self._gate_seq += 1
-            gate_id = f"promo_{run_id}_{self._gate_seq}"
-            gate = PromotionGate(gate_id=gate_id, run_id=run_id, creator=creator,
-                                 checks=checks, eligible=eligible)
+            gate_id = f"promo_{run_id}_{uuid.uuid4().hex}"
+            verification_target_ref = _promotion_verification_target(
+                gate_id=gate_id,
+                run_id=run_id,
+                creator=creator_id,
+                checks=checks,
+            )
+            gate = PromotionGate(
+                gate_id=gate_id,
+                run_id=run_id,
+                creator=creator_id,
+                checks=checks,
+                eligible=eligible,
+                verification_target_ref=verification_target_ref,
+            )
+            prior_gate = self._gates.get(str(rec.promotion_gate_id or ""))
+            if prior_gate is not None and prior_gate.decision == "pending":
+                prior_gate.decision = "superseded"
             self._gates[gate_id] = gate
             rec.promotion_gate_id = gate_id
             return gate
+
+    def grant_promotion_reviewer(
+        self,
+        gate_id: str,
+        *,
+        owner_user_id: str,
+        reviewer_user_id: str,
+        permissions: tuple[str, ...],
+        expires_at_utc: str,
+    ) -> PaperPromotionReviewerGrant:
+        """由门创建者向另一个认证主体授予 exact-gate 审批权。"""
+
+        with self._lock:
+            gate = self._gates.get(gate_id)
+            if gate is None:
+                raise PaperRunNotFound(gate_id)
+            owner = _actor(owner_user_id, "owner_user_id")
+            reviewer = _actor(reviewer_user_id, "reviewer_user_id")
+            if owner != gate.creator:
+                raise PromotionReviewerUnauthorized("only the exact gate creator can grant review")
+            if reviewer.casefold() == owner.casefold():
+                raise PromotionReviewerUnauthorized("reviewer must differ from gate creator")
+            allowed = tuple(sorted({str(item or "").strip() for item in permissions if str(item or "").strip()}))
+            if allowed != ("approve",):
+                raise PromotionReviewerUnauthorized("paper reviewer grant requires exactly approve")
+            expiry = _parse_future_utc(expires_at_utc)
+            issued_at = datetime.now(UTC).isoformat()
+            identity = {
+                "schema": "paper_promotion_reviewer_grant.v1",
+                "gate_id": gate.gate_id,
+                "run_id": gate.run_id,
+                "verification_target_ref": gate.verification_target_ref,
+                "owner_user_id": owner,
+                "reviewer_user_id": reviewer,
+                "permissions": list(allowed),
+                "expires_at_utc": expiry,
+                "issued_at_utc": issued_at,
+            }
+            grant_id = _sha256_ref("paper_reviewer_grant", {
+                key: value for key, value in identity.items() if key != "issued_at_utc"
+            })
+            record_sha256 = _sha256_ref("paper_reviewer_grant_record", identity)
+            grant = PaperPromotionReviewerGrant(
+                grant_id=grant_id,
+                gate_id=gate.gate_id,
+                run_id=gate.run_id,
+                verification_target_ref=gate.verification_target_ref,
+                owner_user_id=owner,
+                reviewer_user_id=reviewer,
+                permissions=allowed,
+                expires_at_utc=expiry,
+                issued_at_utc=issued_at,
+                record_sha256=record_sha256,
+            )
+            stale_grants = [
+                identity
+                for identity, current in self._reviewer_grants.items()
+                if current.gate_id == gate.gate_id
+                and current.owner_user_id == owner
+                and current.reviewer_user_id == reviewer
+            ]
+            for identity in stale_grants:
+                self._reviewer_grants.pop(identity, None)
+            self._reviewer_grants[grant_id] = grant
+            return grant
+
+    def _authorize_promotion_reviewer(
+        self, gate: PromotionGate, approver: str
+    ) -> tuple[PaperPromotionReviewerGrant, str]:
+        reviewer = _actor(approver, "approver")
+        now = datetime.now(UTC)
+        candidates = [
+            grant
+            for grant in self._reviewer_grants.values()
+            if grant.gate_id == gate.gate_id
+            and grant.run_id == gate.run_id
+            and grant.verification_target_ref == gate.verification_target_ref
+            and grant.owner_user_id == gate.creator
+            and grant.reviewer_user_id == reviewer
+            and grant.permissions == ("approve",)
+        ]
+        if len(candidates) != 1:
+            raise PromotionReviewerUnauthorized(
+                "promotion gate not found or authenticated reviewer is not authorized"
+            )
+        grant = candidates[0]
+        expires = datetime.fromisoformat(grant.expires_at_utc).astimezone(UTC)
+        if expires <= now:
+            raise PromotionReviewerUnauthorized(
+                "promotion gate not found or authenticated reviewer is not authorized"
+            )
+        expected_identity = {
+            "schema": "paper_promotion_reviewer_grant.v1",
+            "gate_id": grant.gate_id,
+            "run_id": grant.run_id,
+            "verification_target_ref": grant.verification_target_ref,
+            "owner_user_id": grant.owner_user_id,
+            "reviewer_user_id": grant.reviewer_user_id,
+            "permissions": list(grant.permissions),
+            "expires_at_utc": grant.expires_at_utc,
+            "issued_at_utc": grant.issued_at_utc,
+        }
+        if grant.record_sha256 != _sha256_ref("paper_reviewer_grant_record", expected_identity):
+            raise PromotionReviewerUnauthorized("reviewer grant record hash does not match content")
+        if self._reviewer_authority_lookup is None:
+            raise PromotionReviewerUnauthorized(
+                "trusted paper verifier authority is not configured"
+            )
+        try:
+            authority_ref = str(self._reviewer_authority_lookup(reviewer) or "").strip()
+        except Exception as exc:  # noqa: BLE001 - authority lookup fails closed.
+            raise PromotionReviewerUnauthorized(
+                "trusted paper verifier authority could not be resolved"
+            ) from exc
+        if not authority_ref:
+            raise PromotionReviewerUnauthorized(
+                "authenticated reviewer is not in the machine paper verifier allowlist"
+            )
+        return grant, authority_ref
+
+    def _resolve_promotion_endorsement(
+        self, gate: PromotionGate, endorsement_ref: str | None
+    ) -> tuple[Any, str]:
+        ref = str(endorsement_ref or "").strip()
+        if not ref:
+            from ..approval.schema import EmptyReason
+
+            raise EmptyReason(
+                "缺验证背书（endorsement_ref）：裸翻必拒（INV-5，未验证≠已验证）"
+            )
+        if self._endorsement_lookup is None:
+            raise PromotionEndorsementRejected("paper promotion endorsement authority is unavailable")
+        try:
+            record = self._endorsement_lookup(ref)
+        except Exception as exc:  # noqa: BLE001 - tamper/read errors fail closed.
+            raise PromotionEndorsementRejected(
+                "paper promotion endorsement could not be verified"
+            ) from exc
+        if record is None:
+            raise PromotionEndorsementRejected("paper promotion endorsement was not found")
+
+        from ..verification.schema import VerdictRecord, verdict_id_of
+
+        if not isinstance(record, VerdictRecord):
+            raise PromotionEndorsementRejected("paper promotion endorsement is not typed")
+        if record.verdict_id != ref or verdict_id_of(record) != ref:
+            raise PromotionEndorsementRejected("paper promotion endorsement content id is invalid")
+        if record.target_ref != gate.verification_target_ref:
+            raise PromotionEndorsementRejected(
+                "paper promotion endorsement is not bound to this exact run/gate snapshot"
+            )
+        if record.verdict != "consistent":
+            raise PromotionEndorsementRejected(
+                f"paper promotion endorsement verdict={record.verdict!r} is not releasable"
+            )
+        if (
+            not record.independence.established
+            or not record.independence.model_differs
+            or record.generator_model == record.checker_model
+        ):
+            raise PromotionEndorsementRejected(
+                "paper promotion endorsement lacks a distinct-model verification challenge"
+            )
+        if not record.consistency_check or not record.replay_ref:
+            raise PromotionEndorsementRejected(
+                "paper promotion endorsement requires exact checks and replay_ref"
+            )
+        evidence_hash = _sha256_ref("paper_promotion_endorsement", record.to_dict())
+        return record, evidence_hash
 
     def approve_promotion(
         self, gate_id: str, *, approver: str, endorsement_ref: str | None, reason: str,
@@ -562,8 +945,9 @@ class PaperDeskService:
         """人工审批晋级（INV-5 硬门 + §17 RDP 追溯接线）：
 
         - approver == creator → ApproverEqualsCreator（防自审，生成≠验证不可自我满足）。
-        - 无 endorsement_ref（验证背书）→ EmptyReason（裸翻必拒，未验证 ≠ 已验证）。
-        - 4 门未全过（eligible=False）→ GateStateError（不可跳级）。
+        - 无/无效/错绑 endorsement_ref → 拒（必须解析成绑定本门的 consistent typed verdict）。
+        - approver 必须是认证主体，且持有 creator 签发给本门的当前 reviewer grant。
+        - 5 门未全过（eligible=False，含数据源门）→ GateStateError（不可跳级）。
         - 非 pending → GateStateError。
         - §17 RDP 追溯（D-RDP-1 wire）：翻态前调 `require_promotion_rdp(rdp, promotion_claim, ...)`——
           残缺 RDP（缺 manifest/hash/repro/DatasetVersion/未验证残余）或追溯断裂 → RDPRejected，不翻态。
@@ -579,24 +963,78 @@ class PaperDeskService:
                 raise PaperRunNotFound(gate_id)
             if gate.decision != "pending":
                 raise GateStateError(f"门非 pending（当前 {gate.decision}），不可再审批")
-            if not approver or approver == gate.creator:
+            if not str(endorsement_ref or "").strip():
+                raise EmptyReason(
+                    "缺验证背书（endorsement_ref）：裸翻必拒（INV-5，未验证≠已验证）"
+                )
+            approver_id = _actor(approver, "approver")
+            if approver_id.casefold() == gate.creator.casefold():
                 raise ApproverEqualsCreator("approver 不得等于 creator（防自审，INV-5）")
-            if not (endorsement_ref or "").strip():
-                raise EmptyReason("缺验证背书（endorsement_ref）：裸翻必拒（INV-5，未验证≠已验证）")
             if not (reason or "").strip():
                 raise EmptyReason("审批理由不得为空（反敷衍）")
-            if not gate.eligible:
-                gaps = [c["label"] for c in gate.checks if not c["passed"]]
-                raise GateStateError("晋级判定 4 门未全过，不可晋级（不可跳级）：" + "；".join(gaps))
+            # 审批瞬间重新聚合当前 run，防止开门后数据源降级或指标恶化仍沿用旧快照。
+            # 已经不合格的旧门不会因后续状态变化自行转绿；须重新开门留新快照。
+            rec = self.get(gate.run_id)
+            if rec.promotion_gate_id != gate.gate_id:
+                raise GateStateError(
+                    "晋级门已被更新门取代；旧门不可审批，须使用当前 gate"
+                )
+            current_checks, current_eligible = aggregate_promotion_checks(rec, self.risk)
+            current_target_ref = _promotion_verification_target(
+                gate_id=gate.gate_id,
+                run_id=gate.run_id,
+                creator=gate.creator,
+                checks=current_checks,
+            )
+            if not gate.eligible or not current_eligible or current_target_ref != gate.verification_target_ref:
+                gaps = [c["label"] for c in current_checks if not c["passed"]]
+                if not gaps:
+                    gaps = ["门快照已变化或打开时未达标，须重新开门并重新验证"]
+                raise GateStateError("晋级判定 5 门未全过，不可晋级（不可跳级）：" + "；".join(gaps))
+            reviewer_grant, reviewer_authority_ref = self._authorize_promotion_reviewer(
+                gate, approver_id
+            )
+            _endorsement, endorsement_evidence_sha256 = self._resolve_promotion_endorsement(
+                gate, endorsement_ref
+            )
             # §17 RDP 追溯接线：fail-closed 在翻态之前（残缺/断裂 RDP raise RDPRejected，promoted 不动）。
             require_promotion_rdp(rdp, promotion_claim, require_rdp=require_rdp)
-            gate.decision = "approved"
-            gate.approver = approver
-            gate.endorsement_ref = endorsement_ref
-            gate.reason = reason
-            gate.decided_at_utc = datetime.now(UTC).isoformat()
-            self.get(gate.run_id).promoted = True
-            return gate
+            # 外部验证完成后，在风险锁内做最后一次快照并翻态。这样并发违规只能
+            # 线性化在本次晋级之前（被下方复核拒绝）或之后，不能插进快照与 commit 之间。
+            with self.risk.promotion_guard():
+                final_checks, final_eligible = aggregate_promotion_checks(rec, self.risk)
+                final_target_ref = _promotion_verification_target(
+                    gate_id=gate.gate_id,
+                    run_id=gate.run_id,
+                    creator=gate.creator,
+                    checks=final_checks,
+                )
+                if (
+                    not gate.eligible
+                    or not final_eligible
+                    or final_target_ref != gate.verification_target_ref
+                ):
+                    gaps = [c["label"] for c in final_checks if not c["passed"]]
+                    if not gaps:
+                        gaps = ["门快照已变化或打开时未达标，须重新开门并重新验证"]
+                    raise GateStateError(
+                        "晋级判定 5 门未全过，不可晋级（不可跳级）：" + "；".join(gaps)
+                    )
+                # All gates passed. Commit the in-memory gate/run state while both
+                # PaperDeskService._lock and the risk evidence lock are held.
+                gate.checks = final_checks
+                gate.eligible = True
+                gate.decision = "approved"
+                gate.approver = approver_id
+                gate.endorsement_ref = str(endorsement_ref).strip()
+                gate.endorsement_evidence_sha256 = endorsement_evidence_sha256
+                gate.reviewer_grant_id = reviewer_grant.grant_id
+                gate.reviewer_grant_record_sha256 = reviewer_grant.record_sha256
+                gate.reviewer_authority_ref = reviewer_authority_ref
+                gate.reason = reason.strip()
+                gate.decided_at_utc = datetime.now(UTC).isoformat()
+                rec.promoted = True
+                return gate
 
     def get_promotion_gate(self, gate_id: str) -> PromotionGate:
         with self._lock:
@@ -657,6 +1095,6 @@ def _default_risk_limits(market: MarketKind) -> dict[str, Any]:
 
 __all__ = [
     "AShareLiveForbidden", "FrozenRiskGate", "PaperDeskService", "PaperRunNotFound",
-    "PaperRunRecord", "PromotionGate", "RiskGateMutationForbidden",
+    "PaperRunRecord", "PromotionGate", "RiskEvidenceCorrupted", "RiskGateMutationForbidden",
     "aggregate_promotion_checks", "PROMO_MIN_DAYS", "PROMO_MAX_DECAY",
 ]

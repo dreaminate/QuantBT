@@ -37,6 +37,7 @@ from ..research_os import (
     RecertificationTrigger,
     SafeLoadingPolicy,
 )
+from ..research_os.model_governance_closure import model_training_code_hash
 from . import artifact_trust
 from .artifact_inspection import inspect_artifact_in_subprocess
 from .codegen import load_pit_panel, spec_to_code
@@ -56,6 +57,7 @@ from .store import TrainingJob, TrainingJobStore, _gen_id
 # producer 路径破基线 → 构造 TrainingService(trust_enforce=False) 回退 opt-in(无需改门/改 producer)。
 # 🟡 enforce-默认-翻开【待中心全量验证】:本卡只跑 scoped、只验组合消费路径,绝不声称全量绿。
 _TRUST_ENFORCE_DEFAULT = True
+_TRAINING_SERVICE_ACTOR = "training_service"
 
 
 def _now() -> str:
@@ -77,8 +79,19 @@ def _sha256_file(path: Path) -> str:
     return "sha256:" + h.hexdigest()
 
 
-def _next_model_version(registry: ModelRegistry, model_id: str) -> int:
-    versions = [version.version for version in registry.list_versions(model_id)]
+def _next_model_version(
+    registry: ModelRegistry,
+    model_id: str,
+    *,
+    owner_user_id: str,
+) -> int:
+    versions = [
+        version.version
+        for version in registry.list_versions(
+            model_id,
+            owner_user_id=owner_user_id,
+        )
+    ]
     return (max(versions) + 1) if versions else 1
 
 
@@ -131,6 +144,9 @@ class TrainingRequest:
     # None=全知视图（默认·additive·向后兼容·逐字现状不变）。透传链：to_dict() → spec →
     # codegen `load_pit_panel`（DL/脚本路·子进程）；ML 进程内路经 `_pit_view` 走同一单一源折叠。
     as_of_known: str | None = None
+    # GOAL §11: confirmatory_validation is a fail-closed PIT consumer.  Other
+    # contexts remain explicitly exploratory/backtest compatible.
+    use_context: str = "research"
     # 模型组合：用已训练模型的输出当输入特征。
     # 每项 {"artifact_path": "...", "feature_cols": [...], "as_col": "model_x_pred"}
     input_models: list[dict[str, Any]] = field(default_factory=list)
@@ -170,6 +186,7 @@ class TrainingService:
         run_store: RunStore | None = None,
         model_registry: ModelRegistry | None = None,
         model_governance_registry: Any | None = None,
+        model_recertification_event_registry: Any | None = None,
         result_recorder: Callable[[TrainingJob], dict[str, Any]] | None = None,
         max_concurrency: int = 1,
         timeout: float | None = None,
@@ -184,12 +201,58 @@ class TrainingService:
         m12_root = self._root.parent / "experiments"
         self._exp = experiment_store or ExperimentStore(m12_root)
         self._runs = run_store or RunStore(m12_root)
-        self._models = model_registry or ModelRegistry(m12_root)
+        self._models = model_registry or ModelRegistry(
+            m12_root,
+            model_governance_registry=model_governance_registry,
+        )
+        attached_model_governance = getattr(
+            self._models,
+            "_model_governance_registry",
+            None,
+        )
+        if (
+            model_governance_registry is not None
+            and attached_model_governance is not model_governance_registry
+        ):
+            raise ValueError(
+                "TrainingService model_registry and model_governance_registry must share identity"
+            )
         self._model_governance = model_governance_registry or getattr(
             self._models,
             "_model_governance_registry",
             None,
         )
+        self._model_recertification_events = None
+        if self._model_governance is not None:
+            from ..research_os.model_recertification_events import (
+                PersistentModelRecertificationEventRegistry,
+            )
+
+            attached_events = getattr(
+                self._models,
+                "model_recertification_event_registry",
+                None,
+            )
+            event_registry = (
+                model_recertification_event_registry
+                or attached_events
+                or PersistentModelRecertificationEventRegistry(
+                    self._root.parent
+                    / "audit"
+                    / "model_recertification_events.jsonl"
+                )
+            )
+            bind_events = getattr(
+                self._models,
+                "bind_model_recertification_events",
+                None,
+            )
+            if not callable(bind_events):
+                raise ValueError(
+                    "TrainingService model registry lacks recertification event binding"
+                )
+            bind_events(event_registry, self._jobs)
+            self._model_recertification_events = event_registry
         self._result_recorder = result_recorder
         # 有界线程池：真正限流并发（不再为每个提交预先 spawn 一个阻塞线程→内存/线程泄漏）。
         self._pool = ThreadPoolExecutor(
@@ -200,34 +263,78 @@ class TrainingService:
 
     # ---------------- 公开 API：结构化 spec ----------------
 
-    def submit(self, request: TrainingRequest, panel: pd.DataFrame) -> TrainingJob:
+    def submit(
+        self,
+        request: TrainingRequest,
+        panel: pd.DataFrame,
+        *,
+        owner_user_id: str | None = None,
+    ) -> TrainingJob:
+        owner = self._execution_owner(owner_user_id)
         job = self._build_spec_job(request)
+        job.owner_user_id = owner
         self._jobs.create(job)
-        self._spawn(job.job_id, panel, request=request)
+        self._spawn(job.job_id, panel, request=request, owner_user_id=owner)
         return job
 
-    def train_now(self, request: TrainingRequest, panel: pd.DataFrame) -> TrainingJob:
+    def train_now(
+        self,
+        request: TrainingRequest,
+        panel: pd.DataFrame,
+        *,
+        owner_user_id: str | None = None,
+    ) -> TrainingJob:
+        owner = self._execution_owner(owner_user_id)
         job = self._build_spec_job(request)
+        job.owner_user_id = owner
         self._jobs.create(job)
-        self._execute(job.job_id, panel, request=request)
+        self._execute(job.job_id, panel, request=request, owner_user_id=owner)
         return self._jobs.get(job.job_id)
 
     # ---------------- 公开 API：自由代码 ----------------
 
     def submit_code(
-        self, name: str, code: str, panel: pd.DataFrame, *, asset_class: str = "a_share"
+        self,
+        name: str,
+        code: str,
+        panel: pd.DataFrame,
+        *,
+        asset_class: str = "a_share",
+        owner_user_id: str | None = None,
     ) -> TrainingJob:
+        owner = self._execution_owner(owner_user_id)
         job = self._build_code_job(name, asset_class)
+        job.owner_user_id = owner
         self._jobs.create(job)
-        self._spawn(job.job_id, panel, code=code, asset_class=asset_class)
+        self._spawn(
+            job.job_id,
+            panel,
+            code=code,
+            asset_class=asset_class,
+            owner_user_id=owner,
+        )
         return job
 
     def train_now_code(
-        self, name: str, code: str, panel: pd.DataFrame, *, asset_class: str = "a_share"
+        self,
+        name: str,
+        code: str,
+        panel: pd.DataFrame,
+        *,
+        asset_class: str = "a_share",
+        owner_user_id: str | None = None,
     ) -> TrainingJob:
+        owner = self._execution_owner(owner_user_id)
         job = self._build_code_job(name, asset_class)
+        job.owner_user_id = owner
         self._jobs.create(job)
-        self._execute(job.job_id, panel, code=code, asset_class=asset_class)
+        self._execute(
+            job.job_id,
+            panel,
+            code=code,
+            asset_class=asset_class,
+            owner_user_id=owner,
+        )
         return self._jobs.get(job.job_id)
 
     # ---------------- 查询 ----------------
@@ -244,6 +351,21 @@ class TrainingService:
                 f.result(timeout)
             except Exception:  # noqa: BLE001 — _execute 自己落 job.error，这里只等完成
                 pass
+
+    def _execution_owner(self, owner_user_id: str | None) -> str:
+        """Normalize the authenticated owner at the public service boundary.
+
+        Every successful structured training run writes a ModelVersion even when a
+        model-governance registry is not configured. The caller must therefore
+        provide the stable authenticated owner explicitly for every public training
+        seam; deriving an owner from existing rows would turn ambient single-owner
+        state into an authorization decision and fail open when another owner exists.
+        """
+
+        owner = str(owner_user_id or "").strip()
+        if not owner:
+            raise ValueError("owner_user_id is required for training model identity")
+        return owner
 
     # ---------------- 内部：建 job ----------------
 
@@ -293,6 +415,7 @@ class TrainingService:
         request: TrainingRequest | None = None,
         code: str | None = None,
         asset_class: str = "a_share",
+        owner_user_id: str,
     ) -> None:
         # 并发由线程池 max_workers 限流；此处不再各自 acquire 信号量。
         if True:
@@ -336,7 +459,11 @@ class TrainingService:
                 # panel 已过 input_models 注入 + train_fraction 切片，指纹反映真实送训 schema。
                 # 返回的 plan 在训练后登记 passport 时透传（绑定指纹 + change_events + 清账记录引用）。
                 recert_plan = (
-                    self._evaluate_data_schema_recertification(request, panel)
+                    self._evaluate_data_schema_recertification(
+                        request,
+                        panel,
+                        owner_user_id=owner_user_id,
+                    )
                     if request is not None
                     else None
                 )
@@ -371,6 +498,7 @@ class TrainingService:
                         run_id=run_id,
                         spec_dump=spec_dump,
                         recert_plan=recert_plan,
+                        owner_user_id=owner_user_id,
                     )
                     job.model_version = version_record.version
                     job.model_passport_ref = version_record.model_passport_ref
@@ -427,7 +555,8 @@ class TrainingService:
         **同一单一源** ``codegen.load_pit_panel`` 折叠后再训练——两路 as-of 语义对齐、不另造平行
         PIT 逻辑（复用 ``resolver.as_of_bound`` + 镜像 ``catalog._materialize_sub`` 折叠，单一源）。
 
-        - ``as_of_known=None`` → **逐字原 panel**：向后兼容·additive·绝不改既有 ML 训练（无 round-trip）。
+        - 非 confirmatory 且 ``as_of_known=None`` → **逐字原 panel**：向后兼容·additive。
+        - ``use_context=confirmatory_validation`` → 缺 ``as_of_known`` 或 ``known_at`` 轴均 fail-closed。
         - ``as_of_known`` 给定 → 经 ``load_pit_panel`` 按 ``known_at<=as_of_known`` 折叠点查：
           晚于该知识时点的未来重述 / 未来行必被挡在训练之外（重述 as-of）。
         - 无 ``known_at`` 列 → ``load_pit_panel`` 内部 mirror ``_materialize_sub`` 原样返回
@@ -437,7 +566,8 @@ class TrainingService:
         DataFrame → 落一份**临时** parquet 当传输、走同一源折叠后即清理（不在 job_dir 留未过滤快照、
         与 ML 进程内路本就不持久化训练面板一致），绝不在 service 层另造折叠逻辑。
         """
-        if request.as_of_known is None:
+        confirmatory = request.use_context == "confirmatory_validation"
+        if request.as_of_known is None and not confirmatory:
             return panel  # 逐字现状·向后兼容（既有 ML 训练一字不变，无 round-trip 开销）
         import tempfile
 
@@ -447,6 +577,7 @@ class TrainingService:
             return load_pit_panel(  # load_pit_panel 全量读进内存后返回，临时目录可随即清理
                 str(pit_path),
                 as_of_known=request.as_of_known,
+                confirmatory=confirmatory,
                 ts_col=request.ts_col,
                 symbol_col=request.symbol_col,
             )
@@ -483,6 +614,7 @@ class TrainingService:
         run_id: str,
         spec_dump: dict[str, Any],
         recert_plan: _SchemaRecertPlan | None = None,
+        owner_user_id: str,
     ):
         artifact_path = Path(str(result["artifact_path"]))
         artifact_hash = _sha256_file(artifact_path)
@@ -491,7 +623,11 @@ class TrainingService:
             json.dumps(inspection, ensure_ascii=False, indent=2, sort_keys=True),
             encoding="utf-8",
         )
-        next_version = _next_model_version(self._models, request.model)
+        next_version = _next_model_version(
+            self._models,
+            request.model,
+            owner_user_id=owner_user_id,
+        )
         model_version_ref = f"model_version:{request.model}:v{next_version}"
         validation_dossier_ref = f"validation_dossier:{job.job_id}"
         training_run_ref = f"training_run:{run_id}"
@@ -547,7 +683,7 @@ class TrainingService:
                 dataset_refs=(dataset_ref,),
                 feature_refs=tuple(request.feature_cols),
                 label_refs=(request.label_col,),
-                training_code_hash="sha256:" + _stable_json_hash(spec_dump),
+                training_code_hash=model_training_code_hash(spec_dump),
                 artifact_manifest=(
                     ModelArtifactManifestEntry(
                         artifact_ref=f"model_artifact:{job.job_id}",
@@ -573,9 +709,14 @@ class TrainingService:
                 dataset_schema_fingerprint=schema_fingerprint,
                 validation_dossier_ref=validation_dossier_ref,
                 challenger_result="not required for medium risk training artifact",
+                owner_user_id=owner_user_id,
+                recorded_by=_TRAINING_SERVICE_ACTOR,
             )
             recorded_passport = self._model_governance.record_passport(
-                passport, change_events=change_events
+                passport,
+                change_events=change_events,
+                owner_user_id=owner_user_id,
+                recorded_by=_TRAINING_SERVICE_ACTOR,
             )
             passport_ref = recorded_passport.passport_id
             self._model_governance.record_artifact_inspection(
@@ -590,8 +731,11 @@ class TrainingService:
                     inspector_ref=str(inspection.get("inspector_ref") or ""),
                     checks=tuple(str(value) for value in inspection.get("checks") or ()),
                     limitations=tuple(str(value) for value in inspection.get("limitations") or ()),
-                    recorded_by="training_service",
-                )
+                    recorded_by=_TRAINING_SERVICE_ACTOR,
+                    owner_user_id=owner_user_id,
+                ),
+                owner_user_id=owner_user_id,
+                recorded_by=_TRAINING_SERVICE_ACTOR,
             )
         return self._models.register_version(
             model_id=request.model,
@@ -601,12 +745,17 @@ class TrainingService:
             model_passport_ref=passport_ref,
             validation_dossier_ref=validation_dossier_ref,
             note=job.name,
+            owner_user_id=owner_user_id,
         )
 
     # ---------------- C-S15 producer：DATA_SCHEMA_CHANGE 重认证门 ----------------
 
     def _evaluate_data_schema_recertification(
-        self, request: TrainingRequest, panel: pd.DataFrame
+        self,
+        request: TrainingRequest,
+        panel: pd.DataFrame,
+        *,
+        owner_user_id: str,
     ) -> _SchemaRecertPlan:
         """Pre-run §15 DATA_SCHEMA_CHANGE gate (producer side).
 
@@ -639,14 +788,21 @@ class TrainingService:
         # changed schema train unchecked. A model with no fingerprinted passport yet
         # has no prior schema to police → its baseline is set by this run (no
         # obligation on a baseline that does not exist).
-        prior = self._schema_baseline_passport(model_card_ref)
+        prior = self._schema_baseline_passport(
+            model_card_ref,
+            owner_user_id=owner_user_id,
+        )
         prev_fp = str(getattr(prior, "dataset_schema_fingerprint", "") or "") if prior is not None else ""
         if not prev_fp or prev_fp == now_fp:
             # No fingerprinted baseline for this model, or schema unchanged →放行（无义务）。
             return _SchemaRecertPlan(now_fp, (), ())
 
         change_event_ref = schema_change_event_ref(model_card_ref, prev_fp, now_fp)
-        resolving = self._resolving_schema_recertifications(model_card_ref, change_event_ref)
+        resolving = self._resolving_schema_recertifications(
+            model_card_ref,
+            change_event_ref,
+            owner_user_id=owner_user_id,
+        )
         if not resolving:
             diff = describe_name_diff(
                 prior.feature_refs,
@@ -667,13 +823,20 @@ class TrainingService:
             tuple(record.recertification_record_id for record in resolving),
         )
 
-    def _schema_baseline_passport(self, model_card_ref: str) -> Any | None:
+    def _schema_baseline_passport(
+        self,
+        model_card_ref: str,
+        *,
+        owner_user_id: str,
+    ) -> Any | None:
         """Latest passport for a model that carries a non-empty schema fingerprint
         (``passports()`` keeps insertion order, so the last match is the most recent),
         or None when no fingerprinted passport exists yet. A fingerprint-less passport
         is skipped so it cannot reset the producer baseline (fail-closed)."""
         baseline = None
-        for passport in self._model_governance.passports():
+        for passport in self._model_governance.passports(
+            owner_user_id=owner_user_id
+        ):
             if getattr(passport, "model_type_card_ref", None) != model_card_ref:
                 continue
             if not str(getattr(passport, "dataset_schema_fingerprint", "") or ""):
@@ -682,7 +845,11 @@ class TrainingService:
         return baseline
 
     def _resolving_schema_recertifications(
-        self, model_card_ref: str, change_event_ref: str
+        self,
+        model_card_ref: str,
+        change_event_ref: str,
+        *,
+        owner_user_id: str,
     ) -> list[Any]:
         """Accepted/waived DATA_SCHEMA_CHANGE recert records that clear exactly this
         transition. Three independent bindings must all hold so an unrelated or
@@ -695,7 +862,9 @@ class TrainingService:
         """
         governance = self._model_governance
         resolving: list[Any] = []
-        for record in governance.recertification_records():
+        for record in governance.recertification_records(
+            owner_user_id=owner_user_id
+        ):
             trigger = str(getattr(record.trigger, "value", record.trigger))
             if trigger != RecertificationTrigger.DATA_SCHEMA_CHANGE.value:
                 continue
@@ -704,7 +873,10 @@ class TrainingService:
             if getattr(record, "decision", "") not in _ACCEPTED_RECERT_DECISIONS:
                 continue
             try:
-                bound = governance.passport(record.model_passport_ref)
+                bound = governance.passport(
+                    record.model_passport_ref,
+                    owner_user_id=owner_user_id,
+                )
             except KeyError:
                 continue
             if getattr(bound, "model_type_card_ref", None) != model_card_ref:

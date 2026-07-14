@@ -6,12 +6,17 @@
         i_runs (run_id, strategy_id, owner_username, status, started_at_utc,
                 finished_at_utc, exit_code, error, stdout_path, result_path)
 
-运行结果落盘到 RUN_ROOT/<run_id>/{stdout.log, stderr.log, result.json}
+运行结果落盘到 RUN_ROOT/<run_id>/。成功运行还会冻结精确的 strategy.py、
+canonical result.json、portfolio.csv 与最后写入的 canonical run.json。
 """
 
 from __future__ import annotations
 
+import csv
+import hashlib
+import io
 import json
+import math
 import sqlite3
 import threading
 import time
@@ -20,6 +25,7 @@ from pathlib import Path
 from secrets import token_urlsafe
 from typing import Any
 
+from ..lineage.ids import canonical_json, content_hash
 from .sandbox import SandboxResult, cleanup_workdir, run_user_strategy
 
 
@@ -66,6 +72,7 @@ class IDERun:
     status: str  # running / ok / failed / timeout
     started_at_utc: str
     market_data_use_validation_refs: list[str]
+    section9_evidence_ref: str | None
     finished_at_utc: str | None
     exit_code: int | None
     error: str | None
@@ -77,6 +84,94 @@ class IDERun:
 
 def _utc_now() -> str:
     return time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime())
+
+
+_PORTFOLIO_COLUMNS = (
+    "timestamp",
+    "equity",
+    "net_return",
+    "benchmark_return",
+    "drawdown",
+)
+
+
+def _safe_float(value: Any) -> float | None:
+    try:
+        parsed = float(value)
+    except (TypeError, ValueError):
+        return None
+    return parsed if math.isfinite(parsed) else None
+
+
+def _canonical_portfolio_rows(result: dict[str, Any]) -> list[dict[str, Any]]:
+    """Derive stable portfolio rows only from the sandbox-emitted result."""
+
+    raw_curve = result.get("equity_curve")
+    if not isinstance(raw_curve, list):
+        return []
+    rows: list[dict[str, Any]] = []
+    for index, point in enumerate(raw_curve):
+        if not isinstance(point, dict):
+            continue
+        timestamp = point.get("timestamp") or point.get("t") or point.get("date") or str(index)
+        equity = point.get("equity")
+        if equity is None:
+            equity = point.get("value")
+        equity_value = _safe_float(equity)
+        if equity_value is None:
+            continue
+        rows.append(
+            {
+                "timestamp": str(timestamp),
+                "equity": equity_value,
+                "net_return": _safe_float(point.get("net_return")),
+                "benchmark_return": _safe_float(point.get("benchmark_return")),
+                "drawdown": _safe_float(point.get("drawdown")),
+            }
+        )
+
+    if not rows:
+        return []
+    for index, row in enumerate(rows):
+        if row["net_return"] is not None:
+            continue
+        if index == 0:
+            row["net_return"] = 0.0
+            continue
+        previous_equity = rows[index - 1]["equity"]
+        if previous_equity:
+            row["net_return"] = row["equity"] / previous_equity - 1.0
+
+    peak = rows[0]["equity"]
+    for row in rows:
+        peak = max(peak, row["equity"])
+        if row["drawdown"] is None and peak:
+            row["drawdown"] = row["equity"] / peak - 1.0
+    return rows
+
+
+def _canonical_portfolio_csv_bytes(result: dict[str, Any]) -> bytes:
+    buffer = io.StringIO(newline="")
+    writer = csv.DictWriter(
+        buffer,
+        fieldnames=list(_PORTFOLIO_COLUMNS),
+        extrasaction="ignore",
+        lineterminator="\n",
+    )
+    writer.writeheader()
+    for row in _canonical_portfolio_rows(result):
+        writer.writerow(
+            {key: "" if row.get(key) is None else row.get(key) for key in _PORTFOLIO_COLUMNS}
+        )
+    return buffer.getvalue().encode("utf-8")
+
+
+def _canonical_json_bytes(value: Any) -> bytes:
+    return (canonical_json(value) + "\n").encode("utf-8")
+
+
+def _sha256_bytes(value: bytes) -> str:
+    return "sha256:" + hashlib.sha256(value).hexdigest()
 
 
 def _schema() -> list[str]:
@@ -103,6 +198,7 @@ def _schema() -> list[str]:
             status TEXT NOT NULL,
             started_at_utc TEXT NOT NULL,
             market_data_use_validation_refs TEXT NOT NULL DEFAULT '[]',
+            section9_evidence_ref TEXT,
             finished_at_utc TEXT,
             exit_code INTEGER,
             error TEXT,
@@ -148,10 +244,41 @@ def init_ide_db(db_path: Path) -> None:
             conn.execute(
                 "ALTER TABLE i_runs ADD COLUMN market_data_use_validation_refs TEXT NOT NULL DEFAULT '[]'"
             )
+        if "section9_evidence_ref" not in run_cols:
+            conn.execute("ALTER TABLE i_runs ADD COLUMN section9_evidence_ref TEXT")
         conn.commit()
 
 
 VALID_ASSET = {"crypto_perp", "crypto_spot", "equity_cn"}
+
+
+def validate_strategy_inputs(
+    owner_username: Any,
+    name: Any,
+    code: Any,
+    *,
+    asset_class: Any = "crypto_perp",
+    description: Any = "",
+) -> None:
+    """Validate deterministic IDE strategy inputs without touching storage."""
+
+    if (
+        not isinstance(owner_username, str)
+        or not owner_username
+        or not isinstance(name, str)
+        or not name
+    ):
+        raise IDEError("owner_username / name 必填")
+    if not isinstance(asset_class, str) or asset_class not in VALID_ASSET:
+        raise IDEError(f"asset_class 必须 ∈ {sorted(VALID_ASSET)}")
+    if not isinstance(code, str):
+        raise IDEError("策略源码必须是字符串")
+    if len(code) > 1_000_000:
+        raise IDEError("策略源码不能超过 1MB")
+    if not name.replace("_", "").replace("-", "").isalnum():
+        raise IDEError("策略名只能用字母数字 - _")
+    if not isinstance(description, str):
+        raise IDEError("策略描述必须是字符串")
 
 
 class IDEService:
@@ -166,6 +293,12 @@ class IDEService:
         self._run_root = run_root or db_path.parent / "ide_runs"
         self._run_root.mkdir(parents=True, exist_ok=True)
         self._run_lock = threading.Lock()
+
+    @property
+    def run_root(self) -> Path:
+        """Read-only root containing immutable per-run source snapshots."""
+
+        return self._run_root
 
     def _conn(self) -> sqlite3.Connection:
         c = sqlite3.connect(self._db)
@@ -224,6 +357,27 @@ class IDEService:
             raise IDEError(f"strategy not found: {name}")
         return self._strategy_from_row(r)
 
+    def get_strategy_by_id(self, strategy_id: str) -> StrategyFile:
+        """Internal exact-id getter used after a separate stable-owner envelope check.
+
+        Public API reads remain owner/name scoped.  This getter deliberately does
+        not establish authorization by itself; callers must first resolve the
+        owner-scoped research-design envelope and then compare the current source
+        content hash.
+        """
+
+        sid = str(strategy_id or "").strip()
+        if not sid:
+            raise IDEError("strategy_id is required")
+        with self._conn() as c:
+            row = c.execute(
+                "SELECT * FROM i_strategies WHERE strategy_id=?",
+                (sid,),
+            ).fetchone()
+        if not row:
+            raise IDEError(f"strategy not found: {sid}")
+        return self._strategy_from_row(row)
+
     def save_strategy(
         self,
         owner_username: str,
@@ -234,22 +388,34 @@ class IDEService:
         description: str = "",
         market_data_use_validation_refs: list[str] | tuple[str, ...] | None = None,
     ) -> StrategyFile:
-        if not owner_username or not name:
-            raise IDEError("owner_username / name 必填")
-        if asset_class not in VALID_ASSET:
-            raise IDEError(f"asset_class 必须 ∈ {sorted(VALID_ASSET)}")
-        if len(code) > 1_000_000:
-            raise IDEError("策略源码不能超过 1MB")
-        if not name.replace("_", "").replace("-", "").isalnum():
-            raise IDEError("策略名只能用字母数字 - _")
+        validate_strategy_inputs(
+            owner_username,
+            name,
+            code,
+            asset_class=asset_class,
+            description=description,
+        )
         refs_json = self._refs_json(market_data_use_validation_refs)
         now = _utc_now()
         with self._conn() as c:
+            # Lock before the read so concurrent identical saves cannot both
+            # append a version after observing the same prior projection.
+            c.execute("BEGIN IMMEDIATE")
             existing = c.execute(
-                "SELECT strategy_id FROM i_strategies WHERE owner_username=? AND name=?",
+                "SELECT * FROM i_strategies WHERE owner_username=? AND name=?",
                 (owner_username, name),
             ).fetchone()
             if existing:
+                if (
+                    existing["code"] == code
+                    and existing["asset_class"] == asset_class
+                    and existing["description"] == description
+                    and existing["market_data_use_validation_refs"] == refs_json
+                ):
+                    # An identical retry is a read of the already committed
+                    # business object, not a new edit/version.
+                    c.commit()
+                    return self._strategy_from_row(existing)
                 sid = existing["strategy_id"]
                 c.execute(
                     "UPDATE i_strategies SET code=?, asset_class=?, description=?, market_data_use_validation_refs=?, updated_at_utc=? WHERE strategy_id=?",
@@ -376,9 +542,12 @@ class IDEService:
         owner_username: str,
         name: str,
         *,
+        owner_user_id: str | None = None,
         market_data_use_validation_refs: list[str] | tuple[str, ...] | None = None,
+        section9_evidence_ref: str | None = None,
     ) -> IDERun:
         s = self.get_strategy(owner_username, name)
+        stable_owner_user_id = str(owner_user_id or "").strip() or owner_username
         run_refs = (
             list(market_data_use_validation_refs)
             if market_data_use_validation_refs is not None
@@ -386,13 +555,21 @@ class IDEService:
         )
         run_id = "ide_" + token_urlsafe(8)
         run_dir = self._run_root / run_id
-        run_dir.mkdir(parents=True, exist_ok=True)
+        run_dir.mkdir(parents=True, exist_ok=False)
 
         started_at = _utc_now()
         with self._conn() as c:
             c.execute(
-                "INSERT INTO i_runs (run_id, strategy_id, owner_username, status, started_at_utc, market_data_use_validation_refs) VALUES (?,?,?,?,?,?)",
-                (run_id, s.strategy_id, owner_username, "running", started_at, self._refs_json(run_refs)),
+                "INSERT INTO i_runs (run_id, strategy_id, owner_username, status, started_at_utc, market_data_use_validation_refs, section9_evidence_ref) VALUES (?,?,?,?,?,?,?)",
+                (
+                    run_id,
+                    s.strategy_id,
+                    owner_username,
+                    "running",
+                    started_at,
+                    self._refs_json(run_refs),
+                    str(section9_evidence_ref or "").strip() or None,
+                ),
             )
             c.commit()
 
@@ -400,19 +577,48 @@ class IDEService:
         with self._run_lock:
             sandbox_result = run_user_strategy(s.code, work_root=run_dir)
 
-        # 落盘
-        (run_dir / "stdout.log").write_text(sandbox_result.stdout)
-        (run_dir / "stderr.log").write_text(sandbox_result.stderr)
+        # 落盘。成功状态只有在精确源码、真实结果和三文件运行工件全部冻结后才成立。
         result_path: str | None = None
         result_keys: list[str] = []
-        if sandbox_result.user_result is not None:
-            result_path = str(run_dir / "result.json")
-            (run_dir / "result.json").write_text(
-                json.dumps(sandbox_result.user_result, default=str, ensure_ascii=False, indent=2),
-            )
+        if isinstance(sandbox_result.user_result, dict):
             result_keys = list(sandbox_result.user_result.keys())
-
         status = self._classify_status(sandbox_result)
+        error = sandbox_result.error
+        try:
+            (run_dir / "stdout.log").write_text(sandbox_result.stdout, encoding="utf-8")
+            (run_dir / "stderr.log").write_text(sandbox_result.stderr, encoding="utf-8")
+            if status == "ok":
+                if not isinstance(sandbox_result.user_result, dict):
+                    raise ValueError("successful sandbox run did not emit a result object")
+                self._persist_source_snapshot(
+                    run_dir=run_dir,
+                    run_id=run_id,
+                    strategy=s,
+                    owner_user_id=stable_owner_user_id,
+                    result=sandbox_result.user_result,
+                    started_at=started_at,
+                )
+                result_path = str(run_dir / "result.json")
+            elif sandbox_result.user_result is not None:
+                # Preserve legacy failed-run diagnostics, but never mint run.json/strategy.py/portfolio.csv.
+                self._write_new_bytes(
+                    run_dir / "result.json",
+                    _canonical_json_bytes(sandbox_result.user_result),
+                )
+                result_path = str(run_dir / "result.json")
+        except Exception as exc:  # noqa: BLE001 - any persistence gap must fail the run closed.
+            if status == "ok":
+                for artifact_name in ("run.json", "strategy.py", "portfolio.csv", "result.json"):
+                    try:
+                        (run_dir / artifact_name).unlink(missing_ok=True)
+                    except OSError:
+                        pass
+                error = f"source snapshot persistence failed: {type(exc).__name__}: {exc}"
+                result_path = None
+            elif not error:
+                error = f"run artifact persistence failed: {type(exc).__name__}: {exc}"
+            status = "failed"
+
         finished_at = _utc_now()
         with self._conn() as c:
             c.execute(
@@ -421,7 +627,7 @@ class IDEService:
                     status,
                     finished_at,
                     sandbox_result.exit_code,
-                    sandbox_result.error,
+                    error,
                     sandbox_result.stdout[-4000:],
                     sandbox_result.stderr[-4000:],
                     sandbox_result.duration_s,
@@ -437,6 +643,84 @@ class IDEService:
             cleanup_workdir(sandbox_result.workdir)
 
         return self.get_run(run_id)
+
+    @staticmethod
+    def _write_new_bytes(path: Path, payload: bytes) -> None:
+        """Create one artifact exactly once; never overwrite an existing snapshot."""
+
+        with path.open("xb") as handle:
+            handle.write(payload)
+
+    def _persist_source_snapshot(
+        self,
+        *,
+        run_dir: Path,
+        run_id: str,
+        strategy: StrategyFile,
+        owner_user_id: str,
+        result: dict[str, Any],
+        started_at: str,
+    ) -> None:
+        """Freeze one successful IDE run, writing run.json last as the commit marker."""
+
+        from .strategy_graph import strategy_content_hash
+
+        strategy_bytes = strategy.code.encode("utf-8")
+        result_bytes = _canonical_json_bytes(result)
+        portfolio_bytes = _canonical_portfolio_csv_bytes(result)
+        metadata = result.get("metadata") if isinstance(result.get("metadata"), dict) else {}
+        metrics = result.get("metrics") if isinstance(result.get("metrics"), dict) else {}
+        source = {
+            "kind": "ide_sandbox",
+            "ide_run_id": run_id,
+            "owner_user_id": owner_user_id,
+            "owner_username": strategy.owner_username,
+            "strategy_name": strategy.name,
+            "strategy_asset_class": strategy.asset_class,
+            "strategy_content_hash": strategy_content_hash(
+                name=strategy.name,
+                code=strategy.code,
+                asset_class=strategy.asset_class,
+            ),
+            "strategy_code_content_hash": content_hash(strategy.code),
+            "strategy_file_sha256": _sha256_bytes(strategy_bytes),
+            "result_content_hash": content_hash(result),
+            "result_file_sha256": _sha256_bytes(result_bytes),
+            "portfolio_file_sha256": _sha256_bytes(portfolio_bytes),
+        }
+        run_manifest = {
+            "artifact_version": "ide.source_run.v1",
+            "run_id": run_id,
+            "owner_user_id": owner_user_id,
+            "owner_username": strategy.owner_username,
+            "strategy_id": strategy.strategy_id,
+            "strategy_name": strategy.name,
+            "started_at": started_at,
+            "status": "completed",
+            "market": str(metadata.get("market") or strategy.asset_class),
+            "frequency": str(metadata.get("frequency") or "unknown"),
+            "metrics": metrics,
+            "source": source,
+        }
+        payloads = (
+            ("strategy.py", strategy_bytes),
+            ("result.json", result_bytes),
+            ("portfolio.csv", portfolio_bytes),
+            ("run.json", _canonical_json_bytes(run_manifest)),
+        )
+        written: list[Path] = []
+        try:
+            for name, payload in payloads:
+                path = run_dir / name
+                self._write_new_bytes(path, payload)
+                written.append(path)
+        except Exception:
+            for path in reversed(written):
+                try:
+                    path.unlink(missing_ok=True)
+                except OSError:
+                    pass
+            raise
 
     @staticmethod
     def _classify_status(sb: SandboxResult) -> str:
@@ -505,5 +789,6 @@ __all__ = [
     "init_ide_db",
     "run_to_dict",
     "strategy_to_dict",
+    "validate_strategy_inputs",
     "version_to_dict",
 ]

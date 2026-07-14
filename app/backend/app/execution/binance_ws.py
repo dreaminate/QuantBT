@@ -1,15 +1,16 @@
-"""M9.3+ · Binance WS userDataStream + listenKey 续期 + REST 对账。
+"""Experimental Binance user-data WebSocket prototype.
 
-GOAL §M9.3 D 要求：
-- WS：userDataStream 必须用；listenKey 每 30 分钟 PUT 续期
-- 断连指数退避重连
-- 订单状态对账：每 N 分钟「我本地认为的活动订单」vs「GET /openOrders」对比，
-  发现孤儿订单自动 reconcile
-- 部分成交 (executionReport / ORDER_TRADE_UPDATE) 增量推送 → 本地仓位实时更新
+This class is exported for isolated compatibility tests but is **not** wired to
+FastAPI startup, account activation, formal execution projection, or health.
+It keeps a ``BinanceClient`` for its lifetime and therefore does not satisfy the
+production JIT lease-only credential boundary.  Production copy-trade state is
+currently recovered by the account-scoped 30-second REST reconciler using the
+exact ``/order`` + ``/userTrades`` execution bundle and the persistent formal/
+risk ledgers.
 
-实现选择：用 `websocket-client` 作为单线程同步 WS（minimal dep，requirements
-已在 uvicorn[standard] 间接依赖），listenKey 续期与对账走后台线程；不引 asyncio
-框架避免与现有同步 venue 协议冲突。
+Do not instantiate this class in a production path until a lease-scoped stream
+supervisor, generation rotation, durable inbox, authoritative gap reconciliation,
+and clean shutdown semantics are implemented and tested.
 """
 
 from __future__ import annotations
@@ -23,7 +24,8 @@ from dataclasses import dataclass, field
 from datetime import UTC, datetime
 from typing import Any, Literal
 
-from .base import ExecutionAuditLog, ExecutionReport, Position
+from ..lineage.ids import content_hash
+from .base import ExecutionAuditLog, ExecutionReport, Position, canonical_raw_event_hash
 from .binance_client import BinanceClient
 
 
@@ -62,7 +64,7 @@ class UserDataEvent:
 
 
 class BinanceUserDataStream:
-    """单实例 WS 客户端 + 后台 listenKey 续期 + 后台对账。"""
+    """Unwired compatibility prototype; not an authoritative runtime stream."""
 
     def __init__(
         self,
@@ -263,6 +265,24 @@ class BinanceUserDataStream:
             # Spot executionReport 直接用顶层字段；USDM 走 o 子对象
             order = p.get("o", p)
             try:
+                source_ms = order.get("T") or p.get("E") or p.get("eventTime")
+                source_timestamp = (
+                    datetime.fromtimestamp(float(source_ms) / 1000, tz=UTC).isoformat()
+                    if source_ms not in (None, "")
+                    else event.timestamp_utc
+                )
+                raw_event_hash = canonical_raw_event_hash(p)
+                source_event_ref = "binance_execution_" + content_hash(
+                    {
+                        "event_type": et,
+                        "order_id": str(order.get("i") or order.get("orderId") or ""),
+                        "trade_id": str(order.get("t") or order.get("tradeId") or ""),
+                        "client_order_id": str(order.get("c") or order.get("clientOrderId") or ""),
+                        "event_time": source_timestamp,
+                        "cumulative_filled_qty": str(order.get("z") or "0"),
+                        "raw_event_hash": raw_event_hash,
+                    }
+                )
                 report = ExecutionReport(
                     order_id=str(order.get("i") or order.get("orderId") or ""),
                     symbol=str(order.get("s") or order.get("symbol") or ""),
@@ -273,7 +293,11 @@ class BinanceUserDataStream:
                     commission=float(order.get("n") or 0),
                     commission_asset=str(order.get("N") or ""),
                     status=_normalize_status(str(order.get("X", "")).lower()),
+                    timestamp_utc=source_timestamp,
                     raw=p,
+                    client_order_id=str(order.get("c") or order.get("clientOrderId") or "") or None,
+                    source_event_ref=source_event_ref,
+                    raw_event_hash=raw_event_hash,
                 )
                 self._on_execution(report)
                 # 本地仓位更新：累计 filled

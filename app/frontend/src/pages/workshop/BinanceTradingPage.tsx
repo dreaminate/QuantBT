@@ -36,9 +36,9 @@ export function BinanceTradingPage() {
   const [killBusy, setKillBusy] = useState(false);
 
   const refresh = () => {
-    fetch("/api/security/keystore").then((r) => r.json()).then(setKeystoreInfo);
+    authFetch("/api/security/keystore").then((r) => (r.ok ? r.json() : null)).then(setKeystoreInfo);
     fetch("/api/risk/alerts").then((r) => r.json()).then(setAlerts);
-    fetch("/api/security/network").then((r) => r.json()).then(setNetwork);
+    authFetch("/api/security/network").then((r) => r.json()).then(setNetwork);
     // mainnet 配置需登录态；拿不到（未登录/无后端）→ 留 null，急停前会诚实提示前置条件
     authFetch("/api/security/mainnet/config")
       .then((r) => (r.ok ? r.json() : null))
@@ -59,7 +59,7 @@ export function BinanceTradingPage() {
   const store = async () => {
     // 真钱凭据写入：HTTP 失败绝不能假绿灯（对齐同文件 confirmMainnet/confirmKill 的 res.ok 守卫）。
     try {
-      const res = await fetch("/api/security/keystore", {
+      const res = await authFetch("/api/security/keystore", {
         method: "POST",
         headers: { "content-type": "application/json" },
         body: JSON.stringify({ name, api_key: apiKey, api_secret: apiSecret }),
@@ -81,7 +81,7 @@ export function BinanceTradingPage() {
   const switchToTestnet = async () => {
     // 切回 testnet 失败必须如实报错：否则用户以为已安全离开 mainnet 真钱模式。
     try {
-      const res = await fetch("/api/security/network", {
+      const res = await authFetch("/api/security/network", {
         method: "POST",
         headers: { "content-type": "application/json" },
         body: JSON.stringify({ binance_network: "testnet" }),
@@ -104,7 +104,7 @@ export function BinanceTradingPage() {
   };
 
   const confirmMainnet = async () => {
-    const res = await fetch("/api/security/network", {
+    const res = await authFetch("/api/security/network", {
       method: "POST",
       headers: { "content-type": "application/json" },
       body: JSON.stringify({

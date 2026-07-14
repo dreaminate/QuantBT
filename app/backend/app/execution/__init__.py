@@ -11,12 +11,16 @@ from .base import (
     ExecutionVenue,
     Order,
     OrderAck,
+    OrderExecutionObservation,
     OrderSide,
     OrderStatus,
     OrderType,
     Position,
     TimeInForce,
+    canonical_raw_event_hash,
 )
+# Compatibility export only.  binance_ws documents why it is not a wired or
+# authoritative production capability.
 from .binance_ws import BinanceUserDataStream, UserDataEvent, WSStreamerState
 from .generic_trading import GenericTradingConfig, GenericTradingVenue
 from .paper_venue import PaperEquitySnapshot, PaperVenue
@@ -35,6 +39,7 @@ __all__ = [
     "MatchingMode",
     "Order",
     "OrderAck",
+    "OrderExecutionObservation",
     "OrderSide",
     "OrderStatus",
     "OrderType",
@@ -44,4 +49,5 @@ __all__ = [
     "TimeInForce",
     "UserDataEvent",
     "WSStreamerState",
+    "canonical_raw_event_hash",
 ]

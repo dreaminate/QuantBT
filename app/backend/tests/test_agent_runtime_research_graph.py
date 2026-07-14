@@ -13,6 +13,7 @@ from app.research_os import (
     DefinitionStatus,
     PersistentCompilerIRStore,
     PersistentGoalEntrypointCoverageRegistry,
+    PersistentGoalValidationReceiptRegistry,
     PersistentResearchAssetRAGIndex,
     QRORecord,
     QROType,
@@ -20,6 +21,21 @@ from app.research_os import (
     ResearchGraphCommand,
     ResearchGraphStore,
 )
+from app.research_os.entrypoint_evidence import PersistentEntrypointEvidenceRegistry
+from app.research_os.goal_proof_ledger import GoalProofLedger
+from app.research_os.ref_resolution import build_real_ref_resolver
+from conftest import build_test_agent_gateway
+
+
+def _patch_route_gateway(main, monkeypatch, client) -> None:  # noqa: ANN001
+    monkeypatch.setattr(
+        main,
+        "_current_agent_gateway",
+        lambda run_id=None: build_test_agent_gateway(
+            client,
+            seal_secret=main.LLM_CALL_RECORD_STORE.seal_secret,
+        ),
+    )
 
 
 class _ToolThenFinalLLM:
@@ -87,13 +103,68 @@ def _source_value(value) -> str:
 
 
 def _patch_goal_coverage_stores(main, tmp_path, monkeypatch) -> None:  # noqa: ANN001
-    monkeypatch.setattr(main, "RESEARCH_GRAPH_STORE", ResearchGraphStore())
-    monkeypatch.setattr(main, "COMPILER_IR_STORE", PersistentCompilerIRStore(tmp_path / "compiler_ir.jsonl"))
+    proof_ledger = GoalProofLedger(tmp_path / "goal_proof_ledger")
+    graph = ResearchGraphStore()
+    compiler = PersistentCompilerIRStore(
+        tmp_path / "compiler_ir.jsonl",
+        proof_ledger=proof_ledger,
+        legacy_read_only=True,
+    )
+    validation = PersistentGoalValidationReceiptRegistry(
+        tmp_path / "goal_validation_receipts.jsonl",
+        proof_ledger=proof_ledger,
+        legacy_read_only=True,
+    )
+    evidence = PersistentEntrypointEvidenceRegistry(
+        tmp_path / "entrypoint_evidence.jsonl",
+        research_graph_store=graph,
+        compiler_store=compiler,
+        validation_receipt_registry=validation,
+        proof_ledger=proof_ledger,
+        legacy_read_only=True,
+    )
+    coverage = PersistentGoalEntrypointCoverageRegistry(
+        tmp_path / "goal_entrypoint_coverage.jsonl",
+        proof_ledger=proof_ledger,
+        legacy_read_only=True,
+    )
+    coverage.set_ref_resolver(
+        build_real_ref_resolver(
+            research_graph_store=graph,
+            lifecycle_registry=None,
+            governance_registry=None,
+            rag_index=None,
+            spine_chain_registry=None,
+            compiler_store=compiler,
+            goal_validation_receipt_registry=validation,
+            platform_source_evidence_registry=evidence,
+        )
+    )
+    monkeypatch.setattr(main, "RESEARCH_GRAPH_STORE", graph)
+    monkeypatch.setattr(main, "COMPILER_IR_STORE", compiler)
+    monkeypatch.setattr(main, "GOAL_VALIDATION_RECEIPT_REGISTRY", validation)
+    monkeypatch.setattr(main, "ENTRYPOINT_EVIDENCE_REGISTRY", evidence)
     monkeypatch.setattr(
         main,
         "GOAL_ENTRYPOINT_COVERAGE_REGISTRY",
-        PersistentGoalEntrypointCoverageRegistry(tmp_path / "goal_entrypoint_coverage.jsonl"),
+        coverage,
     )
+
+
+@pytest.fixture(autouse=True)
+def _authenticated_agent_api():
+    """These graph tests exercise authenticated agent entrypoints, not auth itself."""
+
+    import app.main as main
+
+    main.app.dependency_overrides[main.require_user_dependency] = lambda: SimpleNamespace(
+        username="u1",
+        user_id="u1",
+    )
+    try:
+        yield
+    finally:
+        main.app.dependency_overrides.pop(main.require_user_dependency, None)
 
 
 def test_agent_runtime_records_chat_steps_as_qro_graph_commands_without_plaintext_content():
@@ -176,7 +247,7 @@ def test_agent_chat_endpoint_returns_research_graph_and_goal_coverage_refs(tmp_p
     import app.main as main
 
     _patch_goal_coverage_stores(main, tmp_path, monkeypatch)
-    monkeypatch.setattr(main, "_current_agent_llm", lambda run_id=None: DevLocalLLM())
+    _patch_route_gateway(main, monkeypatch, DevLocalLLM())
     before = len(main.RESEARCH_GRAPH_STORE.commands())
     secret = "SECRET_SHOULD_NOT_ENTER_GOAL_COVERAGE"
     response = TestClient(main.app).post("/api/agent/chat", json={"message": f"你能做什么 {secret}"})
@@ -185,17 +256,16 @@ def test_agent_chat_endpoint_returns_research_graph_and_goal_coverage_refs(tmp_p
     body = response.json()
     assert body["qro_ids"]
     assert body["research_graph_command_ids"]
-    assert len(body["compiler_ir_refs"]) == 2
-    assert len(body["compiler_pass_refs"]) == 2
-    assert len(body["entrypoint_coverage_refs"]) == 2
+    assert len(body["compiler_ir_refs"]) == 1
+    assert len(body["compiler_pass_refs"]) == 1
+    assert len(body["entrypoint_coverage_refs"]) == 1
     assert len(body["qro_ids"]) == len(body["steps"])
     assert len(main.RESEARCH_GRAPH_STORE.commands()) >= before + len(body["qro_ids"])
     qro = main.RESEARCH_GRAPH_STORE.qro(body["qro_ids"][0])
-    assert qro.input_contract["entry_source"] == "agent_shell"
+    assert qro.input_contract["entry_source"] == "chat"
     assert qro.input_contract["role"] == "user"
     coverages = main.GOAL_ENTRYPOINT_COVERAGE_REGISTRY.records()
     assert {(record.entry_source, record.entrypoint_ref) for record in coverages} == {
-        ("agent_shell", "agent_shell:api.agent.chat"),
         ("chat", "chat:api.agent.chat"),
     }
     for record in coverages:
@@ -219,7 +289,7 @@ def test_research_graph_commands_endpoint_returns_audit_summary_without_plaintex
     import app.main as main
 
     _patch_goal_coverage_stores(main, tmp_path, monkeypatch)
-    monkeypatch.setattr(main, "_current_agent_llm", lambda run_id=None: DevLocalLLM())
+    _patch_route_gateway(main, monkeypatch, DevLocalLLM())
     client = TestClient(main.app)
     secret = "SECRET_SHOULD_NOT_ENTER_GRAPH_AUDIT"
     chat = client.post("/api/agent/chat", json={"message": f"你能做什么 {secret}"})
@@ -237,7 +307,7 @@ def test_research_graph_commands_endpoint_returns_audit_summary_without_plaintex
     assert "你能做什么" not in str(body)
     qro_payloads = [command["payload"]["qro"] for command in commands if "qro" in command["payload"]]
     assert qro_payloads
-    assert qro_payloads[0]["input_contract"]["entry_source"] == "agent_shell"
+    assert qro_payloads[0]["input_contract"]["entry_source"] == "chat"
     assert qro_payloads[0]["status_axes"]["definition"] == "implemented"
     assert "content_hash" in qro_payloads[0]["output_contract"]
 
@@ -255,7 +325,7 @@ def test_agent_turn_goal_coverage_rejects_missing_graph_refs_without_partial_wri
         main._record_agent_turn_goal_entrypoint_coverage(
             turn,
             endpoint_ref="api.agent.chat",
-            actor="agent_runtime",
+            actor="test_agent",
             permission_mode="auto",
         )
 
@@ -264,7 +334,10 @@ def test_agent_turn_goal_coverage_rejects_missing_graph_refs_without_partial_wri
     assert main.COMPILER_IR_STORE.passes() == []
 
 
-def test_agent_turn_goal_coverage_rejects_silent_mock_fallback_without_partial_write(tmp_path, monkeypatch):
+def test_agent_turn_goal_coverage_rejects_silent_mock_without_partial_proof_write(
+    tmp_path,
+    monkeypatch,
+):
     import app.main as main
 
     _patch_goal_coverage_stores(main, tmp_path, monkeypatch)
@@ -304,24 +377,31 @@ def test_agent_turn_goal_coverage_rejects_silent_mock_fallback_without_partial_w
     turn.qro_ids.append(qro.qro_id)
     turn.research_graph_command_ids.append(command_id)
 
-    with pytest.raises(ValueError, match="goal_entrypoint_silent_mock_fallback"):
+    with pytest.raises(ValueError) as caught:
         main._record_agent_turn_goal_entrypoint_coverage(
             turn,
             endpoint_ref="api.agent.chat",
-            actor="agent_runtime",
+            actor="test_agent",
             permission_mode="auto",
         )
 
+    assert "goal_entrypoint_silent_mock_fallback" in str(caught.value)
     assert main.GOAL_ENTRYPOINT_COVERAGE_REGISTRY.records() == []
     assert main.COMPILER_IR_STORE.irs() == []
     assert main.COMPILER_IR_STORE.passes() == []
+    receipts = main._compiler_receipts_for_subject(
+        owner_user_id="test_agent",
+        qro_ref=qro.qro_id,
+        graph_command_ref=command_id,
+    )
+    assert receipts == {}
 
 
 def test_agent_strategy_goal_tool_writes_quant_intent_qro_visible_in_audit(tmp_path, monkeypatch):
     import app.main as main
     from app.strategy_goal_store import StrategyGoalStore
 
-    monkeypatch.setattr(main, "_current_agent_llm", lambda run_id=None: _StrategyGoalThenFinalLLM())
+    _patch_route_gateway(main, monkeypatch, _StrategyGoalThenFinalLLM())
     monkeypatch.setattr(main, "STRATEGY_GOAL_STORE", StrategyGoalStore(tmp_path / "goals"))
     _patch_goal_coverage_stores(main, tmp_path, monkeypatch)
     client = TestClient(main.app)
@@ -391,27 +471,23 @@ def test_agent_chat_auto_retrieves_research_asset_rag_and_records_usage(tmp_path
     import app.main as main
 
     index = PersistentResearchAssetRAGIndex(tmp_path / "research_asset_rag.jsonl")
-    index.add(_rag_doc())
+    index.add_for_owner(_rag_doc(), owner_user_id="u1")
     llm = _CapturingLLM()
     monkeypatch.setattr(main, "RESEARCH_ASSET_RAG_INDEX", index)
     _patch_goal_coverage_stores(main, tmp_path, monkeypatch)
     store = main.RESEARCH_GRAPH_STORE
-    monkeypatch.setattr(main, "_current_agent_llm", lambda run_id=None: llm)
-    main.app.dependency_overrides[main.current_user_dependency] = lambda: SimpleNamespace(username="u1", user_id="u1")
-    try:
-        response = TestClient(main.app).post(
-            "/api/agent/chat",
-            json={
-                "message": "covariance shrinkage risk portfolio",
-                "desk": "research",
-                "visible_asset_refs": ["qro:portfolio-risk"],
-                "permission_tags": ["research.read"],
-                "projections": ["ResearchRAG"],
-                "rag_search": "vector",
-            },
-        )
-    finally:
-        main.app.dependency_overrides.pop(main.current_user_dependency, None)
+    _patch_route_gateway(main, monkeypatch, llm)
+    response = TestClient(main.app).post(
+        "/api/agent/chat",
+        json={
+            "message": "covariance shrinkage risk portfolio",
+            "desk": "research",
+            "visible_asset_refs": ["qro:portfolio-risk"],
+            "permission_tags": ["research.read"],
+            "projections": ["ResearchRAG"],
+            "rag_search": "vector",
+        },
+    )
 
     assert response.status_code == 200, response.text
     body = response.json()
@@ -420,7 +496,7 @@ def test_agent_chat_auto_retrieves_research_asset_rag_and_records_usage(tmp_path
     assert body["rag_hits"][0]["version"] == "v1"
     assert body["rag_hits"][0]["context_role"] == "candidate_context"
     assert body["rag_usage_ids"]
-    assert index.agent_usage(source_id="doc:risk-parity", user_id="u1")
+    assert index.strict_usage_records(owner_user_id="u1")
 
     prompt_text = "\n".join(message.content for message in llm.messages)
     assert "Research Asset RAG candidate context" in prompt_text
@@ -445,27 +521,23 @@ def test_agent_chat_does_not_auto_retrieve_unauthorized_rag_context(tmp_path, mo
     import app.main as main
 
     index = PersistentResearchAssetRAGIndex(tmp_path / "research_asset_rag.jsonl")
-    index.add(_rag_doc())
+    index.add_for_owner(_rag_doc(), owner_user_id="u1")
     llm = _CapturingLLM()
     monkeypatch.setattr(main, "RESEARCH_ASSET_RAG_INDEX", index)
     _patch_goal_coverage_stores(main, tmp_path, monkeypatch)
     store = main.RESEARCH_GRAPH_STORE
-    monkeypatch.setattr(main, "_current_agent_llm", lambda run_id=None: llm)
-    main.app.dependency_overrides[main.current_user_dependency] = lambda: SimpleNamespace(username="u1", user_id="u1")
-    try:
-        response = TestClient(main.app).post(
-            "/api/agent/chat",
-            json={
-                "message": "covariance shrinkage risk portfolio",
-                "desk": "data",
-                "visible_asset_refs": ["qro:portfolio-risk"],
-                "permission_tags": ["research.read"],
-                "projections": ["ResearchRAG"],
-                "rag_search": "vector",
-            },
-        )
-    finally:
-        main.app.dependency_overrides.pop(main.current_user_dependency, None)
+    _patch_route_gateway(main, monkeypatch, llm)
+    response = TestClient(main.app).post(
+        "/api/agent/chat",
+        json={
+            "message": "covariance shrinkage risk portfolio",
+            "desk": "data",
+            "visible_asset_refs": ["qro:portfolio-risk"],
+            "permission_tags": ["research.read"],
+            "projections": ["ResearchRAG"],
+            "rag_search": "vector",
+        },
+    )
 
     assert response.status_code == 200, response.text
     body = response.json()

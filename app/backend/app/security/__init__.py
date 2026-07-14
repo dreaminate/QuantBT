@@ -9,8 +9,10 @@ from .keystore import (
     KeystoreRecord,
     SecureKeystore,
     derive_key_from_password,
+    open_runtime_keystore,
 )
 from .secrets_loader import DEFAULT_SECRETS_PATH, SecretsLoadReport, load_secrets
+from .trading_credentials import PersistentTradingCredentialRegistry, TradingCredentialVersion
 
 __all__ = [
     "DEFAULT_SECRETS_PATH",
@@ -18,8 +20,11 @@ __all__ = [
     "KeystoreBackend",
     "KeystoreError",
     "KeystoreRecord",
+    "PersistentTradingCredentialRegistry",
     "SecretsLoadReport",
     "SecureKeystore",
+    "TradingCredentialVersion",
     "derive_key_from_password",
     "load_secrets",
+    "open_runtime_keystore",
 ]
