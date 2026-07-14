@@ -6,6 +6,8 @@
 ## <日期> · <标题>
 - 建/改了什么 + 命门  - 验收：<对抗测试 + 变异 + 全量数字>  - 下一步：<…> -->
 
+## 2026-07-14-1502 卡 39d08df8 done:研究面资产+探针#6/#7 落地;质量门经 codex 四轮对抗数学收敛到 factor-价格补偿不变量(全反例钉死回归);scope 裁定登记待用户复核(对抗性防篡改归签名链/vintage 层);后端全量以终验行为准
+
 ## 2026-07-14-1336 切片① HS300 真数据证据链核心达成并 land:harness 真数据转绿(0.0185s/3s,measured=True);链条全走(pull→preflight→DatasetVersion+manifest→签名 universe/receipt→跨厂商三轮审查[REJECT→修复→approve_pin→delta approve]→operator pin);autoplan 三相三声道评审必修项全落;后端 6298/0 failed;卡余研究面资产+探针#6#7。Inference 自决项(可翻案):0.80 纯计数契约/契约常量留 harness/token 迁 keyring
 
 ## 2026-07-14-1228 切片① duet 裁决落定(签真实成员+修门,弃幸存者cohort案与timeline案);拉数完成(137.7万行/622只/68MB);harness 修门 commit e2878c66(66 passed,7 新变异探针);生产者实现+codex 门审并行中

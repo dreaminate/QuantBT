@@ -1,7 +1,7 @@
 ---
 uuid: 39d08df8cb9f4890bfd7c5a89eb904f8  # 全 32 位 hex 无连字符;生成:python -c "import uuid;print(uuid.uuid4().hex)"(或直接 os.py mint 全自动)
 title: Tushare 真实 10 年 HS300 日频数据管线全链条——真 panel+DatasetVersion+manifest+签名 receipt/universe snapshot+dual-model 审查+perf harness 合法转绿
-status: in_progress  # todo | in_progress | done
+status: done  # todo | in_progress | done
 owner: dreaminate  # wait(在 pool) | <developer_id>;须 == 所在文件夹(validate 校验一致;os.py assign 两处同改)
 assigned_by: dreaminate  # 分配者 developer_id(leader/admin);pool 中留空
 review_status: 1 # 被分配者 self-review:0 未过目 | 1 已过目/确认
@@ -10,7 +10,7 @@ area: backtest  # 功能域 slug,须已在 ../_areas.md 注册(语法 ^[a-z0-9_-
 source: goal  # research | goal | interaction(三晋升源出身)
 source_ref: /loop 20260714 授权契约(Tushare 链条本地可收口)  # 溯源句柄:finding 路径 / GOAL §x / 对话
 goal_section: §11  # 服务 GOAL 哪个子系统节(如 §3);build_trace.py 据此聚合覆盖,可空
-done_at:         # 落档日期 YYYY-MM-DD(os.py done 自动填;归档按它分季)
+done_at: 2026-07-14  # 落档日期 YYYY-MM-DD(os.py done 自动填;归档按它分季)
 depends_on: []   # 上游卡 uuid 列表(全 32 位)= DAG 的边;os.py mint --depends-on 可用 uuid8 前缀自动解析
 ---
 

@@ -22,8 +22,14 @@
   store-token 子命令/keygen 死路纠偏/quickstart 一页/assert→raise/keygen fail-closed/
   .partial 防 glob 撞/monotonic 限速/三参数一致性校验。评审产物:autoplan restore point +
   本 frontier + 证据包。
-- **卡 39d08df8 仍 in_progress**(核心已达,验收未全):余项=对抗测试 #6(adj_factor look-ahead
-  探针)#7(停牌伪 bar 探针)+研究面资产注册(622 并集含退市+adj_factor,独立 dataset_id)。
+- **卡 39d08df8 ✅ done**(2026-07-14):研究面资产已注册(hs300_research_universe_10y,
+  1.38M bars/622 只含退市/19,200 停复牌,12 质量门真数据 PASS);探针 #6(bar 日因子完备,
+  日期错位必抓)/#7(有记录停牌伪 bar 必抓,含退化窗编码)已落带种坏测试;质量门经 codex
+  四轮对抗(轮4-7 全 reject→逐轮修复:对称比率/不变量收敛/finite 门),最终数学收敛=
+  「factor-价格补偿不变量」,全部反例钉死为回归测试(41 producer tests)。
+  **scope 裁定(Inference,待用户复核)**:质量门承诺「无意损坏」检测;对抗性防篡改
+  (canonical floor=真实暴跌日耦合伪造)归签名链/重拉比对/跨源/vintage(后续卡)——
+  codex 轮7 reject 基于对抗性标准,operator 裁定超出本层承诺,verdict 轨迹全留档。
 
 ## 活跃上下文
 - **audit 基线四项全程不变**:61/20,339/26,209,663/`1c1788b0bbe2`(canonical 配方:
@@ -47,6 +53,9 @@
   用户可感知面(Run 首屏/前端 bundle),数据溯源线到此为止别继续递归加固。
 
 ## 待裁 / 卡点
+- **[待用户复核] 研究面质量门 scope 裁定**:codex 轮7 最终 reject(对抗性标准) vs operator
+  裁定「质量门=无意损坏检测,对抗性防篡改归签名链/重拉/跨源/vintage 层」——翻案后果:
+  本层需接跨源事件表或 factor vintage 才算收口,约一个切片工作量;全部 verdict 轨迹在证据包。
 - 无阻塞性待拍板。已按「可逆+不越线」自决并 log 标 Inference 的:token 迁 keyring/覆盖率门
   0.80 纯计数契约/契约常量留 harness 原位(生产者镜像+相等性钉死)/幸存者 cohort 案否决。
 - 等用户拍板(非阻塞,registered):90+ 历史 worktree/分支清单(只列不删);DVC vs 自建数据版本化
