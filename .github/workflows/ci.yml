@@ -1,0 +1,51 @@
+# QuantBT CI —— 后端全量 + 前端测试/构建。
+# 语义与本地最低验证一致:pytest 隔离 BACKTEST_DATA_ROOT + timeout 兜底,凭汇总行判绿。
+# 不携带任何 secret:HS300 性能门在无真数据/无 pinned-key 环境诚实 KNOWN_RUN_GAP,
+# benchmark 测试全部走 fixture/monkeypatch,不触 Tushare。
+name: ci
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  backend:
+    runs-on: ubuntu-latest
+    timeout-minutes: 45
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.13"
+          cache: pip
+          cache-dependency-path: app/backend/requirements.txt
+      - name: Install backend deps
+        run: python -m pip install --upgrade pip && python -m pip install -r app/backend/requirements.txt
+      - name: Compile check
+        run: python -m compileall -q app/backend/app
+      - name: Backend full suite (isolated DATA_ROOT, timeout 兜底)
+        run: |
+          export BACKTEST_DATA_ROOT="$(mktemp -d)"
+          timeout 2400 python -m pytest -q app/backend/tests
+
+  frontend:
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 20
+          cache: npm
+          cache-dependency-path: app/frontend/package-lock.json
+      - name: Install frontend deps
+        run: npm --prefix app/frontend ci
+      - name: Frontend tests
+        run: npm --prefix app/frontend run test:run -- --testTimeout=15000
+      - name: Frontend build
+        run: npm --prefix app/frontend run build
