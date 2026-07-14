@@ -102,14 +102,15 @@ _HS300_MIN_CALENDAR_SPAN_DAYS = 3650
 # membership itself.
 #
 # The 0.80 floor is a PURE COUNT contract — no maximum-contiguous-gap rule
-# is imposed. Contiguous multi-month holes are genuine A-share suspension
-# structure (measured 2026-07: a current constituent's longest real
-# suspension spans 311 consecutive open days), so any gap rule tight enough
-# to add teeth would reject genuine data. Suspension semantics belong to the
-# dataset's missingness model, and fabricated listing-date claims are the
-# signing operator's responsibility — bounded by the cross-vendor
-# re-derivation of membership and listing dates required before an
-# authority root may be pinned below.
+# is imposed here. Contiguous multi-month bar-less stretches occur in
+# genuine current-constituent history (measured 2026-07: one member's
+# longest stretch spans 311 consecutive open days), so a count-based gap
+# rule adds little discrimination without a suspension-status artifact;
+# suspension-aware missingness semantics belong to the dataset's
+# missingness model, and fabricated listing-date claims are the signing
+# operator's responsibility — bounded by the cross-vendor re-derivation of
+# membership and listing dates required before an authority root may be
+# pinned below.
 _HS300_MIN_SYMBOL_COVERAGE_RATIO = 0.80
 # A constituent listed after the panel start must produce its first bar
 # within this many panel trading days of its signed listing date; measured
@@ -448,10 +449,32 @@ class HS300AuthorityRoot:
         }
 
 
-# Production is intentionally GAP until a separately reviewed authority root is
-# pinned here. CLI arguments, environment variables, receipts, registries and
+# Production stays GAP until a separately reviewed authority root is pinned
+# here. CLI arguments, environment variables, receipts, registries and
 # dataset files cannot add to this tuple.
-_HS300_PINNED_AUTHORITY_ROOTS: tuple[HS300AuthorityRoot, ...] = ()
+#
+# quantbt-hs300-operator-root-v1 attestation basis (2026-07-14): operator
+# dreaminate attests the tushare://daily 10y HS300 chain whose builder was
+# claude (anthropic); the independent cross-vendor verifier gpt-5.6-sol
+# (openai, via codex, reasoning=ultra) issued verdict `approve_pin` scoped to
+# DatasetVersion 20260714T194817_915479_0000__856b67b1 after zero-diff
+# re-derivation of membership, listing dates, calendar, panel bytes, registry
+# record, manifest and signed payload bindings from the raw staging
+# artifacts. The verdict is NOT a blanket approval: future artifacts signed
+# by the same key still require their own per-artifact cross-vendor review.
+_HS300_PINNED_AUTHORITY_ROOTS: tuple[HS300AuthorityRoot, ...] = (
+    HS300AuthorityRoot(
+        root_id="quantbt-hs300-operator-root-v1",
+        key_id="hs300-provenance-2026-07",
+        verification_key_sha256=(
+            "79d1a7b7de1cea7238bea85d5440a1a428490e573e09b1781ba6dca461791653"
+        ),
+        authority_level="operator_attested",
+        source_name="tushare",
+        source_refs=("tushare://daily",),
+        universe_refs=(_HS300_UNIVERSE_REF,),
+    ),
+)
 
 
 @dataclass(frozen=True)

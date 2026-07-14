@@ -385,7 +385,12 @@ def test_asset_library_retrieval_restores_pool_dir():
 def test_arbitrary_caller_key_and_self_signed_synthetic_hs300_stays_gap(
     hs300_proof_fixture,
 ):
-    assert ph._HS300_PINNED_AUTHORITY_ROOTS == ()
+    # The adversarial intent survives the production pin: a synthetic
+    # self-signed chain whose root is NOT among the reviewed pinned roots
+    # must stay GAP — pinning a real operator root must not open the door
+    # to any other self-minted authority.
+    pinned_ids = {root.root_id for root in ph._HS300_PINNED_AUTHORITY_ROOTS}
+    assert hs300_proof_fixture["authority_root"].root_id not in pinned_ids
     measurement = _measure_hs300_fixture(hs300_proof_fixture)
     assert measurement.measured is False
     assert "out-of-band production authority root" in measurement.unavailable_reason
