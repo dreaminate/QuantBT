@@ -226,3 +226,29 @@ def test_assemble_panel_rejects_corrupt_parquet(tmp_path):
             members=[f"00000{i}.SZ" for i in range(1, 5)],
             start_date="2024-01-01", end_date="2024-02-29",
         )
+
+
+def test_cli_missing_token_hint_never_suggests_keygen(tmp_path, monkeypatch):
+    # 种坏回归:缺外部 token 时的报错绝不能指向 keygen(会生成随机串顶替真 token)。
+    import importlib.util
+    from pathlib import Path as _P
+
+    spec = importlib.util.spec_from_file_location(
+        "hs300_onboard", _P(__file__).resolve().parents[3].parent / "scripts" / "hs300_onboard.py"
+    )
+    mod = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(mod)
+
+    class _EmptyKS:
+        def fetch(self, _name):
+            return None
+
+    monkeypatch.setattr(mod, "_keystore", lambda: _EmptyKS())
+    with pytest.raises(SystemExit) as exc_info:
+        mod._fetch_key("tushare")
+    message = str(exc_info.value)
+    assert "store-token" in message
+    assert "keygen --key-name tushare" not in message
+    with pytest.raises(SystemExit) as exc_info2:
+        mod._fetch_key("hs300_provenance")
+    assert "keygen" in str(exc_info2.value)

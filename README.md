@@ -67,7 +67,7 @@ docker compose up -d
 
 | 要解锁 | 你提供 | 插哪里 | 文档 |
 |---|---|---|---|
-| A股真数据与 HS300 性能证据 | `TUSHARE_TOKEN`、真实 10 年日频数据、权威成分股快照和信任根 | token 进 keyring；`scripts/hs300_onboard.py` 的 `pull → preflight → build → bench` 走全链（限流拉取→自检→DatasetVersion+签名 receipt/universe→harness 探针）。仓库已 pin `quantbt-hs300-operator-root-v1`（operator_attested，经跨厂商 dual-model 复核后写入 `perf_harness.py`；attestation 依据见该文件注释）——**你自己的数据仍需自己的 key + 你机器上的 build 产物才能转绿，任何自签合成数据都会被拒**；operator_attested 是本机完整性背书，不是 Tushare 官方签名或第三方审计 | [secrets-guide](docs/secrets-guide.md) |
+| A股真数据与 HS300 性能证据 | Tushare token（≥2000 积分）+ 十年日频真数据 | 六步 copy-paste 走全链：`store-token → keygen → pull → preflight → build → bench`（限流拉取→12 项自检→DatasetVersion+签名 receipt/universe→harness 探针）。仓库已 pin `quantbt-hs300-operator-root-v1`（operator_attested，经跨厂商 dual-model 复核，依据见 `perf_harness.py` 注释）；任何自签合成数据都会被拒 | [hs300-quickstart](docs/hs300-quickstart.md) |
 | 真 LLM 多轮 Agent / Review | 至少两条真正不同的 Settings-managed provider/model 能力（或经确认的独立本地端点） | 每条都登记 provider、model、SecretRef 与路由；未配置时报 `NoLLMConfigured`。单 provider 或同一客户端换标签不能关闭 Review GAP | [user-manual](docs/user-manual.md) |
 | Paper 晋级验证人 | 由机器运维指定、与 run owner 不同的稳定 user ID | `QUANTBT_PAPER_VERIFIER_USER_IDS`；普通请求不能修改。空列表时晋级明确不可用 | [secrets-guide §7](docs/secrets-guide.md) |
 | 加密 testnet 真喂 paper | Binance **testnet** key（名 `binance_testnet`） | `/api/security/keystore`（走持久加密 keystore、不入 git；无 key 诚实回退样本回放） | [binance-security-guide §4.5](docs/binance-security-guide.md) |
