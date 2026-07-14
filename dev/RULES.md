@@ -32,7 +32,7 @@
 - 改现有文件「**扩展不替换**」。
 - **按模板 / 格式骨架填,别走样**:每个文件严格照其**对应模板** + 顶部**「格式·防跑偏」骨架**做——**类型**(追加型 / 结构型固定节序 / 重生型每 loop 整篇重写)、**节顺序·表头**、**必填项**都不走样,别乱序 / 漏必填 / 混类型。骨架/模板本身勿改(OS 级,见下条),改内容别动骨架。
 - **不擅自 commit/push**——用户明说才提交。
-- 决策记录 `decisions/`（一决策一文件,canonical 归 leader）**append-only**,锁定不改既往。
+- 决策记录 `decisions/`（canonical 归 leader）**append-only**,锁定不改既往;**单文件账本或一决策一文件皆可**(选一种坚持,模板 `decisions/_TEMPLATE.md`),但**锚语法硬约定**:`D-####` / `ADR-<NS>-###`,一锚一决策,GOAL/卡引用只认锚。要推翻旧决策就新开一条注明「取代 <旧锚>」。
 - **【开发os级别】文件(`RULES.md` / `validate_dev.py` / 模板等)agent 不自作主张改**;用户**明确**要改才改——但要意识到那是 **OS 级改动**(会和 Multi-Dev-Os 分叉),改完最好同步回 Multi-Dev-Os。项目自己的东西写**【项目级别】**文件,别顺手动 OS 文件。
 
 ## 5. 致命错误即停工
@@ -54,7 +54,7 @@
 - 这是个**循环**:拍完一项还有待决策就接着问,直到**待拍板清零**才进实现;别因为想快跳过没拍的(待决策岔路同时点名进 `state/`)。
 - **前置闸门别截断**:遇卡标注的前置闸门(需用户过目/点头)→ 先停下请拍板;但**讲清点头后要走完整套 Goal Loop、别把闸门当终点**——拍板是 Loop 中途的关卡,不是终止。
 - **容忍用户回头改**(推翻之前拍过的)——照单重新规划、不嫌烦:**单次/偶发回退 ≠ 左右横跳**,直接照做、别提醒;**仅当同一处反复推翻(X→Y→X 来回)**才提醒一句「**这是在左右横跳(刚定 X、现改 Y)**」。注意**回退会连带翻案**:重估其余已拍项是否被新选择推翻,被带翻的下游项重新摆上台等拍、**待拍清零计数随之重开**。
-- **拍板项在任务卡 `Open Questions` 用规范标签** `[需拍板]`(待) / `[已决]`(已拍)标注——**只认这两个名、别用变体**;计数器 `（已决 D/总）`(满格 D=总 即全决可进实现,直觉化) 由 `build_card_counters.py` **从标签派生写回**(人别手敲)。**派生量依赖规范 token:标签一漂,计数连锁错**——故标签名是硬约定,`validate_dev.py` 设「标签规范 + 计数核对」兜底。
+- **拍板项在任务卡 `Open Questions` 用规范标签** `[需拍板]`(待) / `[已决]`(已拍)标注——**只认这两个名、别用变体**,且必须是**行首列表项**(`- [需拍板 ...]`,散文里的字面量不算)。**计数不落盘**:「已决 D/总」由 board/DEVMAP 展示时**从标签现算**(单一源=标签本身,消灭「派生数字写回源文件」的第二份);`validate_dev.py` 守「标签规范 + in_progress 时待拍=0」。**全决(待拍=0)才可进实现**。
 
 ## 8. 团队并发协作（多 developer · folder 化）
 > 单写者 → 多写者:**有主的过程内容全 folder 化、各写各文件 → 并发零冲突**;全局视图全部脚本现生成。
@@ -62,7 +62,9 @@
 - **权限**:只有 leader/admin 能 ① **分配**(卡从 `tasks/pool/{uuid8}/` → `tasks/{developer_id}/{uuid8}/`,改归属文件夹)② **land**(合并进 main,并在 land 时合并 decisions/issues 等全局账)。`developer` 只写自己 `tasks/{自己}/` 名下的卡 + **self-review 被分配给自己的卡**。
 - **任务卡 id**:文件名 = uuid 前 8 位 hex;`frontmatter.uuid` = 全 32 位 hex;**依赖/引用一律锚 uuid(前缀可变、uuid 不变)**;归属由所在文件夹编码。**冻结历史卡保 legacy id(不重 mint)**,validate 兼容两套。
 - **三晋升源**(研究台晋升 / GOAL gap / developer×claude 交互)→ 全部 mint uuid 入 `tasks/pool/`,由 leader/admin 分配。全任务 `depends_on` 构成 DAG(validate 校验无环 + 无悬空)。
-- **folder 化全局真相**:`state/board/log/experience/decisions/issues/` + 研究台 全 `{type}/{developer_id}/` per-dev;**canonical/全局决策归 leader 的 folder**。**读任何一类 = 遍历 `{type}/*/` 聚合**;导航 map(`DEVMAP.md` / 各 `_NAV.md`)是快路径——**只定位,实时依据永远是原文 + 对应代码**(沿用「索引不替代原文」)。
+- **folder 化全局真相**:`state/board/log/experience/decisions/issues/` + 研究台 全 `{type}/{developer_id}/` per-dev;**canonical/全局决策归 leader 的 folder**;跨人共建的研究产物有名分:`research/findings/_shared/<topic>/`。**读任何一类 = 遍历 `{type}/*/` 聚合**;导航 map(`DEVMAP.md` / 各 `_NAV.md`)是快路径——**只定位,实时依据永远是原文 + 对应代码**(沿用「索引不替代原文」)。
+- **state 三分职,按更新节奏拆文件**(把不同节奏塞一个文件 = 必然长成不可读巨物):`state/{你}/state.md` = **重生型** gap 表(land 后整篇重写,~30K 内);跨会话续接现场 = `state/{你}/frontier.md`(**重生型**,每 loop 整篇覆写、永远只有最新一份);会话叙事 = log。**续接块禁止堆进 state.md**(validate 抓)。
 - **代码状态新鲜度**:状态文件只从本地代码来。**开工前 `git pull` main;若新提交触及你卡依赖的代码路径 → 先看 diff + `DEVMAP` 刷新理解再动手**(git pull/diff = 代码动了的原生信号,不另设 hash)。
-- **生成视图不手编**:`board/ledger/dev-map/log-index/nav` 一律脚本现生成 —— 各 developer 只编自己有主的卡/状态,全局视图从源重算。
-- **log = durable 交接**:每 session 末 `log/{你}/log.md` 落一行(干了啥 + 交接);**查历史先跑 `python dev/scripts/build_log_index.py` 遍历全员 log 统一索引**定位 → 读原文,别因自己 log 没记就当没发生(别人可能记了)。durable 进度进仓库,别只活在会被压缩的对话里。
+- **生成视图不手编、不入库**:`board/ledger/dev-map/nav/trace-coverage` 一律脚本从源现生成(`os.py refresh` 一键),**且不进 git**(`dev/.gitignore` 已挡)——派生数据入库就得守「新鲜度」这个额外不变量,还让多分支 land 必撞同一批全局文件;不入库则两个问题都不存在。
+- **活跃面/历史面分离**:done 卡按季归档 `tasks/{你}/done/archive/YYYY-QN/`(`os.py archive`,归档卡照常参与依赖解析);`DEVMAP` 只列活跃卡,全量历史看 `build_ledger.py`。追加型文件全都要有滚动出口,**只增不减 = 结构性事故**。
+- **log = durable 交接**:每 session 末 `log/{你}/log.md` 落一条(`os.py log "<一句话>"`;格式 `## YYYY-MM-DD-HHMM 一句话` + ≤5 行要点 = `build_log_index` 解析契约,**别把整个 session 压成一行**);当月之外自动滚到 `log/{你}/archive/YYYY-MM.md`。**查历史先跑 `python dev/scripts/build_log_index.py` 遍历全员 log 统一索引**(含归档)定位 → 读原文,别因自己 log 没记就当没发生(别人可能记了)。durable 进度进仓库,别只活在会被压缩的对话里。

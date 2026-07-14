@@ -85,8 +85,16 @@ def render(dev: Path) -> dict:
             rows.append(card_info(d, dev_id, "active"))
         if (base / "done").is_dir():
             for d in sorted((base / "done").glob("*")):
-                if d.is_dir() and not d.name.startswith("."):
-                    rows.append(card_info(d, dev_id, "done"))
+                if not d.is_dir() or d.name.startswith("."):
+                    continue
+                if d.name == "archive":  # 按季归档的 done 卡照收(全含量账本,历史不缺席)
+                    for period in sorted(d.glob("*")):
+                        if period.is_dir():
+                            for card in sorted(period.glob("*")):
+                                if card.is_dir() and not card.name.startswith("."):
+                                    rows.append(card_info(card, dev_id, f"done({period.name})"))
+                    continue
+                rows.append(card_info(d, dev_id, "done"))
     lines = [
         "# LEDGER · 全含量任务账本（自动生成 · 勿手改 · 跑 build_ledger.py 刷新）",
         "",

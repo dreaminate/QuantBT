@@ -1,0 +1,17 @@
+# dev/.gitignore —— 随 dev/ 整套拷进采纳项目,开箱即生效【开发os级别】
+# 规则一句话:本机身份 + 一切派生视图不入库(现用现生成,见 scripts/README.md)。
+
+# 本机开发者身份(每人各异;框架仓 ship 空占位,采纳项目里填上后自动被忽略)
+.identity
+
+# 派生视图(脚本从源现生成;os.py refresh 一键重建。不入库 = 没有"新鲜度"要守、多分支零冲突)
+DEVMAP.md
+_NAV.md
+board/*/
+tasks/LEDGER.md
+tasks/ASSIGNMENT_BOARD.md
+research/TRACE.coverage.md
+
+# Python
+__pycache__/
+*.py[cod]

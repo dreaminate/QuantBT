@@ -12,6 +12,9 @@ import re
 import sys
 from pathlib import Path
 
+sys.path.insert(0, str(Path(__file__).resolve().parent))
+from _oslib import oq_tag_counts  # noqa: E402
+
 
 def fm(txt: str) -> dict:
     if not txt.lstrip().startswith("---"):
@@ -53,21 +56,25 @@ def render(dev: Path, me: str) -> dict:
         for d in sorted(base.glob("*")):
             if d.name == "done" or not d.is_dir() or not (d / "TASK.md").is_file():
                 continue
-            f = fm((d / "TASK.md").read_text(encoding="utf-8"))
+            txt = (d / "TASK.md").read_text(encoding="utf-8")
+            f = fm(txt)
+            pend, dec, _bad = oq_tag_counts(txt)
+            oq = f"已决 {dec}/{dec + pend}" if (pend or dec) else "-"
             rows.append((d.name, f.get("title", "?"), f.get("status", "?"), f.get("area", "-"),
-                         f.get("priority", "-"), " ".join(x[:8] for x in (f.get("depends_on") or []))))
+                         f.get("priority", "-"), oq, " ".join(x[:8] for x in (f.get("depends_on") or []))))
     lines = [
-        f"# BOARD · {me} 的工作板（生成 · 勿手改 · 跑 build_board.py 刷新）",
+        f"# BOARD · {me} 的工作板（生成 · 勿手改/勿入库 · os.py refresh 重建）",
         "",
         f"> 只含 **{me}** 名下 active 卡（从 tasks/{me}/ 现生成）。**导航 only，实时依据看卡原文 + 对应代码。**",
+        "> 「已决 D/总」从 OQ 标签现算、不落盘——待拍>0 的卡别进实现(RULES §7)。",
         "",
-        "| uuid8 | 标题 | status | area | 优先级 | 依赖(uuid8) |",
-        "|---|---|---|---|---|---|",
+        "| uuid8 | 标题 | status | area | 优先级 | 已决 D/总 | 依赖(uuid8) |",
+        "|---|---|---|---|---|---|---|",
     ]
     for r in rows:
         lines.append("| " + " | ".join(c or "-" for c in r) + " |")
     if not rows:
-        lines.append("| _（名下无 active 卡）_ | | | | | |")
+        lines.append("| _（名下无 active 卡）_ | | | | | | |")
     return {str(dev / "board" / me / "board.md"): "\n".join(lines) + "\n"}
 
 

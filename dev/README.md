@@ -16,25 +16,26 @@
 | 目标台 | `GOAL.md` | 终态契约(慢变,所有 gap 对照它) | 全局单 |
 | — | `RULES.md` / `RULES.project.md` | OS 通用铁律 / 本项目红线 | 框架 / 项目 |
 | — | `CODEMAP.md` | 项目代码结构图(不含 dev/) | 全局单 |
-| 状态(per-dev) | `state/{id}/state.md` | 现状 gap(从本地代码来;🟡≠✅) | per-dev·committed |
-| — | `board/{id}/board.md` | 本人活跃卡(**生成视图**) | per-dev·生成 |
-| — | `log/{id}/log.md` | 滚动记录 | per-dev |
+| 状态(per-dev) | `state/{id}/state.md` | 现状 gap 表(**重生型**:land 后整篇重写;从本地代码来;🟡≠✅) | per-dev·committed |
+| — | `state/{id}/frontier.md` | 跨会话续接现场(**重生型**:每 loop 整篇覆写;续接块禁进 state.md) | per-dev·committed |
+| — | `board/{id}/board.md` | 本人活跃卡(**派生视图·不入库**) | per-dev·生成 |
+| — | `log/{id}/log.md` | 滚动日志(当月;`os.py log` 自动按月滚到 `archive/YYYY-MM.md`) | per-dev |
 | — | `experience/{id}/experience.md` | 技术坑经验库 | per-dev |
-| 决策/问题 | `decisions/{id}/` · `issues/{id}/` | 一决策/问题一文件;**canonical 归 leader** | per-dev·committed |
-| 任务台 | `tasks/` | `pool/{uuid8}/`(待分配) + `{id}/{uuid8}/`(已分配) + `{id}/done/` + `_templates/` | 结构框架·卡 committed |
-| 研究台 | `research/` | `ideas/active/findings/{id}/` + `INDEX`/`TRACE`(全局聚合) + `WORKFLOW`(方法) + `archive` | 结构框架·内容 per-dev |
+| 决策/问题 | `decisions/{id}/` · `issues/{id}/` | append-only;账本或一决策一文件皆可,**锚 D-####/ADR-***;**canonical 归 leader** | per-dev·committed |
+| 任务台 | `tasks/` | `pool/{uuid8}/`(待分配) + `{id}/{uuid8}/`(已分配) + `{id}/done/`(+`done/archive/YYYY-QN/` 季度归档) + `_templates/` + `_areas.md`(功能域词表) | 结构框架·卡 committed |
+| 研究台 | `research/` | `ideas/active/findings/{id}/` + `findings/_shared/`(共享槽) + `INDEX`/`TRACE`(手填溯源) + `WORKFLOW`(方法) + `archive` | 结构框架·内容 per-dev |
 | 执行台 | `exec/` | `HANDOFF.md`(入口) | 框架 |
-| 闸+脚本 | `scripts/` | `validate_dev` `validate_project` `build_{board,dev_map,ledger,card_counters,log_index}` | framework |
+| 闸+脚本 | `scripts/` | `os`(卡生命周期 CLI) `_oslib` `validate_dev` `validate_project` `build_{board,dev_map,ledger,trace,log_index}` | framework |
 
-> 导航 map(**生成、勿手维护**):`DEVMAP.md`(全员→卡,按 area 功能查)+ 各 folder `_NAV.md`。跑 `build_dev_map.py` 刷新。
+> 导航 map(**生成、勿手维护、不入库**):`DEVMAP.md`(活跃面:全员 active+pool,按 area 词表分组;done 只计数、全量看 ledger)+ 各 folder `_NAV.md`。派生视图全部被 `dev/.gitignore` 挡在库外——现用现生成(`os.py refresh`),没有「新鲜度」要守、多分支 land 零冲突。
 
 ## 并发 Goal Loop
 
 ```
-认身份(.identity/TEAM) → git pull main + 看 DEVMAP/diff(代码动了先刷理解)
-  → 取卡(developer:自己 tasks/{我}/ 名下; leader/admin:从 pool 分配)
-  → 写实现 + 对抗测试(测试跑绿,不破基线) → 落档 tasks/{我}/done/
-  → 刷自己 state/ + 生成 board/(build_board) → validate_dev
+认身份(.identity/TEAM) → git pull main + os.py refresh + 看 DEVMAP/diff(代码动了先刷理解)
+  → 取卡(developer:自己 tasks/{我}/ 名下; leader/admin:os.py assign 从 pool 分配)
+  → 写实现 + 对抗测试(测试跑绿,不破基线) → os.py done(落档/盖 done_at 原子)
+  → 整篇重写 state/(gap 表) + 覆写 frontier(续接现场) + os.py log → os.py validate
   → land(仅 leader/admin 合并进 main) → 他人 pull 同步
 ```
 
@@ -42,7 +43,7 @@
 
 - **逻辑 id = `{owner}-{uuid}`**(owner = `wait`(在 pool)或 `developer_id`);**物理:文件夹名 = uuid 前 8 位 hex,归属由所在父文件夹(`pool`/`{developer_id}`)编码、名字不带前缀**;内容 + 依赖 = 全 32 位 uuid;**依赖锚 uuid**(前缀可变、uuid 不变)。冻结历史卡保 legacy id。
 - **三晋升源**(研究台 / GOAL gap / dev×claude)→ mint uuid 入 `tasks/pool/`;leader/admin 分配(pool→`{developer_id}`,改归属文件夹)与 land。
-- 全任务 `depends_on` 构成 **DAG**(validate 校验无环 + 无悬空);连通分量拆分 / 分配算法 = 后续 skill(留空)。
+- 全任务 `depends_on` 构成 **DAG**(validate 校验无环 + 无悬空);package-level 拆包 / 分配推荐由 `dev/skills/assign-tasks/` 落地：先切 shared trunk 的 foundation 包,分叉后再发 branch 包,汇合点留到后续 join 包。
 
 ## 研究 → 任务（方法 · 通用,所有项目一样）
 
@@ -67,16 +68,16 @@
 长引用文件(`GOAL.md` / `RULES.md` / `decisions/` 类)顶部放一句**导航 + 查法**:本文件怎么组织 + 怎么 grep 找一条。
 **铁律一:索引/导航头/导航 map 只为定位,不是原文的替代品** —— 据它 grep/跳到位后**必须读对应原文 + 对应代码再行事**(RULES 顶部索引、§ 标题、`DEVMAP`/`_NAV`、卡计数器同理)。
 **铁律二:只描述结构与查法,绝不枚举每条内容**——枚举=和正文双份必漂。要"每条都列"只能靠脚本从正文/目录自动生成(`build_ledger`/`build_dev_map`/`build_log_index`),**绝不手维护**。
-同理:任务卡 `## Open Questions` 标题用**计数器 `已决/总`**(满格=全决、可进实现),不写"含 N 个需拍板"这种会 stale 的散文。
+同理:任务卡 `## Open Questions` 的「已决 D/总」是**派生量**——board/DEVMAP 展示时从标签现算,**不落盘进卡**(落盘=第二份必漂),更不写"含 N 个需拍板"这种会 stale 的散文。
 **folder 层导航**:folder 全 per-dev 化后,读要遍历——`DEVMAP.md`(任务,按 developer + area)、各 `_NAV.md`(decisions/issues/state/log/experience/research) 是这层的导航,生成、只定位。
 
 ## 查 LOG
 
-各人滚动日志 `log/{developer_id}/log.md`(最新在上)。**查历史别手翻**——跑 `python dev/scripts/build_log_index.py` 看全员统一索引(脚本生成、不手维护)定位再读原文。纪律(每 session 落一行 / 别因自己没记就当没发生)见 `RULES.md` §8。
+各人滚动日志 `log/{developer_id}/log.md`(最新在上,当月;历史在 `log/{id}/archive/YYYY-MM.md`)。**查历史别手翻**——跑 `python dev/scripts/build_log_index.py` 看全员统一索引(含归档;脚本生成、不手维护)定位再读原文。纪律(每 session 落一条 / 别因自己没记就当没发生)见 `RULES.md` §8。
 
 ## 自检
 
-`python dev/scripts/validate_dev.py` —— harness 不靠手工纪律,自检:身份∈TEAM / leader 唯一 / 卡 owner==所在文件夹 / 文件名==uuid8 / **依赖无悬空 + DAG 无环** / 生成视图新鲜(DEVMAP/_NAV/board) / state 不假绿灯 / 目录骨架齐。挂 CI 或 pre-commit 即防漂。
+`python dev/scripts/validate_dev.py`(= `os.py validate`) —— harness 不靠手工纪律,自检:身份∈TEAM / leader 唯一 / 卡 owner==所在文件夹 / 文件名==uuid8 / **依赖无悬空 + DAG 无环**(归档卡在册) / 派生视图未被 track / state 不假绿灯 + 无续接堆叠 + 体积行长 lint / area slug 合法 / 研究台归属合法 / 目录骨架齐。挂 CI 或 pre-commit 即防漂。
 
 ## 新 session 怎么开始
 

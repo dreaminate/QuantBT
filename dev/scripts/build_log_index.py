@@ -38,9 +38,12 @@ if LOGBASE.is_dir():
     for devdir in sorted(LOGBASE.glob("*")):
         if not devdir.is_dir():
             continue
-        for lf in (devdir / "log.md", devdir / "log.archive.md"):
+        targets = [devdir / "log.md", devdir / "log.archive.md"]
+        if (devdir / "archive").is_dir():  # os.py log 按月滚动的归档(archive/YYYY-MM.md)
+            targets += sorted((devdir / "archive").glob("*.md"))
+        for lf in targets:
             for title, line in _entries(lf):
-                rows.append((title, f"{devdir.name}/{lf.name}", line))
+                rows.append((title, f"{devdir.name}/{lf.relative_to(devdir)}", line))
 
 rows.sort(key=lambda r: _datekey(r[0]), reverse=True)
 
