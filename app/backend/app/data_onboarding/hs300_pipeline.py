@@ -13,6 +13,12 @@
 诚实边界：本模块产出的是「可被 harness 验收的证据链文件」，不是绿灯本身——
 harness 侧 authority root 未 pin 时依然是 KNOWN_RUN_GAP（独立复审步骤，数据方不自铸）。
 
+【幸存者边界·双资产纪律】本管线产出的 panel = **as-of 当期 300 成分 × 十年窗口**，
+语义是「读性能基准面」，带幸存者选择（成分本身按 as-of 快照取）——它**不是**无幸存者
+偏差的研究 universe，禁止喂 confirmatory validation / 回测选股。无偏研究面 =
+历史成分并集（~622 只含退市，staging 已含全量 daily+adj_factor）作为**独立
+dataset_id 的第二资产**交付，survivorship_rule_ref 显式区分两者（见任务卡 39d08df8）。
+
 密钥红线：HMAC key 只流经 hs300_provenance.sign_payload；本模块不打印、不落盘、
 不把 key 放进任何返回值或异常文本。
 """

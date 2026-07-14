@@ -3,6 +3,7 @@
 
 子命令:
     keygen     生成 provenance HMAC key 存 keyring(只打印 sha256 指纹,绝不打印 key)
+    pull       Tushare 全量回填 staging(token 走 keyring;限流+退避+幂等续拉)
     preflight  staging → 面板逐项自检报告(不签名、不落库)
     build      staging → preflight → DatasetVersion+manifest → 签名 universe+receipt
     bench      按证据链跑 perf-harness HS300 探针(key 从 keyring 取,不进 argv/stdout)
@@ -70,6 +71,25 @@ def cmd_keygen(args: argparse.Namespace) -> int:
         f"key stored to keyring name={args.key_name}; "
         f"verification_key_sha256={hashlib.sha256(key.encode('utf-8')).hexdigest()}"
     )
+    return 0
+
+
+def cmd_pull(args: argparse.Namespace) -> int:
+    import tushare as ts
+
+    from app.data_onboarding.hs300_fetch import fetch_raw_hs300
+
+    token = _fetch_key(args.token_name)
+    pro = ts.pro_api(token)
+    result = fetch_raw_hs300(
+        args.staging_dir,
+        pro=pro,
+        start_compact=args.start.replace("-", ""),
+        end_compact=args.end.replace("-", ""),
+        progress=print,
+    )
+    assert token not in str(result), "内部错误:token 泄入输出,拒绝打印"
+    print(json.dumps(result, ensure_ascii=False))
     return 0
 
 
@@ -151,6 +171,10 @@ def main(argv: list[str] | None = None) -> int:
     common.add_argument("--snapshot", default="202606")
     common.add_argument("--start", default="2016-06-01")
     common.add_argument("--end", default="2026-06-30")
+
+    p_pull = sub.add_parser("pull", parents=[common], help="Tushare 回填 staging")
+    p_pull.add_argument("--token-name", default="tushare")
+    p_pull.set_defaults(fn=cmd_pull)
 
     p_pre = sub.add_parser("preflight", parents=[common], help="面板自检(不签名)")
     p_pre.set_defaults(fn=cmd_preflight)
