@@ -1,7 +1,7 @@
 ---
 uuid: 39d08df8cb9f4890bfd7c5a89eb904f8  # 全 32 位 hex 无连字符;生成:python -c "import uuid;print(uuid.uuid4().hex)"(或直接 os.py mint 全自动)
 title: Tushare 真实 10 年 HS300 日频数据管线全链条——真 panel+DatasetVersion+manifest+签名 receipt/universe snapshot+dual-model 审查+perf harness 合法转绿
-status: todo  # todo | in_progress | done
+status: in_progress  # todo | in_progress | done
 owner: dreaminate  # wait(在 pool) | <developer_id>;须 == 所在文件夹(validate 校验一致;os.py assign 两处同改)
 assigned_by: dreaminate  # 分配者 developer_id(leader/admin);pool 中留空
 review_status: 1 # 被分配者 self-review:0 未过目 | 1 已过目/确认
