@@ -133,6 +133,7 @@ def hs300_proof_fixture(tmp_path_factory):
         "universe_ref": ph._HS300_UNIVERSE_REF,
         "as_of_date": "2024-01-03",
         "constituent_symbols": symbols,
+        "constituent_list_dates": {symbol: "2010-01-04" for symbol in symbols},
     }
     _write_signed_receipt(universe_path, universe_payload, key)
     universe_snapshot_sha256 = hashlib.sha256(universe_path.read_bytes()).hexdigest()
@@ -612,6 +613,7 @@ def test_signed_wrong_hs300_membership_is_rejected(
     universe_payload = {
         **hs300_proof_fixture["universe_payload"],
         "constituent_symbols": wrong_symbols,
+        "constituent_list_dates": {symbol: "2010-01-04" for symbol in wrong_symbols},
     }
     _write_signed_receipt(universe_path, universe_payload, hs300_proof_fixture["key"])
     payload = {
@@ -628,6 +630,342 @@ def test_signed_wrong_hs300_membership_is_rejected(
     )
     assert measurement.measured is False
     assert "membership snapshot" in measurement.unavailable_reason
+    assert classify_performance_baseline(measurement).status == PERF_KNOWN_RUN_GAP
+
+
+def _resign_universe_variant(
+    hs300_proof_fixture,
+    tmp_path,
+    universe_payload,
+    *,
+    tamper_after_signing=None,
+):
+    """Sign a universe payload variant and re-bind the receipt to it."""
+    universe_path = tmp_path / "variant-universe.json"
+    receipt_path = tmp_path / "variant-receipt.json"
+    _write_signed_receipt(universe_path, universe_payload, hs300_proof_fixture["key"])
+    if tamper_after_signing is not None:
+        raw = json.loads(universe_path.read_text(encoding="utf-8"))
+        tamper_after_signing(raw)
+        universe_path.write_text(
+            json.dumps(raw, ensure_ascii=False, sort_keys=True), encoding="utf-8"
+        )
+    payload = {
+        **hs300_proof_fixture["payload"],
+        "universe_snapshot_sha256": hashlib.sha256(
+            universe_path.read_bytes()
+        ).hexdigest(),
+    }
+    _write_signed_receipt(receipt_path, payload, hs300_proof_fixture["key"])
+    return receipt_path, universe_path
+
+
+def test_hs300_universe_v1_payload_without_list_dates_is_rejected(
+    hs300_proof_fixture,
+    tmp_path,
+    monkeypatch,
+):
+    # Seeded bad: a pre-amendment (v1) snapshot without signed listing dates
+    # must not be accepted by the since-listing coverage contract.
+    _pin_hs300_root(monkeypatch, hs300_proof_fixture)
+    universe_payload = {
+        key: value
+        for key, value in hs300_proof_fixture["universe_payload"].items()
+        if key != "constituent_list_dates"
+    }
+    universe_payload["schema_version"] = "quantbt.hs300_perf_universe.v1"
+    receipt_path, universe_path = _resign_universe_variant(
+        hs300_proof_fixture, tmp_path, universe_payload
+    )
+    measurement = _measure_hs300_fixture(
+        hs300_proof_fixture,
+        provenance_receipt_path=receipt_path,
+        universe_snapshot_path=universe_path,
+    )
+    assert measurement.measured is False
+    assert "missing or unknown fields" in measurement.unavailable_reason
+    assert classify_performance_baseline(measurement).status == PERF_KNOWN_RUN_GAP
+
+
+def test_hs300_universe_list_dates_key_mismatch_is_rejected(
+    hs300_proof_fixture,
+    tmp_path,
+    monkeypatch,
+):
+    # Seeded bad: listing dates keyed to a different symbol set than the
+    # signed membership (drop one member, add a foreign one).
+    _pin_hs300_root(monkeypatch, hs300_proof_fixture)
+    symbols = hs300_proof_fixture["symbols"]
+    bad_dates = {symbol: "2010-01-04" for symbol in symbols[:-1]}
+    bad_dates["999999.SZ"] = "2010-01-04"
+    universe_payload = {
+        **hs300_proof_fixture["universe_payload"],
+        "constituent_list_dates": bad_dates,
+    }
+    receipt_path, universe_path = _resign_universe_variant(
+        hs300_proof_fixture, tmp_path, universe_payload
+    )
+    measurement = _measure_hs300_fixture(
+        hs300_proof_fixture,
+        provenance_receipt_path=receipt_path,
+        universe_snapshot_path=universe_path,
+    )
+    assert measurement.measured is False
+    assert "cover exactly the signed constituents" in measurement.unavailable_reason
+    assert classify_performance_baseline(measurement).status == PERF_KNOWN_RUN_GAP
+
+
+def test_hs300_universe_list_dates_tamper_after_signing_is_rejected(
+    hs300_proof_fixture,
+    tmp_path,
+    monkeypatch,
+):
+    # Seeded bad: mutate one signed listing date in the snapshot file without
+    # re-signing; the HMAC must catch it even though the receipt re-binds the
+    # tampered file bytes.
+    _pin_hs300_root(monkeypatch, hs300_proof_fixture)
+    target = hs300_proof_fixture["symbols"][0]
+
+    def _mutate(raw):
+        raw["constituent_list_dates"][target] = "2019-06-01"
+
+    receipt_path, universe_path = _resign_universe_variant(
+        hs300_proof_fixture,
+        tmp_path,
+        hs300_proof_fixture["universe_payload"],
+        tamper_after_signing=_mutate,
+    )
+    measurement = _measure_hs300_fixture(
+        hs300_proof_fixture,
+        provenance_receipt_path=receipt_path,
+        universe_snapshot_path=universe_path,
+    )
+    assert measurement.measured is False
+    assert "signature mismatch" in measurement.unavailable_reason
+    assert classify_performance_baseline(measurement).status == PERF_KNOWN_RUN_GAP
+
+
+def test_hs300_bars_before_signed_listing_date_are_rejected(
+    hs300_proof_fixture,
+    tmp_path,
+    monkeypatch,
+):
+    # Seeded bad: a constituent signed as listed mid-window while the panel
+    # carries bars from the window start — physically impossible history.
+    _pin_hs300_root(monkeypatch, hs300_proof_fixture)
+    target = hs300_proof_fixture["symbols"][0]
+    universe_payload = {
+        **hs300_proof_fixture["universe_payload"],
+        "constituent_list_dates": {
+            **hs300_proof_fixture["universe_payload"]["constituent_list_dates"],
+            target: "2019-06-03",
+        },
+    }
+    receipt_path, universe_path = _resign_universe_variant(
+        hs300_proof_fixture, tmp_path, universe_payload
+    )
+    measurement = _measure_hs300_fixture(
+        hs300_proof_fixture,
+        provenance_receipt_path=receipt_path,
+        universe_snapshot_path=universe_path,
+    )
+    assert measurement.measured is False
+    assert "bars before its signed listing date" in measurement.unavailable_reason
+    assert classify_performance_baseline(measurement).status == PERF_KNOWN_RUN_GAP
+
+
+def _build_hs300_variant_chain(tmp_path, base_fixture, frame, list_dates):
+    """Re-register and re-sign the full proof chain for a mutated panel."""
+    from app.connectors.base import make_wide_fetch_result
+    from app.data_quality import DatasetRegistry, GERule
+
+    root = tmp_path / "variant-chain"
+    root.mkdir()
+    data_path = root / "hs300_panel.parquet"
+    registry_path = root / "registry.jsonl"
+    receipt_path = root / "provenance.json"
+    universe_path = root / "universe.json"
+    frame.write_parquet(data_path)
+    fetch_result = replace(
+        make_wide_fetch_result(frame, source_name="tushare"),
+        source_ref="tushare://daily",
+        ingestion_skill_version="tushare@test-contract-1",
+        secret_ref="keyring://tushare/perf-test",
+        known_at_utc=datetime.now(UTC).isoformat(),
+        effective_at_utc=frame.get_column("ts").max().isoformat(),
+    )
+    registry = DatasetRegistry(registry_path)
+    version = registry.register(
+        "hs300_daily_10y_test_contract",
+        fetch_result,
+        file_paths=[str(data_path)],
+        rules=[
+            GERule(column=column, rule_type="not_null")
+            for column in ("open", "high", "low", "close", "volume")
+        ],
+        metadata={
+            "market": "stocks_cn",
+            "interval": "1d",
+            "data_kind": "ohlcv",
+        },
+        source_ref="tushare://daily",
+        ingestion_skill_version="tushare@test-contract-1",
+        secret_ref="keyring://tushare/perf-test",
+        known_at_utc=fetch_result.known_at_utc,
+        effective_at_utc=fetch_result.effective_at_utc,
+        require_provenance=True,
+    )
+    key = base_fixture["key"]
+    authority_root = base_fixture["authority_root"]
+    symbols = sorted(frame.get_column("symbol").unique().to_list())
+    universe_payload = {
+        "schema_version": ph._HS300_UNIVERSE_SCHEMA,
+        "authority_root_id": authority_root.root_id,
+        "key_id": authority_root.key_id,
+        "universe_ref": ph._HS300_UNIVERSE_REF,
+        "as_of_date": "2024-01-03",
+        "constituent_symbols": symbols,
+        "constituent_list_dates": list_dates,
+    }
+    _write_signed_receipt(universe_path, universe_payload, key)
+    manifest_sha256 = hashlib.sha256(
+        Path(version.manifest_path).read_bytes()
+    ).hexdigest()
+    payload = {
+        "schema_version": ph._HS300_RECEIPT_SCHEMA,
+        "authority_root_id": authority_root.root_id,
+        "key_id": authority_root.key_id,
+        "dataset_id": version.dataset_id,
+        "dataset_version": version.version_id,
+        "dataset_record_sha256": hashlib.sha256(
+            json.dumps(
+                version.to_dict(),
+                ensure_ascii=False,
+                sort_keys=True,
+                separators=(",", ":"),
+            ).encode("utf-8")
+        ).hexdigest(),
+        "dataset_frame_sha256": version.sha256,
+        "manifest_sha256": manifest_sha256,
+        "source_name": version.source_name,
+        "source_ref": version.source_ref,
+        "ingestion_skill_version": version.ingestion_skill_version,
+        "market": version.metadata["market"],
+        "interval": version.metadata["interval"],
+        "data_kind": version.metadata["data_kind"],
+        "universe_ref": ph._HS300_UNIVERSE_REF,
+        "universe_snapshot_sha256": hashlib.sha256(
+            universe_path.read_bytes()
+        ).hexdigest(),
+        "loaded_panel_sha256": ph._hs300_loaded_panel_sha256(frame),
+        "row_count": version.row_count,
+        "coverage_start_utc": version.coverage_start_utc,
+        "coverage_end_utc": version.coverage_end_utc,
+        "attested_at_utc": datetime.now(UTC).isoformat(),
+    }
+    _write_signed_receipt(receipt_path, payload, key)
+    return {
+        **base_fixture,
+        "data_path": data_path,
+        "registry_path": registry_path,
+        "receipt_path": receipt_path,
+        "universe_path": universe_path,
+        "version": version,
+        "payload": payload,
+        "universe_payload": universe_payload,
+        "symbols": symbols,
+    }
+
+
+def _late_listed_variant_inputs(hs300_proof_fixture):
+    import polars as pl
+
+    frame = pl.read_parquet(hs300_proof_fixture["data_path"])
+    trading_dates = sorted(frame.get_column("ts").dt.date().unique().to_list())
+    target = hs300_proof_fixture["symbols"][0]
+    listed = trading_dates[300]
+    list_dates = {
+        **hs300_proof_fixture["universe_payload"]["constituent_list_dates"],
+        target: listed.isoformat(),
+    }
+    late_frame = frame.filter(
+        (pl.col("symbol") != target) | (pl.col("ts").dt.date() >= listed)
+    )
+    return frame, late_frame, trading_dates, target, listed, list_dates
+
+
+def test_late_listed_constituent_with_full_since_listing_coverage_is_green(
+    hs300_proof_fixture,
+    tmp_path,
+    monkeypatch,
+):
+    # Real HS300 membership always contains late-listed constituents; a panel
+    # honest about that (no bars before listing, full coverage afterwards)
+    # must be measurable — this pins the amendment's satisfiability.
+    _, late_frame, _, _, _, list_dates = _late_listed_variant_inputs(
+        hs300_proof_fixture
+    )
+    variant = _build_hs300_variant_chain(
+        tmp_path, hs300_proof_fixture, late_frame, list_dates
+    )
+    _pin_hs300_root(monkeypatch, variant)
+    measurement = _measure_hs300_fixture(variant)
+    assert measurement.measured is True
+    assert measurement.observed_seconds is not None
+
+
+def test_late_listed_constituent_coverage_hole_is_rejected(
+    hs300_proof_fixture,
+    tmp_path,
+    monkeypatch,
+):
+    # Seeded bad: punch a >20% hole in the late-listed member's since-listing
+    # history (keeping its first bar aligned) — the coverage gate must catch.
+    import polars as pl
+
+    _, late_frame, trading_dates, target, listed, list_dates = (
+        _late_listed_variant_inputs(hs300_proof_fixture)
+    )
+    hole_start = trading_dates[900]
+    hole_end = trading_dates[1500]
+    holed = late_frame.filter(
+        (pl.col("symbol") != target)
+        | (pl.col("ts").dt.date() < hole_start)
+        | (pl.col("ts").dt.date() > hole_end)
+    )
+    variant = _build_hs300_variant_chain(
+        tmp_path, hs300_proof_fixture, holed, list_dates
+    )
+    _pin_hs300_root(monkeypatch, variant)
+    measurement = _measure_hs300_fixture(variant)
+    assert measurement.measured is False
+    assert "lack 80% daily coverage" in measurement.unavailable_reason
+    assert classify_performance_baseline(measurement).status == PERF_KNOWN_RUN_GAP
+
+
+def test_late_listed_constituent_first_bar_lag_is_rejected(
+    hs300_proof_fixture,
+    tmp_path,
+    monkeypatch,
+):
+    # Seeded bad: the late-listed member's history starts 15 trading days
+    # after its signed listing date — laundering a missing early history.
+    import polars as pl
+
+    _, late_frame, trading_dates, target, listed, list_dates = (
+        _late_listed_variant_inputs(hs300_proof_fixture)
+    )
+    lag_cutoff = trading_dates[315]
+    lagged = late_frame.filter(
+        (pl.col("symbol") != target) | (pl.col("ts").dt.date() >= lag_cutoff)
+    )
+    variant = _build_hs300_variant_chain(
+        tmp_path, hs300_proof_fixture, lagged, list_dates
+    )
+    _pin_hs300_root(monkeypatch, variant)
+    measurement = _measure_hs300_fixture(variant)
+    assert measurement.measured is False
+    assert "first bar lags its signed listing date" in measurement.unavailable_reason
     assert classify_performance_baseline(measurement).status == PERF_KNOWN_RUN_GAP
 
 

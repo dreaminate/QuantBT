@@ -88,11 +88,25 @@ HS300_PROVENANCE_KEY_ENV = "QUANTBT_PERF_HS300_PROVENANCE_KEY"
 _RUN_REQUIRED_SERIES = ("equity", "benchmark_return", "daily_buy", "daily_sell")
 
 _HS300_RECEIPT_SCHEMA = "quantbt.hs300_perf_provenance.v2"
-_HS300_UNIVERSE_SCHEMA = "quantbt.hs300_perf_universe.v1"
+_HS300_UNIVERSE_SCHEMA = "quantbt.hs300_perf_universe.v2"
 _HS300_REQUIRED_SYMBOL_COUNT = 300
 _HS300_MIN_TRADING_DAYS = 2400
 _HS300_MIN_CALENDAR_SPAN_DAYS = 3650
+# Coverage is measured against each constituent's own listable window
+# (panel trading dates on/after its authority-signed listing date), not the
+# full panel window: real HS300 membership always contains recently listed
+# constituents (measured 2026-07: 61 of 300 members list-dated past the 80%
+# line of a 10-year window), so a full-window denominator is unsatisfiable
+# by genuine data. Listing dates are part of the signed universe snapshot
+# (schema v2) so the denominator carries the same authority binding as the
+# membership itself.
 _HS300_MIN_SYMBOL_COVERAGE_RATIO = 0.80
+# A constituent listed after the panel start must produce its first bar
+# within this many panel trading days of its signed listing date; measured
+# reality is exact alignment (79/79 late-listed members, 2026-07), the
+# allowance only absorbs listing-day suspensions. This blocks laundering a
+# missing early history through an honest-looking listing date.
+_HS300_FIRST_BAR_MAX_LAG_OPEN_DAYS = 10
 _HS300_SOURCE_REFS = frozenset(
     {
         "tushare://daily",
@@ -135,6 +149,7 @@ _HS300_UNIVERSE_PAYLOAD_FIELDS = frozenset(
         "universe_ref",
         "as_of_date",
         "constituent_symbols",
+        "constituent_list_dates",
     }
 )
 _HS300_PRODUCTION_AUTHORITY_LEVELS = frozenset({"operator_attested"})
@@ -756,6 +771,28 @@ def _load_hs300_universe_snapshot(
         raise HS300DatasetUnavailable(
             "authority-bound HS300 constituents must be unique sorted SH/SZ symbols"
         )
+    list_dates = payload.get("constituent_list_dates")
+    if not isinstance(list_dates, dict) or set(list_dates) != set(symbols):
+        raise HS300DatasetUnavailable(
+            "authority-bound HS300 listing dates must cover exactly the signed constituents"
+        )
+    for symbol, listed_raw in list_dates.items():
+        if not isinstance(listed_raw, str) or not re.fullmatch(
+            r"[0-9]{4}-[0-9]{2}-[0-9]{2}", listed_raw
+        ):
+            raise HS300DatasetUnavailable(
+                f"HS300 constituent listing date is invalid for {symbol}"
+            )
+        try:
+            listed = datetime.strptime(listed_raw, "%Y-%m-%d").date()
+        except ValueError as exc:
+            raise HS300DatasetUnavailable(
+                f"HS300 constituent listing date is invalid for {symbol}"
+            ) from exc
+        if listed > parsed_as_of:
+            raise HS300DatasetUnavailable(
+                f"HS300 constituent listing date is after the snapshot as_of_date for {symbol}"
+            )
     return payload, universe_snapshot_sha256
 
 
@@ -1268,18 +1305,52 @@ def _validate_hs300_panel(
         raise HS300DatasetUnavailable(
             f"HS300 panel spans only {span_days:.0f} calendar days"
         )
-    min_symbol_days = (
-        frame.group_by("symbol")
-        .agg(pl.col("__hs300_trading_date").n_unique().alias("trading_days"))
-        .get_column("trading_days")
-        .min()
+    import bisect
+
+    list_dates = universe["constituent_list_dates"]
+    trading_dates = sorted(
+        frame.get_column("__hs300_trading_date").unique().to_list()
     )
-    if min_symbol_days < math.ceil(
-        trading_day_count * _HS300_MIN_SYMBOL_COVERAGE_RATIO
-    ):
-        raise HS300DatasetUnavailable(
-            "one or more signed HS300 constituents lack 80% daily coverage"
-        )
+    per_symbol = frame.group_by("symbol").agg(
+        pl.col("__hs300_trading_date").n_unique().alias("trading_days"),
+        pl.col("__hs300_trading_date").min().alias("first_bar_date"),
+    )
+    for row in per_symbol.iter_rows(named=True):
+        row_symbol = row["symbol"]
+        listed = datetime.strptime(
+            list_dates[row_symbol], "%Y-%m-%d"
+        ).date()
+        start_index = bisect.bisect_left(trading_dates, listed)
+        expected_days = len(trading_dates) - start_index
+        if expected_days <= 0:
+            raise HS300DatasetUnavailable(
+                "signed HS300 constituent is list-dated after the panel "
+                f"coverage end ({row_symbol})"
+            )
+        if row["first_bar_date"] < listed:
+            raise HS300DatasetUnavailable(
+                "HS300 constituent has bars before its signed listing date "
+                f"({row_symbol})"
+            )
+        if row["trading_days"] < math.ceil(
+            expected_days * _HS300_MIN_SYMBOL_COVERAGE_RATIO
+        ):
+            raise HS300DatasetUnavailable(
+                "one or more signed HS300 constituents lack 80% daily coverage "
+                "of their listed trading days"
+            )
+        if start_index > 0:
+            lag_cutoff = trading_dates[
+                min(
+                    start_index + _HS300_FIRST_BAR_MAX_LAG_OPEN_DAYS - 1,
+                    len(trading_dates) - 1,
+                )
+            ]
+            if row["first_bar_date"] > lag_cutoff:
+                raise HS300DatasetUnavailable(
+                    "late-listed HS300 constituent's first bar lags its signed "
+                    f"listing date ({row_symbol})"
+                )
 
     recorded_start = _parse_utc(
         version.coverage_start_utc, field_name="coverage_start_utc"
