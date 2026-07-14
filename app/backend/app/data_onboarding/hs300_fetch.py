@@ -41,25 +41,26 @@ class PermissionDeniedError(RuntimeError):
 
 
 class RateLimiter:
-    """滑动窗口令牌桶:每 60s 至多 ``per_minute`` 次调用。"""
+    """滑动窗口限速:每 60s 至多 ``per_minute`` 次调用(monotonic 时钟,免时钟回拨)。"""
 
-    def __init__(self, per_minute: int = RATE_LIMIT_PER_MIN, clock=time.time,
+    def __init__(self, per_minute: int = RATE_LIMIT_PER_MIN, clock=time.monotonic,
                  sleeper=time.sleep) -> None:
+        if per_minute <= 0:
+            raise ValueError("per_minute 必须为正")
         self.per_minute = per_minute
         self._clock = clock
         self._sleep = sleeper
         self._calls: list[float] = []
 
     def acquire(self) -> None:
-        now = self._clock()
-        self._calls = [t for t in self._calls if now - t < 60.0]
-        if len(self._calls) >= self.per_minute:
-            wait = 60.0 - (now - self._calls[0]) + 0.5
-            if wait > 0:
-                self._sleep(wait)
+        while True:  # sleep 后重查窗口,时钟未前进也不会放行超额调用
             now = self._clock()
             self._calls = [t for t in self._calls if now - t < 60.0]
-        self._calls.append(now)
+            if len(self._calls) < self.per_minute:
+                self._calls.append(now)
+                return
+            wait = 60.0 - (now - self._calls[0]) + 0.5
+            self._sleep(max(wait, 0.1))
 
 
 def classify_tushare_error(message: str) -> str:
@@ -76,29 +77,34 @@ def classify_tushare_error(message: str) -> str:
 def call_with_backoff(fn: Callable[..., Any], *, limiter: RateLimiter,
                       sleeper=time.sleep, **kwargs: Any) -> Any:
     delay = _RETRY_BASE_SECONDS
-    for _ in range(_MAX_ATTEMPTS):
+    last_exc: Exception | None = None
+    for attempt in range(_MAX_ATTEMPTS):
         limiter.acquire()
         try:
             return fn(**kwargs)
-        except Exception as exc:  # tushare SDK 只抛携 msg 的裸 Exception
+        except Exception as exc:  # tushare SDK 只抛携 msg 的裸 Exception,无类型分层
             kind = classify_tushare_error(str(exc))
-            if kind == "rate_limit":
-                sleeper(61.0)
-                continue
             if kind == "daily_limit":
                 raise DailyLimitError("Tushare 当日接口上限耗尽,次日再续(幂等续拉)") from None
             if kind == "permission":
                 raise PermissionDeniedError(
                     "Tushare 接口权限不足(检查积分档)"
                 ) from None
-            sleeper(delay)
-            delay = min(delay * 2.0, _RETRY_MAX_SECONDS)
-    raise RuntimeError("Tushare 调用重试耗尽")
+            last_exc = exc
+            if attempt == _MAX_ATTEMPTS - 1:
+                break  # 最后一跳不再睡
+            sleeper(61.0 if kind == "rate_limit" else delay)
+            if kind != "rate_limit":
+                delay = min(delay * 2.0, _RETRY_MAX_SECONDS)
+    raise RuntimeError(
+        f"Tushare 调用重试耗尽(最后错误 {type(last_exc).__name__})"
+    ) from last_exc
 
 
 def _save_atomic(frame: pd.DataFrame, path: Path) -> None:
     path.parent.mkdir(parents=True, exist_ok=True)
-    tmp = path.with_suffix(".tmp.parquet")
+    # .partial 后缀不以 .parquet 结尾:中断残留绝不会被消费端 *.parquet glob 读入
+    tmp = path.with_name(path.name + ".partial")
     frame.to_parquet(tmp, index=False)
     tmp.rename(path)
 
@@ -120,6 +126,9 @@ def fetch_raw_hs300(
 
     调用量级(2026-07 实测):日历 1 + 股票表 2 + 月度快照 ~121 + 并集 622 只
     ×2 接口 ÷2 码/次 ≈ 700 次,180 次/分下约 4-6 分钟。
+
+    注意:staging 目录与拉取窗口一一绑定——单元文件名不含窗口参数,换 start/end
+    必须换新 staging 目录,否则旧窗口缓存会被幂等跳过(下游 preflight 会拦但费解)。
     """
     root = Path(staging_dir)
     root.mkdir(parents=True, exist_ok=True)

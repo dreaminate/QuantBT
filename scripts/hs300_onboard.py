@@ -27,7 +27,8 @@ BACKEND = REPO_ROOT / "app" / "backend"
 sys.path.insert(0, str(BACKEND))
 
 # 隔离默认 DATA_ROOT 绑定(app.paths 在 import 时解析);build/bench 均显式传路径。
-os.environ.setdefault("BACKTEST_DATA_ROOT", tempfile.mkdtemp(prefix="hs300-onboard-"))
+if "BACKTEST_DATA_ROOT" not in os.environ:  # 不用 setdefault:实参会先求值,平白遗留空目录
+    os.environ["BACKTEST_DATA_ROOT"] = tempfile.mkdtemp(prefix="hs300-onboard-")
 
 
 def _keystore():
@@ -47,11 +48,15 @@ def cmd_keygen(args: argparse.Namespace) -> int:
     from app.security.keystore import KeystoreRecord
 
     ks = _keystore()
-    existing = None
     try:
         existing = ks.fetch(args.key_name)
-    except Exception:
-        existing = None
+    except Exception as exc:
+        # fail-closed:keyring 读取失败 ≠ key 不存在。此时生成新 key 可能无授权覆盖
+        # 信任锚,旧签名链将永久不可验证——宁可中止。
+        raise SystemExit(
+            f"keyring 读取失败({type(exc).__name__}),无法确认 {args.key_name!r} 是否已存在,"
+            "拒绝生成新 key(防覆盖信任锚);修复 keyring 后重试"
+        ) from None
     if existing is not None and not args.rotate:
         print(
             f"{args.key_name} 已存在(拒绝覆盖,--rotate 才轮换); "
@@ -81,14 +86,19 @@ def cmd_pull(args: argparse.Namespace) -> int:
 
     token = _fetch_key(args.token_name)
     pro = ts.pro_api(token)
-    result = fetch_raw_hs300(
-        args.staging_dir,
-        pro=pro,
-        start_compact=args.start.replace("-", ""),
-        end_compact=args.end.replace("-", ""),
-        progress=print,
-    )
-    assert token not in str(result), "内部错误:token 泄入输出,拒绝打印"
+    try:
+        result = fetch_raw_hs300(
+            args.staging_dir,
+            pro=pro,
+            start_compact=args.start.replace("-", ""),
+            end_compact=args.end.replace("-", ""),
+            progress=print,
+        )
+    except Exception as exc:
+        # 不打印 traceback:pro 对象/调用栈可能间接携带 token 上下文
+        raise SystemExit(f"pull 失败({type(exc).__name__}): {str(exc)[:200]}") from None
+    if token in str(result):  # 不用 assert:python -O 会剥离断言
+        raise SystemExit("内部错误:token 泄入输出,拒绝打印")
     print(json.dumps(result, ensure_ascii=False))
     return 0
 
@@ -125,7 +135,8 @@ def cmd_build(args: argparse.Namespace) -> int:
         as_of_date=args.as_of,
     )
     text = json.dumps(result, ensure_ascii=False, indent=2, default=str)
-    assert key not in text, "内部错误:key 泄入输出,拒绝打印"
+    if key in text:  # 不用 assert:python -O 会剥离断言,secret 卫生必须无条件生效
+        raise SystemExit("内部错误:key 泄入输出,拒绝打印")
     print(text)
     return 0
 
@@ -152,7 +163,8 @@ def cmd_bench(args: argparse.Namespace) -> int:
         "evidence_ref": measurement.evidence_ref,
     }
     text = json.dumps(payload, ensure_ascii=False, indent=2)
-    assert key not in text, "内部错误:key 泄入输出,拒绝打印"
+    if key in text:  # 不用 assert:python -O 会剥离断言
+        raise SystemExit("内部错误:key 泄入输出,拒绝打印")
     print(text)
     return 0 if measurement.measured else 2
 

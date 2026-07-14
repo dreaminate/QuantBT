@@ -175,3 +175,54 @@ def test_fetch_layout_matches_pipeline_contract(tmp_path):
     assert len(list((staging / "daily").glob("*.parquet"))) == 2  # 4 只 ÷ 2 码/文件
     assert len(list((staging / "adj_factor").glob("*.parquet"))) == 2
     assert (staging / "index_daily_000300SH.parquet").exists()
+
+
+def test_fetch_resumes_after_mid_pipeline_daily_limit(tmp_path):
+    # 种坏:第二次 index_weight 调用抛当日上限 → 重跑后已完成单元零重复调用。
+    class _LimitOnceThenOk(_FakePro):
+        def __init__(self):
+            super().__init__()
+            self.iw_calls = 0
+
+        def index_weight(self, **kw):
+            self.iw_calls += 1
+            if self.iw_calls == 2:
+                raise Exception("抱歉，您每天最多访问该接口100000次")
+            return super().index_weight(**kw)
+
+    pro = _LimitOnceThenOk()
+    limiter = RateLimiter(per_minute=100000, sleeper=lambda _s: None)
+    kwargs = dict(
+        pro=pro, start_compact="20240101", end_compact="20240229",
+        calendar_start="20240101", calendar_end="20240301",
+        limiter=limiter, sleeper=lambda _s: None,
+    )
+    with pytest.raises(DailyLimitError):
+        fetch_raw_hs300(tmp_path / "staging", **kwargs)
+    trade_cal_calls = pro.calls["trade_cal"]
+    result = fetch_raw_hs300(tmp_path / "staging", **kwargs)  # 续拉
+    assert result["members"] == 4
+    # 已完成单元(trade_cal/stock_basic/第一个月快照)不重复调用
+    assert pro.calls["trade_cal"] == trade_cal_calls
+
+
+def test_assemble_panel_rejects_corrupt_parquet(tmp_path):
+    # 种坏:daily 目录混入半写损坏文件 → 组面板必须炸出来,不许静默跳过。
+    from app.data_onboarding import assemble_panel as _assemble
+
+    pro = _FakePro()
+    limiter = RateLimiter(per_minute=100000, sleeper=lambda _s: None)
+    fetch_raw_hs300(
+        tmp_path / "staging", pro=pro,
+        start_compact="20240101", end_compact="20240229",
+        calendar_start="20240101", calendar_end="20240301",
+        limiter=limiter, sleeper=lambda _s: None,
+    )
+    corrupt = tmp_path / "staging" / "daily" / "zz_corrupt.parquet"
+    corrupt.write_bytes(b"PAR1" + b"\x00" * 64)
+    with pytest.raises(Exception):
+        _assemble(
+            tmp_path / "staging",
+            members=[f"00000{i}.SZ" for i in range(1, 5)],
+            start_date="2024-01-01", end_date="2024-02-29",
+        )

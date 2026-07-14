@@ -73,12 +73,16 @@ def load_list_dates(staging_dir: str | Path, symbols: list[str]) -> dict[str, st
     if not frames:
         raise FileNotFoundError(f"stock_basic parquet 缺失于 {staging_dir}")
     basic = pl.concat(frames)
-    mapping = dict(
-        zip(
-            basic.get_column("ts_code").to_list(),
-            basic.get_column("list_date").to_list(),
-        )
-    )
+    codes = basic.get_column("ts_code").to_list()
+    dates = basic.get_column("list_date").to_list()
+    mapping: dict[str, str] = {}
+    conflicts: list[str] = []
+    for code, raw in zip(codes, dates):
+        if code in mapping and mapping[code] != raw:
+            conflicts.append(code)
+        mapping[code] = raw
+    if conflicts:
+        raise ValueError(f"stock_basic L/D 上市日冲突,fail-closed: {conflicts[:5]}")
     missing = [s for s in symbols if not mapping.get(s)]
     if missing:
         raise KeyError(
@@ -160,6 +164,16 @@ def preflight_report(
     def _check(name: str, ok: bool, detail: str = "") -> None:
         checks[name] = {"ok": bool(ok), "detail": detail}
 
+    if frame.is_empty():
+        return {
+            "ok": False,
+            "checks": {"non_empty": {"ok": False, "detail": "panel is empty"}},
+            "worst_coverage": [],
+            "trading_days": 0,
+            "span_days": 0,
+            "symbols": 0,
+            "rows": 0,
+        }
     work = frame.with_columns(pl.col("ts").dt.date().alias("__d"))
     symbols = sorted(work.get_column("symbol").unique().to_list())
     _check(
@@ -261,10 +275,10 @@ def register_panel(
     *,
     registry_path: str | Path,
     panel_path: str | Path,
-    dataset_id: str = "hs300_daily_10y",
+    dataset_id: str = "hs300_daily_10y_readbench_cohort",
     source_ref: str = "tushare://daily",
     secret_ref: str = "keyring://quantbt/tushare",
-    ingestion_skill_version: str = "tushare@1.4.29",
+    ingestion_skill_version: str | None = None,
     known_at_utc: str | None = None,
     effective_at_utc: str | None = None,
 ):
@@ -273,6 +287,11 @@ def register_panel(
     GE 规则 = 5 个 distinct (column, not_null)（harness registry 契约要求 ≥5 distinct
     passing data tests）；metadata 按 harness 契约三键。
     """
+    if ingestion_skill_version is None:
+        # 从真实安装版本派生,防链记录与运行环境漂移(硬编码=provenance 漂移向量)
+        import tushare as _ts
+
+        ingestion_skill_version = f"tushare@{_ts.__version__}"
     panel_file = Path(panel_path)
     panel_file.parent.mkdir(parents=True, exist_ok=True)
     frame.write_parquet(panel_file)
@@ -298,6 +317,12 @@ def register_panel(
             "market": "stocks_cn",
             "interval": "1d",
             "data_kind": "ohlcv",
+            # 语义标记进签名制品(additive,harness 白名单校验容忍):
+            # 基准面 = as-of 当期成分,带幸存者选择,禁喂 confirmatory research。
+            "panel_semantics": "benchmark_only_current_cohort",
+            "survivorship": "biased_as_of_cohort",
+            "research_use": "forbidden_confirmatory",
+            "volume_unit": "lot_100_shares",
         },
         source_ref=source_ref,
         ingestion_skill_version=ingestion_skill_version,
@@ -321,8 +346,8 @@ def build_chain(
     start_date: str,
     end_date: str,
     as_of_date: str,
-    dataset_id: str = "hs300_daily_10y",
-    ingestion_skill_version: str = "tushare@1.4.29",
+    dataset_id: str = "hs300_daily_10y_readbench_cohort",
+    ingestion_skill_version: str | None = None,
     preflight_kwargs: dict[str, Any] | None = None,
 ) -> dict[str, Any]:
     """staging → preflight → register → 签名 universe + receipt。返回 refs（不含 key）。"""
