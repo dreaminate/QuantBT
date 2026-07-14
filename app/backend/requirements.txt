@@ -23,3 +23,7 @@ safetensors>=0.4
 keyring>=24.0
 cryptography>=42.0
 pytest==8.4.1
+# CI 首轮暴露的依赖洗白补齐(本机隐性存在,requirements 缺失):
+xgboost==3.2.0
+torch==
+reportlab==5.0.0
