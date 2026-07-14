@@ -422,6 +422,12 @@ def build_chain(
 
 __all__ = [
     "CANONICAL_COLUMNS",
+    "HFQ_HARD_BAND",
+    "HFQ_DIAGNOSTIC_BAND",
+    "assemble_research_tables",
+    "build_research_asset",
+    "load_union_members",
+    "research_quality_report",
     "load_members",
     "load_list_dates",
     "assemble_panel",
@@ -429,3 +435,284 @@ __all__ = [
     "register_panel",
     "build_chain",
 ]
+
+
+# ── 研究面资产(第二资产):历史成分并集,无幸存者选择 ────────────────────────────
+#
+# 与基准面(readbench cohort)的分界:研究面 = index_weight 全史并集(~622 只,含退市/
+# 已调出),raw bars + adj_factor + suspend_d 三表分离,禁 pre-join 复权(复权唯一落点
+# 仍在 factor_factory/panel_source)。质量门内嵌卡 39d08df8 的两根探针:
+#   #6 adj_factor look-ahead:每根 bar 必须有同日复权因子(左连零缺失)——因子日期
+#      被前移/错位(种已知坏)必在此炸;
+#   #7 停牌伪 bar:bar 日不得与「有记录的全天停牌日」相交——在已记录停牌日伪造
+#      bar(种已知坏)必在此炸。诚实边界:Tushare suspend_d 早年记录不完整,
+#      记录缺席≠未停牌,本门只在正向(有记录处)有牙。
+# 复权因子的诚实模型(2026-07 真实 union 实测,证据见 evidence 包):
+# - factor 在 A股不单调:缩股/重述/僵尸股双口径翻转都真实存在(532 处 >1e-4 回撤,
+#   零舍入噪声级)——但翻转集中在停牌无 bar 日,对 bar 连接后的消费者不可见;
+# - 质量门因此定在【bar 日 hfq 连续性】:hfq_ret = (close×factor) 的日收益。
+#   真实极值 = +306%(盐湖股份 2021-08-10 恢复上市首日,无涨跌幅限制)、-79%/-63%
+#   (退市整理期);99.99% 分位=0.20(涨跌停带)。硬门 3.5 抓十倍级 factor 错位/损坏,
+#   >0.30 事件计数作诊断细节供复核。检测下限如实声明:3.5 倍以下的内部 factor
+#   损坏本层不抓(涨跌停带内无法与真实行情区分),归跨源对账(后续工作)。
+
+HFQ_HARD_BAND = 3.5
+HFQ_DIAGNOSTIC_BAND = 0.30
+
+
+def load_union_members(staging_dir: str | Path) -> list[str]:
+    """历史成分并集(pull 时由全史 index_weight 快照聚合写入)。"""
+    path = Path(staging_dir) / "member_union.parquet"
+    if not path.is_file():
+        raise FileNotFoundError(f"member_union 缺失(先跑 pull): {path}")
+    members = sorted(set(pl.read_parquet(path).get_column("ts_code").to_list()))
+    if not members:
+        raise ValueError("member_union 为空")
+    return members
+
+
+def _read_staged_kind(
+    staging_dir: str | Path, kind: str, columns: list[str],
+    *, members: set[str], start_c: str, end_c: str,
+) -> pl.DataFrame:
+    frames = []
+    for path in sorted((Path(staging_dir) / kind).glob("*.parquet")):
+        chunk = pl.read_parquet(path, columns=columns).filter(
+            pl.col("ts_code").is_in(list(members))
+            & (pl.col("trade_date") >= start_c)
+            & (pl.col("trade_date") <= end_c)
+        )
+        if chunk.height:
+            frames.append(chunk)
+    if not frames:
+        return pl.DataFrame(schema={c: pl.Utf8 for c in columns})
+    return pl.concat(frames)
+
+
+def assemble_research_tables(
+    staging_dir: str | Path,
+    *,
+    members: list[str],
+    start_date: str,
+    end_date: str,
+) -> tuple[pl.DataFrame, pl.DataFrame, pl.DataFrame]:
+    """union 三表:bars(canonical OHLCV) / factors(symbol,ts,adj_factor) / suspensions。"""
+    start_c, end_c = _compact(start_date), _compact(end_date)
+    member_set = set(members)
+    bars = assemble_panel(
+        staging_dir, members=members, start_date=start_date, end_date=end_date
+    )
+    factors = (
+        _read_staged_kind(
+            staging_dir, "adj_factor", ["ts_code", "trade_date", "adj_factor"],
+            members=member_set, start_c=start_c, end_c=end_c,
+        )
+        .rename({"ts_code": "symbol"})
+        .with_columns(
+            pl.col("trade_date").str.strptime(pl.Datetime("us"), "%Y%m%d")
+            .dt.replace_time_zone("UTC").alias("ts"),
+            pl.col("adj_factor").cast(pl.Float64, strict=False),
+        )
+        .select(["symbol", "ts", "adj_factor"])
+        .sort(["symbol", "ts"])
+        .rechunk()
+    )
+    dup_f = factors.height - factors.select(pl.struct(["symbol", "ts"]).n_unique()).item()
+    if dup_f:
+        raise ValueError(f"adj_factor 含 {dup_f} 条重复 (symbol, ts)——源损坏")
+    suspension_dir = Path(staging_dir) / "suspend_d"
+    if suspension_dir.is_dir():
+        suspensions = (
+            _read_staged_kind(
+                staging_dir, "suspend_d",
+                ["ts_code", "trade_date", "suspend_timing", "suspend_type"],
+                members=member_set, start_c=start_c, end_c=end_c,
+            )
+            .rename({"ts_code": "symbol"})
+            .with_columns(
+                pl.col("trade_date").str.strptime(pl.Datetime("us"), "%Y%m%d")
+                .dt.replace_time_zone("UTC").alias("ts"),
+            )
+            .select(["symbol", "ts", "suspend_timing", "suspend_type"])
+            .unique(subset=["symbol", "ts", "suspend_type"], keep="first",
+                    maintain_order=True)
+            .sort(["symbol", "ts"])
+            .rechunk()
+        )
+    else:
+        raise FileNotFoundError(f"suspend_d staging 缺失(先跑 pull): {suspension_dir}")
+    return bars, factors, suspensions
+
+
+def research_quality_report(
+    bars: pl.DataFrame,
+    factors: pl.DataFrame,
+    suspensions: pl.DataFrame,
+    *,
+    current_members: set[str] | None = None,
+    hfq_hard_band: float = HFQ_HARD_BAND,
+) -> dict[str, Any]:
+    """研究面质量门(诊断态跑全项)。含探针 #6(因子同日覆盖)与 #7(停牌伪 bar)。"""
+    checks: dict[str, dict[str, Any]] = {}
+
+    def _check(name: str, ok: bool, detail: str = "") -> None:
+        checks[name] = {"ok": bool(ok), "detail": detail}
+
+    dup_b = bars.height - bars.select(pl.struct(["symbol", "ts"]).n_unique()).item()
+    _check("bars_no_duplicates", dup_b == 0, f"duplicates={dup_b}")
+    weekend = bars.select((pl.col("ts").dt.date().dt.weekday() > 5).sum()).item()
+    _check("bars_no_weekend", weekend == 0, f"weekend_rows={weekend}")
+    bad_ohlc = bars.select(
+        (
+            (pl.col("open") <= 0) | (pl.col("high") <= 0) | (pl.col("low") <= 0)
+            | (pl.col("close") <= 0) | (pl.col("volume") < 0)
+            | (pl.col("high") < pl.max_horizontal("open", "low", "close"))
+            | (pl.col("low") > pl.min_horizontal("open", "high", "close"))
+        ).sum()
+    ).item()
+    _check("bars_ohlcv_invariants", bad_ohlc == 0, f"violating_rows={bad_ohlc}")
+
+    # 探针 #6:每根 bar 必有同日因子(look-ahead/错位种坏必炸)
+    joined = bars.join(factors, on=["symbol", "ts"], how="left")
+    missing_factor = joined.get_column("adj_factor").null_count()
+    _check(
+        "factor_same_day_coverage",
+        missing_factor == 0,
+        f"bars_without_same_day_factor={missing_factor}",
+    )
+    nonpos = factors.select((pl.col("adj_factor") <= 0).sum()).item()
+    _check("factor_positive", nonpos == 0, f"non_positive={nonpos}")
+    hfq = (
+        joined.sort(["symbol", "ts"])
+        .with_columns(
+            (
+                (pl.col("close") * pl.col("adj_factor"))
+                / (
+                    pl.col("close").shift(1).over("symbol")
+                    * pl.col("adj_factor").shift(1).over("symbol")
+                )
+                - 1.0
+            ).alias("__hfq_ret")
+        )
+        .drop_nulls("__hfq_ret")
+    )
+    gross = hfq.select((pl.col("__hfq_ret").abs() > hfq_hard_band).sum()).item()
+    diagnostic = hfq.select(
+        (pl.col("__hfq_ret").abs() > HFQ_DIAGNOSTIC_BAND).sum()
+    ).item()
+    _check(
+        "hfq_continuity_no_gross_spikes",
+        gross == 0,
+        f"abs_hfq_ret>{hfq_hard_band}={gross}; diagnostic>{HFQ_DIAGNOSTIC_BAND}="
+        f"{diagnostic}(真实无涨跌幅事件会计入,供复核非判罚)",
+    )
+
+    # 探针 #7:bar 不得落在「有记录的全天停牌日」(伪 bar 种坏必炸;记录缺席≠未停牌)
+    full_day_suspensions = suspensions.filter(
+        (pl.col("suspend_type") == "S") & pl.col("suspend_timing").is_null()
+    ).select(["symbol", "ts"])
+    conflicts = bars.join(full_day_suspensions, on=["symbol", "ts"], how="inner").height
+    _check(
+        "no_bars_on_recorded_suspension_days",
+        conflicts == 0,
+        f"bars_on_recorded_full_day_suspensions={conflicts}",
+    )
+
+    union_symbols = set(bars.get_column("symbol").unique().to_list())
+    if current_members is not None:
+        beyond_current = len(union_symbols - set(current_members))
+        _check(
+            "survivorship_free_union",
+            beyond_current > 0,
+            f"union_members_beyond_current_snapshot={beyond_current}",
+        )
+    return {
+        "ok": all(item["ok"] for item in checks.values()),
+        "checks": checks,
+        "bars_rows": bars.height,
+        "factor_rows": factors.height,
+        "suspension_rows": suspensions.height,
+        "union_symbols": len(union_symbols),
+    }
+
+
+def build_research_asset(
+    staging_dir: str | Path,
+    *,
+    registry_path: str | Path,
+    out_dir: str | Path,
+    snapshot_yyyymm: str,
+    start_date: str,
+    end_date: str,
+    dataset_id: str = "hs300_research_universe_10y",
+    source_ref: str = "tushare://daily",
+    secret_ref: str = "keyring://quantbt/tushare",
+    ingestion_skill_version: str | None = None,
+) -> dict[str, Any]:
+    """研究面资产:union 三表 → 质量门(探针 #6/#7)→ DatasetVersion(3 文件 manifest)。"""
+    if ingestion_skill_version is None:
+        import tushare as _ts
+
+        ingestion_skill_version = f"tushare@{_ts.__version__}"
+    members = load_union_members(staging_dir)
+    current = set(load_members(staging_dir, snapshot_yyyymm))
+    bars, factors, suspensions = assemble_research_tables(
+        staging_dir, members=members, start_date=start_date, end_date=end_date
+    )
+    report = research_quality_report(bars, factors, suspensions, current_members=current)
+    if not report["ok"]:
+        failing = {k: v for k, v in report["checks"].items() if not v["ok"]}
+        raise ValueError(f"研究面质量门未过,拒注册: {failing}")
+    out = Path(out_dir)
+    out.mkdir(parents=True, exist_ok=True)
+    bars_path = out / "bars.parquet"
+    factors_path = out / "adj_factors.parquet"
+    suspensions_path = out / "suspensions.parquet"
+    bars.write_parquet(bars_path)
+    factors.write_parquet(factors_path)
+    suspensions.write_parquet(suspensions_path)
+    now_iso = datetime.now(UTC).isoformat()
+    fetch_result = replace(
+        make_wide_fetch_result(bars, source_name="tushare"),
+        source_ref=source_ref,
+        ingestion_skill_version=ingestion_skill_version,
+        secret_ref=secret_ref,
+        known_at_utc=now_iso,
+        effective_at_utc=bars.get_column("ts").max().isoformat(),
+    )
+    registry = DatasetRegistry(Path(registry_path))
+    version = registry.register(
+        dataset_id,
+        fetch_result,
+        file_paths=[str(bars_path), str(factors_path), str(suspensions_path)],
+        rules=[
+            GERule(column=column, rule_type="not_null")
+            for column in ("open", "high", "low", "close", "volume")
+        ],
+        metadata={
+            "market": "stocks_cn",
+            "interval": "1d",
+            "data_kind": "ohlcv",
+            "panel_semantics": "research_universe_union",
+            "survivorship": "union_includes_delisted",
+            "research_use": "pit_discipline_required",
+            "adjustment_policy": "raw_plus_adj_factor_no_prejoin",
+            "suspension_record_completeness": "positive_only_early_years_incomplete",
+            "volume_unit": "lot_100_shares",
+        },
+        source_ref=source_ref,
+        ingestion_skill_version=ingestion_skill_version,
+        secret_ref=secret_ref,
+        known_at_utc=fetch_result.known_at_utc,
+        effective_at_utc=fetch_result.effective_at_utc,
+        require_provenance=True,
+    )
+    return {
+        "dataset_id": version.dataset_id,
+        "dataset_version_ref": version.version_id,
+        "manifest_path": str(version.manifest_path),
+        "bars_path": str(bars_path),
+        "factors_path": str(factors_path),
+        "suspensions_path": str(suspensions_path),
+        "quality": report,
+    }

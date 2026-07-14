@@ -8,6 +8,8 @@
     <staging>/index_weight/YYYYMM.parquet      # 逐月 000300.SH 成分快照
     <staging>/daily/<code>__<code>.parquet     # 2 码/文件并联
     <staging>/adj_factor/<code>__<code>.parquet
+    <staging>/suspend_d/<code>__<code>.parquet # 停复牌记录(注意:早年数据不完整,
+                                               #   记录缺席≠未停牌;仅正向可用)
     <staging>/index_daily_000300SH.parquet
 
 设计依据(tushare.pro 文档,2026-07 实测):回填 ts_code 轴(单码十年≈2446 行<6000 行上限,
@@ -189,7 +191,11 @@ def fetch_raw_hs300(
     note(f"member union: {len(members)}")
 
     pairs = [members[i : i + 2] for i in range(0, len(members), 2)]
-    for kind, fn in (("daily", pro.daily), ("adj_factor", pro.adj_factor)):
+    for kind, fn in (
+        ("daily", pro.daily),
+        ("adj_factor", pro.adj_factor),
+        ("suspend_d", pro.suspend_d),
+    ):
         done = 0
         for pair in pairs:
             key = "__".join(code.replace(".", "_") for code in pair)

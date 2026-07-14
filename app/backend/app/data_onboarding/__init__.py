@@ -2,12 +2,18 @@
 
 from .hs300_pipeline import (
     CANONICAL_COLUMNS,
+    HFQ_DIAGNOSTIC_BAND,
+    HFQ_HARD_BAND,
     assemble_panel,
+    assemble_research_tables,
     build_chain,
+    build_research_asset,
     load_list_dates,
     load_members,
+    load_union_members,
     preflight_report,
     register_panel,
+    research_quality_report,
 )
 from .hs300_provenance import (
     RECEIPT_PAYLOAD_FIELDS,
@@ -25,8 +31,14 @@ from .hs300_provenance import (
 
 __all__ = [
     "CANONICAL_COLUMNS",
+    "HFQ_DIAGNOSTIC_BAND",
+    "HFQ_HARD_BAND",
     "assemble_panel",
+    "assemble_research_tables",
     "build_chain",
+    "build_research_asset",
+    "load_union_members",
+    "research_quality_report",
     "load_list_dates",
     "load_members",
     "preflight_report",

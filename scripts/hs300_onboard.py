@@ -212,6 +212,21 @@ def cmd_build(args: argparse.Namespace) -> int:
     return 0
 
 
+def cmd_build_research(args: argparse.Namespace) -> int:
+    from app.data_onboarding import build_research_asset
+
+    result = build_research_asset(
+        args.staging_dir,
+        registry_path=args.registry_path,
+        out_dir=args.out_dir,
+        snapshot_yyyymm=args.snapshot,
+        start_date=args.start,
+        end_date=args.end,
+    )
+    print(json.dumps(result, ensure_ascii=False, indent=2, default=str))
+    return 0
+
+
 def cmd_bench(args: argparse.Namespace) -> int:
     sys.path.insert(0, str(BACKEND / "tests" / "benchmark"))
     import perf_harness as ph
@@ -287,6 +302,16 @@ def main(argv: list[str] | None = None) -> int:
     p_build.add_argument("--key-id", default="hs300-provenance-2026-07",
                          help="key id(须与 harness pin 一致)")
     p_build.set_defaults(fn=cmd_build)
+
+    p_research = sub.add_parser(
+        "build-research", parents=[common],
+        help="研究面资产:622 并集(含退市)三表+质量门(探针#6/#7)→DatasetVersion(无签名,非基准面)",
+    )
+    p_research.add_argument("--registry-path", required=True,
+                            help="DatasetRegistry JSONL(与基准面同一本账)")
+    p_research.add_argument("--out-dir", required=True,
+                            help="三表 parquet 输出目录(bars/adj_factors/suspensions)")
+    p_research.set_defaults(fn=cmd_build_research)
 
     p_bench = sub.add_parser("bench", help="跑 harness HS300 探针")
     p_bench.add_argument("--panel-path", required=True, help="build 输出的 panel parquet")

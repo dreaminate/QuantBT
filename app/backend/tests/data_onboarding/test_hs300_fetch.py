@@ -130,6 +130,14 @@ class _FakePro:
              "adj_factor": [1.0] * len(codes)}
         )
 
+    def suspend_d(self, ts_code="", **_kw):
+        self._count("suspend_d")
+        codes = ts_code.split(",")
+        return pd.DataFrame(
+            {"ts_code": [codes[0]], "trade_date": ["20240103"],
+             "suspend_timing": [None], "suspend_type": ["S"]}
+        )
+
     def index_daily(self, **_kw):
         self._count("index_daily")
         return pd.DataFrame(
@@ -174,6 +182,7 @@ def test_fetch_layout_matches_pipeline_contract(tmp_path):
     ]
     assert len(list((staging / "daily").glob("*.parquet"))) == 2  # 4 只 ÷ 2 码/文件
     assert len(list((staging / "adj_factor").glob("*.parquet"))) == 2
+    assert len(list((staging / "suspend_d").glob("*.parquet"))) == 2
     assert (staging / "index_daily_000300SH.parquet").exists()
 
 

@@ -305,3 +305,135 @@ def test_build_chain_feeds_harness_until_scale_gate(tmp_path, monkeypatch):
     assert "distinct trading days" in measurement.unavailable_reason
     assert KEY not in (measurement.unavailable_reason or "")
     assert KEY not in (measurement.detail or "")
+
+
+# ── 研究面资产:探针 #6(adj_factor look-ahead) / #7(停牌伪 bar) ────────────────
+
+def _research_frames():
+    import polars as pl
+    from datetime import datetime, UTC
+
+    def _ts(day):
+        return datetime(2024, 1, day, tzinfo=UTC)
+
+    days = [2, 3, 4, 5, 8]  # 交易日(周一~周五,1/6-7 是周末)
+    symbols = ["000001.SZ", "000002.SZ", "999999.SZ"]  # 999999 = 已调出成员
+    rows = {"symbol": [], "ts": [], "open": [], "high": [], "low": [],
+            "close": [], "volume": []}
+    frows = {"symbol": [], "ts": [], "adj_factor": []}
+    for s in symbols:
+        skip = {4} if s == "999999.SZ" else set()  # 999999 在 1/4 有记录停牌无 bar
+        for d in days:
+            if d not in skip:
+                rows["symbol"].append(s); rows["ts"].append(_ts(d))
+                rows["open"].append(10.0); rows["high"].append(11.0)
+                rows["low"].append(9.5); rows["close"].append(10.5)
+                rows["volume"].append(1000.0)
+            frows["symbol"].append(s); frows["ts"].append(_ts(d))
+            frows["adj_factor"].append(2.0 if d >= 5 else 1.0)  # 1/5 除权跳变
+    bars = pl.DataFrame(rows)
+    factors = pl.DataFrame(frows)
+    suspensions = pl.DataFrame(
+        {"symbol": ["999999.SZ"], "ts": [_ts(4)],
+         "suspend_timing": pl.Series("suspend_timing", [None], dtype=pl.Utf8),
+         "suspend_type": ["S"]}
+    )
+    return bars, factors, suspensions
+
+
+def test_research_quality_green_on_honest_tables():
+    from app.data_onboarding import research_quality_report
+
+    bars, factors, suspensions = _research_frames()
+    report = research_quality_report(
+        bars, factors, suspensions, current_members={"000001.SZ", "000002.SZ"}
+    )
+    assert report["ok"], report["checks"]
+    assert report["checks"]["survivorship_free_union"]["ok"]
+
+
+def test_probe6_factor_lookahead_shift_is_caught():
+    # 种坏(#6):复权因子整体前移一天(look-ahead 错位)→ 同日覆盖门必炸。
+    import polars as pl
+    from datetime import timedelta
+
+    from app.data_onboarding import research_quality_report
+
+    bars, factors, suspensions = _research_frames()
+    shifted = factors.with_columns((pl.col("ts") + pl.duration(days=1)).alias("ts"))
+    report = research_quality_report(bars, shifted, suspensions)
+    assert not report["ok"]
+    assert not report["checks"]["factor_same_day_coverage"]["ok"]
+
+
+def test_probe6b_gross_factor_corruption_caught_real_events_tolerated():
+    # 种坏(#6b·按真实语义重定):某日 factor 被错置 ×6(十倍级错位)→ bar 日 hfq
+    # 连续性硬门(3.5)必炸;真实无涨跌幅事件量级(+3.06 盐湖复牌)与缩股不误杀。
+    import polars as pl
+
+    from app.data_onboarding import research_quality_report
+
+    bars, factors, suspensions = _research_frames()
+    corrupted = factors.with_columns(
+        pl.when((pl.col("symbol") == "000001.SZ") & (pl.col("ts") == factors["ts"][2]))
+        .then(pl.col("adj_factor") * 6.0)
+        .otherwise(pl.col("adj_factor"))
+        .alias("adj_factor")
+    )
+    report_bad = research_quality_report(bars, corrupted, suspensions)
+    assert not report_bad["checks"]["hfq_continuity_no_gross_spikes"]["ok"]
+    # 合法缩股(factor 永久 ÷2,伴随 raw 价 ×2 → hfq 连续):不误杀
+    legit = factors.with_columns(
+        pl.when((pl.col("symbol") == "000002.SZ") & (pl.col("ts") >= factors["ts"][2]))
+        .then(pl.col("adj_factor") * 0.5)
+        .otherwise(pl.col("adj_factor"))
+        .alias("adj_factor")
+    )
+    legit_bars = bars.with_columns(
+        pl.when((pl.col("symbol") == "000002.SZ") & (pl.col("ts") >= factors["ts"][2]))
+        .then(pl.col("close") * 2.0)
+        .otherwise(pl.col("close"))
+        .alias("close"),
+        pl.when((pl.col("symbol") == "000002.SZ") & (pl.col("ts") >= factors["ts"][2]))
+        .then(pl.col("high") * 2.0)
+        .otherwise(pl.col("high"))
+        .alias("high"),
+    )
+    report_ok = research_quality_report(legit_bars, legit, suspensions)
+    assert report_ok["checks"]["hfq_continuity_no_gross_spikes"]["ok"]
+
+
+def test_probe7_fake_bar_on_recorded_suspension_caught():
+    # 种坏(#7):在有记录的全天停牌日(999999.SZ @ 1/4)伪造一根 bar → 冲突门必炸。
+    import polars as pl
+    from datetime import datetime, UTC
+
+    from app.data_onboarding import research_quality_report
+
+    bars, factors, suspensions = _research_frames()
+    fake = pl.DataFrame(
+        {"symbol": ["999999.SZ"], "ts": [datetime(2024, 1, 4, tzinfo=UTC)],
+         "open": [10.0], "high": [11.0], "low": [9.5], "close": [10.5],
+         "volume": [500.0]}
+    )
+    with_fake = pl.concat([bars, fake]).sort(["symbol", "ts"])
+    report = research_quality_report(with_fake, factors, suspensions)
+    assert not report["ok"]
+    assert not report["checks"]["no_bars_on_recorded_suspension_days"]["ok"]
+
+
+def test_probe7_half_day_suspension_does_not_conflict():
+    # 边界:suspend_timing 非空(半日停牌)当天有 bar 属正常,不误杀。
+    import polars as pl
+    from datetime import datetime, UTC
+
+    from app.data_onboarding import research_quality_report
+
+    bars, factors, suspensions = _research_frames()
+    half_day = pl.DataFrame(
+        {"symbol": ["000001.SZ"], "ts": [datetime(2024, 1, 3, tzinfo=UTC)],
+         "suspend_timing": ["上午"], "suspend_type": ["S"]}
+    )
+    merged = pl.concat([suspensions, half_day])
+    report = research_quality_report(bars, factors, merged)
+    assert report["checks"]["no_bars_on_recorded_suspension_days"]["ok"]
