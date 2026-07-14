@@ -776,10 +776,19 @@ def test_market_coverage_cross_process_writers_preserve_hash_chain(tmp_path):
         worker.start()
     start.set()
     for worker in workers:
-        worker.join(timeout=15)
-        assert worker.exitcode == 0
-    outcomes = [results.get(timeout=2) for _worker in workers]
-    assert {outcome for outcome, _detail in outcomes} == {"ok"}
+        worker.join(timeout=60)  # CI 2vCPU 下 spawn 子进程冷导入全 app 可远超 15s
+    drained = []
+    try:
+        while len(drained) < len(workers):
+            drained.append(results.get(timeout=2))
+    except Exception:  # noqa: BLE001 - 队列耗尽即止,细节进断言消息
+        pass
+    exit_codes = [worker.exitcode for worker in workers]
+    assert all(code == 0 for code in exit_codes), (
+        f"child exit codes={exit_codes}; drained results={drained}"
+    )
+    outcomes = drained
+    assert {outcome for outcome, _detail in outcomes} == {"ok"}, outcomes
 
     replayed = PersistentMarketCoverageRegistry(
         ledger_path,

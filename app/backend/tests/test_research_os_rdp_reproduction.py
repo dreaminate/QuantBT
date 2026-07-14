@@ -400,11 +400,15 @@ def test_section17_formal_promotion_requires_exact_current_receipt(tmp_path) -> 
     manifest = _manifest()
     source_hash = content_hash({"result": "exact"})
     store = _store(tmp_path)
+    # 用测试内取鲜的 now:receipt 有效期=now+5min,而 staleness 对真实时钟评估。
+    # 模块级 NOW 在收集期冻结,慢环境(CI 全量 17min)跑到本测试时窗口已过期
+    # ——CI run5 实证的时间脆弱性,与门语义无关。
+    fresh_now = dt.datetime.now(dt.UTC).replace(microsecond=0)
     receipt = store.record_current(
         owner_user_id=OWNER,
         manifest=manifest,
         source_result_content_hash=source_hash,
-        now_utc=NOW,
+        now_utc=fresh_now,
     )
     promotion = PromotionClaim(
         asset_ref=manifest.asset_ref,
