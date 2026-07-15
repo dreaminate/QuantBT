@@ -6,6 +6,11 @@
 ## <日期> · <标题>
 - 建/改了什么 + 命门  - 验收：<对抗测试 + 变异 + 全量数字>  - 下一步：<…> -->
 
+## 2026-07-15-0456 跨厂商切模型 S3b 全部落 main——后端端到端功能可用(持久化+pin 穿生产链+selection API)
+- S3b-1 持久化(ChatService.update/get_llm_selection owner-scoped)+S3b-2/3 3 跳传参(_current_agent_gateway/_dispatch/两端点读传 model_pin,gateway.py 零改动)+GET/PATCH selection 端点(校验 gateway 可路由+owner-scoped)。用户 PATCH 对话手选模型→驱动那条对话生产 agent
+- S3b-2/3 skeptic:运行期无安全缺陷(dual 门/跨厂商/越权/假账/stale-pin 6 项亲验绕不过 fail-closed),逮 1 MEDIUM(核心接线零端到端覆盖,pin 静默失效变异存活)——补集成测试+**临时断 model_pin 传参确认测试变红**再还原(证明门有牙)。全量 6444 passed;land ae2e61b1
+- 剩余:S4 dual-model 隔离门(独立门已 3 层成立,补 conversation 层免疫测试)、S5 订阅接 gateway、S6 内嵌登录中继、S7 前端。CI flaky 训练超时(test_training_runner 300s CI 慢 runner)间歇性,拟停一轮 push 让最终 head CI 跑完确认
+
 ## 2026-07-15-0406 跨厂商切模型 S3b-1 每对话 llm_selection 持久化落 main
 - ChatService.update_llm_selection(owner-scoped 原子 metadata read-modify-write,Auto 清 pin)+get_llm_selection(服务端读=K10)+_normalize_llm_selection(半残 pin fail-safe→auto);canonical {mode:auto|pinned,provider,model,auth_kind?,updated_at};对抗测试 6(owner-scoped 跨 owner=not found/每对话隔离);全量 6435 passed;land 5a8fc617
 - S3b-2/3 待做:gateway 接线(_current_agent_gateway 加 model_pin→build_agent_llm_gateway default_pin)+selection API 端点+**先核实 ChatService 是否生产 _dispatch_production_agent_turn 真读的对话存储**(已派 Explore 追链,codex 提过 workbench 走不同路径)

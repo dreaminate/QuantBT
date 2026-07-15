@@ -11,26 +11,23 @@
   下一步转用户可感知面(队列见 frontier)。
 
 ### 顶部刷新块（本轮值 · 每轮覆写）
-- **六字段**:1 Local checkout=slice/model-switch-crossvendor @ 5a8fc617(**S3b-1 每对话 llm_selection
-  持久化落 main**:ChatService.update/get_llm_selection);2 Remote=已 push,origin/main ff 到 5a8fc617;
-  3 Local tests=后端全量 **6435 passed/13 skipped/0 failed**(真汇总行,9分07秒,2026-07-15);validate_dev
-  PASS;compileall OK;4 CI=S1 run 29404958507 success;8d175a53(S3a)run 29409135143 backend in_progress
-  (前端 success;flaky 训练超时间歇性,前 3 run success);5a8fc617 push 后新 run 待查;5 Production=Unqueried;
+- **六字段**:1 Local checkout=slice/model-switch-crossvendor @ ae2e61b1(**S3b 全部落 main**:pin 穿生产
+  chat 链+selection API+变异验证集成测试——跨厂商切模型后端端到端功能可用);2 Remote=已 push,origin/main
+  ff 到 ae2e61b1;3 Local tests=后端全量 **6444 passed/13 skipped/0 failed**(真汇总行,9分09秒,2026-07-15);
+  validate_dev PASS;compileall OK;4 CI=S1 run 29404958507 success;近几个 head 因频繁 push 互相 cancel
+  未拿到完整结论——**拟停一轮 push 让 ae2e61b1 CI 跑完确认**(flaky 训练超时是否恢复);5 Production=Unqueried;
   6 User acceptance=Unverified。**已知 flaky**:test_training_runner::test_service_code_path_succeeds 训练
-  300s 超时在 CI 慢 runner(2.6x)间歇撞墙——非 model-switch 回归,间歇性,若成稳定 blocker 再最小修 timeout。
+  300s 超时在 CI 慢 runner(2.6x)间歇撞墙——非 model-switch 回归,前 3 run success,间歇性。
 - **audit 基线四项**(不变):61 files / 20,339 lines / 26,209,663 bytes / sha `1c1788b0bbe2`。
   (本特性改动全在 app/backend/dev,不跑数据管线,基线按构造不变。)
 - **断点**:**当前战役=Claudian 式「每对话跨厂商切模型」(卡 db95c0c6,in_progress)**。蓝图
   `findings/dreaminate/model-switch-crossvendor-design-20260715.md` + 参考实现 `...reference-impls-20260715.md`。
-  **S1 模型目录 ✅ · S2 hard-pin routing ✅ · S3a gateway pin 注入 ✅ · S3b-1 llm_selection 持久化 ✅**
-  (S1-S3a 各经 skeptic 对抗验证:S1 逮 1 假绿灯、S2 逮 3 MEDIUM含假声称、**S3a 逮 CRITICAL 跨厂商泄漏**,全修+变异门;
-  S3b-1 低风险 additive 6 对抗测试)。① 持久化 ✅(`agent/conversations.py` update/get_llm_selection)。
-  **下一 tick 起 S3b-2/3**:② `_current_agent_gateway(run_id, model_pin)`(main.py:4997)→`build_agent_llm_gateway(default_pin)`;
-  ③ selection API(`POST /api/agent/chat/start` 带初始 selection、`PATCH .../llm-selection`、chat/SSE 加 conversation_id);
-  ④ 端点 authed 校验 pin 厂商;⑤ selection digest 进 claim(K8)。**先核实前提**:ChatService 是否生产
-  `_dispatch_production_agent_turn` 真读的对话存储(已派 Explore 追链,codex 提过 workbench 可能走不同路径)——
-  store 对不上则接线连不上。**skeptic 前向铁律**:verifier 请求必带 independence_required=True(gateway 已叠 role 门纵深)。
-  生产装配点 main.py `_current_agent_gateway`(~5022)当前**未传 default_pin**(半接线,S3b-2 接)。顺序 S3b-2/3→S4→S5→S6→S7。
+  **✅ S1 目录 · ✅ S2 hard-pin routing · ✅ S3a gateway pin 注入 · ✅ S3b(持久化+pin 穿生产链+selection API)**
+  ——**后端跨厂商切模型端到端功能可用**(用户 PATCH `/api/agent/chat/{tid}/llm-selection` 手选→驱动那条对话生产 agent)。
+  各切片经 deep-opus skeptic 对抗验证(S1 假绿灯/S2 3MEDIUM含假声称/S3a CRITICAL 跨厂商泄漏/S3b MEDIUM 接线零覆盖,全修+变异门钉死)。
+  **下一 tick 起 S4**:dual-model 隔离门——独立门已 3 层成立(gateway role 门+independence_required+orchestrator 标 verifier,
+  skeptic 亲验绕不过),S4 补 **conversation→dispatch→orchestrator 层**的免疫测试(pinned 对话 verifier 仍跨厂商,skeptic 建议)。
+  然后 S5 订阅接 gateway(K2 Settings preflight)、S6 内嵌登录中继(Hermes session-relay+OpenClaw 贴码,ToS-safe)、S7 前端切换器。
   **待拍板(非阻塞)**:直连指纹方案(ToS 灰区,已默认走 CLI 子进程 ToS-safe)。ultracode:每片落码后对抗验证。
 
 ## 状态表（确定的才标 ✅,证据必挂）
@@ -45,7 +42,8 @@
 | §11 PIT/复权读侧接线 | 🟡 | raw+adj_factor 分离已交付;panel_source 唯一复权落点未接(后续卡) |
 | §4 跨厂商切模型·S1 模型目录 | ✅ | app/llm/model_catalog.py 唯一 LLM 模型清单源(api-key live 拉/models 加固 stream 上限+禁 redirect+fail-closed、非聊天 selectable=false、订阅 curated supports_tools=false、TTL+single-flight+凭据零触碰)+GET /api/llm/models(订阅探测 60s TTL 缓存);对抗测试 29(deep-opus skeptic 逮 1 假绿灯+6 项全修+回归);后端 6409 passed;land e89964a8+CI success。卡 db95c0c6 |
 | §4 跨厂商切模型·S2 hard-pin routing | ✅ | routing.py pin_provider/pin_model 硬约束+resolve 硬 pin 过滤(仅 !independence_required 生效→dual 门物理免疫、pool 不变保 no-mix、pin 无候选→PinnedModelUnavailable 绝不跨厂商 fallback、pin_model tier 优先用登记档);对抗测试 14(skeptic 逮 3 MEDIUM:degraded 判反/fallback 锁死实靠断路器/命门测试弱,全修+补测);gateway 76+全量 6423 passed;land 6a8990e9 |
-| §4 跨厂商切模型·S3a gateway pin 注入 | ✅ | LLMGateway(default_pin) 在 complete() 盖章成 hard pin(仅非独立且非 verifier role→dual 门物理免疫叠双层);盖章后 effective_capability 贯穿 _invoke_with_fallback→S2 跨厂商锁死端到端成立(K1:真实主链走 GatewayLLMAdapter);对抗测试 6(skeptic 逮 **CRITICAL 跨厂商泄漏**——盖章在 fallback 蒸发,已修+变异门钉死;+MEDIUM-2 spy 门+LOW-4 role 纵深);全量 6429 passed;land dc940949。**生产装配点未传 default_pin**(半接线),接线=S3b |
+| §4 跨厂商切模型·S3a gateway pin 注入 | ✅ | LLMGateway(default_pin) 在 complete() 盖章成 hard pin(仅非独立且非 verifier role→dual 门物理免疫叠双层);盖章后 effective_capability 贯穿 _invoke_with_fallback→S2 跨厂商锁死端到端成立(K1:真实主链走 GatewayLLMAdapter);对抗测试 6(skeptic 逮 **CRITICAL 跨厂商泄漏**——盖章在 fallback 蒸发,已修+变异门钉死;+MEDIUM-2 spy 门+LOW-4 role 纵深);全量 6429 passed;land dc940949 |
+| §4 跨厂商切模型·S3b 持久化+pin 穿链+端点 | ✅ **端到端可用** | ChatService.update/get_llm_selection(owner-scoped 原子,S3b-1) + `_current_agent_gateway(model_pin)`/`_dispatch(model_pin)`/两端点经 `_thread_model_pin` 服务端读传(S3b-2,gateway.py 零改动) + GET/PATCH `/api/agent/chat/{tid}/llm-selection`(校验 gateway 可路由+owner-scoped,S3b-3);对抗测试 6+8+集成 1(skeptic 判运行期无安全缺陷,逮 MEDIUM 接线零覆盖→补集成测试+**临时断 model_pin 传参确认变红**);全量 6444 passed;land ae2e61b1。用户 PATCH 手选→驱动那条对话生产 agent。**订阅 pin 待 S5**(gateway 未接订阅) |
 | §6 数学链门(§6 gate) | ✅ | section6_mathchain_gate.py 委托 spine_gate 8 deny 子句;gate_registry 7 门(2026-06-29 land ad7b9d4e,原文 git 历史) |
 | §5 Research Asset RAG | ✅ | /api/agent/chat+workbench+legacy Mode2 全接;test_agent_runtime_research_graph 等系列在当日后端全量 6313 passed/0 failed(2026-07-14 实跑)内全绿;建设明细见 git 历史 |
 | §6 Document Intelligence | ✅ | text/MD/PDF(PyMuPDF+OCR fallback)/HTML snapshot parser+batch+upload+目录同步;test_document_intelligence_parser_rag 在当日全量 6313 passed(2026-07-14 实跑)内全绿;边界:非联网 crawler/非表格理解 |
