@@ -6,6 +6,10 @@
 ## <日期> · <标题>
 - 建/改了什么 + 命门  - 验收：<对抗测试 + 变异 + 全量数字>  - 下一步：<…> -->
 
+## 2026-07-15-1043 dual-model binding(卡 8be0e547)跨厂商 skeptic 判 NOT SOUND—未 land 已 revert
+- deep-opus 实现+我同厂商复审判 sound,但 codex 跨厂商 skeptic 逮 4×P1:digest 哈希 messages 非实发 payload(label actually_submitted 越界)·订阅 opt-in 后 _assert_submission_bound 必崩(burn 额度才炸)·submitted_prompt_digest 加 v3 必填废旧 seal/旧 journal 读不了·identity_basis 未持久化下游仍裸 independent:true
+- 同厂商复审不足以守诚实边界——本次现场证(被审对象就是独立性机制,独立审查抓出自己越界)。收紧诚实 scope+findings 见 [[dual-model-binding-crossvendor-findings-20260715]];卡保持 pool/todo,重做须跨厂商复验。main 干净
+
 ## 2026-07-15-0908 补 F1 producer 侧 factors_all_finite 建门——非有限 adj_factor 双拦已闭
 - research_quality_report 补 factors_all_finite(镜 bars_all_finite is_finite);NaN/±inf factor(polars 里既非 null 又非<=0)令 quality_verdict≠pass、不注册。承接 §11 PIT skeptic F1(读侧 0c926235 已拦,建侧原只 <=0 漏非有限)
 - 对抗测试 test_factors_all_finite_caught(NaN+inf 反例)+变异门(门恒 True→red-then-revert);data_onboarding 32 passed+后端全量 6475 passed/0 failed。防御纵深:读侧+建侧双拦

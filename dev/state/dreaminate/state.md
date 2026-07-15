@@ -35,8 +35,16 @@
   (D-11-DATA-ROOT=b)·§16 隔离。deep-opus clean-context 实现 + 独立 skeptic(判 §16 sound,逮 F1 非有限 factor 漏拦已修+
   变异确认)。设计 [[pit-adjustment-readside-design-20260715]]。**follow-up(非 §16,登记)**:读时 manifest hash 复验(F3)、
   producer hs300_pipeline factors_all_finite 建门(defense-in-depth,建侧现只 <=0 无 finite 检查)。
-  下一步:等用户 fork 回复(OpenClaw epic,待拍板);本轮 §11 land 后 gh 查 CI;续 loop 选下个最高杠杆 gap
-  (dual-model 跨厂商机制级 binding 卡 8be0e547 / §11 真实 Tushare 拉取全链 / 前端可感知面)。ultracode:每片落码后对抗验证。
+  **dual-model binding(卡 8be0e547)尝试→跨厂商 skeptic 判 NOT SOUND→已 revert 未 land**:deep-opus 实现 + 我同厂商
+  复审判 sound,但 **codex 跨厂商 skeptic 逮 4×P1**(digest 哈希 messages 非实发 payload=label 越界·订阅模式 opt-in 后必崩·
+  schema v3 向后不兼容·identity_basis 未下游传播)。**同厂商复审不足以守诚实边界——本次已证**(被审对象就是独立性机制、
+  独立审查抓出自己越界)。收紧后诚实 scope + 逐条 findings 见 [[dual-model-binding-crossvendor-findings-20260715]];
+  卡保持 pool/todo,重做须跨厂商复验。main 干净无脏码。
+  **🚩 大方向精化=Claude-Code 式内嵌 agent(非 OpenClaw)**:用户「claude code 更好更强」→ 编排 headless Claude Code
+  (订阅驱动)+ QuantBT MCP server(数据/因子/回测/**画布操作**工具)+ 量化 skill + workspace,扩现有 GraphCanvas。
+  **K3 经 MCP 化解**(Claude Code 原生 tool-use+MCP,订阅账号带工具干活通)。**已拍**:量化专用·权限分级(Claude Code
+  权限+MCP 工具层钉死红线)·扩 GraphCanvas。**待用户拍 A/B**:A 编排真 Claude Code(强推) vs B 自建循环。
+  下一步:等用户 A/B → 核 headless Claude Code+MCP 机制 → duet 设计 + 薄纵切。ultracode:每片落码后**跨厂商**对抗验证。
 
 ## 状态表（确定的才标 ✅,证据必挂）
 | 子系统/能力 | 状态 | 证据 |
