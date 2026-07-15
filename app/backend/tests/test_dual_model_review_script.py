@@ -545,6 +545,56 @@ def test_norm_base_ipv6_brackets_no_collision(tmp_path):
     assert "same_base_url_relay" in evidence2["caveats"]
 
 
+def test_surrogate_pair_escaped_key_caught(monkeypatch, tmp_path):
+    # 种坏:key 含非 BMP 字符(emoji),对端按 UTF-16 代理对 \\ud83d\\ude00 转义回显
+    # ——孤立 chr(代理位) 拼不出原字符,必须先合并代理对再还原。两路径都必须抓。
+    import requests
+
+    emoji_key = "test/😀/key-000000000000000000"
+    surrogate_escaped = (
+        emoji_key.replace("/", "\\/", 1).replace("😀", "\\ud83d\\ude00")
+    )
+    assert json.loads(f'"{surrogate_escaped}"') == emoji_key  # 合法 JSON 前提
+    assert emoji_key not in surrogate_escaped
+
+    class _Resp:
+        status_code = 401
+        text = f'{{"error":"denied for {surrogate_escaped}"}}'
+
+    monkeypatch.setattr(requests, "post", lambda *a, **kw: _Resp())
+    failures = dmr.preflight(_fake_keys(anthropic={"api_key": emoji_key}))
+    joined = "\n".join(failures)
+    assert emoji_key not in joined and surrogate_escaped not in joined
+    assert "REDACTED" in joined
+
+    out = tmp_path / "out22"
+    with pytest.raises(SystemExit, match="拒绝落盘"):
+        dmr.run_review(
+            out,
+            keys=_fake_keys(anthropic={"api_key": emoji_key}),
+            client_factory=lambda cred: _StubClient(
+                cred.provider,
+                echo_secret=surrogate_escaped if cred.provider == "openai" else None,
+            ),
+        )
+    assert not (out / "review_evidence.json").exists()
+
+
+def test_norm_base_empty_query_vs_no_query(tmp_path):
+    # /v1? 与 /v1 在 urlsplit 里 query 同为 ""——但下游拼出的请求路径不同,
+    # 不得错并成同 relay
+    out = tmp_path / "out23"
+    evidence = dmr.run_review(
+        out,
+        keys=_fake_keys(
+            anthropic={"base_url": "https://relay.example/v1?"},
+            openai={"base_url": "https://relay.example/v1"},
+        ),
+        client_factory=lambda cred: _StubClient(cred.provider),
+    )
+    assert evidence["caveats"] == []
+
+
 def test_preflight_redacts_every_loaded_key(monkeypatch):
     # 种坏:中继 401 响应体同时回显两个 provider 的 key → 诊断输出全脱敏
     import requests

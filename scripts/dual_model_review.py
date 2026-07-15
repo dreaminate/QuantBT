@@ -109,19 +109,31 @@ def _key_variants(key: str) -> tuple[str, ...]:
     return tuple(v for v in variants if v)
 
 
+_JSON_SURROGATE_PAIR_RE = re.compile(
+    r"\\u([dD][89abAB][0-9a-fA-F]{2})\\u([dD][c-fC-F][0-9a-fA-F]{2})"
+)
 _JSON_ESCAPE_RE = re.compile(r'\\u([0-9a-fA-F]{4})|\\(["\\/bfnrt])')
 _JSON_ESCAPE_MAP = {'"': '"', "\\": "\\", "/": "/",
                     "b": "\b", "f": "\f", "n": "\n", "r": "\r", "t": "\t"}
 
 
 def _json_unescape(text: str) -> str:
-    """把文本里的标准 JSON 转义序列统一还原(容忍混合/部分转义)。"""
+    """把文本里的标准 JSON 转义序列统一还原(容忍混合/部分转义)。
+
+    UTF-16 代理对(\\ud83d\\ude00 → 非 BMP 字符)先合并再处理单个转义,
+    否则 chr(高位)+chr(低位) 两个孤立代理拼不出原字符,含 emoji 等
+    非 BMP 字符的 key 会逃过还原扫。
+    """
+    def _pair(match: re.Match) -> str:
+        hi, lo = int(match.group(1), 16), int(match.group(2), 16)
+        return chr(0x10000 + ((hi - 0xD800) << 10) + (lo - 0xDC00))
+
     def _sub(match: re.Match) -> str:
         if match.group(1) is not None:
             return chr(int(match.group(1), 16))
         return _JSON_ESCAPE_MAP[match.group(2)]
 
-    return _JSON_ESCAPE_RE.sub(_sub, text)
+    return _JSON_ESCAPE_RE.sub(_sub, _JSON_SURROGATE_PAIR_RE.sub(_pair, text))
 
 
 def _contains_key(text: str, key: str) -> bool:
@@ -246,14 +258,19 @@ def run_review(out_dir: Path, *, task: str = BUILDER_TASK,
             return None
         parts = urlsplit(u)
         scheme = parts.scheme.lower()
+        # 空 query(/v1?)与无 query(/v1)在 urlsplit 里同为 query=""——但下游拼接
+        # 出的请求路径不同(/v1?/messages vs /v1/messages),用分隔符存在性区分
+        has_query_delim = "?" in u
         try:
             port = parts.port  # 数值解析(0443→443)
         except ValueError:
-            return (scheme, parts.netloc, None, parts.path.rstrip("/"), parts.query)
+            return (scheme, parts.netloc, None, parts.path.rstrip("/"),
+                    parts.query, has_query_delim)
         host = (parts.hostname or parts.netloc).lower()
         if port == {"https": 443, "http": 80}.get(scheme):
             port = None
-        return (scheme, host, port, parts.path.rstrip("/"), parts.query)
+        return (scheme, host, port, parts.path.rstrip("/"),
+                parts.query, has_query_delim)
 
     _base_a = _norm_base(keys["anthropic"]["base_url"])
     same_base_relay = _base_a is not None and (
