@@ -646,8 +646,18 @@ def research_quality_report(
     # 检测:管线错误/日期错位/删失/vendor 数据错误/NaN 注入。它【不承诺】对抗性
     # 防篡改——canonical floor 案例(codex 轮7构造):在真实无涨跌幅暴跌日
     # (如 002411 20230619 -78.95%,fq=1 纯价格事件)反向伪造 ×4.75 后缀 factor,
-    # 单源自洽、与价格精确耦合,本层数学上不可分辨。对抗性完整性由上层承担:
-    # 签名链(registry/manifest)+staging 确定性重拉比对+跨源事件表对账+
+    # 单源自洽、与价格精确耦合,本层数学上不可分辨。
+    # 【对抗性完整性 scope(诚实订正·勿夸大)】本研究资产 hs300_research_universe_10y 的生产者
+    # build_research_asset【只落未签名·可覆写的 on-disk manifest + registry 行,不签收据】——
+    # 签名 provenance 收据【仅】由 build_chain 为 benchmark cohort hs300_daily_10y_readbench_cohort
+    # 产出,且该 cohort 被读侧 FORBIDDEN_SOURCE_ASSET_IDS 显式拒。故读侧 F3 门
+    # (panel_source._verify_real_manifest)对该【未签名】manifest 逐文件 re-verify sha256 =
+    # 【纵深防御·抗 DRIFT/损坏/误替换/字节漂移】,【不是】对抗性真实性/防篡改证明(不夸大成"签名链")。
+    # 如实残余(F3 不覆盖):(a) manifest+lake co-tamper——manifest 未签名可覆写,攻击者改文件再重写
+    # 对应 sha 即自洽通过;(b) 同 size+mtime 的原子替换(读前/读后 re-stat 只 best-effort 收窄 TOCTOU,
+    # 不闭合)。split-manifest 读竞态(覆盖门读快照 A、sha 门重开读快照 B,中途 swap manifest 让被删
+    # entry 的篡改文件既过覆盖又逃哈希)已由单快照 re-verify(verify_manifest_obj 跑在同一 parsed 对象上)
+    # 【收口】。真解药 = 对研究资产也签收据 + staging 确定性重拉比对 + 跨源事件表对账 +
     # factor vintage(known_at)落盘(后续卡)。
     # 【factor-价格补偿不变量】(检测「无意」错置的单一规则):
     # 合法除权/缩股日 fq≠1,但 raw 价格反向精确补偿 → hfq r 落常带;

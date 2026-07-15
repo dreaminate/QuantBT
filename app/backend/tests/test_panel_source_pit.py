@@ -10,7 +10,9 @@ raw 价格精确被 adj_factor 补偿 → 后复权 hfq 连续价恒定。factor
 
 from __future__ import annotations
 
+import dataclasses
 import hashlib
+import json
 from datetime import UTC, datetime
 from pathlib import Path
 
@@ -26,6 +28,7 @@ from app.factor_factory.panel_source import (
     PanelResolution,
     PanelSourceError,
     _ensure_asset_allowed,
+    _load_real_panel,
     load_market_panel,
     resolve_panel_source,
 )
@@ -423,7 +426,8 @@ def test_08_section16_reject_cohort_no_perf_claim(tmp_path):
 
 
 # ————————————————————————————————————————————————————————————————————————
-# 9.（硬化）present-detection 负例：verdict≠pass / latest=None / file 缺失 / 无 registry → 合成兜底。
+# 9.（硬化）present-detection：genuinely-absent（无 registry / latest=None）与 verdict≠pass → 合成兜底；
+#    但【已登记+verdict=pass 却在册文件缺失】按 FIX-2 收紧为 fail-closed raise（绝不静默降级合成）。
 # ————————————————————————————————————————————————————————————————————————
 def test_09_present_detection_negatives_fall_back_synthetic(tmp_path):
     # 无 registry 文件。
@@ -443,10 +447,14 @@ def test_09_present_detection_negatives_fall_back_synthetic(tmp_path):
     res_fail = resolve_panel_source("ashare_hs300", data_root=root_fail)
     assert res_fail.kind == "synthetic", "verdict=fail 必须回落合成，不得当真实读"
 
-    # file_paths 某文件运行时缺失（注册后删 bars.parquet）→ present-detection miss → 合成。
+    # file_paths 某文件运行时缺失（注册后删 bars.parquet）：**行为已按 FIX-2 收紧**。
+    # 旧行为(纸门)：present-detection miss → 静默降级合成 → 一次真实回测被洗成合成、污染研究口径。
+    # 新行为(fail-closed)：已登记 + verdict=pass = 声称已验证 hfq，其在册文件缺 → raise，绝不降级合成。
+    # （genuinely-absent[无 registry / 该 asset 从未登记] 仍回落合成——见上方 case 与 test_f3_10。）
     root_missing = tmp_path / "filemiss"
     _register_real_asset(root_missing, drop_files=("bars.parquet",))
-    assert resolve_panel_source("ashare_hs300", data_root=root_missing).kind == "synthetic"
+    with pytest.raises(PanelSourceError, match="缺失"):
+        resolve_panel_source("ashare_hs300", data_root=root_missing)
 
 
 # ————————————————————————————————————————————————————————————————————————
@@ -471,3 +479,333 @@ def test_11_resolution_is_frozen_dataclass_contract():
     assert isinstance(res, PanelResolution)
     with pytest.raises(Exception):
         res.kind = "real"  # frozen：不可变
+
+
+# ════════════════════════════════════════════════════════════════════════════
+# F3 · 读侧完整性门（读价【之前】拿磁盘字节 re-verify 注册 manifest 的 per-file sha256）。
+#
+# 缺口：`_load_real_panel` 过去只按 file_paths 读 bars/adj 落盘文件应用 hfq，从不复核磁盘字节 vs
+# 注册 manifest → 漂移/损坏/误替换的 lake 文件被静默当「已验证 hfq 真实数据」端上去。
+# F3 = 读价前 re-verify（非空 + 覆盖 + 路径门 + per-file sha256；不符/缺/空/未覆盖 → fail-closed raise）。
+#
+# 诚实威胁模型（防夸大 · §3）：F3 是【纵深防御】，抓「受信 registry+manifest 下，在册文件的
+# DRIFT/损坏/非对抗性误替换 + partial/empty manifest 洗白」；它【不】抓 manifest+lake co-tamper
+# （本研究资产 manifest 未签名、可覆写；签名收据只属被读侧 forbidden 的 benchmark cohort）与
+# 同 size+mtime 的并发原子替换（TOCTOU，仅 best-effort re-stat 收窄，不闭合）——详见
+# `_verify_real_manifest` docstring 的残余风险 (a)/(b)/(c)。
+#
+# 每测带【变异】牙口（§2）：注释 `_load_real_panel` 里的 `_verify_real_manifest(resolution)`（整门失效）
+# 或 `_verify_real_manifest` 内的 `_assert_manifest_covers_reads`（仅 FIX-1 非空/覆盖/路径门失效）→ 对应
+# pytest.raises 变「DID NOT RAISE」/ 变 polars 解析错 → 打红。变异是交付时按 HANDOFF Verify 段实跑的
+# 一次性核对（非仓库内常驻证据）；哪些用例翻红见交付报告变异段。
+# ════════════════════════════════════════════════════════════════════════════
+
+
+def _raw_bars_path(root: Path) -> Path:
+    return root / "raw" / "bars.parquet"
+
+
+def _raw_adj_path(root: Path) -> Path:
+    return root / "raw" / "adj_factors.parquet"
+
+
+def _load_manifest_json(version) -> dict:
+    """读注册时落盘的 on-disk manifest JSON（供 F3 对抗用例改写 entry 集）。"""
+    return json.loads(Path(version.manifest_path).read_text(encoding="utf-8"))
+
+
+def _write_manifest_json(version, data: dict) -> None:
+    """把改写后的 manifest 落回原路径（模拟 manifest 未签名·可覆写这一诚实残余）。"""
+    Path(version.manifest_path).write_text(
+        json.dumps(data, ensure_ascii=False, indent=2), encoding="utf-8"
+    )
+
+
+def test_f3_01_pristine_real_load_ok_hfq_preserved(tmp_path, monkeypatch):
+    """F3 不破坏基线：pristine 注册 → load 正常返回 hfq 面板（15 行、oracle 恒定）。"""
+    _register_real_asset(tmp_path)
+    monkeypatch.setenv("QUANTBT_DATA_ROOT", str(tmp_path))
+    panel = load_market_panel("ashare_hs300")  # F3 verify 通过（字节未动）→ 照常读
+    assert panel.height == 15
+    assert set(panel["symbol"].unique().to_list()) == {"AAA", "BBB", "CCC"}
+    # hfq 行为仍被保留（AAA close 恒 10.0，跨除权日零跳变）。
+    assert _sym(panel, "AAA").get_column("close").to_list() == pytest.approx([10.0] * 5, abs=1e-9)
+
+
+def test_f3_02_tampered_bars_raises_integrity(tmp_path, monkeypatch):
+    """篡改 bars.parquet（改写成 schema 相同、值不同的【合法】parquet）→ sha256 不符 → fail-closed raise。
+
+    变异牙口：移除 `_verify_real_manifest` 门 → 被篡 bars 被静默读入并当 hfq 真实数据返回 →
+    本 pytest.raises 变「DID NOT RAISE」→ 打红（证明门有牙、非纸门）。
+    """
+    _register_real_asset(tmp_path)
+    monkeypatch.setenv("QUANTBT_DATA_ROOT", str(tmp_path))
+    # 模拟被换库/被改的 lake 文件：合法 parquet、present-detection 照过、GE verdict 仍 pass（注册期已定），
+    # 唯有磁盘字节 sha256 变 → 只能靠 F3 抓。
+    tampered = _bars().with_columns((pl.col("close") * 2.0 + 1.0).alias("close"))
+    tampered.write_parquet(_raw_bars_path(tmp_path))
+    with pytest.raises(PanelSourceError, match="完整性"):
+        load_market_panel("ashare_hs300")
+
+
+def test_f3_03_tampered_adj_raises_integrity(tmp_path, monkeypatch):
+    """篡改 adj_factors.parquet → sha256 不符 → raise。
+
+    变异牙口：移 F3 门 → 静默用被篡 factor 算出错误 hfq 并返回 → pytest.raises 变 DID-NOT-RAISE → 红。
+    """
+    _register_real_asset(tmp_path)
+    monkeypatch.setenv("QUANTBT_DATA_ROOT", str(tmp_path))
+    tampered = _adj().with_columns((pl.col("adj_factor") + 0.5).alias("adj_factor"))
+    tampered.write_parquet(_raw_adj_path(tmp_path))
+    with pytest.raises(PanelSourceError, match="完整性"):
+        load_market_panel("ashare_hs300")
+
+
+def test_f3_04_missing_manifest_fail_closed_not_synthetic(tmp_path, monkeypatch):
+    """缺 manifest 的真实 resolution → fail-closed raise，【绝不】降级合成（decision C）。"""
+    # (a) on-disk manifest 文件被删：走 full public path。present-detection 不查 manifest → 仍判 real；
+    #     F3 检出 manifest 文件缺 → raise（而非静默回落 synthetic）。
+    version = _register_real_asset(tmp_path)
+    monkeypatch.setenv("QUANTBT_DATA_ROOT", str(tmp_path))
+    assert version.manifest_path and Path(version.manifest_path).is_file()
+    Path(version.manifest_path).unlink()
+    assert resolve_panel_source("ashare_hs300", data_root=tmp_path).kind == "real"  # 仍 real（非兜底）
+    with pytest.raises(PanelSourceError, match="manifest"):
+        load_market_panel("ashare_hs300")
+
+    # (b) manifest_path=None 的真实 resolution（模拟 manifest 特性前的旧 registry 行）→ raise，不降级合成。
+    root_b = tmp_path / "b"
+    _register_real_asset(root_b)
+    res = resolve_panel_source("ashare_hs300", data_root=root_b)
+    assert res.kind == "real"
+    res_none = dataclasses.replace(res, manifest_path=None)
+    with pytest.raises(PanelSourceError, match="manifest"):
+        _load_real_panel(res_none)  # 不可验证真实必须 refuse，绝不返回合成/污染面板
+
+
+def test_f3_05_verify_before_parse_no_tampered_rows_leak(tmp_path, monkeypatch):
+    """完整性门在 `pl.read_parquet` 【之前】：写入非法 parquet 字节 → 抛的是完整性错、不是 parquet 解析错。
+
+    证明篡改字节从未被解析成面板行（零污染泄漏）。变异牙口：移 F3 门 → read_parquet 抛 polars 解析异常
+    （非 PanelSourceError）→ 本 pytest.raises(PanelSourceError, match="完整性") 打红。
+    """
+    _register_real_asset(tmp_path)
+    monkeypatch.setenv("QUANTBT_DATA_ROOT", str(tmp_path))
+    # 非 parquet 垃圾字节：若门失效被 read_parquet 先碰到 → polars ComputeError（≠ 完整性错）。
+    _raw_bars_path(tmp_path).write_bytes(b"NOT_A_PARQUET_tampered_" + b"\x00\x01\x02" * 64)
+    with pytest.raises(PanelSourceError, match="完整性") as exc_info:
+        load_market_panel("ashare_hs300")
+    # 抛的确是「读价前」的完整性门（措辞钉死），不是下游 parquet 解析或 hfq 计算错。
+    assert "manifest sha256 不符" in str(exc_info.value)
+
+
+def test_f3_06_absent_registry_no_f3_regression(tmp_path, monkeypatch):
+    """无 registry（absent）→ 合成分支，F3 门根本不触发；与 equity_cn 逐字节相等（零回归）。"""
+    monkeypatch.setenv("QUANTBT_DATA_ROOT", str(tmp_path / "empty"))
+    ashare = load_market_panel("ashare_hs300")
+    equity = load_market_panel("equity_cn")
+    assert resolve_panel_source("ashare_hs300", data_root=tmp_path / "empty").kind == "synthetic"
+    assert_frame_equal(ashare, equity)  # absent 逐字节兜底到合成 sample
+    assert hashlib.sha256(equity.write_csv().encode()).hexdigest() == _PRECHANGE_EQUITY_CN_CSV_SHA256
+
+
+# ————————————————————————————————————————————————————————————————————————
+# FIX 1 · partial/empty-manifest fail-open 收口（verify_manifest 空过 + 不覆盖将读文件的洞）。
+# ————————————————————————————————————————————————————————————————————————
+def test_f3_07_empty_manifest_vacuous_pass_now_raises(tmp_path, monkeypatch):
+    """空 manifest（0 entry）在真实 resolution 上 → raise。
+
+    修复【前】：`verify_manifest` 对空 manifest 返回 `(True, [])` → 未被任何 entry 覆盖的磁盘字节
+    全程不校验 → 「已验证 hfq 真实」名不副实（vacuous pass）。修复【后】：非空门 fail-closed。
+    变异牙口：注释 `_assert_manifest_covers_reads` → 空 manifest 放行（数据文件本身 pristine → load 成功）
+    → 本 pytest.raises 变「DID NOT RAISE」→ 红。
+    """
+    version = _register_real_asset(tmp_path)
+    monkeypatch.setenv("QUANTBT_DATA_ROOT", str(tmp_path))
+    data = _load_manifest_json(version)
+    data["files"] = []  # 清空 entry（数据文件不动 —— 纯 vacuous-pass 攻击面）
+    _write_manifest_json(version, data)
+    with pytest.raises(PanelSourceError, match="完整性") as exc:
+        load_market_panel("ashare_hs300")
+    assert "manifest 为空" in str(exc.value)  # 钉死是「非空门」而非下游 sha256 门
+
+
+def test_f3_08_partial_manifest_plus_schema_valid_tamper_raises(tmp_path, monkeypatch):
+    """从合法 manifest 删掉 bars entry + 用 schema 合法的篡改 parquet 覆盖 bars.parquet → raise。
+
+    这正是 `verify_manifest` 单独抓不到的洞（codex FIX-1 攻击）：剩余 (adj/susp) entry 全对 → verify
+    空过，而删了 entry 的篡改 bars 却被读入当真实数据。FIX-1 覆盖门：bars 是将读文件却无 entry → fail-closed。
+    变异牙口：注释 `_assert_manifest_covers_reads` → 篡改 bars 被静默读入 → 本 pytest.raises 变 DID-NOT-RAISE → 红。
+    """
+    version = _register_real_asset(tmp_path)
+    monkeypatch.setenv("QUANTBT_DATA_ROOT", str(tmp_path))
+    data = _load_manifest_json(version)
+    data["files"] = [
+        f for f in data["files"] if not str(f["relative_path"]).endswith("bars.parquet")
+    ]
+    _write_manifest_json(version, data)
+    # schema 合法但值不同的篡改 bars（present-detection 照过、注册期 GE verdict 仍 pass，只有字节 sha256 变）。
+    tampered = _bars().with_columns((pl.col("close") * 2.0 + 1.0).alias("close"))
+    tampered.write_parquet(_raw_bars_path(tmp_path))
+    with pytest.raises(PanelSourceError, match="未覆盖") as exc:
+        load_market_panel("ashare_hs300")
+    assert "bars.parquet" in str(exc.value)
+
+
+def test_f3_09_manifest_unsafe_entry_paths_raise(tmp_path):
+    """manifest entry 的 relative_path 绝对 / `..` 逃逸 / 重复 → fail-closed raise（防路径穿越/洗白 · FIX 1）。
+
+    每 sub-case 造「hash 自洽 + 目标存在」的恶意 entry，且不动 bars/adj/susp（覆盖门过）→ 只有路径门能抓：
+    `verify_manifest` 单独会去 root 外哈希那个自洽 decoy 并放行。
+    变异牙口：注释 `_assert_manifest_covers_reads` → verify 放行 → 本 pytest.raises 变 DID-NOT-RAISE → 红。
+    """
+    # (a) `..` 逃逸：root=<dotdot>/raw；加一条 ../decoy.parquet（指向 <dotdot>/decoy.parquet、hash 自洽）。
+    root_dd = tmp_path / "dotdot"
+    v = _register_real_asset(root_dd)
+    decoy = root_dd / "decoy.parquet"
+    decoy.write_bytes(b"decoy-dotdot-bytes")
+    data = _load_manifest_json(v)
+    data["files"].append(
+        {
+            "relative_path": "../decoy.parquet",
+            "sha256": hashlib.sha256(decoy.read_bytes()).hexdigest(),
+            "size_bytes": decoy.stat().st_size,
+            "row_count": None,
+        }
+    )
+    _write_manifest_json(v, data)
+    with pytest.raises(PanelSourceError, match="路径"):
+        resolve_and_load(root_dd)
+
+    # (b) 绝对路径 entry（指向存在的 decoy2、hash 自洽）→ raise。
+    root_abs = tmp_path / "abs"
+    v2 = _register_real_asset(root_abs)
+    decoy2 = root_abs / "decoy2.parquet"
+    decoy2.write_bytes(b"decoy-abs-bytes")
+    data2 = _load_manifest_json(v2)
+    data2["files"].append(
+        {
+            "relative_path": str(decoy2),
+            "sha256": hashlib.sha256(decoy2.read_bytes()).hexdigest(),
+            "size_bytes": decoy2.stat().st_size,
+            "row_count": None,
+        }
+    )
+    _write_manifest_json(v2, data2)
+    with pytest.raises(PanelSourceError, match="路径"):
+        resolve_and_load(root_abs)
+
+    # (c) 重复 relative_path（复制第一条 entry）→ raise。
+    root_dup = tmp_path / "dup"
+    v3 = _register_real_asset(root_dup)
+    data3 = _load_manifest_json(v3)
+    data3["files"].append(dict(data3["files"][0]))
+    _write_manifest_json(v3, data3)
+    with pytest.raises(PanelSourceError, match="重复"):
+        resolve_and_load(root_dup)
+
+
+# ————————————————————————————————————————————————————————————————————————
+# FIX 2 · 删文件→静默降级合成 收口 + 保留 genuinely-absent→synthetic（CI graceful-degrade）。
+# ————————————————————————————————————————————————————————————————————————
+def test_f3_10_registered_pass_missing_file_raises_absent_still_synthetic(tmp_path):
+    """已登记+verdict=pass 的真实资产、在册文件被删 → resolve 即 fail-closed raise（绝不降级合成）；
+    genuinely-absent（无 registry）仍回落 synthetic（CI degrade 保留、未被 FIX-2 误伤）。"""
+    # (a) 已登记+pass+删 bars → resolve_panel_source 直接 raise（不再静默 synthetic）。
+    root_del = tmp_path / "deleted"
+    _register_real_asset(root_del, drop_files=("bars.parquet",))
+    with pytest.raises(PanelSourceError, match="缺失"):
+        resolve_panel_source("ashare_hs300", data_root=root_del)
+    # (b) genuinely-absent（无 registry 文件）→ synthetic（CI graceful-degrade 保留）。
+    assert (
+        resolve_panel_source("ashare_hs300", data_root=tmp_path / "absent").kind
+        == "synthetic"
+    )
+    # (c) 登记但 verdict!=pass → 仍 synthetic（registry 受信，未过质检非可用真实源，≠ 静默降级已验证真实）。
+    root_fail = tmp_path / "verdictfail"
+    _register_real_asset(
+        root_fail,
+        rules=[GERule(column="close", rule_type="value_range", params={"min": 0, "max": 1})],
+    )
+    assert (
+        resolve_panel_source("ashare_hs300", data_root=root_fail).kind == "synthetic"
+    )
+
+
+# ————————————————————————————————————————————————————————————————————————
+# FIX 4 · TOCTOU（best-effort 收窄，不闭合）：verify→read 之间并发替换、size/mtime 变即抓。
+# ————————————————————————————————————————————————————————————————————————
+def test_f3_11_toctou_concurrent_swap_during_read_best_effort(tmp_path, monkeypatch):
+    """verify 通过后、pl.read_parquet 期间文件被并发替换(size/mtime 变) → 读后 re-stat raise。
+
+    诚实边界：仅**收窄** TOCTOU 窗口；同 size+mtime 的原子替换仍不可分辨（不宣称闭合，见残余风险 b）。
+    构造：monkeypatch panel_source 用的 pl.read_parquet，在读 bars 时先把 bars 换成不同 size 的合法 parquet
+    再委托真读 → 读后快照 ≠ 读前快照 → raise。
+    """
+    _register_real_asset(tmp_path)
+    monkeypatch.setenv("QUANTBT_DATA_ROOT", str(tmp_path))
+    import app.factor_factory.panel_source as ps
+
+    real_read = ps.pl.read_parquet
+
+    def _swapping_read(path, *args, **kwargs):
+        if str(path).endswith("bars.parquet"):
+            _bars().head(3).write_parquet(path)  # 读中途原子替换成不同 size 的合法 parquet
+        return real_read(path, *args, **kwargs)
+
+    monkeypatch.setattr(ps.pl, "read_parquet", _swapping_read)
+    with pytest.raises(PanelSourceError, match="并发替换"):
+        load_market_panel("ashare_hs300")
+
+
+# ————————————————————————————————————————————————————————————————————————
+# FIX A · 单快照 manifest 校验（收口 split-snapshot race）：覆盖门与 sha256 门共用【一次】读盘解析。
+# ————————————————————————————————————————————————————————————————————————
+def test_f3_12_manifest_single_snapshot_no_split_read_swap(tmp_path, monkeypatch):
+    """single-snapshot 铁证：F3 对 manifest 文件只读【一次】，覆盖门与 per-file sha256 门跑在【同一】
+    parsed 对象上 —— verify→hash 之间的 manifest swap 无从下手（收口 split-snapshot race）。
+
+    攻击（仅【两读】实现才成立）：磁盘 bars 被篡改（sha256 与【完整】manifest 记录不符）。令 manifest
+    文件第 1 次读（覆盖门）返回【完整】版（bars entry 在 → 覆盖过），第 2 次读（旧 verify_manifest 会
+    重开读）返回【删了 bars entry】版（bars 不被哈希）→ 篡改 bars 既过覆盖门又逃 sha256 → 静默读入。
+    单快照下二者共用同一次读盘：覆盖门看到完整版 → sha256 门在同一对象上撞 bars sha 不符 → raise。
+
+    双牙口：
+    - 行为牙：single-snapshot → PanelSourceError（完整性）；回退两读则 swap 生效 → DID NOT RAISE。
+    - 计数牙：F3 只读 manifest 文件【一次】(reads==1)；回退两读则第 2 次重开 → reads==2 → assert 红。
+    变异（FIX-A 回退）：把 `_verify_real_manifest` 末尾 `verify_manifest_obj(parsed, root)` 改回
+    `verify_manifest(mp, root)`（第二次读盘）→ 这两条 assert 同时翻红（DID NOT RAISE + reads==2）。
+    """
+    version = _register_real_asset(tmp_path)
+    monkeypatch.setenv("QUANTBT_DATA_ROOT", str(tmp_path))
+    manifest_path = Path(version.manifest_path)
+
+    full = _load_manifest_json(version)  # 完整：bars/adj/susp 三 entry
+    partial = dict(full)
+    partial["files"] = [
+        f for f in full["files"] if not str(f["relative_path"]).endswith("bars.parquet")
+    ]
+    full_json = json.dumps(full, ensure_ascii=False)
+    partial_json = json.dumps(partial, ensure_ascii=False)
+
+    # 磁盘 bars 被篡改（schema 合法、值不同 → sha256 与【完整】manifest 记录不符；present-detection 照过）。
+    tampered = _bars().with_columns((pl.col("close") * 2.0 + 1.0).alias("close"))
+    tampered.write_parquet(_raw_bars_path(tmp_path))
+
+    # spy：对【manifest 文件】第 1 次读返回完整版（覆盖门想看到的），第 2 次起返回 partial 版（两读实现的
+    #      sha 门会重开读到它、漏掉被篡 bars）。非 manifest 路径一律走真实 read_text（registry 等不受影响）。
+    real_read_text = Path.read_text
+    reads = {"n": 0}
+
+    def _spy_read_text(self, *args, **kwargs):
+        if str(self) == str(manifest_path):
+            reads["n"] += 1
+            return full_json if reads["n"] == 1 else partial_json
+        return real_read_text(self, *args, **kwargs)
+
+    monkeypatch.setattr(Path, "read_text", _spy_read_text)
+
+    with pytest.raises(PanelSourceError, match="完整性"):
+        load_market_panel("ashare_hs300")
+    # 单快照铁证：整条 F3 路径对 manifest 文件只读了一次（两读实现下这里会是 2）。
+    assert reads["n"] == 1, f"manifest 被读 {reads['n']} 次（期望 1）——split-snapshot 回归"

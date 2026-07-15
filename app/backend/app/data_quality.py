@@ -20,6 +20,7 @@ import json
 import os
 import re
 import threading
+from collections.abc import Iterable
 from dataclasses import asdict, dataclass, field, fields as _dc_fields
 from datetime import UTC, datetime, time, timedelta
 from pathlib import Path
@@ -189,6 +190,29 @@ def make_version_id(fetched_at_utc: str, sha256: str) -> str:
     return f"{safe_ts}__{sha256[:8]}"
 
 
+def dataset_manifest_root(file_paths: Iterable[str | Path]) -> Path | None:
+    """on-disk manifest 的【单一源】root 约定——写侧与读侧 re-verify 必经此函数算根（§1 单一源）。
+
+    写侧 ``DatasetRegistry._write_and_verify_manifest`` 落 manifest 时用它算 root，读侧
+    ``factor_factory.panel_source._load_real_panel``（F3 读侧完整性门）re-verify 时用【同一】
+    函数算 root——两侧 ``relative_path→sha256`` 的 key 永不漂移。若两侧各算各的 root 而算法一偏，
+    ``verify_manifest`` 会把每条 entry 都误判成「文件丢失」→ 假阳性 raise（把好数据判成篡改）。
+
+    规则（与既有写侧逐字节一致，抽取而非新造）：只数**磁盘上真实存在**的文件；单文件=其父目录；
+    多文件=commonpath（若 commonpath 落到非目录则升到其父）。无任一存在文件 → None（无可哈希）。
+    """
+
+    existing = [Path(fp) for fp in (file_paths or []) if Path(fp).is_file()]
+    if not existing:
+        return None
+    if len(existing) == 1:
+        return existing[0].parent
+    root = Path(os.path.commonpath([str(p) for p in existing]))
+    if not root.is_dir():
+        root = root.parent
+    return root
+
+
 class DatasetRegistry:
     """append-only JSONL registry。线程安全；多进程下要把 lock 替换成 fcntl。"""
 
@@ -340,14 +364,11 @@ class DatasetRegistry:
         if not existing:
             return None
 
-        # 稳定 root：单文件=父目录；多文件=commonpath。保证 relative_path 跨次登记一致
-        # （不可变比对按 relative_path→sha256 配对，key 必须稳定才抓得住同 version 漂移）。
-        if len(existing) == 1:
-            root = existing[0].parent
-        else:
-            root = Path(os.path.commonpath([str(p) for p in existing]))
-            if not root.is_dir():
-                root = root.parent
+        # 稳定 root：单一源 = 模块级 dataset_manifest_root（写侧落 manifest 与读侧 F3 re-verify
+        # 同一函数算根 → relative_path key 永不漂移）。single=父目录；multi=commonpath（非目录升父）。
+        root = dataset_manifest_root(existing)
+        if root is None:  # existing 已非空 → 恒非 None；防御式收窄类型（不新增行为分支）
+            return None
 
         entries: list[FileEntry] = []
         total_bytes = 0
@@ -564,6 +585,7 @@ __all__ = [
     "GE_RuleType",
     "GERule",
     "compute_freshness",
+    "dataset_manifest_root",
     "expected_end_utc",
     "make_version_id",
     "run_ge_checks",

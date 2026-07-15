@@ -159,16 +159,14 @@ def write_manifest(manifest: DatasetManifest, manifest_path: Path) -> None:
     )
 
 
-def verify_manifest(manifest_path: Path, root_dir: Path) -> tuple[bool, list[str]]:
-    """重算磁盘文件 hash vs manifest 记录，不匹配返 mismatch 列表。"""
-    if not manifest_path.exists():
-        return False, ["manifest.json 不存在"]
-    try:
-        data = json.loads(manifest_path.read_text(encoding="utf-8"))
-        manifest = DatasetManifest.from_dict(data)
-    except Exception as exc:  # noqa: BLE001
-        return False, [f"manifest 解析失败: {exc}"]
+def verify_manifest_obj(manifest: DatasetManifest, root_dir: Path) -> tuple[bool, list[str]]:
+    """对【已解析】的 ``DatasetManifest`` 对象逐条重算磁盘文件 hash vs 记录，不匹配返 mismatch 列表。
 
+    单快照约定：调用方把 manifest 只解析【一次】，再把【同一】对象同时喂给覆盖/路径门与本 per-file
+    sha256 门 → 两门之间不再有「二次读盘 manifest」的窗口。这正是 split-snapshot 攻击的解药：覆盖门
+    读快照 A、哈希门重开读快照 B，中途 swap manifest 让被删 entry 的篡改文件既过覆盖又逃哈希 —— 单快照
+    下无从下手（见 ``factor_factory.panel_source._verify_real_manifest``）。哈希单源 ``_sha256_file``。
+    """
     mismatches: list[str] = []
     for entry in manifest.files:
         f = root_dir / entry.relative_path
@@ -182,6 +180,23 @@ def verify_manifest(manifest_path: Path, root_dir: Path) -> tuple[bool, list[str
                 f"(manifest={entry.sha256[:8]}.. actual={actual_sha[:8]}..)"
             )
     return len(mismatches) == 0, mismatches
+
+
+def verify_manifest(manifest_path: Path, root_dir: Path) -> tuple[bool, list[str]]:
+    """重算磁盘文件 hash vs manifest 记录，不匹配返 mismatch 列表。
+
+    = 读盘+解析 manifest 一次 → 委托 ``verify_manifest_obj``（既有签名/行为逐字节保留，现有 caller 无感）。
+    需要「覆盖门 + 哈希门共用同一次读盘快照」的调用方（如 F3 读侧 ``panel_source._verify_real_manifest``）
+    应自行把 manifest 解析一次再直接调 ``verify_manifest_obj``，绝不经本函数二次读盘（防 split-snapshot）。
+    """
+    if not manifest_path.exists():
+        return False, ["manifest.json 不存在"]
+    try:
+        data = json.loads(manifest_path.read_text(encoding="utf-8"))
+        manifest = DatasetManifest.from_dict(data)
+    except Exception as exc:  # noqa: BLE001
+        return False, [f"manifest 解析失败: {exc}"]
+    return verify_manifest_obj(manifest, root_dir)
 
 
 # ============================================================
@@ -219,5 +234,6 @@ __all__ = [
     "FileEntry",
     "create_manifest",
     "verify_manifest",
+    "verify_manifest_obj",
     "write_manifest",
 ]
