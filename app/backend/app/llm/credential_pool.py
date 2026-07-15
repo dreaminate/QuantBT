@@ -41,9 +41,9 @@ class CredentialError(RuntimeError):
 class SecretRef:
     """受控引用：指向 Settings/Secrets 安全后端的一条记录，**绝不含明文**。"""
 
-    keystore_name: str               # SecureKeystore 里的记录名，如 "llm_anthropic"
+    keystore_name: str               # SecureKeystore 里的记录名，如 "llm_anthropic"（subscription_cli 为空）
     provider: str                    # anthropic / openai / qwen / custom / oauth_proxy / dev_local
-    auth_kind: str = "api_key"       # api_key | oauth_proxy | token | none
+    auth_kind: str = "api_key"       # api_key | oauth_proxy | token | none | subscription_cli
     label: str = ""
 
     @property
@@ -103,9 +103,15 @@ class MaterializedCredential:
 
     @property
     def has_usable_key(self) -> bool:
-        """非 dev_local / 非 oauth_proxy 的 api_key 档，必须真有 key 才算可用。"""
+        """非 dev_local / 非 oauth_proxy / 非 subscription_cli 的 api_key 档，必须真有 key 才算可用。
 
-        if self.provider == "dev_local" or self.auth_kind in ("none", "oauth_proxy"):
+        subscription_cli（跨厂商切模型 S5）：凭据在厂商 CLI 自己的安全存储，gateway 不持 key、
+        api_key 恒空——认作 keyless-but-authenticated（可用），否则 gateway 会误判 no_key 而 fallback。
+        订阅是否真登录由 build 期 subscription_auth_status 门控（deny-by-default 不弱化）。
+        """
+        if self.provider == "dev_local" or self.auth_kind in (
+            "none", "oauth_proxy", "subscription_cli",
+        ):
             return True
         return bool(self.api_key)
 

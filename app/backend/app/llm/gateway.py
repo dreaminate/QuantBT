@@ -180,6 +180,11 @@ def _default_client_factory(cred: MaterializedCredential) -> Any:
 
     if cred.provider == "dev_local":
         return DevLocalLLM()  # 显式 dev_local 档（非静默兜底）——routing 主动选到它才会走这里。
+    if cred.auth_kind == "subscription_cli":
+        # 跨厂商切模型 S5：订阅账号经厂商官方 CLI（claude/codex）调模型——不伪装 oauth_proxy/custom。
+        # 凭据在 CLI 自己的安全存储，此处不持 key；provider 恒真（anthropic/openai）。
+        from ..agent.subscription_cli_llm import make_subscription_cli_client
+        return make_subscription_cli_client(cred.provider, model=cred.model or None)
     if not cred.provider:
         raise GatewayError(
             "物化凭据缺 provider —— deny-by-default 拒绝静默落 DevLocalLLM（GOAL §8 no-silent-mock）"
