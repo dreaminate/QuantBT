@@ -105,6 +105,20 @@
   淘汰只重算不 stale,WAL 非空绑定边界一字未动)。42 测过+codex APPROVE。同分支带 CI flake
   兜底 commit 95e3efb2(训练 PIT 子进程超时 300→600s:dd6db35c CI 后端因慢 runner 22:48
   子进程 300s 被杀=资源边际 flake 非回归,后端代码零变更)。
+- **IDE 沙箱逃逸止血已 land**(分支 slice/sandbox-escape-hardening,commit d7380484+074dfe56):
+  盘点捞回从未 land main 的 P0 安全加固(worktree-autopolish-w1@92eade4f 2026-06-25)——main
+  sandbox.py 原是 5-30 base 版,os.posix_spawn/posix_fork/forkpty 未封、import ctypes 未拒
+  (→CDLL(libc).system RCE 绕 os.system 黑名单)。按 main 现结构重实现(additive):prelude 补封
+  posix_spawn 族 + run_user_strategy 入口 AST 预检拒直接 import/__import__ ctypes/cffi。
+  **codex 安全复核逮到 __import__(name=)关键字形式漏网(只查 node.args[0])→补拦位置+关键字两形式**
+  (codex 掐于网安分类器但探测已尽职)。诚实边界:defense-in-depth·非 hardened(importlib/getattr
+  可绕=已声明边界,真隔离=OS 级 P0 卡 5bfb5202)·沙箱跑用户自己策略码(防手滑非防对手)·非活 P0。
+  6 对抗测试(posix_spawn/posix_fork/ctypes AST 拒×2+kw+不误伤),6363 passed。**该安全修复内容
+  从此在 main**(autopolish-w1 的独有价值已救回)。
+- **[待办] 其余 4 个未合并分支删前需同样核**:盘点已发现 autopolish-w1 有真·未落地工作(证明"只列
+  不删"对);其余 4 个(wip/uncommitted-closure、2 个 research-os/release-gate producer、
+  integration-prodbuilder)删前也应逐个核内容是否已在 main,别盲删。用户已 greenlight 清理,但
+  逐个核后再删(有 un-landed 就先救回)。
 - **待用户权衡(engineering tradeoff·registered)**:8be0e547 机制层 dual-model 加固的可实现核=
   改 LLMClient 接口让全部 adapter 回带实发 payload digest。四面权衡:防的是「内部 adapter
   改写 payload」内部代码完整性威胁(非假绿灯/非外部对手),当前 gateway-digest 绑定对 app

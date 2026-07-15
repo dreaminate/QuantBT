@@ -6,6 +6,11 @@
 ## <日期> · <标题>
 - 建/改了什么 + 命门  - 验收：<对抗测试 + 变异 + 全量数字>  - 下一步：<…> -->
 
+## 2026-07-14-2305 IDE 沙箱逃逸止血 land——盘点捞回从未 land 的 P0 安全加固
+- worktree-autopolish-w1@92eade4f(2026-06-25 审计 pass3 #1)从未合并 main,main sandbox.py 仍 5-30 base 版:posix_spawn 族未封/import ctypes 未拒(CDLL RCE 绕 os.system)。按 main 现结构重实现:prelude 封 posix_spawn 族+入口 AST 预检拒 ctypes/cffi 直接 import/__import__
+- codex 安全复核逮到 __import__(name=)关键字形式漏网(只查 node.args[0])→补拦位置+关键字两形式;codex 掐于网安分类器但探测尽职。6 对抗测试(种坏可抓)+6363 passed
+- 诚实边界:defense-in-depth 非 hardened(importlib/getattr 可绕=声明边界,真隔离 OS 级 P0 卡 5bfb5202),沙箱跑用户自己码防手滑非防对手,非活 P0。盘点证'只列不删'对——其余 4 未合并分支删前需同样逐个核
+
 ## 2026-07-14-2239 GoalProofLedger LRU(P2) land + CI 训练 PIT 超时 flake 兜底
 - snapshot cache 无界 dict→OrderedDict 有界(maxsize 256,读命中 move_to_end/写后逐最旧);正确性红线守住:命中仍 token+WAL 文件状态绑定独立门控,淘汰只重算不 stale,WAL 非空绑定边界一字未动;42 测(2 新 LRU 对抗)+codex APPROVE
 - 同分支 CI flake 兜底:训练 PIT 子进程超时 300→600(dd6db35c CI 后端因慢 runner 22:48 子进程 300s 被杀=资源边际,后端零变更/本地全过/上个 run 绿);120→300→600 逐次实证
