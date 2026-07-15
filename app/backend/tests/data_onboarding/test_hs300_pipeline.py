@@ -351,6 +351,36 @@ def test_research_quality_green_on_honest_tables():
     )
     assert report["ok"], report["checks"]
     assert report["checks"]["survivorship_free_union"]["ok"]
+    assert report["checks"]["factors_all_finite"]["ok"]  # 绿基线:factor 全有限
+
+
+def test_factors_all_finite_caught():
+    # 种坏:adj_factor 置 NaN / +inf——polars 里既非 null 又非 `<=0`（NaN<=0 / +inf<=0 均 False），
+    # factor_bar_day_completeness 与 factor_positive 两门都漏 → factors_all_finite 门必炸
+    # （否则非有限 factor 算出 NaN/inf hfq 却当合格数据落盘）。把该门去掉 → 本测试红。
+    import polars as pl
+
+    from app.data_onboarding import research_quality_report
+
+    bars, factors, suspensions = _research_frames()
+    nan_f = factors.with_columns(
+        pl.when((pl.col("symbol") == "000001.SZ") & (pl.col("ts") == factors["ts"][2]))
+        .then(pl.lit(float("nan")))
+        .otherwise(pl.col("adj_factor"))
+        .alias("adj_factor")
+    )
+    rep_nan = research_quality_report(bars, nan_f, suspensions)
+    assert not rep_nan["ok"]
+    assert not rep_nan["checks"]["factors_all_finite"]["ok"]
+
+    inf_f = factors.with_columns(
+        pl.when((pl.col("symbol") == "000002.SZ") & (pl.col("ts") == factors["ts"][2]))
+        .then(pl.lit(float("inf")))
+        .otherwise(pl.col("adj_factor"))
+        .alias("adj_factor")
+    )
+    rep_inf = research_quality_report(bars, inf_f, suspensions)
+    assert not rep_inf["checks"]["factors_all_finite"]["ok"]
 
 
 def test_probe6_factor_lookahead_shift_is_caught():

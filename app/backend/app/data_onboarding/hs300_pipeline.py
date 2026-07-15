@@ -603,6 +603,10 @@ def research_quality_report(
     )
     nonpos = factors.select((pl.col("adj_factor") <= 0).sum()).item()
     _check("factor_positive", nonpos == 0, f"non_positive={nonpos}")
+    # factor 也必须有限：polars 里 NaN/±inf 既非 null 又非 `<=0`（NaN<=0 / +inf<=0 均 False），
+    # 上面两门都漏 → 非有限 factor 会算出 NaN/inf hfq 却当合格数据落盘。显式 is_finite 拦（镜 bars_all_finite）。
+    nonfinite_f = factors.select((~pl.col("adj_factor").is_finite()).sum()).item()
+    _check("factors_all_finite", nonfinite_f == 0, f"non_finite={nonfinite_f}")
     # __q 与 __fq 必须在同一完整帧上计算再 drop_nulls——先 drop 再算 fq 会让
     # 每 symbol 首条返回腿的 fq=null,检测链在关键腿失明(codex 轮5暴露的根因)。
     hfq = (
