@@ -6,6 +6,11 @@
 ## <日期> · <标题>
 - 建/改了什么 + 命门  - 验收：<对抗测试 + 变异 + 全量数字>  - 下一步：<…> -->
 
+## 2026-07-15-0307 跨厂商切模型 S2 hard-pin routing 落 main + 参考实现研究
+- routing.py RoleCapabilityRequest 加 pin_provider/pin_model,resolve 硬 pin 过滤仅 independence_required==False 生效(dual 门物理免疫)、pool 不变保 no-mix、pin 厂商无候选→PinnedModelUnavailable 绝不跨厂商 fallback
+- S2 skeptic 逮 3 MEDIUM(命门稳固无绕过;M1 pin 丢弃登记 tier 致 degraded 判反+可绕 strict_degrade、M2 pin_model fallback 锁死实际靠 health 断路器隐性兜底非声称的 signature、M3 命门测试不够强)全修+补真测试;S2 测 14+gateway 76 无回归;全量 6423 passed;land 6a8990e9
+- 用户指定参考 Claudian/Hermes/OpenClaw 源码(全 MIT/Apache)已调研落 finding:sk-ant-oat 直连 400 真因=缺 CLI 指纹层,但指纹签名绕过=计费规避 ToS 红线只学不落地;S6 内嵌登录采 Hermes session-relay+OpenClaw VPS-aware 贴码;直连高阶开关登记待拍板
+
 ## 2026-07-15-0232 跨厂商切模型 S1 模型目录落 main——GET /api/llm/models + 对抗验证加固
 - model_catalog.py 唯一 LLM 模型清单源:api-key live 拉/models(加固 stream 上限+禁 redirect+fail-closed)、非聊天模型 selectable=false、订阅 curated(supports_tools=false)、TTL 缓存+single-flight+凭据零触碰;GET /api/llm/models 端点(订阅探测 60s TTL 缓存防 DoS)
 - deep-opus skeptic 对抗验证逮到 7 项(1 must-fix 假绿灯:上游挂掉时缓存命中把 curated_fallback 谎报 live 撞§3)全修+回归钉死;后端全量 6409 passed;land e89964a8,CI run 29404840965 in_progress
