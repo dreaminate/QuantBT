@@ -6,6 +6,13 @@
 ## <日期> · <标题>
 - 建/改了什么 + 命门  - 验收：<对抗测试 + 变异 + 全量数字>  - 下一步：<…> -->
 
+## 2026-07-15-0842 §11 PIT 复权读侧接线 land——真实 HS300 后复权 hfq panel(fail-closed)
+- panel_source.py:market ashare_hs300 registry present→raw×adj_factor 四价列同乘(volume raw)·缺因子/非正/非有限(NaN±inf,F1)/dup 全 fail-closed raise;absent→逐字节合成兜底零行为变更;registry 单一源=paths.DATA_ROOT(=main.py:734,D-11-DATA-ROOT=b 无双源漂移)
+- §16 隔离:研究/回测 env≠perf harness(物理隔离)·perf_baseline_claim=False·拒 forbidden_confirmatory cohort;PIT:hfq PIT-safe·诚实标 no_per_row_factor_vintage 不冒充 bitemporal
+- 验证:12 对抗测试+后端 6474 passed/0 failed+前端 build 绿;hfq 方向(×→÷)与非有限(is_finite)变异门均 red-then-revert;byte-identity 双证。deep-opus clean-context 实现+独立 skeptic 判 §16 sound(逮 F1 已修)
+- Inference(未拍板默认可翻案):D-11-MARKET-KEY=B(新 ashare_hs300 key)·D-11-VOLUME-ADJ=raw·D-11-DATA-ROOT=b(据新证=main.py 已有 paths.DATA_ROOT 单一源,翻我先前 <repo>/data 默认)
+- follow-up(非 §16,登记非阻塞):读时 manifest hash 复验(F3)、producer hs300_pipeline factors_all_finite 建侧门(现只 <=0 无 finite 检查)
+
 ## 2026-07-15-0709 S6 订阅账号 in-app 登录中继 + K4 token 泄漏面收口 + §3 假绿灯修复(跨厂商切模型伞卡 db95c0c6)
 - 后端 begin_subscription_login/_spawn_detached_login(DEVNULL 三流·不 wait·固定 argv,后端不碰 token)+2 端点(机器级 admin gated)+前端订阅登录面板(状态卡/一键登录/终端降级)
 - K4:全仓弃 claude setup-token(打长效 token 到 stdout)→ claude auth login --claudeai(存 keychain);清 scripts/llm_auth.py+docstring+错误串+quickstart,login_cmd 单一源防漂

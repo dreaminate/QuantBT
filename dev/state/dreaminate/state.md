@@ -11,11 +11,11 @@
   下一步转用户可感知面(队列见 frontier)。
 
 ### 顶部刷新块（本轮值 · 每轮覆写）
-- **六字段**:1 Local checkout=slice/model-switch-crossvendor @ **656c85eb**(**S6 订阅账号 in-app 登录中继 + K4
-  token 泄漏面收口 + §3 假绿灯修复**,product fb7d253e + dev 656c85eb);2 Remote=**已 land**——origin/main ff 到
-  656c85eb(HEAD==origin/main 0/0);3 Local tests=后端全量 **6462 passed/13 skipped/0 failed**(真汇总行,9分48秒)+
-  前端 **430 passed + build 绿**;4 CI=**in_progress**(gh 实查 656c85eb «ci» 运行中,下 tick 查结论;上一 main
-  bb77029a=success);5 Production=Unqueried;6 User acceptance=**Unverified**(真浏览器登录端到端要用户本人按,我只验状态检测/authMethod 解析)。
+- **六字段**:1 Local checkout=slice/model-switch-crossvendor @ **0c926235**(**§11 PIT 复权读侧接线**:真实
+  HS300 后复权 hfq·fail-closed;product 0c926235 + 本轮 dev 落档);2 Remote=**待 land**(ff origin/main 到本轮 HEAD);
+  3 Local tests=后端全量 **6474 passed/13 skipped/0 failed**(真汇总行,8分52秒)+ 前端 build 绿(前端未改·上轮 430 passed);
+  4 CI=**passed**(auth slice b06ab42d «ci» = gh 实查 success;本轮 §11 push 后再查);5 Production=Unqueried;
+  6 User acceptance=**Unverified**。上一 slice(S6 订阅 in-app 登录)已 land 656c85eb·CI 绿(b06ab42d 含之)。
 - **audit 基线四项**(不变):61 files / 20,339 lines / 26,209,663 bytes / sha `1c1788b0bbe2`。(改动全在 app/scripts/docs/dev,基线按构造不变。)
 - **断点**:**当前战役=Claudian 式「每对话跨厂商切模型」(卡 db95c0c6,in_progress)**。蓝图 + 参考实现 + S6 记录见 findings。
   **✅ S1 目录 · ✅ S2 路由 · ✅ S3a-b gateway+pin 穿链 · ✅ S4 隔离(证成) · ✅ S6 订阅 in-app 登录 · ✅ S7 前端切换器**
@@ -30,12 +30,13 @@
   反转:不塞工具给纯文本调用,而是**把 claude code/codex 当完整 agent 跑**(自带工具在 workspace 干活),
   我们编排+绑画布。已对齐复述 + 5 岔路(通用/量化专用·**安全命门**·画布=现有 GraphCanvas·本地优先·ToS CLI 驱动)
   见 [[openclaw-agent-epic-alignment-20260715]]。**等用户拍 forks 1-5(尤其 fork2 安全命门)再 duet 设计 + 薄纵切**。
-  **§11 PIT 读侧接线**:设计已持久化 [[pit-adjustment-readside-design-20260715]]（execution-ready）+ **R6 已核**
-  （registry 路径:onboarding `--registry-path` CLI 参数·建议 `<repo>/data/datasets/registry.jsonl`·无 env;读侧对齐解=
-  `QUANTBT_DATA_ROOT` env 默认同路径 + 把 onboarding 默认设同值,两侧构造对齐）。correctness-critical（§16「未复权价误喂成交层」
-  向量）；**11b hfq join+fail-closed 承重,刻意留给下一 fresh 会话走 duet,不在超长 context 尾仓促落安全关键复权数学**。
-  下一步:等用户 fork 回复(OpenClaw epic);CI 结论下 tick 查(673f999b 权威 in_progress,656c85eb=supersede-cancel 非失败);
-  下一 fresh 会话执行 §11 PIT 11a→11b→11c(逐片对抗+变异门)。ultracode:每片落码后对抗验证。
+  **✅ §11 PIT 读侧接线已 land 0c926235**(11a+11b+11c 一次落):真实 HS300 后复权 hfq(raw×adj_factor 四价列·
+  volume raw·缺因子/非正/**非有限**/dup 全 fail-closed)·absent 逐字节合成兜底·registry 单一源=paths.DATA_ROOT
+  (D-11-DATA-ROOT=b)·§16 隔离。deep-opus clean-context 实现 + 独立 skeptic(判 §16 sound,逮 F1 非有限 factor 漏拦已修+
+  变异确认)。设计 [[pit-adjustment-readside-design-20260715]]。**follow-up(非 §16,登记)**:读时 manifest hash 复验(F3)、
+  producer hs300_pipeline factors_all_finite 建门(defense-in-depth,建侧现只 <=0 无 finite 检查)。
+  下一步:等用户 fork 回复(OpenClaw epic,待拍板);本轮 §11 land 后 gh 查 CI;续 loop 选下个最高杠杆 gap
+  (dual-model 跨厂商机制级 binding 卡 8be0e547 / §11 真实 Tushare 拉取全链 / 前端可感知面)。ultracode:每片落码后对抗验证。
 
 ## 状态表（确定的才标 ✅,证据必挂）
 | 子系统/能力 | 状态 | 证据 |
@@ -46,7 +47,7 @@
 | §11 数据层·基准面(readbench cohort) | ✅ | DatasetVersion hs300_daily_10y_readbench_cohort@…856b67b1(metadata 四键防误用);preflight 12/12 真数据 PASS |
 | §11 数据层·研究面(union 含退市) | ✅ | hs300_research_universe_10y@…332bebc0(1.38M bars/622 只/19,200 停复牌);12 质量门真数据 PASS(含探针 #6 bar日因子完备/#7 停牌伪 bar含退化窗);质量门经 codex 四轮对抗收敛到 factor-价格补偿不变量,scope 裁定见 frontier 待复核 |
 | §11 数据接入·Tushare 管线 | ✅ | scripts/hs300_onboard.py 六子命令(store-token/keygen/pull/preflight/build/build-research/bench);限流 180/分+退避+幂等;docs/hs300-quickstart.md;data_onboarding 测试 41 passed(含 codex 全部反例回归) |
-| §11 PIT/复权读侧接线 | 🟡 | raw+adj_factor 分离已交付;panel_source 唯一复权落点未接(后续卡) |
+| §11 PIT/复权读侧接线 | ✅ | panel_source.py 接真实 HS300 后复权 hfq(market `ashare_hs300`:registry present→raw×adj_factor 四价列同乘·volume raw·缺因子/非正/**非有限**(NaN/±inf,F1)/dup 全 fail-closed raise;absent→逐字节合成兜底,零行为变更)。registry 路径单一源=paths.DATA_ROOT(=main.py:734,D-11-DATA-ROOT=b 无双源漂移)。§16 隔离(≠perf harness·perf_baseline_claim=False·拒 forbidden cohort)。12 对抗测试+变异门(×→÷、is_finite 均 red-then-revert)+byte-identity 双证;后端 6474 passed;deep-opus 实现+独立 skeptic 判 §16 sound;land 0c926235。**残余(follow-up,非 §16)**:读时 manifest hash 复验(F3)、producer factors_all_finite 建门(defense-in-depth) |
 | §4 跨厂商切模型·S1 模型目录 | ✅ | app/llm/model_catalog.py 唯一 LLM 模型清单源(api-key live 拉/models 加固 stream 上限+禁 redirect+fail-closed、非聊天 selectable=false、订阅 curated supports_tools=false、TTL+single-flight+凭据零触碰)+GET /api/llm/models(订阅探测 60s TTL 缓存);对抗测试 29(deep-opus skeptic 逮 1 假绿灯+6 项全修+回归);后端 6409 passed;land e89964a8+CI success。卡 db95c0c6 |
 | §4 跨厂商切模型·S2 hard-pin routing | ✅ | routing.py pin_provider/pin_model 硬约束+resolve 硬 pin 过滤(仅 !independence_required 生效→dual 门物理免疫、pool 不变保 no-mix、pin 无候选→PinnedModelUnavailable 绝不跨厂商 fallback、pin_model tier 优先用登记档);对抗测试 14(skeptic 逮 3 MEDIUM:degraded 判反/fallback 锁死实靠断路器/命门测试弱,全修+补测);gateway 76+全量 6423 passed;land 6a8990e9 |
 | §4 跨厂商切模型·S3a gateway pin 注入 | ✅ | LLMGateway(default_pin) 在 complete() 盖章成 hard pin(仅非独立且非 verifier role→dual 门物理免疫叠双层);盖章后 effective_capability 贯穿 _invoke_with_fallback→S2 跨厂商锁死端到端成立(K1:真实主链走 GatewayLLMAdapter);对抗测试 6(skeptic 逮 **CRITICAL 跨厂商泄漏**——盖章在 fallback 蒸发,已修+变异门钉死;+MEDIUM-2 spy 门+LOW-4 role 纵深);全量 6429 passed;land dc940949 |
