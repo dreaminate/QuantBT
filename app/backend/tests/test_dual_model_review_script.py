@@ -372,18 +372,79 @@ def test_escaped_key_representations_still_caught(monkeypatch, tmp_path):
     assert not (out / "review_evidence.json").exists()
 
 
-def test_loader_rejects_falsy_nonstring_base_url(monkeypatch, tmp_path):
-    # 种坏:base_url 误配成 0(falsy 非字符串,`or \"\"` 会静默吞)→ 必须拒
+@pytest.mark.parametrize("field", ["base_url", "model"])
+@pytest.mark.parametrize("bad", ["0", "false", "[]"])
+def test_loader_rejects_falsy_nonstring_fields(monkeypatch, tmp_path, field, bad):
+    # 种坏:base_url/model 误配成 0/False/[](falsy 非字符串,`or \"\"` 会静默吞)
+    # → 全矩阵必须拒;单独恢复任一字段的 `or \"\"` 写法都要红
     qdir = tmp_path / ".quantbt"
     qdir.mkdir()
     (qdir / "secrets.yaml").write_text(
-        "llm:\n  anthropic:\n    api_key: test-anthropic-key-x\n    base_url: 0\n"
+        f"llm:\n  anthropic:\n    api_key: test-anthropic-key-x\n    {field}: {bad}\n"
         "  openai:\n    api_key: test-openai-key-x\n",
         encoding="utf-8",
     )
     monkeypatch.setattr(Path, "home", classmethod(lambda cls: tmp_path))
     with pytest.raises(SystemExit, match="必须是字符串"):
         dmr._load_llm_keys()
+
+
+def test_solidus_escaped_key_still_caught(monkeypatch, tmp_path):
+    # 种坏:key 含 "/" 且对端按合法 JSON "\\/" 转义回显(json.dumps 不产这形态,
+    # 用它造变体的测试抓不到)→ preflight 脱敏与 evidence 拒落盘都必须抓
+    import requests
+
+    slashy = "test-key/with/solidus-000000000000000000"
+    solidus_escaped = slashy.replace("/", "\\/")
+    assert solidus_escaped != slashy
+
+    class _Resp:
+        status_code = 401
+        text = f"denied for {solidus_escaped}"
+
+    monkeypatch.setattr(requests, "post", lambda *a, **kw: _Resp())
+    failures = dmr.preflight(_fake_keys(anthropic={"api_key": slashy}))
+    joined = "\n".join(failures)
+    assert slashy not in joined and solidus_escaped not in joined
+    assert "[REDACTED]" in joined
+
+    out = tmp_path / "out14"
+    with pytest.raises(SystemExit, match="拒绝落盘"):
+        dmr.run_review(
+            out,
+            keys=_fake_keys(anthropic={"api_key": slashy}),
+            client_factory=lambda cred: _StubClient(
+                cred.provider,
+                echo_secret=solidus_escaped if cred.provider == "openai" else None,
+            ),
+        )
+    assert not (out / "review_evidence.json").exists()
+
+
+def test_norm_base_query_and_leading_zero_port(tmp_path):
+    # ① 数值等价端口(:0443)+ 同 query → 判同 relay;
+    # ② query 不同(?tenant=a vs ?tenant=b)→ 不同端点,不得错并
+    out = tmp_path / "out15"
+    evidence = dmr.run_review(
+        out,
+        keys=_fake_keys(
+            anthropic={"base_url": "https://relay.example:0443/v1?tenant=a"},
+            openai={"base_url": "https://relay.example/v1?tenant=a"},
+        ),
+        client_factory=lambda cred: _StubClient(cred.provider),
+    )
+    assert "same_base_url_relay" in evidence["caveats"]
+
+    out2 = tmp_path / "out16"
+    evidence2 = dmr.run_review(
+        out2,
+        keys=_fake_keys(
+            anthropic={"base_url": "https://relay.example/v1?tenant=a"},
+            openai={"base_url": "https://relay.example/v1?tenant=b"},
+        ),
+        client_factory=lambda cred: _StubClient(cred.provider),
+    )
+    assert evidence2["caveats"] == []
 
 
 def test_relay_default_port_normalized(tmp_path):

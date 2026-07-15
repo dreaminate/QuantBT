@@ -101,6 +101,10 @@ def _key_variants(key: str) -> tuple[str, ...]:
     variants.add(json.dumps(key, ensure_ascii=False)[1:-1])  # JSON 转义形态
     variants.add(json.dumps(key)[1:-1])                       # ASCII JSON 转义形态
     variants.add(repr(key)[1:-1])                             # repr 转义形态
+    # JSON 语法还允许 "\/"(转义斜杠):json.dumps 自己不产,但对端序列化器可能产
+    for v in tuple(variants):
+        if "/" in v:
+            variants.add(v.replace("/", "\\/"))
     return tuple(v for v in variants if v)
 
 
@@ -207,7 +211,8 @@ def run_review(out_dir: Path, *, task: str = BUILDER_TASK,
             "独立性主张不成立,拒绝运行"
         )
     def _norm_base(url: str) -> str:
-        # 归一化后比较:尾斜杠/大小写/scheme 默认端口(https:443, http:80)。
+        # 归一化后比较:尾斜杠/大小写/scheme 默认端口(数值等价,443==0443)。
+        # query 保留(?tenant=a 与 ?tenant=b 是不同租户端点,不得错并)。
         # host 别名(CNAME 等)属 DNS 层,本披露是 best-effort,不是同源性证明
         from urllib.parse import urlsplit
 
@@ -215,12 +220,15 @@ def run_review(out_dir: Path, *, task: str = BUILDER_TASK,
         if not u:
             return ""
         parts = urlsplit(u)
-        netloc = parts.netloc
-        if parts.scheme == "https" and netloc.endswith(":443"):
-            netloc = netloc[: -len(":443")]
-        elif parts.scheme == "http" and netloc.endswith(":80"):
-            netloc = netloc[: -len(":80")]
-        return f"{parts.scheme}://{netloc}{parts.path}"
+        host = parts.hostname or parts.netloc
+        try:
+            port = parts.port  # 数值解析(0443→443);非法端口→按原样保留 netloc
+        except ValueError:
+            host, port = parts.netloc, None
+        default = {"https": 443, "http": 80}.get(parts.scheme)
+        netloc = host if port is None or port == default else f"{host}:{port}"
+        query = f"?{parts.query}" if parts.query else ""
+        return f"{parts.scheme}://{netloc}{parts.path}{query}"
 
     same_base_relay = bool(_norm_base(keys["anthropic"]["base_url"])) and (
         _norm_base(keys["anthropic"]["base_url"]) == _norm_base(keys["openai"]["base_url"])
