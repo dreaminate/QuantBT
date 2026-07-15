@@ -12,12 +12,20 @@ verifier(openai 真调用,independence_required) → bind/validate → Independe
 
 密钥红线:llm.anthropic/llm.openai 的 key 只做 secrets.yaml 窄读→内存 keystore→
 gateway 材料化,绝不打印/落盘/入 record(store 持久化字段是 digest/id 白名单)。
+异常路径同样收口:yaml 解析错误整体抑制(原文可能含 key)、preflight 诊断对全部
+已加载 key 脱敏、evidence 落盘前全文扫描拒泄。
+
+诚实边界(不装成机制能证明的):脚本能证明的是「两个配置槽凭据不同源(同 key 即拒)、
+verifier 实发 prompt 与 binding 派生 instruction 一致(digest 互证)、证据 HMAC 密封
+防篡改」。provider 身份仍来自配置槽声明(model_identity 按模型名判族)——双槽指向
+同一实际后端的伪装无法由单侧脚本证伪,同 base_url 中继场景在 evidence 里如实披露。
 """
 
 from __future__ import annotations
 
 import argparse
 import hashlib
+import hmac
 import json
 import os
 import sys
@@ -45,8 +53,16 @@ REVIEW_CRITERIA = (
 def _load_llm_keys() -> dict[str, dict[str, str]]:
     import yaml
 
-    raw = yaml.safe_load((Path.home() / ".quantbt" / "secrets.yaml").read_text()) or {}
-    llm = raw.get("llm", {})
+    secrets_path = Path.home() / ".quantbt" / "secrets.yaml"
+    try:
+        raw = yaml.safe_load(secrets_path.read_text()) or {}
+    except FileNotFoundError:
+        raise SystemExit("~/.quantbt/secrets.yaml 不存在,双厂商审查无法进行") from None
+    except Exception:  # noqa: BLE001 — yaml/IO 错误消息会回显文件原文(可能含 key),整体抑制
+        raise SystemExit(
+            "secrets.yaml 读取/解析失败(为防 key 回显,原始错误已抑制):检查文件权限与 YAML 语法"
+        ) from None
+    llm = raw.get("llm", {}) or {}
     out = {}
     for provider in ("anthropic", "openai"):
         entry = llm.get(provider, {}) or {}
@@ -64,6 +80,14 @@ def _load_llm_keys() -> dict[str, dict[str, str]]:
 def preflight(keys: dict[str, dict[str, str]]) -> list[str]:
     """逐 provider 最小连通探测,输出脱敏诊断(key 绝不入输出)。返回失败清单。"""
     import requests
+
+    all_keys = [e["api_key"] for e in keys.values() if e.get("api_key")]
+
+    def _redact(text: str) -> str:
+        # 对全部已加载 key 脱敏:中继/网关可能在任一 provider 的响应体里回显另一个 key
+        for k in all_keys:
+            text = text.replace(k, "[REDACTED]")
+        return text
 
     failures: list[str] = []
     for provider, entry in keys.items():
@@ -87,7 +111,7 @@ def preflight(keys: dict[str, dict[str, str]]) -> list[str]:
                     timeout=30,
                 )
             if resp.status_code != 200:
-                body = resp.text.replace(key, "[REDACTED]")[:160]
+                body = _redact(resp.text)[:160]
                 advice = {
                     401: "key 无效/过期:更新 secrets.yaml 对应 api_key",
                     403: "key 权限不足:检查中继账户",
@@ -99,7 +123,7 @@ def preflight(keys: dict[str, dict[str, str]]) -> list[str]:
         except Exception as exc:  # noqa: BLE001
             failures.append(
                 f"{provider}: {type(exc).__name__} "
-                f"{str(exc).replace(key, '[REDACTED]')[:120]} → 网络/端点不可达"
+                f"{_redact(str(exc))[:120]} → 网络/端点不可达"
             )
     return failures
 
@@ -107,8 +131,13 @@ def preflight(keys: dict[str, dict[str, str]]) -> list[str]:
 def run_review(out_dir: Path, *, task: str = BUILDER_TASK,
                criteria: str = REVIEW_CRITERIA,
                keys: dict[str, dict[str, str]] | None = None,
-               client_factory=None) -> dict:
-    """keys/client_factory 注入口仅供测试(桩);生产路径 = secrets 窄读 + 真 adapter。"""
+               client_factory=None,
+               _verifier_prompt_override: str | None = None) -> dict:
+    """keys/client_factory 注入口仅供测试(桩);生产路径 = secrets 窄读 + 真 adapter。
+
+    _verifier_prompt_override 是对抗测试专用种坏缝:模拟「实发 prompt 被偷换」的
+    坏实现,digest 互证门必须抓住它(种已知坏门必被抓)。生产路径永远为 None。
+    """
     from app.agent.llm_client import LLMMessage
     from app.lineage.ids import canonical_json
     from app.llm.call_record import (
@@ -118,11 +147,25 @@ def run_review(out_dir: Path, *, task: str = BUILDER_TASK,
         validate_review_subject_binding,
     )
     from app.llm.call_record_store import LLMCallRecordStore
-    from app.llm.gateway import LLMRequest, build_agent_llm_gateway
+    from app.llm.gateway import LLMGateway, LLMRequest, build_agent_llm_gateway
     from app.llm.routing import RoleCapabilityRequest
     from app.security.keystore import InMemoryKeystore, KeystoreRecord, SecureKeystore
 
     keys = keys if keys is not None else _load_llm_keys()
+    missing = [p for p in ("anthropic", "openai") if not (keys.get(p) or {}).get("api_key")]
+    if missing:
+        raise SystemExit(
+            f"缺 {'/'.join('llm.' + p for p in missing)} 凭据——跨厂商审查 fail-closed"
+            " 拒绝运行(单厂商换 prompt 不构成第二意见,不产出任何 evidence)"
+        )
+    if keys["anthropic"]["api_key"] == keys["openai"]["api_key"]:
+        raise SystemExit(
+            "llm.anthropic 与 llm.openai 配置了同一个 api_key——可证同源,"
+            "独立性主张不成立,拒绝运行"
+        )
+    same_base_relay = bool(keys["anthropic"]["base_url"]) and (
+        keys["anthropic"]["base_url"] == keys["openai"]["base_url"]
+    )
     ks = SecureKeystore(InMemoryKeystore())
     for provider, entry in keys.items():
         ks.store(KeystoreRecord(
@@ -162,17 +205,36 @@ def run_review(out_dir: Path, *, task: str = BUILDER_TASK,
         builder_output=builder_output,
         review_criteria=criteria,
     )
+    verifier_capability = RoleCapabilityRequest(
+        role="verifier", difficulty="hard", independence_required=True,
+    )
+    sent_text = (
+        verifier_instruction if _verifier_prompt_override is None
+        else _verifier_prompt_override
+    )
     verifier_result = gateway.complete(
         LLMRequest(
-            messages=[LLMMessage(role="user", content=verifier_instruction)],
-            capability=RoleCapabilityRequest(
-                role="verifier", difficulty="hard", independence_required=True,
-            ),
+            messages=[LLMMessage(role="user", content=sent_text)],
+            capability=verifier_capability,
             invocation_id="inv-verifier", **common,
         ),
         record_sink=store.append,
     )
     verifier_record = verifier_result.record
+
+    # digest 互证:record 里的 prompt_digest(实发)必须等于 binding 派生 instruction
+    # 的 digest(应发)。复用 gateway 同一哈希族(ids.content_hash),不自立第二套——
+    # 堵「验证器实际收到的 prompt 与 binding 哈希的 instruction 是两码事」的偷换洞。
+    expected_digest = LLMGateway._prompt_digest(LLMRequest(
+        messages=[LLMMessage(role="user", content=verifier_instruction)],
+        capability=verifier_capability,
+        invocation_id="inv-verifier", **common,
+    ))
+    if verifier_record.prompt_digest != expected_digest:
+        raise SystemExit(
+            "verifier 实发 prompt 与 binding 派生 instruction 的 digest 不一致——"
+            "审查对象被偷换,拒绝产出 evidence"
+        )
 
     binding = bind_review_verifier_record(binding, verifier_record)
     validate_review_subject_binding(
@@ -199,17 +261,45 @@ def run_review(out_dir: Path, *, task: str = BUILDER_TASK,
             "builder_call_ref": binding.builder_call_ref,
             "review_subject_ref": binding.review_subject_ref,
             "verifier_context_ref": binding.verifier_context_ref,
+            "verifier_prompt_digest_expected": expected_digest,
         },
+        "transport_disclosure": (
+            "双 provider 经同一 base_url 中继:上游厂商独立性不可由本脚本证明,"
+            "依赖中继诚实路由(如实披露,用户自判是否可信)"
+            if same_base_relay else "各 provider 独立端点配置"
+        ),
         "records_path": str(out_dir / "llm_call_records.jsonl"),
         "builder_output_excerpt": builder_output[:200],
         "verifier_output_excerpt": verifier_result.response.content[:200],
     }
-    text = json.dumps(evidence, ensure_ascii=False, indent=2)
+    # 密封:与 LLMCallRecord 同一把 HMAC key,evidence 事后被改(如手翻 independent)
+    # 可由 verify_evidence_file 检出——密封 JSONL 与 evidence 不再存在可信度落差。
+    seal = hmac.new(
+        store.seal_secret, _canonical_evidence_bytes(evidence), hashlib.sha256,
+    ).hexdigest()
+    doc = {"evidence": evidence, "evidence_seal": seal,
+           "seal_algo": "hmac-sha256/sorted-compact-json"}
+    text = json.dumps(doc, ensure_ascii=False, indent=2)
     for provider, entry in keys.items():
         if entry["api_key"] in text:  # 不用 assert:-O 剥断言
             raise SystemExit("内部错误:key 泄入证据输出,拒绝落盘")
     (out_dir / "review_evidence.json").write_text(text, encoding="utf-8")
     return evidence
+
+
+def _canonical_evidence_bytes(evidence: dict) -> bytes:
+    return json.dumps(
+        evidence, ensure_ascii=False, sort_keys=True, separators=(",", ":"),
+    ).encode("utf-8")
+
+
+def verify_evidence_file(path: Path, seal_secret: bytes) -> bool:
+    """复验 evidence 密封:True=未被篡改。供审计与测试重验。"""
+    doc = json.loads(Path(path).read_text(encoding="utf-8"))
+    expected = hmac.new(
+        seal_secret, _canonical_evidence_bytes(doc["evidence"]), hashlib.sha256,
+    ).hexdigest()
+    return hmac.compare_digest(expected, str(doc.get("evidence_seal", "")))
 
 
 def main(argv: list[str] | None = None) -> int:
@@ -218,18 +308,16 @@ def main(argv: list[str] | None = None) -> int:
         "--out-dir", required=True,
         help="密封记录与证据输出目录(建议 <repo>/data/datasets/llm_reviews/<ts>,gitignored)",
     )
-    parser.add_argument("--skip-preflight", action="store_true",
-                        help="跳过连通探测直接跑(默认先探测,失败即指路退出)")
     args = parser.parse_args(argv)
-    if not args.skip_preflight:
-        failures = preflight(_load_llm_keys())
-        if failures:
-            for line in failures:
-                print(f"preflight FAIL — {line}", file=sys.stderr)
-            raise SystemExit(
-                "双厂商连通探测未过:修复上述凭据/端点后重跑。"
-                "(应用内真实双模型审查依赖有效的 anthropic+openai 凭据)"
-            )
+    # preflight 不设跳过口:诊断门常开(fail-closed),失败即指路退出
+    failures = preflight(_load_llm_keys())
+    if failures:
+        for line in failures:
+            print(f"preflight FAIL — {line}", file=sys.stderr)
+        raise SystemExit(
+            "双厂商连通探测未过:修复上述凭据/端点后重跑。"
+            "(应用内真实双模型审查依赖有效的 anthropic+openai 凭据)"
+        )
     evidence = run_review(Path(args.out_dir))
     print(json.dumps(evidence, ensure_ascii=False, indent=2))
     return 0 if evidence["independent"] else 2
