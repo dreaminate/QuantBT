@@ -32,20 +32,29 @@ class _FakeResponse:
             self.content = json.dumps(body if body is not None else {"data": []}).encode("utf-8")
         self.closed = False
 
+    def iter_content(self, chunk_size=65536):
+        # 模拟真实 requests 流式读；分块吐出(证明流式上限按块生效、内存有界)
+        data = self.content
+        for i in range(0, len(data), chunk_size):
+            yield data[i:i + chunk_size]
+
     def close(self):
         self.closed = True
 
 
 class _FakeSession:
-    """记录 get 调用(url/headers/allow_redirects);按 url 返回预置响应。"""
+    """记录 get 调用(url/headers/allow_redirects/stream);按 url 返回预置响应。"""
 
     def __init__(self, responses=None, default=None):
         self.responses = responses or {}
         self.default = default
         self.calls = []
 
-    def get(self, url, headers=None, timeout=None, allow_redirects=None):
-        self.calls.append({"url": url, "headers": headers or {}, "allow_redirects": allow_redirects})
+    def get(self, url, headers=None, timeout=None, allow_redirects=None, stream=None):
+        self.calls.append({
+            "url": url, "headers": headers or {},
+            "allow_redirects": allow_redirects, "stream": stream,
+        })
         resp = self.responses.get(url, self.default)
         if resp is None:
             resp = _FakeResponse(200, {"data": []})
@@ -84,6 +93,13 @@ def test_fetch_live_never_follows_redirect_flag():
     sess = _FakeSession(default=_FakeResponse(200, {"data": []}))
     mc.fetch_live_models("openai", "https://api.openai.com/v1", "sk-x", session=sess)
     assert sess.calls[0]["allow_redirects"] is False
+
+
+def test_fetch_live_uses_stream_for_bounded_memory():
+    # stream=True + 按块累计上限：内存有界(chunked 恶意 body 也挡得住)
+    sess = _FakeSession(default=_FakeResponse(200, {"data": []}))
+    mc.fetch_live_models("openai", "https://api.openai.com/v1", "sk-x", session=sess)
+    assert sess.calls[0]["stream"] is True
 
 
 def test_fetch_live_rejects_redirect():
@@ -223,8 +239,26 @@ def test_list_models_live_failure_falls_back_to_curated_fallback():
     )
     row = {r["provider"]: r for r in out}["openai"]
     assert row["authed"] is True
+    assert row["source"] == "curated_fallback"  # 行级 source 如实：不是 live
     assert all(m["source"] == "curated_fallback" for m in row["models"])
     assert all(m["supports_tools"] is True for m in row["models"])  # api-key 路径仍支持 tools
+
+
+def test_cache_hit_after_live_failure_never_reports_live():
+    """[对抗·假绿灯] 上游挂掉→curated_fallback;negative-TTL 窗口内缓存命中的第 2 次
+    请求绝不能把 fallback 谎报成 source=live(撞 §3;此前 auth_kind 反推的 bug)。"""
+    sess = _FakeSession(default=requests.ConnectionError("upstream down"))
+    cat = mc.ModelCatalog(session=sess, now=_Clock())
+    args = dict(
+        providers_status=[_status("openai", configured=True, base_url="https://api.openai.com/v1")],
+        subscription_status={},
+        key_lookup=lambda p: "sk-real",
+    )
+    first = {r["provider"]: r for r in cat.list_models(**args)}["openai"]
+    second = {r["provider"]: r for r in cat.list_models(**args)}["openai"]  # 缓存命中
+    assert first["source"] == "curated_fallback"
+    assert second["source"] == "curated_fallback"  # 命中也如实,绝不谎报 live
+    assert len(sess.calls) == 1  # 第二次确实走缓存(negative-TTL 内不重拉)
 
 
 def test_cache_hit_avoids_second_fetch():

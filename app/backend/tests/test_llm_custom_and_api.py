@@ -354,6 +354,7 @@ def test_get_llm_models_requires_auth(monkeypatch) -> None:
 def test_get_llm_models_unauthed_providers_empty(isolated_client, monkeypatch) -> None:
     """无 api-key、无订阅 → 每厂 authed=false、模型不可选、零 live 请求（订阅探测 patched）。"""
     client, keystore, registry = isolated_client
+    main._invalidate_llm_catalog_caches()  # 清订阅探测 TTL 缓存(模块级,防跨测试污染)
     # patch 订阅探测(否则跑真 CLI subprocess,依赖测试机是否登录→flaky)
     monkeypatch.setattr(
         "app.agent.subscription_cli_llm.auth_status_all",
@@ -382,6 +383,7 @@ def test_get_llm_models_unauthed_providers_empty(isolated_client, monkeypatch) -
 def test_get_llm_models_subscription_curated(isolated_client, monkeypatch) -> None:
     """订阅登录的厂商 → curated 模型、supports_tools=false、不打厂商 /models。"""
     client, keystore, registry = isolated_client
+    main._invalidate_llm_catalog_caches()
     monkeypatch.setattr(
         "app.agent.subscription_cli_llm.auth_status_all",
         lambda **kw: [
@@ -404,3 +406,53 @@ def test_get_llm_models_subscription_curated(isolated_client, monkeypatch) -> No
     assert rows["anthropic"]["auth_kind"] == "subscription_cli"
     assert rows["anthropic"]["models"]
     assert all(m["supports_tools"] is False for m in rows["anthropic"]["models"])
+
+
+def test_get_llm_models_subscription_probe_ttl_cached(isolated_client, monkeypatch) -> None:
+    """[DoS 修复] 订阅探测(spawn subprocess)加 TTL 缓存：两次请求只探一次。"""
+    client, keystore, registry = isolated_client
+    main._invalidate_llm_catalog_caches()
+    calls = {"n": 0}
+
+    def _probe(**kw):
+        calls["n"] += 1
+        return [{"provider": "anthropic", "subscription_authed": False},
+                {"provider": "openai", "subscription_authed": False}]
+
+    monkeypatch.setattr("app.agent.subscription_cli_llm.auth_status_all", _probe)
+    from app.llm.model_catalog import ModelCatalog
+    monkeypatch.setattr(main, "_MODEL_CATALOG", ModelCatalog(session=object()))
+
+    client.get("/api/llm/models")
+    client.get("/api/llm/models")
+    assert calls["n"] == 1  # 第二次命中 60s TTL 缓存,不再 spawn subprocess
+
+
+def test_configure_invalidates_model_catalog_cache(isolated_client, monkeypatch) -> None:
+    """[缓存失效] /api/llm/configure 后订阅探测缓存被清,下次请求重探。"""
+    client, keystore, registry = isolated_client
+    main._invalidate_llm_catalog_caches()
+    calls = {"n": 0}
+
+    def _probe(**kw):
+        calls["n"] += 1
+        return [{"provider": "anthropic", "subscription_authed": False},
+                {"provider": "openai", "subscription_authed": False}]
+
+    monkeypatch.setattr("app.agent.subscription_cli_llm.auth_status_all", _probe)
+
+    import requests as _rq
+
+    class _FailSession:  # configure 后 anthropic 变 api-configured→会 live fetch;让它优雅失败到 curated_fallback
+        def get(self, *a, **k):  # noqa: ANN001
+            raise _rq.ConnectionError("no net in test")
+
+    from app.llm.model_catalog import ModelCatalog
+    monkeypatch.setattr(main, "_MODEL_CATALOG", ModelCatalog(session=_FailSession()))
+
+    client.get("/api/llm/models")
+    assert calls["n"] == 1
+    # configure 应失效缓存
+    client.post("/api/llm/configure", json={"provider": "anthropic", "api_key": "sk-x"})
+    client.get("/api/llm/models")
+    assert calls["n"] == 2  # 缓存已清,重探

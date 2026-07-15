@@ -93,6 +93,29 @@ def _parse_model_ids(provider: str, body: Any) -> list[str]:
     return ids
 
 
+def _read_capped(resp: Any, cap: int) -> bytes | None:
+    """流式读响应体，累计超 cap 立即返回 None（内存有界，不预读整个 body）。
+
+    兼容真实 requests（stream=True 时有 iter_content）与测试 fake。chunked 无 Content-Length
+    也挡得住：按块累加，超限即止，不会把 10GB 恶意 body 吃进内存。
+    """
+    reader = getattr(resp, "iter_content", None)
+    if callable(reader):
+        chunks: list[bytes] = []
+        total = 0
+        for chunk in reader(chunk_size=65536):
+            if not chunk:
+                continue
+            total += len(chunk)
+            if total > cap:
+                return None  # 超上限：立即中止，已读部分丢弃
+            chunks.append(chunk)
+        return b"".join(chunks)
+    # 退化路径（无 iter_content 的对象）：仍按长度硬拦
+    content = getattr(resp, "content", b"") or b""
+    return None if len(content) > cap else content
+
+
 def fetch_live_models(
     provider: str,
     base_url: str,
@@ -118,6 +141,7 @@ def fetch_live_models(
         headers=_auth_headers(provider, api_key),
         timeout=timeout,
         allow_redirects=False,  # 禁 redirect：3xx 直接拒，绝不把凭据 header 跟到重定向目标
+        stream=True,  # 流式：配合按块累计上限，内存真正有界（不把整个 body 预读进 RAM）
     )
     try:
         status = int(getattr(resp, "status_code", 0) or 0)
@@ -133,9 +157,10 @@ def fetch_live_models(
             declared = 0
         if declared > MAX_MODELS_BODY_BYTES:
             raise LiveModelsError(f"{provider} /models 响应声明 {declared}B 超上限（拒）")
-        content = resp.content or b""
-        if len(content) > MAX_MODELS_BODY_BYTES:
-            raise LiveModelsError(f"{provider} /models 响应 {len(content)}B 超上限（拒）")
+        # 按块累计，超上限立即中止——chunked（无 Content-Length）恶意灌注也挡得住，内存有界。
+        content = _read_capped(resp, MAX_MODELS_BODY_BYTES)
+        if content is None:
+            raise LiveModelsError(f"{provider} /models 响应流超上限（拒，防内存耗尽）")
         try:
             body = json.loads(content.decode("utf-8"))
         except (ValueError, UnicodeDecodeError) as exc:
@@ -200,6 +225,8 @@ def assemble_curated_entries(
 class _CacheSlot:
     expires_at: float
     entries: tuple[ModelEntry, ...]
+    row_source: str  # 行级 source(live|curated|curated_fallback)——命中时读回，绝不用 auth_kind 反推
+    live_ok: bool
 
 
 def _config_revision(configured: bool, base_url: str, model: str, sub_authed: bool) -> str:
@@ -208,8 +235,12 @@ def _config_revision(configured: bool, base_url: str, model: str, sub_authed: bo
 
 
 def _redacted_base(base_url: str) -> str:
+    """缓存分桶用的 host[:port]——去掉 userinfo（user:pass@），名副其实「已脱敏」。"""
     try:
-        return urlsplit(base_url).netloc or "?"
+        sp = urlsplit(base_url)
+        host = sp.hostname or "?"
+        port = f":{sp.port}" if sp.port else ""
+        return f"{host}{port}"
     except ValueError:
         return "?"
 
@@ -234,9 +265,10 @@ class ModelCatalog:
         self._negative_ttl = negative_ttl
         self._cache: dict[str, _CacheSlot] = {}
         self._lock = threading.Lock()
+        self._inflight: dict[str, threading.Lock] = {}  # single-flight：per-key 拉取锁
 
     def invalidate(self) -> None:
-        """configure / revoke / 订阅登录成功后调，强制下次重拉。"""
+        """configure / revoke / 订阅登录成功后调，强制下次重拉（清缓存）。"""
         with self._lock:
             self._cache.clear()
 
@@ -249,29 +281,34 @@ class ModelCatalog:
         model: str,
         sub_authed: bool,
         key_lookup: Callable[[str], Optional[str]],
-    ) -> tuple[list[ModelEntry], bool, bool]:
-        """→ (entries, authed, live_ok)。api-key 优先；订阅补 api-key 缺位的厂（no-mix 单路由）。"""
+    ) -> tuple[list[ModelEntry], bool, bool, str]:
+        """→ (entries, authed, live_ok, row_source)。api-key 优先；订阅补 api-key 缺位的厂（no-mix 单路由）。
+
+        row_source ∈ {none, live, curated_fallback, curated}——**如实**反映本次到底是 live 还是兜底，
+        随 slot 落缓存，命中时读回（不再用 auth_kind 反推，杜绝把 fallback 谎报成 live）。
+        """
         authed = api_configured or sub_authed
         if not authed:
-            return [], False, False
+            return [], False, False, "none"
         if api_configured:
-            # api-key 路径优先：live 拉；失败 → curated_fallback（supports_tools 仍 True）
+            # api-key 路径优先：live 拉；失败 → curated_fallback（supports_tools 仍 True，但 source 如实标）
             try:
                 api_key = key_lookup(provider) or ""
                 live_ids = fetch_live_models(
                     provider, base_url or "", api_key, session=self._session,
                 )
-                return assemble_live_entries(provider, live_ids), True, True
+                return assemble_live_entries(provider, live_ids), True, True, "live"
             except (LiveModelsError, requests.RequestException):
                 fallback = assemble_curated_entries(
                     provider, auth_kind="api_key", source="curated_fallback",
                 )
-                return fallback, True, False
+                return fallback, True, False, "curated_fallback"
         # 仅订阅：curated（supports_tools=false）
         return (
             assemble_curated_entries(provider, auth_kind="subscription_cli", source="curated"),
             True,
             False,
+            "curated",
         )
 
     def list_models(
@@ -298,39 +335,66 @@ class ModelCatalog:
             authed = api_configured or sub_authed
             auth_kind = "api_key" if api_configured else ("subscription_cli" if sub_authed else "none")
             rev = _config_revision(api_configured, base_url, model, sub_authed)
-            cache_key = f"{provider}|{auth_kind}|{_redacted_base(base_url)}|{rev}"
 
-            entries: list[ModelEntry]
-            live_ok = False
             if not authed:
-                entries = []
-            else:
-                slot = self._get_slot(cache_key)
-                if slot is not None:
-                    entries = list(slot.entries)
-                    live_ok = auth_kind == "api_key"
-                else:
-                    entries, _authed, live_ok = self._provider_entries(
-                        provider,
-                        api_configured=api_configured,
-                        base_url=base_url,
-                        model=model,
-                        sub_authed=sub_authed,
-                        key_lookup=key_lookup,
-                    )
-                    ttl = self._live_ttl if live_ok else self._negative_ttl
-                    self._put_slot(cache_key, tuple(entries), ttl)
+                result.append({
+                    "provider": provider, "auth_kind": "none", "authed": False,
+                    "selectable": False, "source": "none",
+                    "catalog_revision": rev, "models": [],
+                })
+                continue
 
+            cache_key = f"{provider}|{auth_kind}|{_redacted_base(base_url)}|{rev}"
+            slot = self._get_or_fetch(
+                cache_key,
+                # 同步在本次迭代内执行,闭包捕获当前 provider/base 无 late-binding 问题
+                lambda p=provider, ak=api_configured, bu=base_url, md=model, sa=sub_authed: self._provider_entries(
+                    p, api_configured=ak, base_url=bu, model=md, sub_authed=sa, key_lookup=key_lookup,
+                ),
+            )
             result.append({
                 "provider": provider,
                 "auth_kind": auth_kind,
-                "authed": authed,
-                "selectable": authed and any(e.selectable for e in entries),
-                "source": ("live" if live_ok else ("curated" if authed else "none")),
+                "authed": True,
+                "selectable": any(e.selectable for e in slot.entries),
+                "source": slot.row_source,  # 如实：命中也读回真实 source,fallback 绝不谎报 live
                 "catalog_revision": rev,
-                "models": [e.to_dict() for e in entries],
+                "models": [e.to_dict() for e in slot.entries],
             })
         return result
+
+    def _get_or_fetch(
+        self,
+        cache_key: str,
+        fetch_fn: Callable[[], tuple[list[ModelEntry], bool, bool, str]],
+    ) -> _CacheSlot:
+        """缓存命中即返回；miss 时 single-flight（同 key 只一个线程真拉，其余等它），再落缓存。"""
+        slot = self._get_slot(cache_key)
+        if slot is not None:
+            return slot
+        with self._inflight_lock(cache_key):
+            slot = self._get_slot(cache_key)  # 双检：等锁期间别人可能已填
+            if slot is not None:
+                return slot
+            entries, _authed, live_ok, row_source = fetch_fn()
+            ttl = self._live_ttl if live_ok else self._negative_ttl
+            slot = _CacheSlot(
+                expires_at=self._now() + ttl,
+                entries=tuple(entries),
+                row_source=row_source,
+                live_ok=live_ok,
+            )
+            with self._lock:
+                self._cache[cache_key] = slot
+            return slot
+
+    def _inflight_lock(self, cache_key: str) -> threading.Lock:
+        with self._lock:
+            lk = self._inflight.get(cache_key)
+            if lk is None:
+                lk = threading.Lock()
+                self._inflight[cache_key] = lk
+            return lk
 
     def _get_slot(self, key: str) -> _CacheSlot | None:
         with self._lock:
@@ -341,10 +405,6 @@ class ModelCatalog:
                 self._cache.pop(key, None)
                 return None
             return slot
-
-    def _put_slot(self, key: str, entries: tuple[ModelEntry, ...], ttl: float) -> None:
-        with self._lock:
-            self._cache[key] = _CacheSlot(expires_at=self._now() + ttl, entries=entries)
 
 
 def _default_base(provider: str) -> str:

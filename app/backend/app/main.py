@@ -14114,6 +14114,41 @@ def _catalog_key_lookup(provider: str) -> str | None:
         return None
 
 
+# 订阅登录态探测(spawn claude/codex CLI subprocess)加 ~60s TTL 缓存：防 /api/llm/models
+# 每请求都打 2 个子进程(≤40s，DoS/延迟放大面)。探测失败时复用上次成功结果——已登录的订阅
+# 不该因一次 subprocess 抖动凭空消失；从没成功过才退化为空(fail-closed：少显模型而非多显)。
+_SUB_STATUS_CACHE: dict[str, Any] = {"ts": 0.0, "val": None}
+_SUB_STATUS_TTL_SECONDS = 60.0
+
+
+def _cached_subscription_status() -> dict[str, bool]:
+    import time as _time
+
+    from .agent.subscription_cli_llm import auth_status_all
+
+    now = _time.monotonic()
+    cached = _SUB_STATUS_CACHE.get("val")
+    if cached is not None and (now - float(_SUB_STATUS_CACHE.get("ts") or 0.0)) < _SUB_STATUS_TTL_SECONDS:
+        return cached
+    try:
+        val = {r["provider"]: bool(r.get("subscription_authed")) for r in auth_status_all()}
+        _SUB_STATUS_CACHE["val"] = val
+        _SUB_STATUS_CACHE["ts"] = now
+        return val
+    except Exception:  # noqa: BLE001 —— 探测失败不炸目录：复用上次成功，没有则空(fail-closed)
+        return cached if cached is not None else {}
+
+
+def _invalidate_llm_catalog_caches() -> None:
+    """configure/revoke/订阅登录成功后调：清模型目录缓存 + 订阅探测缓存，下次请求重算。"""
+    try:
+        _model_catalog().invalidate()
+    except Exception:  # noqa: BLE001
+        pass
+    _SUB_STATUS_CACHE["val"] = None
+    _SUB_STATUS_CACHE["ts"] = 0.0
+
+
 @app.get("/api/llm/models")
 def llm_models(user=Depends(require_user_dependency)) -> dict:
     """列出每个已 auth 厂商的可选模型（跨厂商切模型选择器用）。
@@ -14121,20 +14156,13 @@ def llm_models(user=Depends(require_user_dependency)) -> dict:
     api-key 厂商 live 拉 /models；订阅厂商 curated。未 auth 厂商 authed=false、模型不可选。
     key 只 server 端用于拉取，绝不回显。
     """
-    from .agent.subscription_cli_llm import auth_status_all
-
     _ = _formal_owner_user_id(user)
     providers_status = list_llm_status(
         KEYSTORE,
         onboarding_registry=ONBOARDING_REGISTRY,
         owner_user_id=_LLM_SERVICE_PRINCIPAL,
     )
-    try:
-        subscription_status = {
-            r["provider"]: bool(r.get("subscription_authed")) for r in auth_status_all()
-        }
-    except Exception:  # noqa: BLE001 —— 订阅探测(subprocess)失败不炸整个目录，退化为无订阅
-        subscription_status = {}
+    subscription_status = _cached_subscription_status()
     providers = _model_catalog().list_models(
         providers_status=providers_status,
         subscription_status=subscription_status,
@@ -15006,6 +15034,8 @@ def llm_configure(
         owner=service_owner,
         replace_secret=True,
     )
+    # 配置变了(含纯 api_key 轮换)→失效模型目录缓存,下次 /api/llm/models 重拉(否则最长 300s 陈旧)。
+    _invalidate_llm_catalog_caches()
     return {"configured": provider, "base_url": base_url, "model": model, "settings_refs": settings_refs}
 
 
