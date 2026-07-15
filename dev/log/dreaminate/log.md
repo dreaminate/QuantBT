@@ -6,6 +6,11 @@
 ## <日期> · <标题>
 - 建/改了什么 + 命门  - 验收：<对抗测试 + 变异 + 全量数字>  - 下一步：<…> -->
 
+## 2026-07-14-2150 前端 bundle 拆分 land + 卡 861182e6 测绘
+- vite manualChunks:单 2,557.79 kB JS→9 可缓存 chunk(echarts 1.38MB 隔离/index 813/react-vendor 142/…);react 系同 chunk 防多实例;build 绿+423 前端测试 passed(worktree npm ci 装依赖后真跑)
+- 边界诚实:首屏字节未减(echarts 只 RunDetailPage 用,该页 §M15 唯一冻结例外、eager);lazy-load 需碰冻结面=用户拍板项,登记非阻塞
+- 卡 861182e6(CPCV→gate)Explore 测绘:①/② 机制层已 done(gate 已消费 cpcv_distribution+policy+降级),真缺口=③双轨 report+cv_scheme 一等模式(跨层)+DSR 口径(方法学)+backtest 生产者;横跨前端/方法学/跨层重构,暂缓
+
 ## 2026-07-14-2129 FastAPI on_event→lifespan 迁移 land + 切片② CI 确认绿
 - main.py @app.on_event(startup/shutdown)→_app_lifespan asynccontextmanager;try/finally 无条件 shutdown 严格等价旧 _DefaultLifespan.__aexit__;startup_event/shutdown_event 保留模块级函数(直调不破)
 - codex(gpt-5.6-sol ultra)复核首轮 REJECT 两真缺陷(serving 异常 shutdown 被跳过/缺'真绑 app'牙)→try/finally+2 新测修复→修复轮 APPROVE;test_app_lifespan 5 测

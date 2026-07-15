@@ -79,9 +79,25 @@
   _DefaultLifespan.__aexit__)。codex 复核首轮 REJECT 两点(serving 异常 shutdown 被跳过/
   缺"真绑 app"牙)→修复轮 APPROVE。test_app_lifespan.py 5 测(顺序/无 legacy/真绑 app/
   startup 异常外传/serving 异常仍 shutdown)。后端全量 6356 passed。
-- **下一步(优先序)**:① 切片②真实调用(待用户凭据,非阻塞) ② 用户可感知面
-  (Run 首屏门/前端 bundle 拆分,CEO 声道战略提示) ③ pool 三张 eval 卡 + 8be0e547
-  机制层加固 ④ validate_dev 两 warning(state.md 蒸馏归档) ⑤ 90+ worktree 盘点(只列)。
+- **前端 bundle 拆分已 land**(分支 slice/frontend-bundle-split,commit 593ffa02):
+  vite manualChunks 把单 2,557.79 kB JS chunk→9 可缓存 chunk(echarts 1.38MB 隔离/
+  app 码 index 813.82/react-vendor 142.40/recharts 62.60/vendor 98.92/query 35.59/
+  router 13.59)。铁律守 react/react-dom/scheduler 同 chunk(防多实例)。build 绿+423 前端
+  测试全 passed。**边界**:首屏字节未减——echarts 只在 RunDetailPage 用,但该页是 GOAL §M15
+  「唯一冻结例外」旧 SPA、eager 加载;lazy-load 需碰冻结面=**用户拍板项(登记,非阻塞)**。
+- **worktree 已装前端 node_modules**(npm ci 206 包,gitignored):前端最低验证门(test:run/
+  build)本 worktree 从此可真跑,不再靠上次 CI 承接。
+- **卡 861182e6(CPCV→gate)已测绘,发现比表面大**:①/② 机制层其实**已 done**(overfit_gate
+  run_overfit_gate 已消费 cpcv_distribution+cpcv_policy report_only/cpcv_conservative 降级、
+  gate_runner/promote 透传已接)。真缺口=③双轨 report 全无(有前端件)+cv_scheme=cpcv 作
+  一等模式(跨 3 层训练重构,train_model 单路径 concat≠CPCV 多路径)+DSR 口径未实现(现 gate
+  消费 r2/auc 的 q05 非 Sharpe/DSR,DSR 转换=方法学 follow-on=用户的选择)+backtest promote
+  生产者未喂 cpcv_distribution(管线在数据源缺)。**横跨前端+方法学+跨层重构,非干净后端切片,
+  暂缓**;测绘全档见本轮 Explore。
+- **下一步(优先序)**:① 切片②真实调用(待用户凭据,非阻塞) ② validate_dev 两 warning
+  (state.md 蒸馏归档,纯 dev/ 可自决) ③ Run 首屏门(§16 KNOWN_RUN_GAP,需 Playwright 实测)
+  ④ 8be0e547 机制层加固(P1,duet) ⑤ 90+ worktree 盘点(只列)。前端 eval 卡 UI 件与 echarts
+  lazy 归用户拍板类。
 
 ## 待裁 / 卡点
 - **[待用户复核] 研究面质量门 scope 裁定**:codex 轮7 最终 reject(对抗性标准) vs operator

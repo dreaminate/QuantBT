@@ -40,7 +40,7 @@
 | §7/§8 dual-model 应用内接线(脚本化端到端) | 🟡 | scripts/dual_model_review.py:secrets 窄读→内存 keystore→build_agent_llm_gateway→builder(anthropic)→binding→verifier(openai,independence_required)→HMAC 密封记录+独立性判定;test_dual_model_review_script 36 passed(桩注入,零网络);codex 九轮对抗全修+回归钉死。**真实跨厂商调用待用户凭据**(本机中继 key 双 401);机制级残余(binding 绑 adapter 实发/身份可验证)=卡 8be0e547 |
 | CI(GitHub Actions) | ✅ | .github/workflows/ci.yml 双 job;run 29377617245 gh 实查 success:后端 6315 passed/0 failed(17:18)+前端 423+build;七轮迭代账目在 log/证据包 |
 | FastAPI on_event→lifespan 迁移 | ✅ | main.py _app_lifespan asynccontextmanager(try/finally 无条件 shutdown 等价旧 _DefaultLifespan.__aexit__);test_app_lifespan 5 passed;codex 修复轮 APPROVE(commit f8d1f1cd+d940aed3) |
-| 前端 bundle 拆分 | ⬜ | 已知本地 gap(2,557.79 kB/gzip 767.39),排队中 |
+| 前端 bundle 拆分 | ✅ | vite manualChunks:单 2,557.79 kB JS→9 可缓存 chunk(echarts 1.38MB/index 813/react-vendor 142/…);build 绿+423 前端测试 passed(commit 593ffa02)。边界:首屏字节未减(echarts 随 §M15 冻结页 eager),lazy-load=用户拍板 |
 
 ## 下一步
 - 切片②真实调用待用户凭据(非阻塞)→ 用户可感知面(Run 首屏门/前端 bundle 拆分)→ FastAPI
