@@ -1,6 +1,7 @@
 import { useCallback, useEffect, useRef, useState } from "react";
 import { useSearchParams } from "react-router-dom";
 import { authFetch, getStoredUser, getToken } from "../../lib/auth";
+import ModelSwitcher from "./ModelSwitcher";
 
 /**
  * v0.8.6 · 诊断台多轮研究问答 (/chat)
@@ -327,6 +328,10 @@ export function Mode2ChatPage() {
                     state: {activeThread.state} · {activeThread.market_mode}
                     {activeThread.active_run_id && ` · run=${activeThread.active_run_id.slice(0, 12)}`}
                   </span>
+                </div>
+                {/* 跨厂商切模型 S7：每对话模型切换器（下一条消息即生效） */}
+                <div className="cc-row" style={{ justifyContent: "flex-end", marginTop: 4 }}>
+                  <ModelSwitcher threadId={activeThread.thread_id} />
                 </div>
               </div>
               <div style={{ flex: 1, overflow: "auto", padding: 12 }}>
