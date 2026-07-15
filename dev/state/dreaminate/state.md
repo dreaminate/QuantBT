@@ -14,10 +14,9 @@
 - **六字段**:1 Local checkout=slice/model-switch-crossvendor @ **21a14abd**(= origin/main,干净;**F3 §11 完整性门(918daf7f)** + UI 路由文档同步 desk 架构(21a14abd,能信/onboarding 准确性,纯文档));
   2 Remote=**origin/main 同 21a14abd**;
   3 Local tests=**后端全量 6487 passed/13 skipped/0 failed**(真汇总行,508s 实跑)+ perf harness 72 passed + 前端 40 files/430 passed + build ✓;
-  4 CI=**passed(F3 码)+文档 commit CI flake 重跑中**(gh 实查:**b998f7ee[=F3 码] completed success**,19min=代码真绿;
-  文档 commit 1a8b2cff CI 首跑 backend **6486 passed/1 failed**,唯一 fail=`test_training_runner::test_service_code_path_succeeds`
-  训练子进程 300s 超时被杀[慢 2 核 runner 资源边际 flake·非逻辑断言],**backend 码与 b998f7ee 逐字节相同**[文档 commit 零码改]→
-  flake 非回归,`gh run rerun --failed` 重跑中);5 Production=Unqueried;6 User acceptance=**Unverified**。
+  4 CI=**passed**(gh 实查:**b998f7ee[=F3 码] completed success**,19min + **25dac5af[=最新·F3 码+全 docs] completed success**=代码真绿;
+  中途文档 commit 1a8b2cff CI 首跑撞 `test_training_runner::test_service_code_path_succeeds` 训练子进程 300s 超时[慢 2 核 runner 资源边际 flake·
+  非逻辑断言·backend 码逐字节同 b998f7ee 绿],`gh run rerun` 后 25dac5af 全绿=**证实 flake 非回归**);5 Production=Unqueried;6 User acceptance=**Unverified**。
   本 session 累计 land 进 main:S6 订阅 in-app 登录(656c85eb)·§11 PIT(0c926235)·F1 建侧(a2b6d534)·**F3 读侧完整性门(918daf7f,3 轮跨厂商 SOUND)**。
 - **audit 基线四项**(不变):61 files / 20,339 lines / 26,209,663 bytes / sha `1c1788b0bbe2`。(改动全在 app/scripts/docs/dev,基线按构造不变。)
 - **✅ F3 §11 读侧 manifest 完整性门已 land(918daf7f,3 轮跨厂商 SOUND)**:真实 ashare_hs300 读价【前】拿磁盘字节 re-verify
