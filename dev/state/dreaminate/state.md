@@ -18,9 +18,14 @@
   success(headSha 0ea40818,后端+前端+build);5 Production=Unqueried;6 User acceptance=Unverified。
 - **audit 基线四项**(不变):61 files / 20,339 lines / 26,209,663 bytes / sha `1c1788b0bbe2`。
   (本切片改动全在 app/backend/scripts/docs/dev,不跑数据管线,基线按构造不变。)
-- **断点**:切片② 已全绿落 main+CI 验证。**当前战役**=Claudian 式「每对话跨厂商切模型」
-  (用户拍板:每对话独立选/动态拉模型/内嵌订阅登录)。设计走 duet(deep-opus 已回·codex 跑中),
-  待三方并集裁决→拆 S1~S6 切片(见 frontier)→ **ultracode 已开,实现走 workflow 编排+对抗验证**。
+- **断点**:切片② 已全绿落 main+CI 验证。**当前战役**=Claudian 式「每对话跨厂商切模型」(卡
+  db95c0c6,in_progress)。**duet 三方裁决已完成**,实现蓝图落 main:
+  `dev/research/findings/dreaminate/model-switch-crossvendor-design-20260715.md`(codex 对抗复审逮
+  4 关键修正:主链走 GatewayLLMAdapter/订阅-only 卡 Settings preflight/订阅拒 tools 只跑无工具对话/
+  setup-token 泄 token 改 auth login--claudeai+codex login--device-auth)。**下一 tick 起 S1**:
+  新建 app/backend/app/llm/model_catalog.py + GET /api/llm/models(api-key 真拉 base.rstrip('/')+/models、
+  订阅 curated 兜底、TTL、auth 门控、非聊天模型 selectable=false)+ 对抗测试,过四门。
+  分支 slice/model-switch-crossvendor(已 push);顺序 S1(∥S2)→S3→S4→S5→S6→S7。ultracode 已开,S1 落码后走对抗验证。
 
 ## 状态表（确定的才标 ✅,证据必挂）
 | 子系统/能力 | 状态 | 证据 |
