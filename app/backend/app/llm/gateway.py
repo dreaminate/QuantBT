@@ -438,6 +438,7 @@ class LLMGateway:
         if (
             self._default_pin is not None
             and not req.independence_required
+            and not _is_verifier(req.role)  # 纵深:role 是 verifier/critic 也不盖章(即便漏设 independence 标志)
             and not req.pin_provider
         ):
             req = replace(req, pin_provider=self._default_pin[0], pin_model=self._default_pin[1])
@@ -596,6 +597,7 @@ class LLMGateway:
             decision,
             events,
             builder_signature,
+            effective_capability=req,  # 盖章后的 capability(含 default_pin)——贯穿 fallback,防 pin 蒸发
             started=started,
             t0=t0,
             invocation_id=invocation_id,
@@ -1043,6 +1045,7 @@ class LLMGateway:
         events: list[LLMGatewayEvent],
         builder_signature: tuple[str, str] | None,
         *,
+        effective_capability: RoleCapabilityRequest,
         started: str,
         t0: float,
         invocation_id: str,
@@ -1051,7 +1054,10 @@ class LLMGateway:
         audit_records: list[LLMCallRecord],
         sink: Callable[[LLMCallRecord], None] | None,
     ) -> tuple[LLMResponse, RoutingDecision, MaterializedCredential, bool, list[str], int]:
-        req = request.capability
+        # 跨厂商切模型 S3a 命门修复：用**盖章后**的 effective_capability(含 default_pin)驱动
+        # degrade 校验 + _refallback 重 resolve——否则 fallback 会重读原始未盖章 capability、
+        # pin 蒸发 → 静默跨厂商泄漏(S3a skeptic CRITICAL-1)。record 仍读原始 request.capability 保诚实。
+        req = effective_capability
         excluded: set[tuple[str, str]] = set()
         fallback_chain: list[str] = []
         fallback_used = False

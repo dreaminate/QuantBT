@@ -1184,3 +1184,51 @@ def test_request_own_pin_not_overridden_by_default_pin():
     )
     res = gw.complete(req)
     assert res.record.provider == "openai"  # 请求自带 pin 赢
+
+
+class _RaiseOnChat:
+    provider = "stub"
+
+    def chat(self, messages, *, tools=None, model=None, temperature=0.2):
+        raise RuntimeError("provider down")
+
+
+def test_default_pin_failure_fails_closed_never_crossvendor():
+    """[命门·CRITICAL-1 变异门] default_pin 厂商首刺失败时,fallback 绝不静默跨到别厂商——
+    必 fail-closed 抛 GatewayError。若盖章 req 没贯穿 _invoke_with_fallback(bug),这里会落 openai
+    并返回,测试变红。"""
+    profiles = _profiles_two_strong()  # anthropic + openai 都 STRONG
+    # pin 厂商 anthropic 的 client 打不通;openai 健康
+    factory = lambda cred: (_RaiseOnChat() if cred.provider == "anthropic" else StubLLMClient(content="RESP-OPENAI"))  # noqa: E731
+    gw = _gateway_pin(profiles, ("anthropic", "claude-opus-4"), factory=factory)
+    with pytest.raises(GatewayError):
+        gw.complete(_req(role="reporter", difficulty="hard"))
+
+
+def test_gateway_stamp_isolated_verifier_capability_has_no_pin():
+    """[MEDIUM-2] 直接隔离 gateway 层守卫:独立 verifier 请求递给 policy.resolve 的 capability
+    的 pin_provider 必须为 None(gateway 没盖章)——不靠 routing 层兜底,单独钉死 gateway 守卫。"""
+    profiles = _profiles_two_strong()
+
+    class _SpyPolicy(ModelRoutingPolicy):
+        def __init__(self, profs, **kw):
+            super().__init__(profs, **kw)
+            self.seen = []
+
+        def resolve(self, req, **kw):
+            self.seen.append(req)
+            return super().resolve(req, **kw)
+
+    ks = _seed_keystore(profiles)
+    pool = _build_pool(profiles, ks)
+    spy = _SpyPolicy(profiles)
+    gw = LLMGateway(policy=spy, credential_pool=pool,
+                    client_factory=lambda c: StubLLMClient(content="ok"),
+                    default_pin=("anthropic", "claude-opus-4"))
+    # builder 先建 session 基准
+    gw.complete(_req(role="factor_engineer", difficulty="hard", session="sv"))
+    gw.complete(_req(role="verifier", difficulty="hard", independence=True, session="sv"))
+    # 最后一次 resolve 是 verifier 的:它的 capability 绝不能带 pin(gateway 层未盖章)
+    verifier_caps = [c for c in spy.seen if c.independence_required]
+    assert verifier_caps, "应有独立请求进入 resolve"
+    assert all(c.pin_provider is None for c in verifier_caps)
