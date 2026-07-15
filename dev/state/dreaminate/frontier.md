@@ -47,10 +47,14 @@
   制品=后续);_sha256_of_frame 依赖 polars IPC 编码稳定(共享基建,勿单方动);
   DatasetVersion.to_dict schema 演化会破旧 receipt 重算(共享基建,记录待改);
   build 非版本寻址目录(重跑覆盖旧产物,门会拦但旧证毁);Run first-screen 门=harness 第二 gap(另卡)。
-- **下一步(优先序)**:① 卡 39d08df8 收口:研究面资产注册+探针 #6/#7 ② 切片③ CI 接入
-  (GitHub Actions+gh 真查,CI 字段才能脱离 Unqueried) ③ 切片② dual-model gate 应用内跨厂商接线
-  ④ state.md 蒸馏归档(validate 两 ⚠️) ⑤ pool 三张 eval 卡。CEO 声道战略提示已记:下一波优先
-  用户可感知面(Run 首屏/前端 bundle),数据溯源线到此为止别继续递归加固。
+- **切片③ CI ✅ 完成(2026-07-15Z)**:run7 29377617245 success(后端 6315/0+前端 423+build)。
+  七轮迭代全录:run1 python-multipart 洗白→run2 xgboost/torch/reportlab 洗白(44败)→
+  run3 我的空 pin 失误→run4 polars/pyarrow pin 过期+pypdf/catboost/tesseract(7败)→
+  run5 时间炸弹+跨进程边际(2败)→run6 loader 时钟同罪+PIT 超时边际(2败)→run7 绿。
+  CI 的头号价值实证:六类「本机隐性状态洗白」被逐一还原(依赖×5/版本 pin×2/时钟×2/资源边际×2)。
+- **下一步(优先序)**:① 切片② dual-model gate 应用内跨厂商接线 ② 用户可感知面
+  (Run 首屏门/前端 bundle 拆分,CEO 声道战略提示) ③ FastAPI on_event 迁移
+  ④ pool 三张 eval 卡 ⑤ 90+ worktree 盘点(只列)。数据溯源线到此收口不再递归加固。
 
 ## 待裁 / 卡点
 - **[待用户复核] 研究面质量门 scope 裁定**:codex 轮7 最终 reject(对抗性标准) vs operator

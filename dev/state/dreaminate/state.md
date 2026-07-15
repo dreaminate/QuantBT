@@ -27,7 +27,7 @@
 | §4 Settings/LLM Gateway | 🟡 | provider registry+keystore+routing+UI 第一版已建;OAuth/device-code、全 connector 未做;gateway secret 泄漏向量已闭(C-S7 Gap1,2026-06-29) |
 | §13/§17 RDP | 🟡 | manifest/store/materialize/publish 已建;本切片链产物未组 RDP(residual) |
 | dual-model 独立审查(流程级) | ✅ | builder=claude(anthropic)/verifier=gpt-5.6-sol(openai) 跨厂商;本切片三轮 verdict 留档证据包;应用内 Gateway 接线=另卡(切片②) |
-| CI(GitHub Actions) | ⬜ | 未建;gh 未查询——一切 CI 声明保持 Unqueried |
+| CI(GitHub Actions) | ✅ | .github/workflows/ci.yml 双 job;run 29377617245 gh 实查 success:后端 6315 passed/0 failed(17:18)+前端 423+build;七轮迭代账目在 log/证据包 |
 | 前端 bundle 拆分 / FastAPI on_event 迁移 | ⬜ | 已知本地 gap,排队中 |
 
 ## 下一步
