@@ -124,6 +124,59 @@ def test_update_state_validation(svc: ChatService):
         svc.update_state(t.thread_id, "BOGUS_STATE", owner_user_id="u1")
 
 
+# ---------- 跨厂商切模型 S3b-1：每对话 llm_selection 持久化 ----------
+
+def test_llm_selection_pinned_roundtrip(svc: ChatService):
+    t = svc.start_thread(user_id="u1")
+    # 默认无 pin → auto
+    assert svc.get_llm_selection(t.thread_id, owner_user_id="u1") == {"mode": "auto"}
+    saved = svc.update_llm_selection(
+        t.thread_id, {"mode": "pinned", "provider": "openai", "model": "gpt-5.6-sol"},
+        owner_user_id="u1",
+    )
+    assert saved["mode"] == "pinned" and saved["provider"] == "openai" and saved["model"] == "gpt-5.6-sol"
+    got = svc.get_llm_selection(t.thread_id, owner_user_id="u1")
+    assert got["provider"] == "openai" and got["model"] == "gpt-5.6-sol"
+
+
+def test_llm_selection_auto_clears_pin(svc: ChatService):
+    t = svc.start_thread(user_id="u1")
+    svc.update_llm_selection(t.thread_id, {"mode": "pinned", "provider": "anthropic", "model": "claude-opus-4-8"}, owner_user_id="u1")
+    svc.update_llm_selection(t.thread_id, {"mode": "auto"}, owner_user_id="u1")
+    assert svc.get_llm_selection(t.thread_id, owner_user_id="u1") == {"mode": "auto"}
+    assert "llm_selection" not in svc.get_thread(t.thread_id, owner_user_id="u1").metadata
+
+
+def test_llm_selection_missing_provider_or_model_is_auto(svc: ChatService):
+    t = svc.start_thread(user_id="u1")
+    # pinned 但缺 model → 规范化为 auto(不存半残 pin)
+    svc.update_llm_selection(t.thread_id, {"mode": "pinned", "provider": "openai"}, owner_user_id="u1")
+    assert svc.get_llm_selection(t.thread_id, owner_user_id="u1") == {"mode": "auto"}
+
+
+def test_llm_selection_owner_scoped(svc: ChatService):
+    t = svc.start_thread(user_id="alice")
+    # 别的 owner 读/写 alice 的对话 → thread not found(与不存在同形,不泄漏)
+    with pytest.raises(ChatError):
+        svc.update_llm_selection(t.thread_id, {"mode": "pinned", "provider": "openai", "model": "gpt-4o"}, owner_user_id="mallory")
+    with pytest.raises(ChatError):
+        svc.get_llm_selection(t.thread_id, owner_user_id="mallory")
+
+
+def test_llm_selection_per_conversation_isolation(svc: ChatService):
+    a = svc.start_thread(user_id="u1")
+    b = svc.start_thread(user_id="u1")
+    svc.update_llm_selection(a.thread_id, {"mode": "pinned", "provider": "openai", "model": "gpt-4o"}, owner_user_id="u1")
+    svc.update_llm_selection(b.thread_id, {"mode": "pinned", "provider": "anthropic", "model": "claude-opus-4-8"}, owner_user_id="u1")
+    assert svc.get_llm_selection(a.thread_id, owner_user_id="u1")["provider"] == "openai"
+    assert svc.get_llm_selection(b.thread_id, owner_user_id="u1")["provider"] == "anthropic"
+
+
+def test_llm_selection_unknown_thread_raises(svc: ChatService):
+    with pytest.raises(ChatError):
+        svc.update_llm_selection("thr_nope", {"mode": "pinned", "provider": "openai", "model": "gpt-4o"}, owner_user_id="u1")
+
+
 def test_add_message_basic(svc: ChatService):
     t = svc.start_thread(user_id="u1")
     m = svc.add_message(t.thread_id, "user", "hi", owner_user_id="u1")

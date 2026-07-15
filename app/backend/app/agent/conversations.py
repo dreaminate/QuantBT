@@ -82,6 +82,32 @@ def _thread_not_found() -> ChatError:
     return ChatError("thread not found")
 
 
+def _normalize_llm_selection(selection: dict[str, Any] | None) -> dict[str, Any] | None:
+    """规范化每对话 llm_selection（跨厂商切模型 S3b）。
+
+    None / mode!=pinned / 缺 provider|model → None（= Auto，不存半残 pin，fail-safe）。
+    否则 {mode:'pinned', provider, model, auth_kind?, updated_at}。真正的 catalog/authed 校验在端点层。
+    """
+    if not isinstance(selection, dict):
+        return None
+    if str(selection.get("mode") or "").strip().lower() != "pinned":
+        return None
+    provider = str(selection.get("provider") or "").strip()
+    model = str(selection.get("model") or "").strip()
+    if not provider or not model:
+        return None
+    out: dict[str, Any] = {
+        "mode": "pinned",
+        "provider": provider,
+        "model": model,
+        "updated_at": _utc_now(),
+    }
+    auth_kind = str(selection.get("auth_kind") or "").strip()
+    if auth_kind:
+        out["auth_kind"] = auth_kind
+    return out
+
+
 @dataclass
 class ChatThread:
     thread_id: str
@@ -221,6 +247,57 @@ class ChatService:
             if cursor.rowcount != 1:
                 raise _thread_not_found()
             c.commit()
+
+    def update_llm_selection(
+        self,
+        thread_id: str,
+        selection: dict[str, Any] | None,
+        *,
+        owner_user_id: str,
+    ) -> dict[str, Any]:
+        """原子写 metadata.llm_selection（跨厂商切模型 S3b）——用户对本对话手选的模型。
+
+        selection=None 或 mode=='auto' → 清 pin（回 Auto，不留 provider/model）。否则规范化存
+        {mode:'pinned', provider, model, auth_kind?, updated_at}。owner-scoped + rowcount 校验（防跨
+        owner 篡改）。catalog/authed 校验在端点层（K10），此处只规范化存储。返回落库后的 selection。
+        """
+        owner = _owner_user_id(owner_user_id)
+        normalized = _normalize_llm_selection(selection)
+        with self._conn() as c:
+            r = c.execute(
+                "SELECT metadata FROM chat_conversations WHERE thread_id=? AND user_id=?",
+                (thread_id, owner),
+            ).fetchone()
+            if not r:
+                raise _thread_not_found()
+            meta = json.loads(r["metadata"] or "{}")
+            if not isinstance(meta, dict):
+                meta = {}
+            if normalized is None:
+                meta.pop("llm_selection", None)
+            else:
+                meta["llm_selection"] = normalized
+            cursor = c.execute(
+                "UPDATE chat_conversations SET metadata=?, updated_at_utc=? "
+                "WHERE thread_id=? AND user_id=?",
+                (json.dumps(meta, ensure_ascii=False), _utc_now(), thread_id, owner),
+            )
+            if cursor.rowcount != 1:
+                raise _thread_not_found()
+            c.commit()
+        return normalized or {"mode": "auto"}
+
+    def get_llm_selection(self, thread_id: str, *, owner_user_id: str) -> dict[str, Any]:
+        """读本对话的 llm_selection（**服务端读**，不信客户端每条消息随手传的 model，K10）。
+        无有效 pin → {'mode':'auto'}（走自动路由）。"""
+        thread = self.get_thread(thread_id, owner_user_id=owner_user_id)
+        sel = thread.metadata.get("llm_selection")
+        if isinstance(sel, dict) and str(sel.get("mode") or "").lower() == "pinned":
+            provider = str(sel.get("provider") or "").strip()
+            model = str(sel.get("model") or "").strip()
+            if provider and model:
+                return sel
+        return {"mode": "auto"}
 
     # ---------- messages ----------
 
