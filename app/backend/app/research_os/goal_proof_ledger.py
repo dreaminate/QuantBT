@@ -20,6 +20,7 @@ import os
 import sqlite3
 import stat
 import threading
+from collections import OrderedDict
 from contextlib import contextmanager
 from dataclasses import dataclass, field, replace
 from pathlib import Path
@@ -27,6 +28,10 @@ from typing import Any, Callable, Iterable, Literal, Mapping, Sequence
 
 from ..cross_process_lock import acquire_exclusive_fd
 from ..lineage.ids import canonical_json
+
+# current() 快照缓存的 LRU 上限:按 (owner, subject) 对计,足够覆盖单请求内的重复读,
+# 又不让长驻进程无界增长。淘汰纯为控内存,命中正确性仍由 token 校验独立门控。
+_SNAPSHOT_CACHE_MAXSIZE = 256
 
 
 DB_FILENAME = "goal_proof_ledger.sqlite"
@@ -377,10 +382,12 @@ class GoalProofLedger:
         self._lock_path = self._root / MIRROR_LOCK_FILENAME
         self._fault_injector = fault_injector
         self._lock = threading.RLock()
-        self._current_snapshot_cache: dict[
-            tuple[str | None, str | None],
-            tuple[tuple[Any, ...], ProofSnapshot],
-        ] = {}
+        # LRU 有界(原为无界 dict:每个 (owner,subject) 一条永不淘汰)。
+        # 正确性不受影响:命中仍由 token 校验(cached[0]==state_token + fully_mirrored)
+        # 门控,淘汰只导致重算、绝不 stale;WAL 文件状态绑定(见 _current_state_token)
+        # 不碰。move_to_end 标最近用,超上限 popitem(last=False) 逐最旧。
+        self._current_snapshot_cache: "OrderedDict[tuple[str | None, str | None], tuple[tuple[Any, ...], ProofSnapshot]]" = OrderedDict()
+        self._current_snapshot_cache_maxsize = _SNAPSHOT_CACHE_MAXSIZE
         self._prepare_paths()
         self._initialize_database()
         self.sync()
@@ -2410,6 +2417,9 @@ class GoalProofLedger:
                         and self._token_is_fully_mirrored(state_token)
                         and cached[0] == state_token
                     ):
+                        # LRU:真命中(token 匹配)才标最近用。stale 项(token 不匹配)
+                        # 落到重算路径、由写侧覆盖,不在此提权。
+                        self._current_snapshot_cache.move_to_end(cache_key)
                         # Proof payloads are JSON dictionaries. Return a
                         # defensive copy so a caller cannot mutate the cached
                         # authoritative snapshot seen by later readers.
@@ -2489,6 +2499,14 @@ class GoalProofLedger:
                             verified_state_token,
                             copy.deepcopy(snapshot),
                         )
+                        self._current_snapshot_cache.move_to_end(cache_key)
+                        # LRU 淘汰:超上限逐最旧(FIFO of least-recently-used)。
+                        # 淘汰项下次读走重算路径,token 校验保证绝不 stale。
+                        while (
+                            len(self._current_snapshot_cache)
+                            > self._current_snapshot_cache_maxsize
+                        ):
+                            self._current_snapshot_cache.popitem(last=False)
                 return snapshot
 
     def journal_mode(self) -> str:

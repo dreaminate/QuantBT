@@ -924,3 +924,37 @@ def test_same_instance_meta_tamper_fails_closed_before_any_mutation(
             reason="must fail before mutation",
         )
     assert _counts(ledger) == counts_before
+
+
+def test_snapshot_cache_lru_bounds_size_and_evicts_oldest(tmp_path):
+    # LRU 有界(原无界 dict):超上限逐最旧,size 不无界增长。
+    # 种坏:超上限后旧 key 若不被逐 → size 断言红。淘汰不 stale——重查重算等价快照。
+    ledger = GoalProofLedger(tmp_path / "ledger")
+    ledger._current_snapshot_cache_maxsize = 2  # 缩小便于种坏
+
+    first_a = ledger.current(owner="a")
+    ledger.current(owner="b")
+    assert set(ledger._current_snapshot_cache.keys()) == {("a", None), ("b", None)}
+
+    ledger.current(owner="c")  # 触发淘汰:最旧 ("a") 被逐
+    assert len(ledger._current_snapshot_cache) == 2
+    assert ("a", None) not in ledger._current_snapshot_cache
+    assert set(ledger._current_snapshot_cache.keys()) == {("b", None), ("c", None)}
+
+    # 淘汰项重查:重算(不报错、不 stale),内容与首次等价
+    again_a = ledger.current(owner="a")
+    assert again_a.at_seq == first_a.at_seq
+
+
+def test_snapshot_cache_lru_hit_promotes_recency(tmp_path):
+    # 读命中 move_to_end:近用项在淘汰中存活,老项先被逐(真 LRU 非 FIFO)。
+    # 种坏:若命中不提权,current("a") 第二次后 a 仍最旧 → 下轮淘汰逐 a 而非 b → 断言红。
+    ledger = GoalProofLedger(tmp_path / "ledger")
+    ledger._current_snapshot_cache_maxsize = 2
+
+    ledger.current(owner="a")
+    ledger.current(owner="b")
+    ledger.current(owner="a")   # 命中 → a 提到最近端
+    ledger.current(owner="c")   # 淘汰最旧 = b(非 a)
+    assert ("b", None) not in ledger._current_snapshot_cache
+    assert set(ledger._current_snapshot_cache.keys()) == {("a", None), ("c", None)}
