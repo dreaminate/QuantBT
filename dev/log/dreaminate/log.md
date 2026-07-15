@@ -6,6 +6,10 @@
 ## <日期> · <标题>
 - 建/改了什么 + 命门  - 验收：<对抗测试 + 变异 + 全量数字>  - 下一步：<…> -->
 
+## 2026-07-14-2209 90+ worktree/分支盘点 land(只列) + validate_dev 0 warning 确认
+- 盘点:90 worktree(89 agent-*+主)/113 分支(107 已合并可删/5 未合并需审含安全 autopolish-w1);只列不删=用户拍板,附清理命令+不可逆边界;档 research/findings/dreaminate/worktree-branch-inventory-20260715.md
+- validate_dev 现 0 warning(state.md 早已蒸馏 6505 字节,契约陈旧描述);下轮 8be0e547 机制层 dual-model(P1,duet,广面 adapter 接口改)
+
 ## 2026-07-14-2150 前端 bundle 拆分 land + 卡 861182e6 测绘
 - vite manualChunks:单 2,557.79 kB JS→9 可缓存 chunk(echarts 1.38MB 隔离/index 813/react-vendor 142/…);react 系同 chunk 防多实例;build 绿+423 前端测试 passed(worktree npm ci 装依赖后真跑)
 - 边界诚实:首屏字节未减(echarts 只 RunDetailPage 用,该页 §M15 唯一冻结例外、eager);lazy-load 需碰冻结面=用户拍板项,登记非阻塞

@@ -94,10 +94,18 @@
   消费 r2/auc 的 q05 非 Sharpe/DSR,DSR 转换=方法学 follow-on=用户的选择)+backtest promote
   生产者未喂 cpcv_distribution(管线在数据源缺)。**横跨前端+方法学+跨层重构,非干净后端切片,
   暂缓**;测绘全档见本轮 Explore。
-- **下一步(优先序)**:① 切片②真实调用(待用户凭据,非阻塞) ② validate_dev 两 warning
-  (state.md 蒸馏归档,纯 dev/ 可自决) ③ Run 首屏门(§16 KNOWN_RUN_GAP,需 Playwright 实测)
-  ④ 8be0e547 机制层加固(P1,duet) ⑤ 90+ worktree 盘点(只列)。前端 eval 卡 UI 件与 echarts
-  lazy 归用户拍板类。
+- **validate_dev warning gap 已闭**:现 61 ✅ / 0 ❌ / **0 ⚠️**(state.md 早已蒸馏到 6505 字节,
+  loop 契约里的「两 warning」是陈旧描述)。
+- **90+ worktree/分支盘点已 land**(只列不删,commit 6e22d69e):90 worktree(89 agent-*+主)/
+  113 分支(107 已合并可删/5 未合并需审)。5 未合并逐个标审建议(含安全相关 autopolish-w1 沙箱
+  逃逸止血,删前确认已在 main);附用户可自跑清理命令 + 不可逆边界。全档
+  research/findings/dreaminate/worktree-branch-inventory-20260715.md。**删除等用户拍板(registered)**。
+- **下一步(优先序)**:① 切片②真实调用(待用户凭据,非阻塞) ② **8be0e547 机制层 dual-model
+  加固(P1,下轮 duet)**——可实现核=binding 绑 adapter 实发 payload:改 LLMClient 接口让全部
+  adapter(Anthropic/OpenAI/Qwen/Compatible+桩)回带实发 payload digest→gateway 记账→binding
+  校验(种坏:adapter 改写 payload→门必抓)。广面接口改+6356 测试回归风险,值 duet+全量验证,
+  不宜会话尾赶,新会话开。③ Run 首屏门(§16 KNOWN_RUN_GAP,需 Playwright) ④ GoalProofLedger
+  LRU(P2,守 WAL 绑定不弱化)。前端 eval 卡 UI 件与 echarts lazy 归用户拍板类。
 
 ## 待裁 / 卡点
 - **[待用户复核] 研究面质量门 scope 裁定**:codex 轮7 最终 reject(对抗性标准) vs operator
