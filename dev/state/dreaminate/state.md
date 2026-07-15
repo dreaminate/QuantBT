@@ -11,11 +11,11 @@
   下一步转用户可感知面(队列见 frontier)。
 
 ### 顶部刷新块（本轮值 · 每轮覆写）
-- **六字段**:1 Local checkout=slice/model-switch-crossvendor @ fb7d253e(**S6 订阅账号 in-app 登录中继 + K4
-  token 泄漏面收口 + §3 假绿灯修复**;+ 本轮 dev 落档 commit);2 Remote=**待 land**(ff origin/main 到本轮 HEAD);
-  3 Local tests=后端全量 **6462 passed/13 skipped/0 failed**(真汇总行,9分48秒)+ 前端 **430 passed + build 绿**;
-  4 CI=**Unqueried**(push 后 gh 查);5 Production=Unqueried;6 User acceptance=**Unverified**(真浏览器登录端到端要用户本人按,
-  我只验了状态检测/authMethod 解析)。
+- **六字段**:1 Local checkout=slice/model-switch-crossvendor @ **656c85eb**(**S6 订阅账号 in-app 登录中继 + K4
+  token 泄漏面收口 + §3 假绿灯修复**,product fb7d253e + dev 656c85eb);2 Remote=**已 land**——origin/main ff 到
+  656c85eb(HEAD==origin/main 0/0);3 Local tests=后端全量 **6462 passed/13 skipped/0 failed**(真汇总行,9分48秒)+
+  前端 **430 passed + build 绿**;4 CI=**in_progress**(gh 实查 656c85eb «ci» 运行中,下 tick 查结论;上一 main
+  bb77029a=success);5 Production=Unqueried;6 User acceptance=**Unverified**(真浏览器登录端到端要用户本人按,我只验状态检测/authMethod 解析)。
 - **audit 基线四项**(不变):61 files / 20,339 lines / 26,209,663 bytes / sha `1c1788b0bbe2`。(改动全在 app/scripts/docs/dev,基线按构造不变。)
 - **断点**:**当前战役=Claudian 式「每对话跨厂商切模型」(卡 db95c0c6,in_progress)**。蓝图 + 参考实现 + S6 记录见 findings。
   **✅ S1 目录 · ✅ S2 路由 · ✅ S3a-b gateway+pin 穿链 · ✅ S4 隔离(证成) · ✅ S6 订阅 in-app 登录 · ✅ S7 前端切换器**
@@ -25,7 +25,12 @@
   **K3 约束+待拍板(用户已知悉·非阻塞)**:订阅模型跑不了带工具 agentic 对话(厂商 CLI 拒工具)——订阅只无工具场景
   (dual-model 审查/纯聊天);订阅进带工具对话=需 tool bridge(大·ToS 灰)或纯聊天模式(中),默认保持现状。
   **残余(非阻塞)**:S5 订阅接生产 gateway(K3 所限,S5-piece1 scaffold 已 land 无害)。
-  下一步:land 后 gh 查 CI;等用户拍板 K3 订阅方向;或转 GOAL 其他 gap(§11 PIT 读侧接线设计已备,见 design agent 产出)。ultracode:每片落码后对抗验证。
+  **🚩 新大方向(待用户对齐/拍板 · 不建 until pinned)=OpenClaw 式 agent 层**:用户把 K3 掀翻成
+  「OpenClaw 式 agent + workspace + skill + 无边画布 + 本地 claude code/codex 作模型供应(两层配置)」。
+  反转:不塞工具给纯文本调用,而是**把 claude code/codex 当完整 agent 跑**(自带工具在 workspace 干活),
+  我们编排+绑画布。已对齐复述 + 5 岔路(通用/量化专用·**安全命门**·画布=现有 GraphCanvas·本地优先·ToS CLI 驱动)
+  见 [[openclaw-agent-epic-alignment-20260715]]。**等用户拍 forks 1-5(尤其 fork2 安全命门)再 duet 设计 + 薄纵切**。
+  下一步:等用户 fork 回复(OpenClaw epic);CI 结论下 tick 查;单只等待不停 loop → 可转 §11 PIT 读侧接线(设计已备,correctness-critical,独立于 OpenClaw)。ultracode:每片落码后对抗验证。
 
 ## 状态表（确定的才标 ✅,证据必挂）
 | 子系统/能力 | 状态 | 证据 |
