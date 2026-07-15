@@ -95,7 +95,12 @@ export default function ModelSwitcher({ threadId }: { threadId: string }) {
     [threadId],
   );
 
-  const selectableProviders = providers.filter((p) => p.authed && p.selectable);
+  // 只显示 chat gateway 可路由的厂商 = api-key configured（对齐后端 PATCH 校验 _provider_is_gateway_routable）。
+  // 订阅厂商(auth_kind=subscription_cli)虽在目录里 selectable,但 gateway 未接订阅(K3:带工具 turn 跑不了),
+  // PATCH 会 409——若这里显示订阅模型,用户选了必 409,是误导 UX。故过滤掉,只留 api-key。
+  const selectableProviders = providers.filter(
+    (p) => p.authed && p.selectable && p.auth_kind === "api_key",
+  );
   // stale/未在目录里的当前 pin：仍显示（否则 select 空白，用户不知选的是啥）
   const pinInCatalog =
     selection.mode !== "pinned" ||

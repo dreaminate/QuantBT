@@ -35,6 +35,14 @@ const MODELS = {
       models: [{ model: "claude-opus-4-8", tier: "strong", selectable: true }],
     },
     { provider: "qwen", auth_kind: "none", authed: false, selectable: false, models: [] },
+    // 订阅厂商:目录里 authed+selectable,但 gateway 未接订阅、PATCH 会 409 → 切换器必须**不显示**它。
+    {
+      provider: "anthropic-sub-fixture",
+      auth_kind: "subscription_cli",
+      authed: true,
+      selectable: true,
+      models: [{ model: "claude-sub-only", selectable: true, supports_tools: false }],
+    },
   ],
 };
 
@@ -81,6 +89,9 @@ describe("ModelSwitcher · 每对话切模型", () => {
     expect(opts).toContain("anthropic::claude-opus-4-8");
     expect(opts).not.toContain("openai::text-embedding-3"); // 非聊天模型不可选
     expect(sel(container).querySelector('optgroup[label="qwen"]')).toBeNull(); // 未 auth 厂商不显示
+    // 订阅厂商(auth_kind=subscription_cli)不显示——gateway 未接订阅,选了会 409(避免误导 UX)
+    expect(sel(container).querySelector('optgroup[label="anthropic-sub-fixture"]')).toBeNull();
+    expect(opts).not.toContain("anthropic-sub-fixture::claude-sub-only");
   });
 
   it("初始回显 GET 的 pinned selection", async () => {
