@@ -91,6 +91,76 @@ def test_independence_without_pin_still_crossvendor():
     assert d.profile.provider != "anthropic"
 
 
+def test_independence_pin_result_identical_to_no_pin():
+    """[变异·物理免疫强化] independence 下,一个「会改变自动选择」的 pin 必须**零效果**——
+    结果与完全无 pin 时逐字段一致。防「pin 只在指向异源厂商时才生效」这类存活变异
+    （借 pin 把 verifier 从自动最优导向更弱异源模型、暗削审查质量却保住名义独立）。(skeptic M3)"""
+    profiles = [
+        LLMModelProfile(provider="anthropic", model="claude-opus-4",
+                        capability_tier=ModelTier.STRONG.value, pool_id="anthropic"),
+        LLMModelProfile(provider="openai", model="gpt-4o",
+                        capability_tier=ModelTier.STRONG.value, pool_id="openai"),
+        LLMModelProfile(provider="qwen", model="qwen-plus",
+                        capability_tier=ModelTier.LIGHT.value, pool_id="qwen"),  # 弱异源
+    ]
+    pol = ModelRoutingPolicy(profiles)
+    builder = ("anthropic", "claude-opus-4")
+    no_pin = pol.resolve(RoleCapabilityRequest(independence_required=True, difficulty="hard"),
+                         builder_signature=builder)
+    with_pin = pol.resolve(
+        RoleCapabilityRequest(independence_required=True, difficulty="hard",
+                              pin_provider="qwen", pin_model="qwen-plus"),  # 想把 verifier 拉到弱 qwen
+        builder_signature=builder,
+    )
+    # pin 必须被完全忽略：verifier 选择逐字段一致（pin 没能把它导向 qwen）
+    assert with_pin.profile.signature == no_pin.profile.signature
+    assert with_pin.profile.provider != "qwen"  # pin 指向的弱异源没得逞
+    assert with_pin.tier_resolved == no_pin.tier_resolved
+
+
+# ---------- M1：pin 命中已登记 profile 用显式 tier（不被名字启发式覆盖）----------
+
+def test_pin_to_registered_profile_uses_explicit_tier_not_name_heuristic():
+    """[skeptic M1] operator 显式登记 (openai, o3-mini, STRONG)——名字含 'mini' 启发式会判 LIGHT。
+    pin 到它必须用登记的 STRONG(尊重 ground-truth),否则同 model 同任务 AUTO/PIN 的 degraded 判反、
+    且弱模型带 strong-token 名可绕 strict_degrade 门。"""
+    profiles = [
+        LLMModelProfile(provider="anthropic", model="claude-opus-4",
+                        capability_tier=ModelTier.STRONG.value, pool_id="anthropic"),
+        LLMModelProfile(provider="openai", model="o3-mini",
+                        capability_tier=ModelTier.STRONG.value, pool_id="openai"),  # 登记 STRONG
+    ]
+    pol = ModelRoutingPolicy(profiles)
+    d = pol.resolve(RoleCapabilityRequest(difficulty="hard", pin_provider="openai", pin_model="o3-mini"))
+    assert d.profile.model == "o3-mini"
+    assert d.tier_resolved == ModelTier.STRONG.value  # 用登记档,不是 infer 的 LIGHT
+    assert d.degraded is False  # 难任务 + STRONG 档 → 不降质(若误用 infer=LIGHT 会 degraded=True)
+
+
+def test_pin_to_unregistered_model_falls_back_to_infer():
+    # 未登记的 pin_model 才用 infer 兜底(有显式 profile 覆盖机会时不用)
+    d = ModelRoutingPolicy(_profiles()).resolve(
+        RoleCapabilityRequest(pin_provider="openai", pin_model="gpt-4o-mini-2099")  # 未登记,含 mini
+    )
+    assert d.profile.model == "gpt-4o-mini-2099"
+    assert d.tier_resolved == ModelTier.LIGHT.value  # infer 兜底 → LIGHT
+
+
+# ---------- M2：pin_model + exclude_signatures 真锁死（招牌路径,此前零覆盖）----------
+
+def test_pin_model_refallback_excluded_signature_locks_down():
+    """[skeptic M2] pin_model 的跨厂商 fallback 锁死必须由 signature 排除**真正**保证——
+    不隐性依赖 health 断路器。pin openai+pin_model 后,把改写后的 (openai, pin_model) 放进
+    exclude_signatures 重 resolve → 必抛 PinnedModelUnavailable,绝不返回同一 model 死循环。"""
+    pol = ModelRoutingPolicy(_profiles())
+    pin_model = "gpt-5.6-ghost"
+    with pytest.raises(PinnedModelUnavailable):
+        pol.resolve(
+            RoleCapabilityRequest(pin_provider="openai", pin_model=pin_model),
+            exclude_signatures={("openai", pin_model)},  # 改写后的签名
+        )
+
+
 # ---------- 对抗：跨厂商 fallback 锁死 ----------
 
 def test_pinned_refallback_stays_same_vendor_then_errors():

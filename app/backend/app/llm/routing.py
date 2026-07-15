@@ -222,14 +222,28 @@ class ModelRoutingPolicy:
                     f"（unavailable={sorted(unavailable)}, excluded={sorted(excluded)}）——绝不跨厂商 fallback"
                 )
             if req.pin_model:
-                # 换 model 字符串：provider/pool_id 不动（no-mix），tier 按 pin_model 重判（诚实档位）。
-                usable = [
-                    replace(
-                        p, model=req.pin_model,
-                        capability_tier=infer_capability_tier(req.pin_model),
-                    )
-                    for p in usable
-                ]
+                # 换 model 字符串：provider/pool_id 不动（no-mix）。tier **优先用已登记 profile 的显式档**
+                # ——尊重 operator ground-truth；`infer_capability_tier` 只是「无显式 profile 时」的兜底
+                # 启发式（本模块契约），pin 路径若一律 infer 会丢弃登记档、导致 degraded 判反、甚至凭
+                # 名字里的 strong-token 绕过 strict_degrade 门（S2 skeptic MEDIUM-1）。未登记的 model 才 infer。
+                registered_tier = {
+                    (p.provider, p.model): p.capability_tier for p in self._profiles
+                }
+                pin_tier = registered_tier.get(
+                    (req.pin_provider, req.pin_model),
+                    infer_capability_tier(req.pin_model),
+                )
+                usable = [replace(p, model=req.pin_model, capability_tier=pin_tier) for p in usable]
+            # 排除集在**改写后的 signature** 上复检：pinned 调用失败后 gateway 用改写签名 exclude，
+            # 原始 signature 过滤（上面第一步）对 pin_model 对不上（replace 改了签名）。这里按新签名再滤，
+            # 让「pin 失败→跨厂商 fallback 锁死」真由 signature 排除保证，不隐性依赖 health 断路器
+            # （S2 skeptic MEDIUM-2）。pin 厂商唯一候选被排除 → usable 空 → PinnedModelUnavailable。
+            usable = [p for p in usable if p.signature not in excluded]
+            if not usable:
+                raise PinnedModelUnavailable(
+                    f"手选 {req.pin_provider!r}/{req.pin_model or '(default)'} 本轮候选已试尽或被排除"
+                    "——绝不跨厂商 fallback"
+                )
         # If a route that can actually satisfy the requested independence is
         # available, non-independent routes are not candidates for this
         # decision.  This must happen before tier partitioning: an exact-tier
