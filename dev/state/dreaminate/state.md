@@ -30,7 +30,12 @@
   反转:不塞工具给纯文本调用,而是**把 claude code/codex 当完整 agent 跑**(自带工具在 workspace 干活),
   我们编排+绑画布。已对齐复述 + 5 岔路(通用/量化专用·**安全命门**·画布=现有 GraphCanvas·本地优先·ToS CLI 驱动)
   见 [[openclaw-agent-epic-alignment-20260715]]。**等用户拍 forks 1-5(尤其 fork2 安全命门)再 duet 设计 + 薄纵切**。
-  下一步:等用户 fork 回复(OpenClaw epic);CI 结论下 tick 查;单只等待不停 loop → 可转 §11 PIT 读侧接线(设计已备,correctness-critical,独立于 OpenClaw)。ultracode:每片落码后对抗验证。
+  **§11 PIT 读侧接线**:设计已持久化 [[pit-adjustment-readside-design-20260715]]（execution-ready）+ **R6 已核**
+  （registry 路径:onboarding `--registry-path` CLI 参数·建议 `<repo>/data/datasets/registry.jsonl`·无 env;读侧对齐解=
+  `QUANTBT_DATA_ROOT` env 默认同路径 + 把 onboarding 默认设同值,两侧构造对齐）。correctness-critical（§16「未复权价误喂成交层」
+  向量）；**11b hfq join+fail-closed 承重,刻意留给下一 fresh 会话走 duet,不在超长 context 尾仓促落安全关键复权数学**。
+  下一步:等用户 fork 回复(OpenClaw epic);CI 结论下 tick 查(673f999b 权威 in_progress,656c85eb=supersede-cancel 非失败);
+  下一 fresh 会话执行 §11 PIT 11a→11b→11c(逐片对抗+变异门)。ultracode:每片落码后对抗验证。
 
 ## 状态表（确定的才标 ✅,证据必挂）
 | 子系统/能力 | 状态 | 证据 |
