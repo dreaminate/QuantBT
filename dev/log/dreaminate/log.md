@@ -6,6 +6,10 @@
 ## <日期> · <标题>
 - 建/改了什么 + 命门  - 验收：<对抗测试 + 变异 + 全量数字>  - 下一步：<…> -->
 
+## 2026-07-15-0908 补 F1 producer 侧 factors_all_finite 建门——非有限 adj_factor 双拦已闭
+- research_quality_report 补 factors_all_finite(镜 bars_all_finite is_finite);NaN/±inf factor(polars 里既非 null 又非<=0)令 quality_verdict≠pass、不注册。承接 §11 PIT skeptic F1(读侧 0c926235 已拦,建侧原只 <=0 漏非有限)
+- 对抗测试 test_factors_all_finite_caught(NaN+inf 反例)+变异门(门恒 True→red-then-revert);data_onboarding 32 passed+后端全量 6475 passed/0 failed。防御纵深:读侧+建侧双拦
+
 ## 2026-07-15-0842 §11 PIT 复权读侧接线 land——真实 HS300 后复权 hfq panel(fail-closed)
 - panel_source.py:market ashare_hs300 registry present→raw×adj_factor 四价列同乘(volume raw)·缺因子/非正/非有限(NaN±inf,F1)/dup 全 fail-closed raise;absent→逐字节合成兜底零行为变更;registry 单一源=paths.DATA_ROOT(=main.py:734,D-11-DATA-ROOT=b 无双源漂移)
 - §16 隔离:研究/回测 env≠perf harness(物理隔离)·perf_baseline_claim=False·拒 forbidden_confirmatory cohort;PIT:hfq PIT-safe·诚实标 no_per_row_factor_vintage 不冒充 bitemporal
