@@ -785,3 +785,47 @@ def test_ide_run_rejects_section9_snapshot_for_another_strategy_before_sandbox(
     )
     assert response.status_code == 422
     assert len(main.IDE_SERVICE.list_runs("alice")) == before
+
+
+# ============================================================
+# 安全审计 pass3 #1 止血：posix_spawn/ctypes 逃逸向量（defense-in-depth·非 hardened）
+# 源修复 worktree-autopolish-w1@92eade4f(2026-06-25 从未 land main)，2026-07-15 盘点发现并重实现。
+# ============================================================
+
+
+def test_sandbox_blocks_posix_spawn():
+    """审计实测逃逸向量 os.posix_spawn → prelude 补封（CAUGHT）。MUT（prelude 删 posix_spawn 封禁）→ 真 spawn 无 CAUGHT，红。"""
+    r = run_user_strategy(
+        "import os\n"
+        "try:\n    os.posix_spawn('/bin/echo', ['/bin/echo', 'x'], {})\nexcept PermissionError:\n    print('CAUGHT')\n",
+    )
+    assert "CAUGHT" in r.stdout
+
+
+def test_sandbox_blocks_posix_fork():
+    """os.posix_fork（若平台有）补封。"""
+    r = run_user_strategy(
+        "import os\n"
+        "if not hasattr(os, 'posix_fork'):\n    print('CAUGHT')\n"
+        "else:\n    try:\n        os.posix_fork()\n    except PermissionError:\n        print('CAUGHT')\n",
+    )
+    assert "CAUGHT" in r.stdout
+
+
+def test_sandbox_rejects_ctypes_import_via_ast():
+    """审计实测逃逸向量 import ctypes → 入口 AST 预检拒（不进子进程）。MUT（去 _scan_forbidden_imports 调用）→ 不拒，红。"""
+    r = run_user_strategy("import ctypes\nctypes.CDLL(None)\n")
+    assert r.error is not None and "ctypes" in r.error
+    assert r.exit_code != 0
+
+
+def test_sandbox_rejects_ctypes_dunder_import():
+    """__import__('ctypes') 字符串形式也被 AST 预检拒（封绕过）。"""
+    r = run_user_strategy("m = __import__('ctypes')\n")
+    assert r.error is not None and "ctypes" in r.error
+
+
+def test_sandbox_allows_normal_imports_not_overblocked():
+    """不误伤：普通 import（json/math）正常跑（AST 预检只拒 FFI·不影响合法策略）。"""
+    r = run_user_strategy("import json, math\nquantbt.emit_result({'ok': math.floor(1.5)})")
+    assert r.exit_code == 0 and r.user_result == {"ok": 1}
