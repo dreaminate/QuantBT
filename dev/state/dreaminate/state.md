@@ -14,7 +14,7 @@
 - **六字段**:1 Local checkout=slice/model-switch-crossvendor @ **918daf7f**(= origin/main,干净;**F3 §11 读侧 manifest 完整性门产品码已 land 于此**);
   2 Remote=**origin/main 同 918daf7f**(F3 产品码 918daf7f + 上游 dev-docs;本 tick 之后另落 dev-docs commit);
   3 Local tests=**后端全量 6487 passed/13 skipped/0 failed**(真汇总行,508s 实跑)+ perf harness 72 passed + 前端 40 files/430 passed + build ✓;
-  4 CI=**Unqueried**(F3 918daf7f 刚 push,未 gh 实查;下 tick 查);5 Production=Unqueried;6 User acceptance=**Unverified**。
+  4 CI=**passed**(gh 实查:b998f7ee[=F3 码+docs] completed **success**,19min;918daf7f 被 concurrency 取消非 fail);5 Production=Unqueried;6 User acceptance=**Unverified**。
   本 session 累计 land 进 main:S6 订阅 in-app 登录(656c85eb)·§11 PIT(0c926235)·F1 建侧(a2b6d534)·**F3 读侧完整性门(918daf7f,3 轮跨厂商 SOUND)**。
 - **audit 基线四项**(不变):61 files / 20,339 lines / 26,209,663 bytes / sha `1c1788b0bbe2`。(改动全在 app/scripts/docs/dev,基线按构造不变。)
 - **✅ F3 §11 读侧 manifest 完整性门已 land(918daf7f,3 轮跨厂商 SOUND)**:真实 ashare_hs300 读价【前】拿磁盘字节 re-verify
