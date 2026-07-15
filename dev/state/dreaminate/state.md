@@ -11,21 +11,21 @@
   下一步转用户可感知面(队列见 frontier)。
 
 ### 顶部刷新块（本轮值 · 每轮覆写）
-- **六字段**:1 Local checkout=slice/dual-model-subscription-wiring @ 0ea40818(切片② 真跨厂商
-  收口:订阅 auth+onboarding+dual_model_review 接订阅+dev 记账);2 Remote=已 push,origin/main
-  ff 到 0ea40818(4235f09c..0ea40818);3 Local tests=后端全量 **6380 passed/13 skipped/0 failed**
-  (真汇总行,9分08秒,2026-07-15);validate_dev PASS;compileall OK;4 CI=✅ run 29399272524
-  success(headSha 0ea40818,后端+前端+build);5 Production=Unqueried;6 User acceptance=Unverified。
+- **六字段**:1 Local checkout=slice/model-switch-crossvendor @ e89964a8(**S1 模型目录落 main**:
+  model_catalog.py + GET /api/llm/models + 对抗验证加固 7 项);2 Remote=已 push,origin/main
+  ff 到 e89964a8(5cc636d5..e89964a8);3 Local tests=后端全量 **6409 passed/13 skipped/0 failed**
+  (真汇总行,8分36秒,2026-07-15);validate_dev PASS;compileall OK;4 CI=run 29404840965 in_progress
+  (headSha e89964a8;下 tick gh 查),上一 run 29401618932 success;5 Production=Unqueried;6 User acceptance=Unverified。
 - **audit 基线四项**(不变):61 files / 20,339 lines / 26,209,663 bytes / sha `1c1788b0bbe2`。
-  (本切片改动全在 app/backend/scripts/docs/dev,不跑数据管线,基线按构造不变。)
-- **断点**:切片② 已全绿落 main+CI 验证。**当前战役**=Claudian 式「每对话跨厂商切模型」(卡
-  db95c0c6,in_progress)。**duet 三方裁决已完成**,实现蓝图落 main:
-  `dev/research/findings/dreaminate/model-switch-crossvendor-design-20260715.md`(codex 对抗复审逮
-  4 关键修正:主链走 GatewayLLMAdapter/订阅-only 卡 Settings preflight/订阅拒 tools 只跑无工具对话/
-  setup-token 泄 token 改 auth login--claudeai+codex login--device-auth)。**下一 tick 起 S1**:
-  新建 app/backend/app/llm/model_catalog.py + GET /api/llm/models(api-key 真拉 base.rstrip('/')+/models、
-  订阅 curated 兜底、TTL、auth 门控、非聊天模型 selectable=false)+ 对抗测试,过四门。
-  分支 slice/model-switch-crossvendor(已 push);顺序 S1(∥S2)→S3→S4→S5→S6→S7。ultracode 已开,S1 落码后走对抗验证。
+  (本特性改动全在 app/backend/dev,不跑数据管线,基线按构造不变。)
+- **断点**:**当前战役=Claudian 式「每对话跨厂商切模型」(卡 db95c0c6,in_progress)**。蓝图
+  `findings/dreaminate/model-switch-crossvendor-design-20260715.md`(硬不变量+S1~S7)。
+  **S1 模型目录 ✅ done+CI 验证中**(deep-opus skeptic 逮 1 假绿灯+6 项全修+回归)。
+  **下一 tick 起 S2 hard-pin routing**:routing.py `RoleCapabilityRequest` 加 pin_provider/pin_model、
+  `resolve()` 在 :196 算完 usable 后插硬 pin 过滤(replace-within-resolve 不塞 policy._profiles→Auto 天然不变)、
+  pin 只 `not independence_required` 生效(dual 门物理免疫)、pinned fallback=[]、跨厂商 fallback 锁死;
+  对抗测试(pin 洗白 dual 门必红/跨厂商 fallback 必红/Auto 回归)。顺序 S2→S3→S4→S5→S6→S7。
+  **参考源码研究**(用户指:Claudian/Hermes/OpenClaw)进行中→融 S6 内嵌登录中继。ultracode:每片落码后对抗验证。
 
 ## 状态表（确定的才标 ✅,证据必挂）
 | 子系统/能力 | 状态 | 证据 |
@@ -37,6 +37,7 @@
 | §11 数据层·研究面(union 含退市) | ✅ | hs300_research_universe_10y@…332bebc0(1.38M bars/622 只/19,200 停复牌);12 质量门真数据 PASS(含探针 #6 bar日因子完备/#7 停牌伪 bar含退化窗);质量门经 codex 四轮对抗收敛到 factor-价格补偿不变量,scope 裁定见 frontier 待复核 |
 | §11 数据接入·Tushare 管线 | ✅ | scripts/hs300_onboard.py 六子命令(store-token/keygen/pull/preflight/build/build-research/bench);限流 180/分+退避+幂等;docs/hs300-quickstart.md;data_onboarding 测试 41 passed(含 codex 全部反例回归) |
 | §11 PIT/复权读侧接线 | 🟡 | raw+adj_factor 分离已交付;panel_source 唯一复权落点未接(后续卡) |
+| §4 跨厂商切模型·S1 模型目录 | ✅ | app/llm/model_catalog.py 唯一 LLM 模型清单源(api-key live 拉/models 加固 stream 上限+禁 redirect+fail-closed、非聊天 selectable=false、订阅 curated supports_tools=false、TTL+single-flight+凭据零触碰)+GET /api/llm/models(订阅探测 60s TTL 缓存);对抗测试 29(deep-opus skeptic 逮 1 假绿灯+6 项全修+回归);后端 6409 passed;land e89964a8。S2~S7(hard-pin/持久化/dual门隔离/订阅接gateway/内嵌登录/前端)未起。卡 db95c0c6 |
 | §6 数学链门(§6 gate) | ✅ | section6_mathchain_gate.py 委托 spine_gate 8 deny 子句;gate_registry 7 门(2026-06-29 land ad7b9d4e,原文 git 历史) |
 | §5 Research Asset RAG | ✅ | /api/agent/chat+workbench+legacy Mode2 全接;test_agent_runtime_research_graph 等系列在当日后端全量 6313 passed/0 failed(2026-07-14 实跑)内全绿;建设明细见 git 历史 |
 | §6 Document Intelligence | ✅ | text/MD/PDF(PyMuPDF+OCR fallback)/HTML snapshot parser+batch+upload+目录同步;test_document_intelligence_parser_rag 在当日全量 6313 passed(2026-07-14 实跑)内全绿;边界:非联网 crawler/非表格理解 |

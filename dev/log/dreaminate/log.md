@@ -6,6 +6,11 @@
 ## <日期> · <标题>
 - 建/改了什么 + 命门  - 验收：<对抗测试 + 变异 + 全量数字>  - 下一步：<…> -->
 
+## 2026-07-15-0232 跨厂商切模型 S1 模型目录落 main——GET /api/llm/models + 对抗验证加固
+- model_catalog.py 唯一 LLM 模型清单源:api-key live 拉/models(加固 stream 上限+禁 redirect+fail-closed)、非聊天模型 selectable=false、订阅 curated(supports_tools=false)、TTL 缓存+single-flight+凭据零触碰;GET /api/llm/models 端点(订阅探测 60s TTL 缓存防 DoS)
+- deep-opus skeptic 对抗验证逮到 7 项(1 must-fix 假绿灯:上游挂掉时缓存命中把 curated_fallback 谎报 live 撞§3)全修+回归钉死;后端全量 6409 passed;land e89964a8,CI run 29404840965 in_progress
+- 参考 Claudian/Hermes/OpenClaw 源码的研究 agent 进行中,结果将融进 S2~S7(尤其 S6 内嵌登录中继);duet 蓝图 findings/dreaminate/model-switch-crossvendor-design-20260715.md
+
 ## 2026-07-15-0046 切片② dual-model 真跨厂商调用跑通(订阅路径)——卡 9c5e6975 done
 - 订阅账号 auth+onboarding 做全(subscription_cli_llm.py adapter+llm_auth.py onboarding+docs;陌生用户从零 status/login/verify)——两家订阅 CLI 真调通 pong,model 可切换
 - dual_model_review.py 接订阅(--subscription):builder=anthropic claude-sonnet-4-5/verifier=openai gpt-5.6-sol 真跑 independent=True,verifier 独立重算 IC=0.996834 逮 builder 夸大,evidence 密封;绕过 api-key/中继 401 blocker,真跨厂商比中继强
