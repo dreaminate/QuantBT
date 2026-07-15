@@ -14081,6 +14081,68 @@ def llm_status(user=Depends(require_user_dependency)) -> dict:
     }
 
 
+# ── 跨厂商切模型（S1）：模型目录端点 ──
+# 逐 provider 列可选模型：api-key 厂商 live 拉 {base}/models（非聊天模型 selectable=false）；
+# 订阅厂商 curated（supports_tools=false，订阅 adapter 拒 tools）。未 auth 厂商模型不可选。
+# key 只 server 端即时用于拉取，绝不回显/缓存。设计=findings/dreaminate/model-switch-crossvendor-design-20260715.md。
+_MODEL_CATALOG: Any = None
+
+
+def _model_catalog() -> Any:
+    """惰性单例 ModelCatalog（持久 requests.Session）。"""
+    global _MODEL_CATALOG
+    if _MODEL_CATALOG is None:
+        import requests
+
+        from .llm.model_catalog import ModelCatalog
+
+        _MODEL_CATALOG = ModelCatalog(session=requests.Session())
+    return _MODEL_CATALOG
+
+
+def _catalog_key_lookup(provider: str) -> str | None:
+    """从 keystore 即时取 api_key（仅供 model_catalog 拉 /models 用；绝不回显/缓存）。"""
+    from .agent.llm_providers import KEYSTORE_NAMES
+    from .security.keystore import KeystoreError
+
+    name = KEYSTORE_NAMES.get(provider)
+    if not name or KEYSTORE is None:
+        return None
+    try:
+        return KEYSTORE.fetch(name).api_key or None
+    except (KeystoreError, KeyError, PermissionError, ValueError):
+        return None
+
+
+@app.get("/api/llm/models")
+def llm_models(user=Depends(require_user_dependency)) -> dict:
+    """列出每个已 auth 厂商的可选模型（跨厂商切模型选择器用）。
+
+    api-key 厂商 live 拉 /models；订阅厂商 curated。未 auth 厂商 authed=false、模型不可选。
+    key 只 server 端用于拉取，绝不回显。
+    """
+    from .agent.subscription_cli_llm import auth_status_all
+
+    _ = _formal_owner_user_id(user)
+    providers_status = list_llm_status(
+        KEYSTORE,
+        onboarding_registry=ONBOARDING_REGISTRY,
+        owner_user_id=_LLM_SERVICE_PRINCIPAL,
+    )
+    try:
+        subscription_status = {
+            r["provider"]: bool(r.get("subscription_authed")) for r in auth_status_all()
+        }
+    except Exception:  # noqa: BLE001 —— 订阅探测(subprocess)失败不炸整个目录，退化为无订阅
+        subscription_status = {}
+    providers = _model_catalog().list_models(
+        providers_status=providers_status,
+        subscription_status=subscription_status,
+        key_lookup=_catalog_key_lookup,
+    )
+    return {"providers": providers}
+
+
 # ============================================================
 # v1.0.3 · Stripe 订阅 endpoint (scaffold)
 # ============================================================

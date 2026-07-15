@@ -340,3 +340,67 @@ def test_post_llm_test_falls_back_to_dev_local_when_no_key(client) -> None:
     # 可能是 ok=True 走到 DevLocalLLM，也可能因别的测试已设过 key 走真 provider；
     # 至少接口结构正确
     assert "provider" in body
+
+
+# ------- 跨厂商切模型（S1）：/api/llm/models 端点 -------
+
+def test_get_llm_models_requires_auth(monkeypatch) -> None:
+    """未认证 → 401（与其他 llm 路由一致）。"""
+    main.app.dependency_overrides.pop(require_user_dependency, None)
+    unauth = TestClient(main.app)
+    assert unauth.get("/api/llm/models").status_code == 401
+
+
+def test_get_llm_models_unauthed_providers_empty(isolated_client, monkeypatch) -> None:
+    """无 api-key、无订阅 → 每厂 authed=false、模型不可选、零 live 请求（订阅探测 patched）。"""
+    client, keystore, registry = isolated_client
+    # patch 订阅探测(否则跑真 CLI subprocess,依赖测试机是否登录→flaky)
+    monkeypatch.setattr(
+        "app.agent.subscription_cli_llm.auth_status_all",
+        lambda **kw: [
+            {"provider": "anthropic", "subscription_authed": False},
+            {"provider": "openai", "subscription_authed": False},
+        ],
+    )
+    # 隔离一个全新 catalog(带假 session:任何 get 都 fail,证明未认证时不该被调)
+    class _NoNetSession:
+        def get(self, *a, **k):  # noqa: ANN001
+            raise AssertionError("未认证厂商不得发起 live /models 请求")
+
+    from app.llm.model_catalog import ModelCatalog
+    monkeypatch.setattr(main, "_MODEL_CATALOG", ModelCatalog(session=_NoNetSession()))
+
+    r = client.get("/api/llm/models")
+    assert r.status_code == 200
+    rows = {p["provider"]: p for p in r.json()["providers"]}
+    for prov in ("anthropic", "openai", "qwen", "custom"):
+        assert rows[prov]["authed"] is False
+        assert rows[prov]["selectable"] is False
+        assert rows[prov]["models"] == []
+
+
+def test_get_llm_models_subscription_curated(isolated_client, monkeypatch) -> None:
+    """订阅登录的厂商 → curated 模型、supports_tools=false、不打厂商 /models。"""
+    client, keystore, registry = isolated_client
+    monkeypatch.setattr(
+        "app.agent.subscription_cli_llm.auth_status_all",
+        lambda **kw: [
+            {"provider": "anthropic", "subscription_authed": True},
+            {"provider": "openai", "subscription_authed": False},
+        ],
+    )
+
+    class _NoNetSession:
+        def get(self, *a, **k):  # noqa: ANN001
+            raise AssertionError("订阅路径不得打厂商 /models")
+
+    from app.llm.model_catalog import ModelCatalog
+    monkeypatch.setattr(main, "_MODEL_CATALOG", ModelCatalog(session=_NoNetSession()))
+
+    r = client.get("/api/llm/models")
+    assert r.status_code == 200
+    rows = {p["provider"]: p for p in r.json()["providers"]}
+    assert rows["anthropic"]["authed"] is True
+    assert rows["anthropic"]["auth_kind"] == "subscription_cli"
+    assert rows["anthropic"]["models"]
+    assert all(m["supports_tools"] is False for m in rows["anthropic"]["models"])
