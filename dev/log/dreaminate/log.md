@@ -6,6 +6,11 @@
 ## <日期> · <标题>
 - 建/改了什么 + 命门  - 验收：<对抗测试 + 变异 + 全量数字>  - 下一步：<…> -->
 
+## 2026-07-15-1330 F3 §11 读侧 manifest 完整性门 land(918daf7f)—3 轮跨厂商 codex 收敛
+- 真实 ashare_hs300 读价【前】拿磁盘字节 re-verify 注册的不可变 manifest per-file sha256→fail-closed(drift/corruption/误置 防御)。命门=单快照:manifest 解析一次,覆盖门(非空+逐条路径安全+覆盖将读文件)+per-file sha256(新加 verify_manifest_obj,复用 _sha256_file 单源)跑同一 DatasetManifest 对象、无二次读盘→split-manifest swap 不可绕;deletion 三态(absent/verdict≠pass→合成兜底保 CI、verdict=pass 缺文件→raise 绝不静默降级);verify-before-parse;research_quality_report 诚实收窄(未签名 manifest=defense-in-depth 非 authenticity)。
+- 验收:对抗测试 f3_01..f3_12(空/部分/不安全路径 manifest·bars/adj 篡改·缺 manifest·verify-before-parse·单快照 swap)带变异牙口(移门/two-read 翻红);**3 轮跨厂商 codex skeptic 4→2→0 洞收敛,round3 SOUND to land**(同厂商 pre-review 两轮全漏);land gate 全绿:后端全量 **6487 passed/13 skipped**、perf 72、前端 40 files/430+build ✓、compileall、validate_dev PASS、audit 基线 1c1788b0 不变。设计+arc 见 [[f3-readside-manifest-reverify-crossvendor-20260715]]。
+- 下一步:本地干净切片渐近清零(停止条件③);报 blocker 清单等用户挑高价值方向——尤其 Claude-Code agent epic fork-2(safety floor OS 沙箱 scope + A股 live 治理矛盾 + MCP 依赖)。
+
 ## 2026-07-15-1043 dual-model binding(卡 8be0e547)跨厂商 skeptic 判 NOT SOUND—未 land 已 revert
 - deep-opus 实现+我同厂商复审判 sound,但 codex 跨厂商 skeptic 逮 4×P1:digest 哈希 messages 非实发 payload(label actually_submitted 越界)·订阅 opt-in 后 _assert_submission_bound 必崩(burn 额度才炸)·submitted_prompt_digest 加 v3 必填废旧 seal/旧 journal 读不了·identity_basis 未持久化下游仍裸 independent:true
 - 同厂商复审不足以守诚实边界——本次现场证(被审对象就是独立性机制,独立审查抓出自己越界)。收紧诚实 scope+findings 见 [[dual-model-binding-crossvendor-findings-20260715]];卡保持 pool/todo,重做须跨厂商复验。main 干净

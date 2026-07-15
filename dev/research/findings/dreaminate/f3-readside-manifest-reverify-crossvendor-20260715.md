@@ -50,6 +50,14 @@ re-verify（sha256 不符 / 缺 manifest / manifest 不覆盖将读文件 → fa
   静默 deletion 降级；**不挡**：manifest+lake co-tamper（manifest 无签名可覆写）、data 或 manifest 的并发原子 swap（含 split-snapshot）、
   registry 被篡（改 verdict/file_paths）。是 defense-in-depth，非 authenticity proof。
 
-## 状态
-F3 **未 land、零码进 main**；代码 parked 本地分支 `slice/f3-readside-parked`（d2ec4238，不 push）。main 干净 @ 891c16fd。
-redo 须 single-snapshot + producer 诚实 + **再跨厂商 skeptic 复验**（同厂商 pre-review 本 session 两次漏——已证不足以守边界）。
+## 状态 — ✅ 已 land（918daf7f，round3 SOUND）
+**更新 2026-07-15**：按上方 single-snapshot spec 修完。FIX-A 单快照：`data_hash` 加 `verify_manifest_obj(manifest,root)`（additive，
+`verify_manifest` 委派、字节级不变，既有 caller 不动）；`_verify_real_manifest` 解析 manifest **一次**，覆盖门 + `verify_manifest_obj`
+sha256 跑在**同一** `DatasetManifest` 对象上，无二次读盘。FIX-B：`research_quality_report` 删「签名链挡对抗」假声明、诚实收窄。
+新测 `f3_12` 单快照 swap：spy 令 read#1 全量、read#2 缺 bars 条目 + 篡改 bars → 单快照必 raise，且断言 `reads==1`；two-read 变异翻红。
+**codex round3 跨厂商 re-verify 判 SOUND to land**（FIX-A/B CLOSED·无新洞·空 manifest 仍先 raise·verify 仍先于 parse）。
+land gate 全绿：后端全量 **6487 passed/13 skipped**、perf harness 72、前端 40 files/430 + build ✓、compileall、validate_dev PASS、
+audit 基线 `1c1788b0` 不变。产品码 commit **918daf7f** 进 main；parked 分支 d2ec4238 被取代。
+**教训**：同厂商 pre-review 两轮全漏（判 sound 却各有洞），3 轮跨厂商 codex skeptic 逐轮收敛（4→2→0）才 SOUND——**再证触碰
+completeness/honesty 的改动必须跨厂商复验，且可能需多轮**。残余（如实登记、非 fail-open，需研究面签名 receipt 后续卡）：
+未签名 manifest 的 manifest+lake co-tamper、size+mtime 保持的原子 data-file swap。

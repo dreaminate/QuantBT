@@ -11,30 +11,31 @@
   下一步转用户可感知面(队列见 frontier)。
 
 ### 顶部刷新块（本轮值 · 每轮覆写）
-- **六字段**:1 Local checkout=slice/model-switch-crossvendor @ **891c16fd**(= origin/main,干净;§11 PIT/F1 已 land 在此之前,
-  之上 5 个 docs-only commit[findings/state/log]);2 Remote=**origin/main 同 891c16fd**(本 tick 未新 land 产品码);
-  3 Local tests=§11/F1 上轮后端全量 6475 passed(真汇总行);F3 尝试 test_panel_source_pit 23 + data_quality/pipeline 46 passed(codex 亲跑)但**未 land**;
-  4 CI=**passed**(891c16fd docs-only 叠在绿码上);5 Production=Unqueried;6 User acceptance=**Unverified**。
-  本 session 累计 land 进 main:S6 订阅 in-app 登录(656c85eb)·§11 PIT(0c926235)·F1 建侧(a2b6d534)——皆 CI 绿。**F3 未 land(见断点)**。
+- **六字段**:1 Local checkout=slice/model-switch-crossvendor @ **918daf7f**(= origin/main,干净;**F3 §11 读侧 manifest 完整性门产品码已 land 于此**);
+  2 Remote=**origin/main 同 918daf7f**(F3 产品码 918daf7f + 上游 dev-docs;本 tick 之后另落 dev-docs commit);
+  3 Local tests=**后端全量 6487 passed/13 skipped/0 failed**(真汇总行,508s 实跑)+ perf harness 72 passed + 前端 40 files/430 passed + build ✓;
+  4 CI=**Unqueried**(F3 918daf7f 刚 push,未 gh 实查;下 tick 查);5 Production=Unqueried;6 User acceptance=**Unverified**。
+  本 session 累计 land 进 main:S6 订阅 in-app 登录(656c85eb)·§11 PIT(0c926235)·F1 建侧(a2b6d534)·**F3 读侧完整性门(918daf7f,3 轮跨厂商 SOUND)**。
 - **audit 基线四项**(不变):61 files / 20,339 lines / 26,209,663 bytes / sha `1c1788b0bbe2`。(改动全在 app/scripts/docs/dev,基线按构造不变。)
-- **F3 §11 读侧 manifest re-verify 尝试→跨厂商 2 轮判 NOT SOUND→parked(未 land)**:读价前拿磁盘字节 re-verify 注册
-  manifest per-file sha256(不符/缺/不覆盖将读文件→fail-closed)。deep-opus 建→我同厂商 pre-review 判 sound→**codex round1
-  逮 4 洞**(partial/empty-manifest fail-open·deletion→静默合成·overclaim·TOCTOU)→deep-opus 修闭 3/4(测试 23+46 passed codex 亲跑)→
-  **codex round2 re-verify 仍 2 must-fix**:①split-snapshot manifest race(覆盖读 manifest A、hash 重读 B,两读间换 manifest 绕 FIX-1
-  →修=单快照)②`research_quality_report`(hs300_pipeline.py:645)仍称签名链挡对抗=对研究面假。**未 land、代码 parked 本地
-  `slice/f3-readside-parked`(d2ec4238,不 push),main 干净**。redo spec + 全 arc 见 [[f3-readside-manifest-reverify-crossvendor-20260715]]。
-  **本 session 第 4 次跨厂商 skeptic 守边界(同厂商 pre-review 两次漏)**。
+- **✅ F3 §11 读侧 manifest 完整性门已 land(918daf7f,3 轮跨厂商 SOUND)**:真实 ashare_hs300 读价【前】拿磁盘字节 re-verify
+  注册的不可变 manifest per-file sha256→fail-closed(drift/corruption/误置 防御)。**跨厂商 3 轮收敛**:deep-opus 建→我同厂商
+  pre-review 判 sound(**漏**)→codex round1 逮 4 洞(partial/empty-manifest fail-open·deletion→静默合成·overclaim·TOCTOU)→修闭 3/4→
+  codex round2 逮 2(split-snapshot manifest race·research_quality_report 越界,**同厂商又漏**)→单快照修(manifest 解析一次,覆盖门+
+  verify_manifest_obj sha256 跑同一 DatasetManifest·reads==1 断言+swap 测试·two-read 变异翻红)+ 诚实收窄→**codex round3 判 SOUND to land**。
+  land gate 全绿(后端 6487·perf 72·前端 430·validate_dev·audit 基线不变)。设计+3 轮 arc 见
+  [[f3-readside-manifest-reverify-crossvendor-20260715]]。**本 session 跨厂商 skeptic 3 轮守住诚实/完整性边界(同厂商 pre-review 两次全漏——再证不足)**。
+  残余(如实登记非 fail-open):未签名 manifest 的 co-tamper·size+mtime 保持的原子 swap→需研究面签名 receipt(后续卡)。parked 分支 d2ec4238 已被 918daf7f 取代。
 - **§16 Run 首屏门 Explore 侦察结论=infra-blocked(未做)**:Playwright driver + strict validator **已建已测**在
   perf_harness.py(`measure_run_first_screen`:2426·`_playwright_run_first_screen_probe`:2159-2365·validator
   `_RUN_REQUIRED_SERIES` 六键:88/2077),缺的只是 runtime——live 鉴权后端 + seeded run(equity/benchmark 有点+coach)+
   同源 served SPA + Chromium 二进制 + 三 env var。**<2s 门在 2 核 CI 本质 flaky·harness 刻意设计为诚实 KNOWN_RUN_GAP
   不算 fail**(ci.yml:1-4)。一次性 dev receipt 可行(~30min,无新码)但非可复现门+触碰全栈起服务(keystore)——低价值,不强做。
 - **本地干净可收口切片已渐近清零(停止条件③临界)**:mechanical gap 全 land(on_event/bundle/validate_dev warn/worktree 盘点/
-  GoalProofLedger LRU/IDE 沙箱 P0 止血)。**剩全撞真实依赖/用户拍板**:①Run 首屏(infra:live 栈+Chromium+flaky)②卡 8be0e547
-  dual-model 加固(**registered 工程取舍待用户权衡**:4 adapter+全桩改+6356 测试回归 vs 边际防御)③F3 单快照 redo(我 no-3rd-round
-  自限·subtle·触共享 verify_manifest)④dual-model 真调用(待用户凭据)⑤Claude-Code agent epic fork-2(**用户命门·本 session 顶级优先**)
-  ⑥用户裁:worktree 删除/DVC ADR/Ed25519/质量门 scope/echarts lazy。真实数据/第二模型(dev codex 已用)/CI 皆已收口非 blocker。
-  **→ 报 blocker 清单等用户挑高价值方向(尤其 Claude-Code fork-2)。**
+  GoalProofLedger LRU/IDE 沙箱 P0 止血)+ **F3 完整性门本 tick land(918daf7f)**。**剩全撞真实依赖/用户拍板**:①Run 首屏
+  (infra:live 栈+Chromium+flaky·harness 刻意诚实 gap)②卡 8be0e547 dual-model 加固(**registered 工程取舍待用户权衡**:4 adapter+全桩改+
+  6356 测试回归 vs 边际防御)③dual-model 真调用(待用户凭据)④Claude-Code agent epic fork-2(**用户命门·本 session 顶级优先**:
+  floor OS/网络沙箱 scope + A股 live 治理矛盾 + MCP 依赖)⑤用户裁:worktree 删除/DVC ADR/Ed25519/质量门 scope/echarts lazy。
+  真实数据/第二模型(dev codex 已用)/CI 皆已收口非 blocker。**→ F3 land 后仍报 blocker 清单等用户挑高价值方向(尤其 Claude-Code fork-2)。**
 - **断点**:**当前战役=Claudian 式「每对话跨厂商切模型」(卡 db95c0c6,in_progress)**。蓝图 + 参考实现 + S6 记录见 findings。
   **✅ S1 目录 · ✅ S2 路由 · ✅ S3a-b gateway+pin 穿链 · ✅ S4 隔离(证成) · ✅ S6 订阅 in-app 登录 · ✅ S7 前端切换器**
   ——**API-key 每对话切模型端到端可用+有 UI;订阅账号可在应用内登录(设置页『登录订阅账号』→浏览器→轮询转绿,
