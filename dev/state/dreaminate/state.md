@@ -11,12 +11,19 @@
   下一步转用户可感知面(队列见 frontier)。
 
 ### 顶部刷新块（本轮值 · 每轮覆写）
-- **六字段**:1 Local checkout=slice/model-switch-crossvendor @ **a2b6d534**(**§11 PIT 复权读侧接线**(0c926235)
-  **+ F1 producer factors_all_finite 建门**(a2b6d534);product + 本轮 dev 落档);2 Remote=**待 land**(ff origin/main 到本轮 HEAD);
-  3 Local tests=后端全量 **6475 passed/13 skipped/0 failed**(真汇总行,9分08秒)+ 前端 build 绿(前端未改·上轮 430 passed);
-  4 CI=**passed**(auth slice b06ab42d «ci» = gh 实查 success;§11 97fd0b5f 上 tick 仍 in_progress[2核 runner 慢·非挂];本轮 land 后 gh 查);
-  5 Production=Unqueried;6 User acceptance=**Unverified**。本 session 累计 land:S6 订阅 in-app 登录(656c85eb,CI 绿)·§11 PIT(0c926235)·F1 建侧(a2b6d534)。
+- **六字段**:1 Local checkout=slice/model-switch-crossvendor @ **891c16fd**(= origin/main,干净;§11 PIT/F1 已 land 在此之前,
+  之上 5 个 docs-only commit[findings/state/log]);2 Remote=**origin/main 同 891c16fd**(本 tick 未新 land 产品码);
+  3 Local tests=§11/F1 上轮后端全量 6475 passed(真汇总行);F3 尝试 test_panel_source_pit 23 + data_quality/pipeline 46 passed(codex 亲跑)但**未 land**;
+  4 CI=**passed**(891c16fd docs-only 叠在绿码上);5 Production=Unqueried;6 User acceptance=**Unverified**。
+  本 session 累计 land 进 main:S6 订阅 in-app 登录(656c85eb)·§11 PIT(0c926235)·F1 建侧(a2b6d534)——皆 CI 绿。**F3 未 land(见断点)**。
 - **audit 基线四项**(不变):61 files / 20,339 lines / 26,209,663 bytes / sha `1c1788b0bbe2`。(改动全在 app/scripts/docs/dev,基线按构造不变。)
+- **F3 §11 读侧 manifest re-verify 尝试→跨厂商 2 轮判 NOT SOUND→parked(未 land)**:读价前拿磁盘字节 re-verify 注册
+  manifest per-file sha256(不符/缺/不覆盖将读文件→fail-closed)。deep-opus 建→我同厂商 pre-review 判 sound→**codex round1
+  逮 4 洞**(partial/empty-manifest fail-open·deletion→静默合成·overclaim·TOCTOU)→deep-opus 修闭 3/4(测试 23+46 passed codex 亲跑)→
+  **codex round2 re-verify 仍 2 must-fix**:①split-snapshot manifest race(覆盖读 manifest A、hash 重读 B,两读间换 manifest 绕 FIX-1
+  →修=单快照)②`research_quality_report`(hs300_pipeline.py:645)仍称签名链挡对抗=对研究面假。**未 land、代码 parked 本地
+  `slice/f3-readside-parked`(d2ec4238,不 push),main 干净**。redo spec + 全 arc 见 [[f3-readside-manifest-reverify-crossvendor-20260715]]。
+  **本 session 第 4 次跨厂商 skeptic 守边界(同厂商 pre-review 两次漏)**。
 - **断点**:**当前战役=Claudian 式「每对话跨厂商切模型」(卡 db95c0c6,in_progress)**。蓝图 + 参考实现 + S6 记录见 findings。
   **✅ S1 目录 · ✅ S2 路由 · ✅ S3a-b gateway+pin 穿链 · ✅ S4 隔离(证成) · ✅ S6 订阅 in-app 登录 · ✅ S7 前端切换器**
   ——**API-key 每对话切模型端到端可用+有 UI;订阅账号可在应用内登录(设置页『登录订阅账号』→浏览器→轮询转绿,
