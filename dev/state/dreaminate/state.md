@@ -48,9 +48,16 @@
   (起后端·解析 stream·驱动 UI+GraphCanvas)+量化 skill+workspace+画布绑定。**造法**=融合 OpenClaw/Hermes(均 MIT,可融,
   落码前 pin commit 复审 license)编排范式,按本仓架构重实现+量化提示词。**K3 经 MCP 化解**。**已拍**:量化专用·权限分级·
   扩 GraphCanvas·A(编排真 agent 后端)·三后端(claude/codex/opencode)。
-  **进行中**:deep-opus 设计 agent a6668b18(设计基础+薄纵切:AgentBackend 抽象+MCP server+一工具+红线 floor+编排 seam+
-  一个端到端薄片[app 里 agent 经一 MCP 工具操作画布·订阅 headless 后端])。返回后**跨厂商 codex 复审**→实现薄片。
-  下一步:接 a6668b18 设计→codex 复审→薄纵切实现(每片跨厂商对抗验证,红线 floor 结构不可绕做成对抗测试)。
+  **设计已定稿**(deep-opus a6668b18)见 [[claude-code-agent-foundation-design-20260715]]:AgentBackend 抽象(claude/codex/
+  opencode·claude 薄片选它·flag 已核)+MCP server(唯一工具 canvas_read 只读读规范图源)+**红线 floor 三层**(L0 架构无钥进程排除
+  order/venue 码·L1 危险工具不注册·L2 参数无条件拒无视 tier)+spawn 契约(strict-mcp/allowedTools 排 Bash/无 --dangerously/
+  throwaway ws/洗 env)+编排 seam(新 session_orchestrator 映射现有 SSE 词汇·前端不改)+薄片(真订阅 claude→MCP→现有 GraphCanvas)
+  +5 对抗测试(红线 bypass/tier 不放宽/L0 无钥/spawn 契约/无静默 fallback)+融合 OpenClaw/Hermes(MIT)。
+  **进行中**:**跨厂商 codex 复审红线 floor**(bmywopd2m·攻「结构不可绕」claim·尤其 L0 无钥能否成立/agent 自带 bash 那条道)——
+  safety 命门单厂商设计不足信(dual-model binding 教训),复审过再请用户批 fork2。
+  **blocking [需拍板]**（alignment doc line47:未批 fork2 前不落任何 agent-workspace 执行码）:①fork2 安全 floor 批准 ②新 MCP 依赖
+  (官方 mcp SDK 推 vs FastMCP vs 自建 stdio)+传输(stdio 独立进程 推 vs HTTP)③薄片面(只读 canvas_read 推)。
+  下一步:codex floor 复审→修洞(如有)→请用户批 fork2+MCP 依赖→落薄片(读-only·每片跨厂商验证)。
 
 ## 状态表（确定的才标 ✅,证据必挂）
 | 子系统/能力 | 状态 | 证据 |
