@@ -67,13 +67,20 @@ def _load_llm_keys() -> dict[str, dict[str, str]]:
     for provider in ("anthropic", "openai"):
         entry = llm.get(provider, {}) or {}
         key = entry.get("api_key", "")
-        if not key:
-            raise SystemExit(f"secrets.yaml 缺 llm.{provider}.api_key,双厂商审查无法进行")
-        out[provider] = {
-            "api_key": key,
-            "base_url": entry.get("base_url", "") or "",
-            "model": entry.get("model", "") or "",
-        }
+        # 类型门:非字符串(如误配成数值)的 key 进 requests header 会在异常链里
+        # 原样回显;这里 fail-closed 且值不回显(误配字面量也可能是敏感材料)
+        if not isinstance(key, str) or not key.strip():
+            raise SystemExit(
+                f"secrets.yaml 的 llm.{provider}.api_key 缺失或不是非空字符串,"
+                "双厂商审查无法进行(值不回显)"
+            )
+        base_url = entry.get("base_url", "") or ""
+        model = entry.get("model", "") or ""
+        if not isinstance(base_url, str) or not isinstance(model, str):
+            raise SystemExit(
+                f"secrets.yaml 的 llm.{provider}.base_url/model 必须是字符串(值不回显)"
+            )
+        out[provider] = {"api_key": key, "base_url": base_url, "model": model}
     return out
 
 
@@ -93,7 +100,10 @@ def preflight(keys: dict[str, dict[str, str]]) -> list[str]:
     for provider, entry in keys.items():
         key, base, model = entry["api_key"], entry["base_url"], entry["model"]
         try:
-            if provider == "anthropic" and "/openai" not in base:
+            # 探测协议必须与 gateway 实调协议一致,否则探测通过≠真实调用能通:
+            # gateway 对 anthropic 槽构造 AnthropicLLM(原生 /messages),对 openai 槽
+            # 构造 OpenAI 兼容 /chat/completions——preflight 按同样的分派探测。
+            if provider == "anthropic":
                 resp = requests.post(
                     f"{(base or 'https://api.anthropic.com/v1').rstrip('/')}/messages",
                     headers={"x-api-key": key, "anthropic-version": "2023-06-01"},
@@ -102,7 +112,6 @@ def preflight(keys: dict[str, dict[str, str]]) -> list[str]:
                     timeout=30,
                 )
             else:
-                # OpenAI 兼容端点(含把 anthropic 挂在 OpenAI 兼容中继的情形)
                 resp = requests.post(
                     f"{(base or 'https://api.openai.com/v1').rstrip('/')}/chat/completions",
                     headers={"Authorization": f"Bearer {key}"},
@@ -115,9 +124,9 @@ def preflight(keys: dict[str, dict[str, str]]) -> list[str]:
                 advice = {
                     401: "key 无效/过期:更新 secrets.yaml 对应 api_key",
                     403: "key 权限不足:检查中继账户",
-                    404: "端点路径不匹配:anthropic 原生协议(/messages)打在 OpenAI 兼容"
-                         "中继上会 404——中继场景应把该 provider 配成 OpenAI 兼容形态"
-                         "(base_url 含 /openai 时本 preflight 已自动按兼容协议探测)",
+                    404: "端点路径不匹配:anthropic 槽走原生 /messages(与 gateway 实调"
+                         "同协议)——base_url 若是 OpenAI 兼容中继形态(含 /openai),"
+                         "AnthropicLLM 打不通,需改配原生 anthropic 端点",
                 }.get(resp.status_code, "检查 base_url/model 配置")
                 failures.append(f"{provider}: HTTP {resp.status_code} {body} → {advice}")
         except Exception as exc:  # noqa: BLE001
@@ -151,7 +160,15 @@ def run_review(out_dir: Path, *, task: str = BUILDER_TASK,
     from app.llm.routing import RoleCapabilityRequest
     from app.security.keystore import InMemoryKeystore, KeystoreRecord, SecureKeystore
 
-    keys = keys if keys is not None else _load_llm_keys()
+    if keys is None:
+        # 生产路径(直接编程调用也一样):载入即探测,fail-closed。main() 载入一次后
+        # 显式传入同一份 keys,消除「探测的凭据 ≠ 实调的凭据」的双载 TOCTOU。
+        keys = _load_llm_keys()
+        failures = preflight(keys)
+        if failures:
+            for line in failures:
+                print(f"preflight FAIL — {line}", file=sys.stderr)
+            raise SystemExit("双厂商连通探测未过:修复凭据/端点后重跑")
     missing = [p for p in ("anthropic", "openai") if not (keys.get(p) or {}).get("api_key")]
     if missing:
         raise SystemExit(
@@ -163,8 +180,13 @@ def run_review(out_dir: Path, *, task: str = BUILDER_TASK,
             "llm.anthropic 与 llm.openai 配置了同一个 api_key——可证同源,"
             "独立性主张不成立,拒绝运行"
         )
-    same_base_relay = bool(keys["anthropic"]["base_url"]) and (
-        keys["anthropic"]["base_url"] == keys["openai"]["base_url"]
+    def _norm_base(url: str) -> str:
+        # 归一化后比较(尾斜杠/大小写);host 别名与默认端口等价性属 DNS 层,
+        # 本披露是 best-effort,不是同源性证明
+        return url.strip().rstrip("/").lower()
+
+    same_base_relay = bool(_norm_base(keys["anthropic"]["base_url"])) and (
+        _norm_base(keys["anthropic"]["base_url"]) == _norm_base(keys["openai"]["base_url"])
     )
     ks = SecureKeystore(InMemoryKeystore())
     for provider, entry in keys.items():
@@ -263,41 +285,70 @@ def run_review(out_dir: Path, *, task: str = BUILDER_TASK,
             "verifier_context_ref": binding.verifier_context_ref,
             "verifier_prompt_digest_expected": expected_digest,
         },
+        # 机器可读的主张边界:independent=True 的含义是「按配置槽声明的跨厂商」,
+        # provider 身份由槽名+模型名判族(model_identity),不是远端后端的同源性证明
+        "independence_claim_scope": "cross_vendor_as_configured",
+        "caveats": (["same_base_url_relay"] if same_base_relay else []),
         "transport_disclosure": (
             "双 provider 经同一 base_url 中继:上游厂商独立性不可由本脚本证明,"
             "依赖中继诚实路由(如实披露,用户自判是否可信)"
-            if same_base_relay else "各 provider 独立端点配置"
+            if same_base_relay else "各 provider 独立端点配置(归一化比较,best-effort)"
         ),
         "records_path": str(out_dir / "llm_call_records.jsonl"),
         "builder_output_excerpt": builder_output[:200],
         "verifier_output_excerpt": verifier_result.response.content[:200],
     }
-    # 密封:与 LLMCallRecord 同一把 HMAC key,evidence 事后被改(如手翻 independent)
-    # 可由 verify_evidence_file 检出——密封 JSONL 与 evidence 不再存在可信度落差。
+    # 密封边界(如实):在「seal key 可信」前提下,检出对内层 evidence+seal_algo 的
+    # 未重签修改;不防持 key 者重签、文件删除或整包回滚——那属外部审计/多副本层。
+    # key 与 LLMCallRecord 同一把,evidence 与密封 JSONL 之间无可信度落差。
+    seal_algo = "hmac-sha256/sorted-compact-json"
     seal = hmac.new(
-        store.seal_secret, _canonical_evidence_bytes(evidence), hashlib.sha256,
+        store.seal_secret,
+        _canonical_evidence_bytes({"seal_algo": seal_algo, "evidence": evidence}),
+        hashlib.sha256,
     ).hexdigest()
-    doc = {"evidence": evidence, "evidence_seal": seal,
-           "seal_algo": "hmac-sha256/sorted-compact-json"}
+    doc = {"evidence": evidence, "evidence_seal": seal, "seal_algo": seal_algo}
     text = json.dumps(doc, ensure_ascii=False, indent=2)
     for provider, entry in keys.items():
-        if entry["api_key"] in text:  # 不用 assert:-O 剥断言
+        # 双扫:序列化文本 + 反序列化对象逐字符串(key 含引号/反斜杠等 JSON 转义
+        # 字符时,序列化文本匹配会漏,对象层不会)。不用 assert:-O 剥断言。
+        if entry["api_key"] in text or any(
+            entry["api_key"] in s for s in _iter_strings(doc)
+        ):
             raise SystemExit("内部错误:key 泄入证据输出,拒绝落盘")
     (out_dir / "review_evidence.json").write_text(text, encoding="utf-8")
     return evidence
 
 
-def _canonical_evidence_bytes(evidence: dict) -> bytes:
+def _iter_strings(obj):
+    if isinstance(obj, str):
+        yield obj
+    elif isinstance(obj, dict):
+        for v in obj.values():
+            yield from _iter_strings(v)
+    elif isinstance(obj, (list, tuple)):
+        for v in obj:
+            yield from _iter_strings(v)
+
+
+def _canonical_evidence_bytes(payload: dict) -> bytes:
     return json.dumps(
-        evidence, ensure_ascii=False, sort_keys=True, separators=(",", ":"),
+        payload, ensure_ascii=False, sort_keys=True, separators=(",", ":"),
     ).encode("utf-8")
 
 
 def verify_evidence_file(path: Path, seal_secret: bytes) -> bool:
-    """复验 evidence 密封:True=未被篡改。供审计与测试重验。"""
+    """复验 evidence 密封。True=内层 evidence+seal_algo 未被(未重签地)修改。
+
+    边界:前提是 seal key 可信且未泄;不检测持 key 重签、文件删除、旧包整体回滚。
+    """
     doc = json.loads(Path(path).read_text(encoding="utf-8"))
     expected = hmac.new(
-        seal_secret, _canonical_evidence_bytes(doc["evidence"]), hashlib.sha256,
+        seal_secret,
+        _canonical_evidence_bytes(
+            {"seal_algo": doc.get("seal_algo", ""), "evidence": doc["evidence"]}
+        ),
+        hashlib.sha256,
     ).hexdigest()
     return hmac.compare_digest(expected, str(doc.get("evidence_seal", "")))
 
@@ -309,8 +360,9 @@ def main(argv: list[str] | None = None) -> int:
         help="密封记录与证据输出目录(建议 <repo>/data/datasets/llm_reviews/<ts>,gitignored)",
     )
     args = parser.parse_args(argv)
-    # preflight 不设跳过口:诊断门常开(fail-closed),失败即指路退出
-    failures = preflight(_load_llm_keys())
+    # 载入一次、探测与实调用同一份 keys(消双载 TOCTOU);preflight 无跳过口
+    keys = _load_llm_keys()
+    failures = preflight(keys)
     if failures:
         for line in failures:
             print(f"preflight FAIL — {line}", file=sys.stderr)
@@ -318,8 +370,9 @@ def main(argv: list[str] | None = None) -> int:
             "双厂商连通探测未过:修复上述凭据/端点后重跑。"
             "(应用内真实双模型审查依赖有效的 anthropic+openai 凭据)"
         )
-    evidence = run_review(Path(args.out_dir))
-    print(json.dumps(evidence, ensure_ascii=False, indent=2))
+    evidence = run_review(Path(args.out_dir), keys=keys)
+    # 打印密封后的全文(与落盘一致),而非未密封内层——stdout 副本同样可复验
+    print((Path(args.out_dir) / "review_evidence.json").read_text(encoding="utf-8"))
     return 0 if evidence["independent"] else 2
 
 

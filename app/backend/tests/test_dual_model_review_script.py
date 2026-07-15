@@ -67,7 +67,9 @@ def test_stubbed_cross_vendor_review_end_to_end(tmp_path):
     assert evidence["independent"] is True
     assert evidence["builder"]["provider"] == "anthropic"
     assert evidence["verifier"]["provider"] == "openai"
-    assert evidence["transport_disclosure"] == "各 provider 独立端点配置"
+    # 主张边界必须机器可读:True 的含义是「按配置槽声明的跨厂商」,不是后端同源性证明
+    assert evidence["independence_claim_scope"] == "cross_vendor_as_configured"
+    assert evidence["caveats"] == []
     records = [
         json.loads(line)
         for line in (out / "llm_call_records.jsonl")
@@ -111,14 +113,18 @@ def test_same_key_spoof_refused(tmp_path):
 
 
 def test_same_base_url_relay_disclosed(tmp_path):
-    # 同 base_url 中继:合法(上游可真跨厂商)但不可证 → evidence 必须如实披露
+    # 同 base_url 中继:合法(上游可真跨厂商)但不可证 → evidence 必须如实披露,
+    # 且披露是机器可读 caveat;归一化比较(尾斜杠/大小写)不被表面差异绕过
     out = tmp_path / "out4"
-    relay = "https://relay.example/openai/v1"
     evidence = dmr.run_review(
         out,
-        keys=_fake_keys(anthropic={"base_url": relay}, openai={"base_url": relay}),
+        keys=_fake_keys(
+            anthropic={"base_url": "https://Relay.example/openai/v1/"},
+            openai={"base_url": "https://relay.example/openai/v1"},
+        ),
         client_factory=lambda cred: _StubClient(cred.provider),
     )
+    assert "same_base_url_relay" in evidence["caveats"]
     assert "中继" in evidence["transport_disclosure"]
 
 
@@ -174,7 +180,9 @@ def test_secret_echo_into_verifier_prompt_blocked_by_gateway(tmp_path):
 
 
 def test_evidence_tamper_detected_by_seal(tmp_path):
-    # 种坏:落盘后手翻 independent → 密封复验必红
+    # 种坏:落盘后篡改 → 密封复验必红。两种篡改都验:
+    # ① 翻 independent;② 改非 independent 字段(builder.call_id)——第二种专杀
+    # 「verify 只看 independent 是否为 True」的伪验证器变异。
     out = tmp_path / "out7"
     dmr.run_review(
         out,
@@ -182,12 +190,25 @@ def test_evidence_tamper_detected_by_seal(tmp_path):
         client_factory=lambda cred: _StubClient(cred.provider),
     )
     path = out / "review_evidence.json"
-    doc = json.loads(path.read_text(encoding="utf-8"))
-    doc["evidence"]["independent"] = False  # 任意方向的事后篡改
-    path.write_text(json.dumps(doc, ensure_ascii=False, indent=2), encoding="utf-8")
     from app.llm.call_record_store import LLMCallRecordStore
 
     seal_secret = LLMCallRecordStore(out / "llm_call_records.jsonl").seal_secret
+    pristine = path.read_text(encoding="utf-8")
+
+    doc = json.loads(pristine)
+    doc["evidence"]["independent"] = False
+    path.write_text(json.dumps(doc, ensure_ascii=False, indent=2), encoding="utf-8")
+    assert dmr.verify_evidence_file(path, seal_secret) is False
+
+    doc = json.loads(pristine)
+    doc["evidence"]["builder"]["call_id"] = "forged-call-id"  # independent 保持 True
+    path.write_text(json.dumps(doc, ensure_ascii=False, indent=2), encoding="utf-8")
+    assert dmr.verify_evidence_file(path, seal_secret) is False
+
+    # 篡改 seal_algo 声明本身也必红(algo 在签名覆盖范围内)
+    doc = json.loads(pristine)
+    doc["seal_algo"] = "none"
+    path.write_text(json.dumps(doc, ensure_ascii=False, indent=2), encoding="utf-8")
     assert dmr.verify_evidence_file(path, seal_secret) is False
 
 
@@ -215,6 +236,108 @@ def test_loader_missing_provider_key_is_actionable(monkeypatch, tmp_path):
     monkeypatch.setattr(Path, "home", classmethod(lambda cls: tmp_path))
     with pytest.raises(SystemExit, match="llm.openai"):
         dmr._load_llm_keys()
+
+
+def test_loader_rejects_non_string_key_without_echo(monkeypatch, tmp_path):
+    # 种坏:api_key 误配成数值 → 若放行,数值 key 在 requests 异常链里会原样回显
+    # (str.replace 对 int 还会 TypeError 二次泄漏)。loader 必须拒且不回显值。
+    qdir = tmp_path / ".quantbt"
+    qdir.mkdir()
+    (qdir / "secrets.yaml").write_text(
+        "llm:\n  anthropic:\n    api_key: 12345678901234567890\n"
+        "  openai:\n    api_key: test-openai-key-x\n",
+        encoding="utf-8",
+    )
+    monkeypatch.setattr(Path, "home", classmethod(lambda cls: tmp_path))
+    with pytest.raises(SystemExit) as excinfo:
+        dmr._load_llm_keys()
+    assert "12345678901234567890" not in str(excinfo.value)
+    assert "不是非空字符串" in str(excinfo.value)
+
+
+def test_secret_with_json_escape_chars_still_refused(tmp_path):
+    # 种坏:key 含引号/反斜杠(JSON 序列化后字面量变形,纯文本扫描会漏)→
+    # 对象层递归扫描必须仍然抓住 verifier 输出回显
+    out = tmp_path / "out8"
+    tricky = 'test-key-with"quote-and\\backslash-000000'
+    keys = _fake_keys(anthropic={"api_key": tricky})
+    with pytest.raises(SystemExit, match="拒绝落盘"):
+        dmr.run_review(
+            out,
+            keys=keys,
+            client_factory=lambda cred: _StubClient(
+                cred.provider,
+                echo_secret=tricky if cred.provider == "openai" else None,
+            ),
+        )
+    assert not (out / "review_evidence.json").exists()
+
+
+def test_script_propagates_mechanism_verdict_not_its_own(monkeypatch, tmp_path):
+    # 种坏:脚本把 independent 硬编码 True(伪造判定)→ 本测强制机制层返回 False,
+    # evidence 必须如实为 False——脚本只许转录 evaluate_independence 的判定
+    import app.llm.call_record as cr
+
+    monkeypatch.setattr(
+        cr, "evaluate_independence",
+        lambda builder, verifier: cr.IndependenceVerdict(False, "forced-by-test"),
+    )
+    evidence = dmr.run_review(
+        tmp_path / "out9",
+        keys=_fake_keys(),
+        client_factory=lambda cred: _StubClient(cred.provider),
+    )
+    assert evidence["independent"] is False
+    assert evidence["reason"] == "forced-by-test"
+
+
+def test_binding_validation_failure_propagates(monkeypatch, tmp_path):
+    # 种坏:删掉 validate_review_subject_binding 调用 → 本测让它必炸,炸必须外传
+    import app.llm.call_record as cr
+
+    def _boom(**_kw):
+        raise cr.LLMRecordError("forced-invalid-binding")
+
+    monkeypatch.setattr(cr, "validate_review_subject_binding", _boom)
+    with pytest.raises(cr.LLMRecordError, match="forced-invalid-binding"):
+        dmr.run_review(
+            tmp_path / "out10",
+            keys=_fake_keys(),
+            client_factory=lambda cred: _StubClient(cred.provider),
+        )
+
+
+def test_main_stops_before_review_when_preflight_fails(monkeypatch, tmp_path):
+    # 种坏:main 无视 preflight 失败继续跑 → 哨兵 run_review 被调即红
+    called = []
+    monkeypatch.setattr(dmr, "_load_llm_keys", lambda: _fake_keys())
+    monkeypatch.setattr(dmr, "preflight", lambda keys: ["anthropic: HTTP 401 → 修凭据"])
+    monkeypatch.setattr(
+        dmr, "run_review",
+        lambda *a, **kw: called.append(1) or {"independent": True},
+    )
+    with pytest.raises(SystemExit, match="探测未过"):
+        dmr.main(["--out-dir", str(tmp_path / "out11")])
+    assert called == []
+
+
+def test_preflight_exception_branch_redacts_all_keys(monkeypatch):
+    # 种坏:探测抛异常且异常文本夹带两个 key(代理/网络层回显)→ 诊断输出全脱敏
+    import requests
+
+    def _boom(*a, **kw):
+        raise RuntimeError(
+            f"proxy echo {FAKE_KEYS['anthropic']['api_key']} "
+            f"{FAKE_KEYS['openai']['api_key']}"
+        )
+
+    monkeypatch.setattr(requests, "post", _boom)
+    failures = dmr.preflight(_fake_keys())
+    assert len(failures) == 2
+    joined = "\n".join(failures)
+    for entry in FAKE_KEYS.values():
+        assert entry["api_key"] not in joined
+    assert "[REDACTED]" in joined
 
 
 def test_preflight_redacts_every_loaded_key(monkeypatch):
