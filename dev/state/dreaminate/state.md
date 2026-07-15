@@ -11,23 +11,23 @@
   下一步转用户可感知面(队列见 frontier)。
 
 ### 顶部刷新块（本轮值 · 每轮覆写）
-- **六字段**:1 Local checkout=slice/model-switch-crossvendor @ 6a8990e9(**S2 hard-pin routing 落 main**:
-  路由原语 + 参考实现研究 + 对抗验证加固);2 Remote=已 push,origin/main ff 到 6a8990e9(8ca47e98..6a8990e9);
-  3 Local tests=后端全量 **6423 passed/13 skipped/0 failed**(真汇总行,8分45秒,2026-07-15);validate_dev
-  PASS;compileall OK;4 CI=S1 run 29404958507 success(8ca47e98);S2 push 后新 run 待 gh 查(记账 push 后);
+- **六字段**:1 Local checkout=slice/model-switch-crossvendor @ dc940949(**S3a gateway pin 注入落 main**:
+  default_pin + CRITICAL 跨厂商泄漏修复);2 Remote=已 push,origin/main ff 到 dc940949(c5db12cf..dc940949);
+  3 Local tests=后端全量 **6429 passed/13 skipped/0 failed**(真汇总行,8分41秒,2026-07-15);validate_dev
+  PASS;compileall OK;4 CI=S1 run 29404958507 success;S2/S3a push 后新 run 待 gh 查(记账 push 后单查最终 head);
   5 Production=Unqueried;6 User acceptance=Unverified。
 - **audit 基线四项**(不变):61 files / 20,339 lines / 26,209,663 bytes / sha `1c1788b0bbe2`。
   (本特性改动全在 app/backend/dev,不跑数据管线,基线按构造不变。)
 - **断点**:**当前战役=Claudian 式「每对话跨厂商切模型」(卡 db95c0c6,in_progress)**。蓝图
-  `findings/dreaminate/model-switch-crossvendor-design-20260715.md`(硬不变量+S1~S7)。
-  **S1 模型目录 ✅ done+CI success · S2 hard-pin routing ✅ done**(各经 deep-opus skeptic 对抗验证:
-  S1 逮 1 假绿灯+6 项、S2 逮 3 MEDIUM含 1 假声称,全修+回归)。参考实现研究(Claudian/Hermes/OpenClaw
-  全 MIT/Apache)✅ 落 `findings/dreaminate/model-switch-reference-impls-20260715.md`。
-  **下一 tick 起 S3 conversation 持久化 + pin 穿进主链**:pin 现在**全仓无调用方**(routing 原语孤立),
-  S3 接线——metadata.llm_selection owner-scoped 原子更新、`POST/PATCH` selection API、
-  **pin 在 gateway 构造期注入(default_pin)覆盖 GatewayLLMAdapter+GatewayBackedLLMClient**(K1 真实主链)、
-  selection digest 进 claim(K8)、端点 authed 校验。**skeptic 前向提醒**:S3+ 接线时 verifier 请求必带
-  independence_required=True,建议纵深防御直接剥 pin 字段。顺序 S3→S4→S5→S6→S7。
+  `findings/dreaminate/model-switch-crossvendor-design-20260715.md` + 参考实现 `...reference-impls-20260715.md`。
+  **S1 模型目录 ✅ · S2 hard-pin routing ✅ · S3a gateway pin 注入 ✅**(各经 deep-opus skeptic 对抗验证:
+  S1 逮 1 假绿灯、S2 逮 3 MEDIUM含假声称、**S3a 逮 CRITICAL 跨厂商泄漏(pin 在 fallback 蒸发)**,全修+变异门)。
+  **下一 tick 起 S3b**:pin 已到 gateway 但**生产装配点 main.py `_current_agent_gateway`(~5022)尚未传 default_pin**
+  (诚实残余·机制半接线)。S3b 接线——① `chat_conversations.metadata.llm_selection` owner-scoped 原子更新
+  (`agent/conversations.py:25-38,178-223`);② selection API(`POST /api/agent/chat/start` 带初始 selection、
+  `PATCH .../llm-selection`、bare chat/workbench SSE 加 conversation_id);③ `_current_agent_gateway(run_id, model_pin)`
+  →`build_agent_llm_gateway(default_pin)`;④ 端点 authed 校验 pin 厂商;⑤ selection digest 进 claim(K8)。
+  **skeptic 前向铁律**:verifier 请求必带 independence_required=True(gateway 已叠 role 门纵深)。顺序 S3b→S4→S5→S6→S7。
   **待拍板(非阻塞)**:直连指纹方案(ToS 灰区,已默认走 CLI 子进程 ToS-safe)。ultracode:每片落码后对抗验证。
 
 ## 状态表（确定的才标 ✅,证据必挂）
@@ -41,7 +41,8 @@
 | §11 数据接入·Tushare 管线 | ✅ | scripts/hs300_onboard.py 六子命令(store-token/keygen/pull/preflight/build/build-research/bench);限流 180/分+退避+幂等;docs/hs300-quickstart.md;data_onboarding 测试 41 passed(含 codex 全部反例回归) |
 | §11 PIT/复权读侧接线 | 🟡 | raw+adj_factor 分离已交付;panel_source 唯一复权落点未接(后续卡) |
 | §4 跨厂商切模型·S1 模型目录 | ✅ | app/llm/model_catalog.py 唯一 LLM 模型清单源(api-key live 拉/models 加固 stream 上限+禁 redirect+fail-closed、非聊天 selectable=false、订阅 curated supports_tools=false、TTL+single-flight+凭据零触碰)+GET /api/llm/models(订阅探测 60s TTL 缓存);对抗测试 29(deep-opus skeptic 逮 1 假绿灯+6 项全修+回归);后端 6409 passed;land e89964a8+CI success。卡 db95c0c6 |
-| §4 跨厂商切模型·S2 hard-pin routing | ✅ | routing.py pin_provider/pin_model 硬约束+resolve 硬 pin 过滤(仅 !independence_required 生效→dual 门物理免疫、pool 不变保 no-mix、pin 无候选→PinnedModelUnavailable 绝不跨厂商 fallback、pin_model tier 优先用登记档);对抗测试 14(skeptic 逮 3 MEDIUM:degraded 判反/fallback 锁死实靠断路器/命门测试弱,全修+补测);gateway 76+全量 6423 passed;land 6a8990e9。**pin 现全仓无调用方**(原语孤立),穿主链=S3 |
+| §4 跨厂商切模型·S2 hard-pin routing | ✅ | routing.py pin_provider/pin_model 硬约束+resolve 硬 pin 过滤(仅 !independence_required 生效→dual 门物理免疫、pool 不变保 no-mix、pin 无候选→PinnedModelUnavailable 绝不跨厂商 fallback、pin_model tier 优先用登记档);对抗测试 14(skeptic 逮 3 MEDIUM:degraded 判反/fallback 锁死实靠断路器/命门测试弱,全修+补测);gateway 76+全量 6423 passed;land 6a8990e9 |
+| §4 跨厂商切模型·S3a gateway pin 注入 | ✅ | LLMGateway(default_pin) 在 complete() 盖章成 hard pin(仅非独立且非 verifier role→dual 门物理免疫叠双层);盖章后 effective_capability 贯穿 _invoke_with_fallback→S2 跨厂商锁死端到端成立(K1:真实主链走 GatewayLLMAdapter);对抗测试 6(skeptic 逮 **CRITICAL 跨厂商泄漏**——盖章在 fallback 蒸发,已修+变异门钉死;+MEDIUM-2 spy 门+LOW-4 role 纵深);全量 6429 passed;land dc940949。**生产装配点未传 default_pin**(半接线),接线=S3b |
 | §6 数学链门(§6 gate) | ✅ | section6_mathchain_gate.py 委托 spine_gate 8 deny 子句;gate_registry 7 门(2026-06-29 land ad7b9d4e,原文 git 历史) |
 | §5 Research Asset RAG | ✅ | /api/agent/chat+workbench+legacy Mode2 全接;test_agent_runtime_research_graph 等系列在当日后端全量 6313 passed/0 failed(2026-07-14 实跑)内全绿;建设明细见 git 历史 |
 | §6 Document Intelligence | ✅ | text/MD/PDF(PyMuPDF+OCR fallback)/HTML snapshot parser+batch+upload+目录同步;test_document_intelligence_parser_rag 在当日全量 6313 passed(2026-07-14 实跑)内全绿;边界:非联网 crawler/非表格理解 |

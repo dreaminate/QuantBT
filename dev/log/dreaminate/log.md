@@ -6,6 +6,11 @@
 ## <日期> · <标题>
 - 建/改了什么 + 命门  - 验收：<对抗测试 + 变异 + 全量数字>  - 下一步：<…> -->
 
+## 2026-07-15-0342 跨厂商切模型 S3a gateway 构造期 pin 注入落 main(K1)——含对抗验证逮到的 CRITICAL 跨厂商泄漏修复
+- LLMGateway(default_pin=(provider,model)) 在 complete() 盖章成 hard pin,仅非独立且非 verifier role 生效(dual 门物理免疫);解决 codex K1(真实主链走 GatewayLLMAdapter,pin 须 gateway 层注入)
+- S3a skeptic 逮 CRITICAL-1:盖章只写 complete() 局部 req,但 _invoke_with_fallback 重取原始 capability→fallback 时 pin 蒸发→静默跨厂商泄漏(跑通复现:default_pin=anthropic 首刺失败→prompt 静默送 openai)。修:effective_capability 穿进 _invoke_with_fallback,record 仍读原始保诚实;补变异门(此前零覆盖 leak 绿着 ship)+LOW-4 role 纵深+MEDIUM-2 spy 门
+- 全量 6429 passed;land dc940949。**pin 现在真到 gateway 但生产装配点 main.py _current_agent_gateway 尚未传 default_pin**(诚实残余,机制半接线)——S3b 接:对话持久化 metadata.llm_selection+selection API+_current_agent_gateway(model_pin)。skeptic 前向:verifier 请求必带 independence_required=True
+
 ## 2026-07-15-0307 跨厂商切模型 S2 hard-pin routing 落 main + 参考实现研究
 - routing.py RoleCapabilityRequest 加 pin_provider/pin_model,resolve 硬 pin 过滤仅 independence_required==False 生效(dual 门物理免疫)、pool 不变保 no-mix、pin 厂商无候选→PinnedModelUnavailable 绝不跨厂商 fallback
 - S2 skeptic 逮 3 MEDIUM(命门稳固无绕过;M1 pin 丢弃登记 tier 致 degraded 判反+可绕 strict_degrade、M2 pin_model fallback 锁死实际靠 health 断路器隐性兜底非声称的 signature、M3 命门测试不够强)全修+补真测试;S2 测 14+gateway 76 无回归;全量 6423 passed;land 6a8990e9
