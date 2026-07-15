@@ -53,11 +53,17 @@
   order/venue 码·L1 危险工具不注册·L2 参数无条件拒无视 tier)+spawn 契约(strict-mcp/allowedTools 排 Bash/无 --dangerously/
   throwaway ws/洗 env)+编排 seam(新 session_orchestrator 映射现有 SSE 词汇·前端不改)+薄片(真订阅 claude→MCP→现有 GraphCanvas)
   +5 对抗测试(红线 bypass/tier 不放宽/L0 无钥/spawn 契约/无静默 fallback)+融合 OpenClaw/Hermes(MIT)。
-  **进行中**:**跨厂商 codex 复审红线 floor**(bmywopd2m·攻「结构不可绕」claim·尤其 L0 无钥能否成立/agent 自带 bash 那条道)——
-  safety 命门单厂商设计不足信(dual-model binding 教训),复审过再请用户批 fork2。
-  **blocking [需拍板]**（alignment doc line47:未批 fork2 前不落任何 agent-workspace 执行码）:①fork2 安全 floor 批准 ②新 MCP 依赖
-  (官方 mcp SDK 推 vs FastMCP vs 自建 stdio)+传输(stdio 独立进程 推 vs HTTP)③薄片面(只读 canvas_read 推)。
-  下一步:codex floor 复审→修洞(如有)→请用户批 fork2+MCP 依赖→落薄片(读-only·每片跨厂商验证)。
+  **跨厂商 codex 复审判 floor NOT SOUND**(bmywopd2m,3P0+4P1)——**未拿去请用户批**。逐条 + 收紧 v2 要求见
+  [[agent-floor-crossvendor-review-20260715]]。核心洞:P0-1 spawn 契约漏 agent 自带 bash 道(user/project/managed 规则可放行→读
+  凭据直连 venue,绕过 L0-L2)→**须 OS/网络沙箱**(非 CLI flag 够);P0-2 L0 无钥一旦 canvas_read import main.py 即塌(main 模块级
+  import order broker/keystore)→须抽纯 projector 包;P0-3 env os.environ.copy 洗不净→白名单+OS 身份隔离;P1 canvas_read 非 owner-safe/
+  L1 非封存/L2 关键词挡不住语义/claim 越界。**第三次跨厂商复审守住命门(同厂商设计+我复审都漏)**。
+  **blocking [需拍板]**（alignment doc line47:未批 fork2 前不落任何执行码;且 floor NOT SOUND 未批）:
+  ①**fork2 floor 须 v2 硬化**(OS/网络沙箱+纯 projector+env 白名单+owner-cap+封存注册+闭合 schema)再跨厂商复审再请批——
+  **P0-1 把范围抬到 OS 级沙箱基建=更大工程,可能本身待拍板(建多少沙箱/薄片是否等沙箱就绪)**;②**A股 live 矛盾请用户拍**:
+  `RULES.project.md:11「A股永不实盘」` vs `GOAL.md:1787「未来治理后可 live」`(codex P1-7 发现,我不碰 GOAL/RULES);
+  ③新 MCP 依赖(官方 mcp SDK 推 vs FastMCP vs 自建 stdio)+传输(stdio 独立进程 推);④薄片面(只读 canvas_read 推)。
+  下一步:请用户拍——A股矛盾澄清 + floor v2 范围(OS 沙箱建多深/薄片等不等沙箱)+ MCP 依赖;拍了再走 v2 硬化设计(跨厂商)→薄片。
 
 ## 状态表（确定的才标 ✅,证据必挂）
 | 子系统/能力 | 状态 | 证据 |
