@@ -115,10 +115,13 @@
   可绕=已声明边界,真隔离=OS 级 P0 卡 5bfb5202)·沙箱跑用户自己策略码(防手滑非防对手)·非活 P0。
   6 对抗测试(posix_spawn/posix_fork/ctypes AST 拒×2+kw+不误伤),6363 passed。**该安全修复内容
   从此在 main**(autopolish-w1 的独有价值已救回)。
-- **[待办] 其余 4 个未合并分支删前需同样核**:盘点已发现 autopolish-w1 有真·未落地工作(证明"只列
-  不删"对);其余 4 个(wip/uncommitted-closure、2 个 research-os/release-gate producer、
-  integration-prodbuilder)删前也应逐个核内容是否已在 main,别盲删。用户已 greenlight 清理,但
-  逐个核后再删(有 un-landed 就先救回)。
+- **5 个未合并分支全部核完(2026-07-15,Explore 子代理)**:1 个有真·未落地(autopolish-w1
+  沙箱止血→已救回 land ee3a2601)、4 个可安全删(S13/S16 producer 已换位重实现进
+  promote_assembler.py 且 test_runjson_producers.py 覆盖;wip closure 是作者自标 fake-green
+  且 main 主动加守卫拒绝其 ref)。核查全表进盘点 doc。**destructive 删除仍留用户/或确认无并行
+  session 在用那些 worktree 后再执行**——89 个 agent worktree 与主 checkout 共享 stash 栈、
+  可能有并行 Claude session 在用,盲删有跨 session 损伤风险(与用户对我这摊清理的授权正交);
+  盘点 doc 的清理命令用户可自跑。
 - **待用户权衡(engineering tradeoff·registered)**:8be0e547 机制层 dual-model 加固的可实现核=
   改 LLMClient 接口让全部 adapter 回带实发 payload digest。四面权衡:防的是「内部 adapter
   改写 payload」内部代码完整性威胁(非假绿灯/非外部对手),当前 gateway-digest 绑定对 app

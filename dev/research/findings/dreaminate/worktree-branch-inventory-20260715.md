@@ -6,7 +6,21 @@
 - **worktree**：90 个（含主 checkout `main`）。其中 ~76 个 `agent-<hex>` 临时 agent worktree + ~13 个命名 integration/slice worktree + 主 checkout + 本 loop worktree（`loop-r1-wrapup`，当前 locked，勿删）。
 - **本地分支**：113 个。**107 已合并进 main**（安全可删）/ **5 未合并**（需审,可能含未落地工作）/ 1 当前。
 
-## ⚠️ 5 个未合并分支（最需你审 —— 可能有未落地工作,删前逐个核）
+## ✅ 5 个未合并分支已逐个核完（2026-07-15，Explore 子代理 + 主 agent 复核）
+结论:**1 个有真·未落地工作(已救回)，4 个可安全删**。
+| 分支 | 核查结论 | 依据 |
+|---|---|---|
+| `worktree-autopolish-w1` | **有真·未落地 P0 → 已救回 land main(ee3a2601)** | sandbox posix_spawn/ctypes 逃逸止血从没 land;已按 main 现结构重实现 |
+| `wip/uncommitted-closure-20260628` | **可删（是被主动否决的 fake-green，无真工作）** | 它 preserve 的 closure-via-materializer 是作者自标 "fake-green A";main 不仅没收、还在 goal_coverage.py:359/579、main.py 主动加守卫拒绝 goal_closure ref |
+| `worktree-agent-a400943bb6777831b`(S13 TRUST) | **可删（producer 已换位重实现）** | build_section13_trust_record 不在 main,但工作已进 promote_assembler.py:854 _assemble_section13(typed dataclass fail-closed)+test_runjson_producers.py:594 覆盖 |
+| `worktree-agent-a763a6989385c4c03`(S16 ENGSTD) | **可删（producer 已换位重实现）** | 同上 → promote_assembler.py:898 _assemble_section16 + test_runjson_producers.py:604 |
+| `worktree-integration-prodbuilder` | **可删（= a400943+a763 merge，无额外独有码）** | S13+S16 并集,两块均已落地 |
+
+**可选保守动作**:S13/S16 分支各带一份更细的对抗测试(test_s13/s16_producer.py 469/501 行,针对老分支的 bool-序列化-往返威胁模型)。main 用 typed dataclass 设计结构上避开了该威胁(不走 dict 往返)，所以那两份测试对 main 设计largely moot;producer 契约已由 test_runjson_producers.py 测到。若想保留更细 mutation-三态用例,删前可单独摘出(需适配 main 的 _assemble_section1x 设计)。
+
+---
+
+## （历史）5 个未合并分支初盘（已被上表核查结论取代）
 | 分支 | 末次提交 | 摘要 | 建议 |
 |---|---|---|---|
 | `wip/uncommitted-closure-20260628` | 2026-06-28 `cdbded91` | wip: preserve uncommitted closure-via-materializer work for recovery | **审**：显式的「未提交工作抢救」分支,删前确认内容是否已由后续 closure 切片覆盖 |

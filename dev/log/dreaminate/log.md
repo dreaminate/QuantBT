@@ -6,6 +6,10 @@
 ## <日期> · <标题>
 - 建/改了什么 + 命门  - 验收：<对抗测试 + 变异 + 全量数字>  - 下一步：<…> -->
 
+## 2026-07-14-2330 5 未合并分支全核完:1 救回(autopolish sandbox)+4 可删
+- Explore 子代理核查:S13(a400943)/S16(a763)producer 已换位重实现进 promote_assembler.py:_assemble_section13/16(typed dataclass fail-closed)+test_runjson_producers.py 覆盖;prodbuilder=两者 merge 无额外码;wip/uncommitted-closure 是作者自标 fake-green,main 主动加守卫(goal_coverage.py:359/579)拒绝其 goal_closure ref——与 autopolish-w1 正好相反
+- destructive 删除留用户/确认无并行 session 在用 worktree 后执行(89 agent worktree 共享 stash 栈,盲删跨 session 损伤风险);盘点 doc 命令用户可自跑
+
 ## 2026-07-14-2305 IDE 沙箱逃逸止血 land——盘点捞回从未 land 的 P0 安全加固
 - worktree-autopolish-w1@92eade4f(2026-06-25 审计 pass3 #1)从未合并 main,main sandbox.py 仍 5-30 base 版:posix_spawn 族未封/import ctypes 未拒(CDLL RCE 绕 os.system)。按 main 现结构重实现:prelude 封 posix_spawn 族+入口 AST 预检拒 ctypes/cffi 直接 import/__import__
 - codex 安全复核逮到 __import__(name=)关键字形式漏网(只查 node.args[0])→补拦位置+关键字两形式;codex 掐于网安分类器但探测尽职。6 对抗测试(种坏可抓)+6363 passed
