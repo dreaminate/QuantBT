@@ -11,23 +11,26 @@
   下一步转用户可感知面(队列见 frontier)。
 
 ### 顶部刷新块（本轮值 · 每轮覆写）
-- **六字段**:1 Local checkout=slice/model-switch-crossvendor @ dc940949(**S3a gateway pin 注入落 main**:
-  default_pin + CRITICAL 跨厂商泄漏修复);2 Remote=已 push,origin/main ff 到 dc940949(c5db12cf..dc940949);
-  3 Local tests=后端全量 **6429 passed/13 skipped/0 failed**(真汇总行,8分41秒,2026-07-15);validate_dev
-  PASS;compileall OK;4 CI=S1 run 29404958507 success;S2/S3a push 后新 run 待 gh 查(记账 push 后单查最终 head);
-  5 Production=Unqueried;6 User acceptance=Unverified。
+- **六字段**:1 Local checkout=slice/model-switch-crossvendor @ 5a8fc617(**S3b-1 每对话 llm_selection
+  持久化落 main**:ChatService.update/get_llm_selection);2 Remote=已 push,origin/main ff 到 5a8fc617;
+  3 Local tests=后端全量 **6435 passed/13 skipped/0 failed**(真汇总行,9分07秒,2026-07-15);validate_dev
+  PASS;compileall OK;4 CI=S1 run 29404958507 success;8d175a53(S3a)run 29409135143 backend in_progress
+  (前端 success;flaky 训练超时间歇性,前 3 run success);5a8fc617 push 后新 run 待查;5 Production=Unqueried;
+  6 User acceptance=Unverified。**已知 flaky**:test_training_runner::test_service_code_path_succeeds 训练
+  300s 超时在 CI 慢 runner(2.6x)间歇撞墙——非 model-switch 回归,间歇性,若成稳定 blocker 再最小修 timeout。
 - **audit 基线四项**(不变):61 files / 20,339 lines / 26,209,663 bytes / sha `1c1788b0bbe2`。
   (本特性改动全在 app/backend/dev,不跑数据管线,基线按构造不变。)
 - **断点**:**当前战役=Claudian 式「每对话跨厂商切模型」(卡 db95c0c6,in_progress)**。蓝图
   `findings/dreaminate/model-switch-crossvendor-design-20260715.md` + 参考实现 `...reference-impls-20260715.md`。
-  **S1 模型目录 ✅ · S2 hard-pin routing ✅ · S3a gateway pin 注入 ✅**(各经 deep-opus skeptic 对抗验证:
-  S1 逮 1 假绿灯、S2 逮 3 MEDIUM含假声称、**S3a 逮 CRITICAL 跨厂商泄漏(pin 在 fallback 蒸发)**,全修+变异门)。
-  **下一 tick 起 S3b**:pin 已到 gateway 但**生产装配点 main.py `_current_agent_gateway`(~5022)尚未传 default_pin**
-  (诚实残余·机制半接线)。S3b 接线——① `chat_conversations.metadata.llm_selection` owner-scoped 原子更新
-  (`agent/conversations.py:25-38,178-223`);② selection API(`POST /api/agent/chat/start` 带初始 selection、
-  `PATCH .../llm-selection`、bare chat/workbench SSE 加 conversation_id);③ `_current_agent_gateway(run_id, model_pin)`
-  →`build_agent_llm_gateway(default_pin)`;④ 端点 authed 校验 pin 厂商;⑤ selection digest 进 claim(K8)。
-  **skeptic 前向铁律**:verifier 请求必带 independence_required=True(gateway 已叠 role 门纵深)。顺序 S3b→S4→S5→S6→S7。
+  **S1 模型目录 ✅ · S2 hard-pin routing ✅ · S3a gateway pin 注入 ✅ · S3b-1 llm_selection 持久化 ✅**
+  (S1-S3a 各经 skeptic 对抗验证:S1 逮 1 假绿灯、S2 逮 3 MEDIUM含假声称、**S3a 逮 CRITICAL 跨厂商泄漏**,全修+变异门;
+  S3b-1 低风险 additive 6 对抗测试)。① 持久化 ✅(`agent/conversations.py` update/get_llm_selection)。
+  **下一 tick 起 S3b-2/3**:② `_current_agent_gateway(run_id, model_pin)`(main.py:4997)→`build_agent_llm_gateway(default_pin)`;
+  ③ selection API(`POST /api/agent/chat/start` 带初始 selection、`PATCH .../llm-selection`、chat/SSE 加 conversation_id);
+  ④ 端点 authed 校验 pin 厂商;⑤ selection digest 进 claim(K8)。**先核实前提**:ChatService 是否生产
+  `_dispatch_production_agent_turn` 真读的对话存储(已派 Explore 追链,codex 提过 workbench 可能走不同路径)——
+  store 对不上则接线连不上。**skeptic 前向铁律**:verifier 请求必带 independence_required=True(gateway 已叠 role 门纵深)。
+  生产装配点 main.py `_current_agent_gateway`(~5022)当前**未传 default_pin**(半接线,S3b-2 接)。顺序 S3b-2/3→S4→S5→S6→S7。
   **待拍板(非阻塞)**:直连指纹方案(ToS 灰区,已默认走 CLI 子进程 ToS-safe)。ultracode:每片落码后对抗验证。
 
 ## 状态表（确定的才标 ✅,证据必挂）

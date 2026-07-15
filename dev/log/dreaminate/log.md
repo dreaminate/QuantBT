@@ -6,6 +6,10 @@
 ## <日期> · <标题>
 - 建/改了什么 + 命门  - 验收：<对抗测试 + 变异 + 全量数字>  - 下一步：<…> -->
 
+## 2026-07-15-0406 跨厂商切模型 S3b-1 每对话 llm_selection 持久化落 main
+- ChatService.update_llm_selection(owner-scoped 原子 metadata read-modify-write,Auto 清 pin)+get_llm_selection(服务端读=K10)+_normalize_llm_selection(半残 pin fail-safe→auto);canonical {mode:auto|pinned,provider,model,auth_kind?,updated_at};对抗测试 6(owner-scoped 跨 owner=not found/每对话隔离);全量 6435 passed;land 5a8fc617
+- S3b-2/3 待做:gateway 接线(_current_agent_gateway 加 model_pin→build_agent_llm_gateway default_pin)+selection API 端点+**先核实 ChatService 是否生产 _dispatch_production_agent_turn 真读的对话存储**(已派 Explore 追链,codex 提过 workbench 走不同路径)
+
 ## 2026-07-15-0342 跨厂商切模型 S3a gateway 构造期 pin 注入落 main(K1)——含对抗验证逮到的 CRITICAL 跨厂商泄漏修复
 - LLMGateway(default_pin=(provider,model)) 在 complete() 盖章成 hard pin,仅非独立且非 verifier role 生效(dual 门物理免疫);解决 codex K1(真实主链走 GatewayLLMAdapter,pin 须 gateway 层注入)
 - S3a skeptic 逮 CRITICAL-1:盖章只写 complete() 局部 req,但 _invoke_with_fallback 重取原始 capability→fallback 时 pin 蒸发→静默跨厂商泄漏(跑通复现:default_pin=anthropic 首刺失败→prompt 静默送 openai)。修:effective_capability 穿进 _invoke_with_fallback,record 仍读原始保诚实;补变异门(此前零覆盖 leak 绿着 ship)+LOW-4 role 纵深+MEDIUM-2 spy 门
