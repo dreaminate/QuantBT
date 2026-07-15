@@ -6,6 +6,11 @@
 ## <日期> · <标题>
 - 建/改了什么 + 命门  - 验收：<对抗测试 + 变异 + 全量数字>  - 下一步：<…> -->
 
+## 2026-07-14-2239 GoalProofLedger LRU(P2) land + CI 训练 PIT 超时 flake 兜底
+- snapshot cache 无界 dict→OrderedDict 有界(maxsize 256,读命中 move_to_end/写后逐最旧);正确性红线守住:命中仍 token+WAL 文件状态绑定独立门控,淘汰只重算不 stale,WAL 非空绑定边界一字未动;42 测(2 新 LRU 对抗)+codex APPROVE
+- 同分支 CI flake 兜底:训练 PIT 子进程超时 300→600(dd6db35c CI 后端因慢 runner 22:48 子进程 300s 被杀=资源边际,后端零变更/本地全过/上个 run 绿);120→300→600 逐次实证
+- 8be0e547 机制层 dual-model 加固按四面权衡登记待用户拍板:广面 LLMClient 接口改防内部代码完整性威胁 vs 边际价值,架构深度取舍
+
 ## 2026-07-14-2209 90+ worktree/分支盘点 land(只列) + validate_dev 0 warning 确认
 - 盘点:90 worktree(89 agent-*+主)/113 分支(107 已合并可删/5 未合并需审含安全 autopolish-w1);只列不删=用户拍板,附清理命令+不可逆边界;档 research/findings/dreaminate/worktree-branch-inventory-20260715.md
 - validate_dev 现 0 warning(state.md 早已蒸馏 6505 字节,契约陈旧描述);下轮 8be0e547 机制层 dual-model(P1,duet,广面 adapter 接口改)

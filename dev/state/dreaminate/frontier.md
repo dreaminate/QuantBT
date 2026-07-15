@@ -100,12 +100,19 @@
   113 分支(107 已合并可删/5 未合并需审)。5 未合并逐个标审建议(含安全相关 autopolish-w1 沙箱
   逃逸止血,删前确认已在 main);附用户可自跑清理命令 + 不可逆边界。全档
   research/findings/dreaminate/worktree-branch-inventory-20260715.md。**删除等用户拍板(registered)**。
-- **下一步(优先序)**:① 切片②真实调用(待用户凭据,非阻塞) ② **8be0e547 机制层 dual-model
-  加固(P1,下轮 duet)**——可实现核=binding 绑 adapter 实发 payload:改 LLMClient 接口让全部
-  adapter(Anthropic/OpenAI/Qwen/Compatible+桩)回带实发 payload digest→gateway 记账→binding
-  校验(种坏:adapter 改写 payload→门必抓)。广面接口改+6356 测试回归风险,值 duet+全量验证,
-  不宜会话尾赶,新会话开。③ Run 首屏门(§16 KNOWN_RUN_GAP,需 Playwright) ④ GoalProofLedger
-  LRU(P2,守 WAL 绑定不弱化)。前端 eval 卡 UI 件与 echarts lazy 归用户拍板类。
+- **GoalProofLedger LRU(P2)已 land**(分支 slice/goalproof-lru,commit cbdc9617):无界
+  dict→OrderedDict 有界(maxsize 256);正确性红线守住(命中仍 token+WAL 文件状态绑定门控,
+  淘汰只重算不 stale,WAL 非空绑定边界一字未动)。42 测过+codex APPROVE。同分支带 CI flake
+  兜底 commit 95e3efb2(训练 PIT 子进程超时 300→600s:dd6db35c CI 后端因慢 runner 22:48
+  子进程 300s 被杀=资源边际 flake 非回归,后端代码零变更)。
+- **待用户权衡(engineering tradeoff·registered)**:8be0e547 机制层 dual-model 加固的可实现核=
+  改 LLMClient 接口让全部 adapter 回带实发 payload digest。四面权衡:防的是「内部 adapter
+  改写 payload」内部代码完整性威胁(非假绿灯/非外部对手),当前 gateway-digest 绑定对 app
+  可控路径已诚实;广面接口改(4 adapter+全部桩)+6356 测试回归风险 vs 边际防御价值——**架构
+  深度取舍,摆代价给你拍**:做则 duet 全量验证,不做则维持现状+卡里已诚实登记边界。
+- **下一步(优先序)**:① 切片②真实调用(待用户凭据,非阻塞) ② Run 首屏门(§16
+  KNOWN_RUN_GAP,需 Playwright 浏览器基建) ③ 8be0e547(待你权衡上条)。本地干净可收口
+  切片渐近清零:剩 Run 首屏(需浏览器基建)+8be0e547(待拍)+前端 eval UI/echarts lazy(用户拍板)。
 
 ## 待裁 / 卡点
 - **[待用户复核] 研究面质量门 scope 裁定**:codex 轮7 最终 reject(对抗性标准) vs operator
