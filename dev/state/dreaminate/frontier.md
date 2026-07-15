@@ -52,9 +52,28 @@
   run3 我的空 pin 失误→run4 polars/pyarrow pin 过期+pypdf/catboost/tesseract(7败)→
   run5 时间炸弹+跨进程边际(2败)→run6 loader 时钟同罪+PIT 超时边际(2败)→run7 绿。
   CI 的头号价值实证:六类「本机隐性状态洗白」被逐一还原(依赖×5/版本 pin×2/时钟×2/资源边际×2)。
-- **下一步(优先序)**:① 切片② dual-model gate 应用内跨厂商接线 ② 用户可感知面
+- **切片② 接线已 land(卡 9c5e6975,P0/§7 · in_progress 待真实凭据)**:应用内跨厂商
+  dual-model 审查脚本化端到端 `scripts/dual_model_review.py`——secrets 窄读→内存 keystore
+  (llm_<provider>+note extras,与 /api/llm/configure 同约定)→build_agent_llm_gateway
+  (单一源,dev_local 永不进路由)→builder(anthropic)→ReviewSubjectBinding(服务端派生
+  verifier prompt)→verifier(openai,independence_required)→bind/validate→IndependenceVerdict,
+  HMAC 密封 LLMCallRecord 落盘。结构性事实:应用 live 运行被 secrets.yaml Binance-material
+  设计性阻断(预期,不修)→脚本化直调机制链是唯一诚实形态,代码路径与应用内一致。
+  **codex(gpt-5.6-sol ultra)九轮对抗复审**:R1 REJECT(五缺口:同源伪装可产 independent=True/
+  prompt 未互证/evidence 未密封/子集不 fail-closed/测试判别力不足)→逐轮修复+重验:同源拒斥
+  (同 key 字面量拒)/gateway 记账 prompt digest 互证/HMAC 密封 evidence+verify_evidence_file/
+  fail-closed(缺凭据/单厂商拒运行,preflight 常开)/key 泄漏全路径(loader 异常抑制+类型门+
+  preflight 全 key 脱敏+evidence 双扫)。R5-R8 收窄到编码/URL 结构性关类:多层 JSON 转义
+  **迭代到真不动点**(任意嵌套深度剥到 raw)+_redact 兜底全文遮蔽;relay 披露改**端点身份**
+  (scheme+host+port,按 requests 规范化 unquote+去尾点,完备性优先宁多报)。R9 被 OpenAI 网安
+  分类器掐断未出 verdict(非缺陷,仅翻出 unquote_unreserved→我的全量 unquote 更激进=更安全)。
+  **测试 3→36**(桩注入,零网络):端到端独立 True/密封复验/逐坏门(同源/prompt 偷换/多层编码
+  key 泄漏/百分号 host 同中继/篡改三态/变异杀手)全绿。**真实跨厂商调用登记待用户提供有效
+  anthropic 原生+openai 凭据**(本机中继 key 双 401,脱敏诊断留档;凭据有效时同一路径即通)。
+  机制级残余(binding 未绑 adapter 实发 payload/provider 身份声明式)→**新卡 tasks/pool/8be0e547**。
+- **下一步(优先序)**:① 切片②真实调用(待用户凭据,非阻塞) ② 用户可感知面
   (Run 首屏门/前端 bundle 拆分,CEO 声道战略提示) ③ FastAPI on_event 迁移
-  ④ pool 三张 eval 卡 ⑤ 90+ worktree 盘点(只列)。数据溯源线到此收口不再递归加固。
+  ④ pool 三张 eval 卡 + 8be0e547 机制层加固 ⑤ 90+ worktree 盘点(只列)。
 
 ## 待裁 / 卡点
 - **[待用户复核] 研究面质量门 scope 裁定**:codex 轮7 最终 reject(对抗性标准) vs operator
@@ -64,3 +83,7 @@
   0.80 纯计数契约/契约常量留 harness 原位(生产者镜像+相等性钉死)/幸存者 cohort 案否决。
 - 等用户拍板(非阻塞,registered):90+ 历史 worktree/分支清单(只列不删);DVC vs 自建数据版本化
   的 ADR 补记;非对称签名(Ed25519+轮换撤销)升级时机;2026-06-29 四项旧待裁(核实存活性后再摆)。
+- **[Inference:切片② review 门]** codex 九轮对抗:R1-R8 每轮 REJECT 均转成已修+已验的具名门与
+  回归测试(codex 反例逐条钉死),R9 被厂商网安分类器掐断(非发现)。当前 commit b5473f38 **无已知
+  in-scope 缺陷**,残余(IDNA/DNS 别名/机制层身份)已登记卡 8be0e547。据此按「四门过+放心大胆做」
+  自决 land,可翻案。真实跨厂商调用另计,凭据到位后跑真证据。

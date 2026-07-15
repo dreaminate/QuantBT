@@ -6,6 +6,13 @@
 ## <日期> · <标题>
 - 建/改了什么 + 命门  - 验收：<对抗测试 + 变异 + 全量数字>  - 下一步：<…> -->
 
+## 2026-07-14-2050 切片② dual-model 应用内跨厂商接线 land(卡 9c5e6975 in_progress)
+- scripts/dual_model_review.py:secrets 窄读→内存 keystore→build_agent_llm_gateway→builder(anthropic)→binding→verifier(openai,indep)→HMAC 密封记录+独立性判定
+- codex(gpt-5.6-sol ultra)九轮对抗:R1 五缺口(同源伪装/未互证/未密封/非 fail-closed/判别力)→逐轮修复重验;R5-R8 结构性关类(反转义迭代到真不动点/relay 端点身份 requests 规范化);R9 被厂商网安分类器掐断非缺陷
+- 测试 3→36(桩注入零网络)全绿;后端全量 6351 passed;真实跨厂商调用待用户凭据(中继 key 双 401,脱敏留档)
+- 机制级残余(binding 绑 adapter 实发/身份可验证)铸新卡 tasks/pool/8be0e547;前端零 diff 门由 CI run 29377617245 承接
+- Inference: review 门=九轮对抗全修+回归钉死、R9 厂商分类器掐断非发现、无已知 in-scope 缺陷,按四门过自决 land 可翻案
+
 ## 2026-07-14-1717 切片③ CI 完成:run7 29377617245 gh 实查 success(后端 6315/0+前端 423+build);七轮迭代修 11 处本机洗白(依赖5/pin2/时钟2/边际2);CI 字段首次真实转绿
 
 ## 2026-07-14-1502 卡 39d08df8 done:研究面资产+探针#6/#7 落地;质量门经 codex 四轮对抗数学收敛到 factor-价格补偿不变量(全反例钉死回归);scope 裁定登记待用户复核(对抗性防篡改归签名链/vintage 层);后端全量以终验行为准

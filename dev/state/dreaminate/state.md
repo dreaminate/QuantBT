@@ -5,7 +5,17 @@
 > 本版 2026-07-14 整篇重写(蒸馏此前 2026-06 全部追加块——原文在 git 历史 `git log dev/state/dreaminate/state.md`)。
 
 ## 进行中
-- 39d08df8 已 done(2026-07-14)。/loop 15m 自主循环运行中;下一切片=CI 接入,队列见 frontier。
+- 39d08df8 已 done(2026-07-14)。切片③ CI ✅、切片② dual-model 应用内接线已 land(卡 9c5e6975
+  in_progress:真实跨厂商调用待用户凭据)。/loop 15m 自主循环运行中;队列见 frontier。
+
+### 顶部刷新块（本轮值 · 每轮覆写）
+- **六字段**:1 Local checkout=slice/39d08df8-hs300-chain @ b5473f38(dual-model 脚本九轮 codex
+  加固,36 桩测 passed);2 Remote=待合并 main 后 push(本条落档 commit 后执行);3 Local tests=
+  后端全量 6351 passed/13 skipped(2026-07-15Z 实跑)+dual_model 定向 36 passed;4 CI=Unqueried
+  (合并 push 后 gh 查);5 Production=Unqueried;6 User acceptance=Unverified(真实跨厂商调用待
+  用户有效 anthropic 原生+openai 凭据)。
+- **audit 基线四项**(不变):61 files / 20,339 lines / 26,209,663 bytes / sha `1c1788b0bbe2`。
+- **断点**:切片② wiring land→合并 main→push→六字段汇报;真实调用待凭据(非阻塞,已登记)。
 
 ## 状态表（确定的才标 ✅,证据必挂）
 | 子系统/能力 | 状态 | 证据 |
@@ -26,10 +36,12 @@
 | §12 执行边界 | ✅ | intent→promotion→venue events→reconciliation→guarded submission/materialization 全 refs-only,A股 live 恒拒;test_execution_boundary_contract 系列在当日全量 6313 passed(2026-07-14 实跑)内全绿;边界:无真实 venue 连通 |
 | §4 Settings/LLM Gateway | 🟡 | provider registry+keystore+routing+UI 第一版已建;OAuth/device-code、全 connector 未做;gateway secret 泄漏向量已闭(C-S7 Gap1,2026-06-29) |
 | §13/§17 RDP | 🟡 | manifest/store/materialize/publish 已建;本切片链产物未组 RDP(residual) |
-| dual-model 独立审查(流程级) | ✅ | builder=claude(anthropic)/verifier=gpt-5.6-sol(openai) 跨厂商;本切片三轮 verdict 留档证据包;应用内 Gateway 接线=另卡(切片②) |
+| dual-model 独立审查(流程级) | ✅ | builder=claude(anthropic)/verifier=gpt-5.6-sol(openai) 跨厂商;HS300 链三轮 verdict 留档证据包 |
+| §7/§8 dual-model 应用内接线(脚本化端到端) | 🟡 | scripts/dual_model_review.py:secrets 窄读→内存 keystore→build_agent_llm_gateway→builder(anthropic)→binding→verifier(openai,independence_required)→HMAC 密封记录+独立性判定;test_dual_model_review_script 36 passed(桩注入,零网络);codex 九轮对抗全修+回归钉死。**真实跨厂商调用待用户凭据**(本机中继 key 双 401);机制级残余(binding 绑 adapter 实发/身份可验证)=卡 8be0e547 |
 | CI(GitHub Actions) | ✅ | .github/workflows/ci.yml 双 job;run 29377617245 gh 实查 success:后端 6315 passed/0 failed(17:18)+前端 423+build;七轮迭代账目在 log/证据包 |
 | 前端 bundle 拆分 / FastAPI on_event 迁移 | ⬜ | 已知本地 gap,排队中 |
 
 ## 下一步
-- 切片③ CI 接入(gh 真查后 CI 字段才动)→ 切片② dual-model 应用内接线 → pool 三张 eval 卡。
+- 切片②真实调用待用户凭据(非阻塞)→ 用户可感知面(Run 首屏门/前端 bundle 拆分)→ FastAPI
+  on_event 迁移 → pool 三张 eval 卡 + 卡 8be0e547 机制层加固 → 90+ worktree 盘点(只列)。
 - 详单与残余见 frontier.md;战略提示(转用户可感知面)已记。
