@@ -11,13 +11,16 @@
   下一步转用户可感知面(队列见 frontier)。
 
 ### 顶部刷新块（本轮值 · 每轮覆写）
-- **六字段**:1 Local checkout=slice/on-event-lifespan @ d940aed3(on_event→lifespan 迁移,
-  codex 修复轮 APPROVE,lifespan 5 测 passed);2 Remote=切片② 已 push(origin/main 2e237b1f),
-  on_event 切片本条落档后合并 push;3 Local tests=后端全量 6356 passed/13 skipped(2026-07-15Z
-  实跑);4 CI=✅ 切片② run 29387569832 success(后端+前端);on_event 切片合并 push 后 gh 查;
-  5 Production=Unqueried;6 User acceptance=Unverified(dual-model 真实跨厂商调用待用户凭据)。
+- **六字段**:1 Local checkout=slice/dual-model-subscription-wiring @ 0ea40818(切片② 真跨厂商
+  收口:订阅 auth+onboarding+dual_model_review 接订阅+dev 记账);2 Remote=已 push,origin/main
+  ff 到 0ea40818(4235f09c..0ea40818);3 Local tests=后端全量 **6380 passed/13 skipped/0 failed**
+  (真汇总行,9分08秒,2026-07-15);validate_dev PASS;compileall OK;4 CI=✅ run 29399272524
+  success(headSha 0ea40818,后端+前端+build);5 Production=Unqueried;6 User acceptance=Unverified。
 - **audit 基线四项**(不变):61 files / 20,339 lines / 26,209,663 bytes / sha `1c1788b0bbe2`。
-- **断点**:on_event 切片 land→合并 main→push→续下一切片(用户可感知面/eval 卡)。
+  (本切片改动全在 app/backend/scripts/docs/dev,不跑数据管线,基线按构造不变。)
+- **断点**:切片② 已全绿落 main+CI 验证。**当前战役**=Claudian 式「每对话跨厂商切模型」
+  (用户拍板:每对话独立选/动态拉模型/内嵌订阅登录)。设计走 duet(deep-opus 已回·codex 跑中),
+  待三方并集裁决→拆 S1~S6 切片(见 frontier)→ **ultracode 已开,实现走 workflow 编排+对抗验证**。
 
 ## 状态表（确定的才标 ✅,证据必挂）
 | 子系统/能力 | 状态 | 证据 |
