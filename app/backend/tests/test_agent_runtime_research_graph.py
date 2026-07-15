@@ -31,7 +31,7 @@ def _patch_route_gateway(main, monkeypatch, client) -> None:  # noqa: ANN001
     monkeypatch.setattr(
         main,
         "_current_agent_gateway",
-        lambda run_id=None: build_test_agent_gateway(
+        lambda run_id=None, *, model_pin=None: build_test_agent_gateway(
             client,
             seal_secret=main.LLM_CALL_RECORD_STORE.seal_secret,
         ),

@@ -2022,7 +2022,7 @@ def test_workbench_to_agent_workflow_closure_endpoint_uses_scripted_offline_ledg
     monkeypatch.setattr(
         main,
         "_current_agent_gateway",
-        lambda run_id=None: build_agent_llm_gateway(
+        lambda run_id=None, *, model_pin=None: build_agent_llm_gateway(
             keystore,
             strict_degrade=False,
             client_factory=lambda _credential: provider,

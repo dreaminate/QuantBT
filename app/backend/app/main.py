@@ -4994,12 +4994,16 @@ def _agent_leverage_cap() -> float:
 AGENT_TRANSLATOR = ControlledTranslator(leverage_cap=_agent_leverage_cap())
 
 
-def _current_agent_gateway(run_id: str | None = None):
+def _current_agent_gateway(run_id: str | None = None, *, model_pin: tuple[str, str] | None = None):
     """Build one hot-Settings-validated, gateway-only provider surface.
 
     The gateway is intentionally rebuilt per workflow so credential revocation,
     routing changes, and provider health metadata take effect without process
     restart. It exposes no DevLocal fallback.
+
+    跨厂商切模型 S3b：`model_pin=(provider, model)` 是用户对本对话手选的模型 → gateway 的
+    default_pin。仅对**非独立**请求盖章（dual-model 独立审查门物理免疫，见 gateway.complete）。
+    None → 自动路由（Auto，现基线）。
     """
 
     mode = os.environ.get("LLM_REPLAY_MODE", "passthrough")
@@ -5032,6 +5036,7 @@ def _current_agent_gateway(run_id: str | None = None):
             provider: llm_routing_policy_ref(provider)
             for provider in ("anthropic", "openai", "qwen", "custom")
         },
+        default_pin=model_pin,
     )
 
 
@@ -5622,6 +5627,7 @@ def _dispatch_production_agent_turn(
     entry_source: EntrySource | str = EntrySource.AGENT_SHELL,
     desk: str = "",
     visible_asset_refs: tuple[str, ...] = (),
+    model_pin: tuple[str, str] | None = None,
 ) -> _ProductionAgentDispatch:
     """Run one authenticated production turn through AgentOrchestrator.
 
@@ -5681,7 +5687,7 @@ def _dispatch_production_agent_turn(
             },
         ) from exc
     orchestrator = AgentOrchestrator(
-        gateway=_current_agent_gateway(run_id=workflow_id),
+        gateway=_current_agent_gateway(run_id=workflow_id, model_pin=model_pin),
         session_id=workflow_id,
         event_ledger=AGENT_WORKFLOW_EVENT_LEDGER,
         owner_user_id=owner,
@@ -40833,6 +40839,83 @@ def chat_get_thread(thread_id: str, user=Depends(require_user_dependency)) -> di
     return {"thread": thread_to_dict(t), "messages": [message_to_dict(m) for m in msgs]}
 
 
+def _thread_model_pin(thread_id: str, user: Any) -> tuple[str, str] | None:
+    """读本对话用户手选模型 → gateway model_pin (provider, model)（跨厂商切模型 S3b）。
+
+    **服务端权威读**（不信客户端每条消息随手传的 model，K10）。auto/无有效 pin → None（自动路由）。
+    pin 厂商失效/未 auth 由 gateway 的 default_pin 盖章后在 resolve fail-closed（PinnedModelUnavailable）——
+    读侧不预校验（那是 PATCH 设置侧的活），保持读路径简单。
+    """
+    sel = CHAT_SERVICE.get_llm_selection(thread_id, owner_user_id=user.user_id)
+    if isinstance(sel, dict) and sel.get("mode") == "pinned":
+        provider = str(sel.get("provider") or "").strip()
+        model = str(sel.get("model") or "").strip()
+        if provider and model:
+            return (provider, model)
+    return None
+
+
+def _provider_is_gateway_routable(provider: str) -> bool:
+    """pin 厂商是否 gateway 可路由（= api-key configured）。K10 端点校验:防 pin 到 gateway 路不到的厂商。
+
+    **仅 api-key configured**：订阅账号接进 gateway 是 S5（当前订阅 provider 不进 routing profile，
+    pin 到它 gateway 会 fail-closed）。故 S3b 只接受 api-key 厂商的 pin，订阅 pin 明确拒（诚实，非静默）。
+    """
+    prov = (provider or "").strip().lower()
+    if prov not in {"anthropic", "openai", "qwen", "custom"}:
+        return False
+    try:
+        for s in list_llm_status(
+            KEYSTORE, onboarding_registry=ONBOARDING_REGISTRY, owner_user_id=_LLM_SERVICE_PRINCIPAL,
+        ):
+            if s.get("provider") == prov and s.get("configured"):
+                return True
+    except Exception:  # noqa: BLE001
+        pass
+    return False
+
+
+@app.get("/api/agent/chat/{thread_id}/llm-selection")
+def chat_get_llm_selection(thread_id: str, user=Depends(require_user_dependency)) -> dict[str, Any]:
+    """读本对话手选模型（跨厂商切模型 S3b）。无 pin → {'mode':'auto'}。owner-scoped。"""
+    try:
+        sel = CHAT_SERVICE.get_llm_selection(thread_id, owner_user_id=user.user_id)
+    except ChatError as exc:
+        raise HTTPException(status_code=404, detail=str(exc)) from exc
+    return {"thread_id": thread_id, "llm_selection": sel}
+
+
+@app.patch("/api/agent/chat/{thread_id}/llm-selection")
+def chat_set_llm_selection(
+    thread_id: str,
+    payload: dict = Body(...),
+    user=Depends(require_user_dependency),
+) -> dict[str, Any]:
+    """设置本对话手选模型（跨厂商切模型 S3b）。
+
+    payload = {"mode":"auto"} 回自动路由；或 {"mode":"pinned","provider","model"} 钉一个模型。
+    pinned 时**端点校验 provider 已 api-key configured**（gateway 可路由，K10）——否则拒（422 缺字段 /
+    409 未配/不可路由）。订阅账号的 pin 待 S5（订阅接 gateway）。owner-scoped（跨 owner=404 不泄漏）。
+    """
+    mode = str((payload or {}).get("mode") or "").strip().lower()
+    if mode == "pinned":
+        provider = str((payload or {}).get("provider") or "").strip()
+        model = str((payload or {}).get("model") or "").strip()
+        if not provider or not model:
+            raise HTTPException(status_code=422, detail="pinned 须带 provider + model")
+        if not _provider_is_gateway_routable(provider):
+            raise HTTPException(
+                status_code=409,
+                detail=f"provider {provider!r} 未配置 api-key 或 gateway 不可路由"
+                "（订阅账号切换待 S5）——请先在 Settings 配置该厂商",
+            )
+    try:
+        saved = CHAT_SERVICE.update_llm_selection(thread_id, payload, owner_user_id=user.user_id)
+    except ChatError as exc:
+        raise HTTPException(status_code=404, detail=str(exc)) from exc
+    return {"thread_id": thread_id, "llm_selection": saved}
+
+
 @app.post("/api/agent/chat/{thread_id}/message")
 def chat_send_message(
     thread_id: str,
@@ -40847,6 +40930,7 @@ def chat_send_message(
         thread = CHAT_SERVICE.get_thread(thread_id, owner_user_id=user.user_id)
     except ChatError as exc:
         raise HTTPException(status_code=404, detail=str(exc)) from exc
+    model_pin = _thread_model_pin(thread_id, user)  # 跨厂商切模型:本对话手选 → gateway pin
     user_text = (payload.get("content") or "").strip()
     if not user_text:
         raise HTTPException(status_code=400, detail="content 必填")
@@ -40925,6 +41009,7 @@ def chat_send_message(
                 research_rag_payload.get("visible_asset_refs")
                 or research_rag_payload.get("rag_visible_asset_refs")
             ),
+            model_pin=model_pin,
         )
         turn = dispatch.turn
         if turn is None:
@@ -41041,6 +41126,7 @@ def chat_stream(
         thread = CHAT_SERVICE.get_thread(thread_id, owner_user_id=user.user_id)
     except ChatError as exc:
         raise HTTPException(status_code=404, detail=str(exc)) from exc
+    model_pin = _thread_model_pin(thread_id, user)  # 跨厂商切模型:本对话手选 → gateway pin
     active_run_bound = thread.active_run_id is not None
     if thread.active_run_id:
         try:
@@ -41133,6 +41219,7 @@ def chat_stream(
                     research_rag_payload.get("visible_asset_refs")
                     or research_rag_payload.get("rag_visible_asset_refs")
                 ),
+                model_pin=model_pin,
             )
         except NoLLMConfigured:
             deny_text = "[LLM 未配置] agent LLM provider 未配置或不可用（deny-by-default）：请在 Settings 配置 LLM 凭据。"

@@ -703,7 +703,7 @@ def test_workbench_stream_auto_retrieves_research_asset_rag(tmp_path, monkeypatc
     monkeypatch.setattr(
         main,
         "_current_agent_gateway",
-        lambda run_id=None: build_test_agent_gateway(
+        lambda run_id=None, *, model_pin=None: build_test_agent_gateway(
             llm,
             seal_secret=main.LLM_CALL_RECORD_STORE.seal_secret,
         ),

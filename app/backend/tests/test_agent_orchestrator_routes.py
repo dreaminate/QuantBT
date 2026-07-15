@@ -135,7 +135,7 @@ def test_all_production_agent_routes_use_orchestrator_and_owner_scoped_events(
     monkeypatch.setattr(
         main,
         "_current_agent_gateway",
-        lambda run_id=None: build_test_agent_gateway(
+        lambda run_id=None, *, model_pin=None: build_test_agent_gateway(
             offline_client,
             seal_secret=llm_store.seal_secret,
         ),
@@ -295,7 +295,7 @@ def test_chat_endpoint_server_routes_data_factor_model_backtest_risk_and_report_
     monkeypatch.setattr(
         main,
         "_current_agent_gateway",
-        lambda run_id=None: build_test_agent_gateway(
+        lambda run_id=None, *, model_pin=None: build_test_agent_gateway(
             offline_client,
             seal_secret=llm_store.seal_secret,
         ),
@@ -376,7 +376,7 @@ def test_workbench_failure_stream_binds_terminal_llm_call_to_failure_event(
     monkeypatch.setattr(
         main,
         "_current_agent_gateway",
-        lambda run_id=None: build_test_agent_gateway(
+        lambda run_id=None, *, model_pin=None: build_test_agent_gateway(
             _FailingRouteClient(),
             seal_secret=llm_store.seal_secret,
         ),

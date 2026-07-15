@@ -78,7 +78,8 @@ def _patch_route_gateway(main, monkeypatch, client) -> None:  # noqa: ANN001
     monkeypatch.setattr(
         main,
         "_current_agent_gateway",
-        lambda run_id=None: build_test_agent_gateway(
+        # 跨厂商切模型 S3b：_current_agent_gateway 新增 model_pin kwarg;stub 接受并忽略(本组测试不设 pin)。
+        lambda run_id=None, *, model_pin=None: build_test_agent_gateway(
             client,
             seal_secret=main.LLM_CALL_RECORD_STORE.seal_secret,
         ),
