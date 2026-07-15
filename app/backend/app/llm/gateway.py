@@ -26,7 +26,7 @@ import secrets
 import threading
 import time
 from collections.abc import Callable, Mapping
-from dataclasses import dataclass, field
+from dataclasses import dataclass, field, replace
 from datetime import datetime, timezone
 from typing import Any
 
@@ -316,9 +316,16 @@ class LLMGateway:
         service_principal_ref: str = "",
         credential_pool_refs: Mapping[str, str] | None = None,
         routing_policy_refs: Mapping[str, str] | None = None,
+        default_pin: tuple[str, str] | None = None,
     ) -> None:
         self._policy = policy
         self._pool = credential_pool
+        # 跨厂商切模型 S3：用户对本对话手选的 (provider, model)。在 complete() 里对**非独立**请求盖章成
+        # hard pin——覆盖真实主链两条消费路径(GatewayLLMAdapter + GatewayBackedLLMClient,均汇入 complete)，
+        # 不依赖任一 adapter 传 model。独立审查请求(verifier)永不盖章 → dual-model 门物理免疫(见 complete)。
+        self._default_pin = (
+            (str(default_pin[0]), str(default_pin[1])) if default_pin else None
+        )
         self._cap = credential_pool.issue_capability()  # 唯一物化令牌，握在 gateway 内
         self._client_factory = client_factory or _default_client_factory
         self._strict_degrade = strict_degrade
@@ -425,6 +432,15 @@ class LLMGateway:
                 "LLM use binding requires a durable terminal call record_sink"
             )
         req = request.capability
+        # 跨厂商切模型 S3：构造期注入的 default_pin 在此盖章成 hard pin——**仅**当请求非独立审查
+        # (not independence_required) 且本身未带 pin。verifier/critic 带 independence_required=True →
+        # 跳过盖章 → dual-model 独立门物理免疫用户手选(叠加 routing.resolve 里同款闸,双层)。
+        if (
+            self._default_pin is not None
+            and not req.independence_required
+            and not req.pin_provider
+        ):
+            req = replace(req, pin_provider=self._default_pin[0], pin_model=self._default_pin[1])
         owner, workflow, invocation_id = self._request_scope(request)
         started = _now_iso()
         t0 = time.perf_counter()
@@ -1498,6 +1514,7 @@ def build_agent_llm_gateway(
     service_principal_ref: str = "",
     credential_pool_refs: Mapping[str, str] | None = None,
     routing_policy_refs: Mapping[str, str] | None = None,
+    default_pin: tuple[str, str] | None = None,
 ) -> LLMGateway:
     """从 keystore 已配置的【真实】provider 装配 agent LLMGateway（deny-by-default · 复用现有原语不另造）。
 
@@ -1578,6 +1595,7 @@ def build_agent_llm_gateway(
         service_principal_ref=service_principal_ref,
         credential_pool_refs=selected_credential_pool_refs,
         routing_policy_refs=selected_routing_policy_refs,
+        default_pin=default_pin,
     )
 
 

@@ -1130,3 +1130,57 @@ def test_seal_roundtrip_and_wrong_secret():
     rec.seal = seal_record(rec, s)
     assert verify_record_seal(rec, s) is True
     assert verify_record_seal(rec, b"y" * 32) is False
+
+
+# ---------- 跨厂商切模型 S3a：gateway 构造期 default_pin 注入 ----------
+
+def _gateway_pin(profiles, pin, *, factory=None):
+    """构造带 default_pin 的 LLMGateway(复用 _seed_keystore/_build_pool/policy)。"""
+    ks = _seed_keystore(profiles)
+    pool = _build_pool(profiles, ks)
+    policy = ModelRoutingPolicy(profiles)
+    if factory is None:
+        factory = lambda cred: StubLLMClient(content="stub-resp")  # noqa: E731
+    return LLMGateway(
+        policy=policy, credential_pool=pool, client_factory=factory, default_pin=pin,
+    )
+
+
+def test_default_pin_routes_nonindependence_to_pinned_provider():
+    # default_pin=(openai,gpt-4o) → 普通(非独立)请求被盖章成 hard pin,路由到 openai。
+    gw = _gateway_pin(_profiles_two_strong(), ("openai", "gpt-4o"))
+    res = gw.complete(_req(role="reporter", difficulty="hard"))
+    assert res.record.provider == "openai"
+    assert res.record.model == "gpt-4o"
+
+
+def test_default_pin_physically_immune_under_independence():
+    """[命门] default_pin 对独立审查(verifier)请求**不盖章**:builder 被 pin 到 anthropic,
+    但 verifier(independence)绝不被 pin 拉回 anthropic,自动异源到别厂商。"""
+    gw = _gateway_pin(_profiles_two_strong(), ("anthropic", "claude-opus-4"))
+    builder = gw.complete(_req(role="factor_engineer", difficulty="hard", session="sx"))
+    verifier = gw.complete(_req(role="verifier", difficulty="hard", independence=True, session="sx"))
+    assert builder.record.provider == "anthropic"      # 非独立 → 被 default_pin 盖章
+    assert verifier.record.provider != "anthropic"     # 独立 → pin 跳过,自动异源
+    assert builder.record.provider != verifier.record.provider
+
+
+def test_no_default_pin_is_baseline_auto():
+    # 无 default_pin → 自动路由(不被 pin 影响),难任务落 STRONG 档。
+    gw = _gateway_pin(_profiles_mixed(), None)
+    res = gw.complete(_req(difficulty="hard"))
+    assert res.record.provider == "anthropic"  # mixed 里唯一 STRONG
+
+
+def test_request_own_pin_not_overridden_by_default_pin():
+    # 请求自带 pin(openai)时,default_pin(anthropic)不覆盖它。
+    gw = _gateway_pin(_profiles_two_strong(), ("anthropic", "claude-opus-4"))
+    req = LLMRequest(
+        messages=[LLMMessage(role="user", content="q")],
+        capability=RoleCapabilityRequest(role="reporter", difficulty="normal",
+                                          pin_provider="openai", pin_model="gpt-4o"),
+        session_id="own", owner_user_id="o", workflow_id="own",
+        invocation_id=f"inv-{next(_INVOCATIONS)}",
+    )
+    res = gw.complete(req)
+    assert res.record.provider == "openai"  # 请求自带 pin 赢
