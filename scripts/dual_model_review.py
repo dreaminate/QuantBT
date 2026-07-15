@@ -216,12 +216,17 @@ def preflight(keys: dict[str, dict[str, str]]) -> list[str]:
     return failures
 
 
+_SUBSCRIPTION_MODELS = {"anthropic": "claude-sonnet-4-5", "openai": "gpt-5.6-sol"}
+
+
 def run_review(out_dir: Path, *, task: str = BUILDER_TASK,
                criteria: str = REVIEW_CRITERIA,
                keys: dict[str, dict[str, str]] | None = None,
                client_factory=None,
+               subscription: bool = False,
                _verifier_prompt_override: str | None = None) -> dict:
-    """keys/client_factory 注入口仅供测试(桩);生产路径 = secrets 窄读 + 真 adapter。
+    """keys/client_factory 注入口仅供测试(桩);生产路径 = secrets 窄读 + 真 adapter,
+    或 subscription=True 走厂商 CLI 订阅账号(builder=claude / verifier=codex,真跨厂商)。
 
     _verifier_prompt_override 是对抗测试专用种坏缝:模拟「实发 prompt 被偷换」的
     坏实现,digest 互证门必须抓住它(种已知坏门必被抓)。生产路径永远为 None。
@@ -239,7 +244,28 @@ def run_review(out_dir: Path, *, task: str = BUILDER_TASK,
     from app.llm.routing import RoleCapabilityRequest
     from app.security.keystore import InMemoryKeystore, KeystoreRecord, SecureKeystore
 
-    if keys is None:
+    if subscription:
+        # 订阅模式:builder=claude(claude CLI) / verifier=gpt(codex CLI)=两个不同厂商官方
+        # 客户端 → 真跨厂商独立,无 key/无中继(no relay caveat)。CLI 自理 OAuth/签名。
+        from app.agent.subscription_cli_llm import (
+            make_subscription_cli_client, provider_auth_report,
+        )
+        for p in ("anthropic", "openai"):
+            rep = provider_auth_report(p)
+            if not rep["subscription_authed"]:
+                raise SystemExit(
+                    f"{p} 订阅未登录,跨厂商审查 fail-closed 拒运行 → {rep['next_action']}"
+                )
+        keys = {  # 占位:client_factory 忽略 key;base_url 空=各自 CLI 非中继
+            p: {"api_key": "subscription-cli", "base_url": "", "model": _SUBSCRIPTION_MODELS[p]}
+            for p in ("anthropic", "openai")
+        }
+        if client_factory is None:
+            client_factory = lambda cred: make_subscription_cli_client(  # noqa: E731
+                cred.provider, model=cred.model,
+            )
+        same_base_relay = False
+    elif keys is None:
         # 生产路径(直接编程调用也一样):载入即探测,fail-closed。main() 载入一次后
         # 显式传入同一份 keys,消除「探测的凭据 ≠ 实调的凭据」的双载 TOCTOU。
         keys = _load_llm_keys()
@@ -254,11 +280,16 @@ def run_review(out_dir: Path, *, task: str = BUILDER_TASK,
             f"缺 {'/'.join('llm.' + p for p in missing)} 凭据——跨厂商审查 fail-closed"
             " 拒绝运行(单厂商换 prompt 不构成第二意见,不产出任何 evidence)"
         )
-    if keys["anthropic"]["api_key"] == keys["openai"]["api_key"]:
+    # 以下 same-key / relay 检查只对 api-key 模式有意义;订阅模式两侧是独立 CLI、
+    # 无 key、无中继,same_base_relay 已在上面设 False。
+    if subscription:
+        pass
+    elif keys["anthropic"]["api_key"] == keys["openai"]["api_key"]:
         raise SystemExit(
             "llm.anthropic 与 llm.openai 配置了同一个 api_key——可证同源,"
             "独立性主张不成立,拒绝运行"
         )
+
     def _relay_endpoint(url: str):
         # relay-operator 身份 = (scheme, host, port)。同 → 视为可能同一中继,披露。
         # 只认端点身份,不比 path/query/fragment:同一中继下不同 path/tenant/参数
@@ -387,13 +418,21 @@ def run_review(out_dir: Path, *, task: str = BUILDER_TASK,
             "verifier_prompt_digest_expected": expected_digest,
         },
         # 机器可读的主张边界:independent=True 的含义是「按配置槽声明的跨厂商」,
-        # provider 身份由槽名+模型名判族(model_identity),不是远端后端的同源性证明
-        "independence_claim_scope": "cross_vendor_as_configured",
+        # provider 身份由槽名+模型名判族(model_identity),不是远端后端的同源性证明。
+        # 订阅模式=两个不同厂商官方 CLI,跨厂商独立性比 api-key/中继更强(据实标)。
+        "independence_claim_scope": (
+            "cross_vendor_via_official_cli" if subscription else "cross_vendor_as_configured"
+        ),
+        "auth_mode": "subscription_cli" if subscription else "api_key",
         "caveats": (["same_base_url_relay"] if same_base_relay else []),
         "transport_disclosure": (
-            "双 provider 经同一 base_url 中继:上游厂商独立性不可由本脚本证明,"
-            "依赖中继诚实路由(如实披露,用户自判是否可信)"
-            if same_base_relay else "各 provider 独立端点配置(归一化比较,best-effort)"
+            "builder=claude(claude CLI)/verifier=gpt(codex CLI):两个不同厂商官方客户端,"
+            "CLI 自理 OAuth/签名;真跨厂商独立(非中继,无 same-relay 风险)"
+            if subscription else (
+                "双 provider 经同一 base_url 中继:上游厂商独立性不可由本脚本证明,"
+                "依赖中继诚实路由(如实披露,用户自判是否可信)"
+                if same_base_relay else "各 provider 独立端点配置(归一化比较,best-effort)"
+            )
         ),
         "records_path": str(out_dir / "llm_call_records.jsonl"),
         "builder_output_excerpt": builder_output[:200],
@@ -461,18 +500,26 @@ def main(argv: list[str] | None = None) -> int:
         "--out-dir", required=True,
         help="密封记录与证据输出目录(建议 <repo>/data/datasets/llm_reviews/<ts>,gitignored)",
     )
+    parser.add_argument(
+        "--subscription", action="store_true",
+        help="用订阅账号跑(builder=claude / verifier=codex CLI,真跨厂商,无 key/无中继)。"
+             "先 `python scripts/llm_auth.py status` 确认两家订阅已登录。",
+    )
     args = parser.parse_args(argv)
-    # 载入一次、探测与实调用同一份 keys(消双载 TOCTOU);preflight 无跳过口
-    keys = _load_llm_keys()
-    failures = preflight(keys)
-    if failures:
-        for line in failures:
-            print(f"preflight FAIL — {line}", file=sys.stderr)
-        raise SystemExit(
-            "双厂商连通探测未过:修复上述凭据/端点后重跑。"
-            "(应用内真实双模型审查依赖有效的 anthropic+openai 凭据)"
-        )
-    evidence = run_review(Path(args.out_dir), keys=keys)
+    if args.subscription:
+        evidence = run_review(Path(args.out_dir), subscription=True)
+    else:
+        # 载入一次、探测与实调用同一份 keys(消双载 TOCTOU);preflight 无跳过口
+        keys = _load_llm_keys()
+        failures = preflight(keys)
+        if failures:
+            for line in failures:
+                print(f"preflight FAIL — {line}", file=sys.stderr)
+            raise SystemExit(
+                "双厂商连通探测未过:修复上述凭据/端点后重跑。"
+                "(应用内真实双模型审查依赖有效的 anthropic+openai 凭据)"
+            )
+        evidence = run_review(Path(args.out_dir), keys=keys)
     # 打印密封后的全文(与落盘一致),而非未密封内层——stdout 副本同样可复验
     print((Path(args.out_dir) / "review_evidence.json").read_text(encoding="utf-8"))
     return 0 if evidence["independent"] else 2
