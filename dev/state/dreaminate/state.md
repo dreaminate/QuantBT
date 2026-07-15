@@ -11,24 +11,23 @@
   下一步转用户可感知面(队列见 frontier)。
 
 ### 顶部刷新块（本轮值 · 每轮覆写）
-- **六字段**:1 Local checkout=slice/model-switch-crossvendor @ ae2e61b1(**S3b 全部落 main**:pin 穿生产
-  chat 链+selection API+变异验证集成测试——跨厂商切模型后端端到端功能可用);2 Remote=已 push,origin/main
-  ff 到 ae2e61b1;3 Local tests=后端全量 **6444 passed/13 skipped/0 failed**(真汇总行,9分09秒,2026-07-15);
-  validate_dev PASS;compileall OK;4 CI=S1 run 29404958507 success;近几个 head 因频繁 push 互相 cancel
-  未拿到完整结论——**拟停一轮 push 让 ae2e61b1 CI 跑完确认**(flaky 训练超时是否恢复);5 Production=Unqueried;
-  6 User acceptance=Unverified。**已知 flaky**:test_training_runner::test_service_code_path_succeeds 训练
-  300s 超时在 CI 慢 runner(2.6x)间歇撞墙——非 model-switch 回归,前 3 run success,间歇性。
+- **六字段**:1 Local checkout=slice/model-switch-crossvendor(本地领先 origin 2:S5-piece1 credential_pool/factory
+  认 subscription_cli scaffold + dev 记账,未 push);2 Remote=origin/main @ ae2e61b1..4a5f882b(S1-S3b 全 land);
+  3 Local tests=后端全量 **6444 passed/13 skipped/0 failed**(4a5f882b,真汇总行);S5-piece1 隔离 4 passed;
+  4 CI=**✅ 4a5f882b run 29413489103 success(S1-S3b 完整,后端+前端+build)** + 88c30703 success——flaky 训练
+  超时彻底恢复,整个 model-switch 后端 CI 验证绿;5 Production=Unqueried;6 User acceptance=Unverified。
 - **audit 基线四项**(不变):61 files / 20,339 lines / 26,209,663 bytes / sha `1c1788b0bbe2`。
   (本特性改动全在 app/backend/dev,不跑数据管线,基线按构造不变。)
-- **断点**:**当前战役=Claudian 式「每对话跨厂商切模型」(卡 db95c0c6,in_progress)**。蓝图
-  `findings/dreaminate/model-switch-crossvendor-design-20260715.md` + 参考实现 `...reference-impls-20260715.md`。
+- **断点**:**当前战役=Claudian 式「每对话跨厂商切模型」(卡 db95c0c6,in_progress)**。蓝图 + 参考实现见 findings。
   **✅ S1 目录 · ✅ S2 hard-pin routing · ✅ S3a gateway pin 注入 · ✅ S3b(持久化+pin 穿生产链+selection API)**
-  ——**后端跨厂商切模型端到端功能可用**(用户 PATCH `/api/agent/chat/{tid}/llm-selection` 手选→驱动那条对话生产 agent)。
-  各切片经 deep-opus skeptic 对抗验证(S1 假绿灯/S2 3MEDIUM含假声称/S3a CRITICAL 跨厂商泄漏/S3b MEDIUM 接线零覆盖,全修+变异门钉死)。
-  **下一 tick 起 S4**:dual-model 隔离门——独立门已 3 层成立(gateway role 门+independence_required+orchestrator 标 verifier,
-  skeptic 亲验绕不过),S4 补 **conversation→dispatch→orchestrator 层**的免疫测试(pinned 对话 verifier 仍跨厂商,skeptic 建议)。
-  然后 S5 订阅接 gateway(K2 Settings preflight)、S6 内嵌登录中继(Hermes session-relay+OpenClaw 贴码,ToS-safe)、S7 前端切换器。
-  **待拍板(非阻塞)**:直连指纹方案(ToS 灰区,已默认走 CLI 子进程 ToS-safe)。ultracode:每片落码后对抗验证。
+  ——**后端跨厂商切模型端到端功能可用 + CI 绿**(用户 PATCH `/api/agent/chat/{tid}/llm-selection` 手选→驱动那条对话生产 agent,
+  对话中途切下条消息即生效)。各切片经 skeptic 对抗验证(S1 假绿灯/S2 3MEDIUM/S3a CRITICAL 泄漏/S3b MEDIUM,全修+变异门)。
+  **S4=已证成**(dual 门 3 层+skeptic 亲验+强测试+conversation 层集成测试组合覆盖,无新代码)。
+  **K3 约束确认+待拍板(用户已知悉·非阻塞)**:订阅模型跑不了带工具 agentic 对话(厂商 CLI 拒工具,生产 role 传 tool schema)——
+  订阅只能无工具场景(dual-model 审查已可用/纯聊天);API-key 线全场景可切(已可用)。订阅进带工具对话=需受治理 tool bridge(大·ToS 灰)
+  或纯聊天模式(中),默认保持现状。**S5 订阅接生产 gateway 暂缓**(避免建误导性成品);S5-piece1 scaffold 本地留存(无害·任一方案都要)。
+  **下一步 S7 前端切换器**:让 API-key 每对话切+中途切对普通用户可视化可用(北极星:能用)。前端 vite/react,chat 页
+  Mode2ChatPage.tsx/AgentWorkbenchPage.tsx。S6 内嵌登录中继(订阅 auth 用,优先级降)。ultracode:每片落码后对抗验证。
 
 ## 状态表（确定的才标 ✅,证据必挂）
 | 子系统/能力 | 状态 | 证据 |
