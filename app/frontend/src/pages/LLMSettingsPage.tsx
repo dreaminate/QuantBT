@@ -37,6 +37,21 @@ interface ConnectionTestResult {
   msg: string;
 }
 
+/** 订阅账号 + API key 的逐 provider 认证画像（GET /api/llm/providers/auth）。绝不含 token/key。 */
+interface ProviderAuthReport {
+  provider: string;
+  label?: string;
+  cli?: string;
+  cli_installed?: boolean;
+  subscription_authed?: boolean;
+  subscription_note?: string;
+  api_key_configured?: boolean;
+  ready?: boolean;
+  next_action?: string;
+  install_command?: string;
+  guided_command?: string;
+}
+
 interface SettingsLLMProvider {
   provider_id: string;
   provider_type?: string;
@@ -111,6 +126,9 @@ export function LLMSettingsPage() {
   const [model, setModel] = useState("");
 
   const [statuses, setStatuses] = useState<ProviderStatus[]>([]);
+  const [authReports, setAuthReports] = useState<ProviderAuthReport[]>([]);
+  const [loginProvider, setLoginProvider] = useState<string | null>(null);
+  const [loginMsg, setLoginMsg] = useState<{ ok: boolean; msg: string } | null>(null);
   const [saving, setSaving] = useState(false);
   const [testingProvider, setTestingProvider] = useState<string | null>(null);
   // 诚实回执：成功 / 失败都如实显示（不假绿灯）。
@@ -159,6 +177,58 @@ export function LLMSettingsPage() {
       });
   }, []);
 
+  const loadAuthReports = useCallback((): Promise<ProviderAuthReport[]> => {
+    // 订阅/API-key 认证画像（机器级 admin 才可见）。best-effort：非 admin / 离线时静默空，不伪造状态。
+    return authFetch("/api/llm/providers/auth")
+      .then((r) => (r.ok ? r.json() : Promise.reject(new Error(`HTTP ${r.status}`))))
+      .then((j) => {
+        const list: ProviderAuthReport[] = Array.isArray(j.providers) ? j.providers : [];
+        setAuthReports(list);
+        return list;
+      })
+      .catch(() => {
+        return [] as ProviderAuthReport[];
+      });
+  }, []);
+
+  const startSubscriptionLogin = useCallback(
+    async (targetProvider: string) => {
+      setLoginProvider(targetProvider);
+      setLoginMsg({ ok: true, msg: "正在拉起浏览器登录…" });
+      try {
+        // 只传 provider 名——凭据全程不经前端。后端起厂商 CLI 浏览器登录，token 只落 CLI keychain。
+        const res = await authFetch(`/api/llm/subscription/login/${targetProvider}`, { method: "POST" });
+        const body = await res.json().catch(() => ({}));
+        if (!res.ok || !body.launched) {
+          const detail = body.error || (typeof body.detail === "string" ? body.detail : `HTTP ${res.status}`);
+          const guided = body.guided_command ? `　终端可直接运行：${body.guided_command}` : "";
+          setLoginMsg({ ok: false, msg: `${detail}${guided}` });
+          return;
+        }
+        setLoginMsg({ ok: true, msg: body.hint || "浏览器已打开，完成登录后自动检测…" });
+        // 轮询认证状态直到该 provider 订阅已登录（最多 ~40s）——完成浏览器登录即自动转绿。
+        for (let i = 0; i < 16; i += 1) {
+          await new Promise((resolve) => setTimeout(resolve, 2500));
+          const list = await loadAuthReports();
+          const report = list.find((p) => p.provider === targetProvider);
+          if (report?.subscription_authed) {
+            setLoginMsg({ ok: true, msg: `✓ ${targetProvider} 订阅已登录，可在对话里切到该厂商模型` });
+            return;
+          }
+        }
+        setLoginMsg({
+          ok: false,
+          msg: "尚未检测到登录完成——若已在浏览器登录，请点『刷新』；或在终端运行卡片里的命令再刷新。",
+        });
+      } catch (e) {
+        setLoginMsg({ ok: false, msg: `登录失败：${String(e)}` });
+      } finally {
+        setLoginProvider(null);
+      }
+    },
+    [loadAuthReports],
+  );
+
   const loadSettingsSummary = useCallback(() => {
     authFetch("/api/research-os/settings/summary")
       .then(async (r) => {
@@ -195,7 +265,8 @@ export function LLMSettingsPage() {
   useEffect(() => {
     loadStatus();
     loadSettingsSummary();
-  }, [loadStatus, loadSettingsSummary]);
+    loadAuthReports();
+  }, [loadStatus, loadSettingsSummary, loadAuthReports]);
 
   /** Hermes 预设：切 custom + 预填本地代理 base_url + 模型占位（引导用订阅额度）。 */
   const applyHermesPreset = useCallback(() => {
@@ -379,6 +450,95 @@ export function LLMSettingsPage() {
         时真实流会明确返回 NoLLMConfigured，不会静默回退到开发期模拟模型。需要演示时必须显式进入
         DEMO / 测试路径。
       </p>
+
+      {/* === 订阅账号登录（Claude / ChatGPT 直连，无按量费）=== */}
+      <section className="cc-card" data-subscription-auth-panel>
+        <div className="cc-row" style={{ justifyContent: "space-between", marginBottom: 8 }}>
+          <h2 style={{ margin: 0 }}>订阅账号登录（Claude / ChatGPT 直连）</h2>
+          <button
+            type="button"
+            className="cc-btn cc-btn--sm cc-btn--ghost"
+            data-auth-reports-refresh
+            onClick={() => loadAuthReports()}
+          >
+            ↻ 刷新
+          </button>
+        </div>
+        <p className="cc-dim" style={{ fontSize: 13, marginTop: 0 }}>
+          已有 Claude Pro/Max 或 ChatGPT Plus/Pro 订阅？直接用订阅账号登录，即可用对应厂商的正经模型，无需
+          API key、无按量费。登录在你自己的浏览器里完成，凭据只存进厂商 CLI 的 keychain——本应用全程不碰
+          token；登录后可在对话里切到该厂商的模型（带工具的 agent 流仍需 API key，订阅暂用于免工具场景）。
+        </p>
+        <div className="cc-row" style={{ flexWrap: "wrap", gap: 10 }}>
+          {authReports.map((rep) => (
+            <div
+              key={rep.provider}
+              className="cc-card"
+              data-auth-report={rep.provider}
+              style={{ padding: 12, minWidth: 260, flex: "1 1 260px" }}
+            >
+              <div className="cc-row" style={{ justifyContent: "space-between" }}>
+                <span style={{ fontSize: 13, fontWeight: 600 }}>{rep.label || rep.provider}</span>
+                <span className={`cc-chip ${rep.ready ? "cc-chip--success" : ""}`}>
+                  {rep.ready ? "就绪" : "未就绪"}
+                </span>
+              </div>
+              <div className="cc-row" style={{ gap: 6, flexWrap: "wrap", marginTop: 8 }}>
+                <span className={`cc-chip ${rep.cli_installed ? "cc-chip--success" : "cc-chip--danger"}`}>
+                  {rep.cli}: {rep.cli_installed ? "已装" : "未装"}
+                </span>
+                <span
+                  className={`cc-chip ${rep.subscription_authed ? "cc-chip--success" : ""}`}
+                  data-subscription-authed={rep.provider}
+                >
+                  订阅: {rep.subscription_authed ? "已登录" : "未登录"}
+                </span>
+                <span className={`cc-chip ${rep.api_key_configured ? "cc-chip--success" : ""}`}>
+                  API key: {rep.api_key_configured ? "已配置" : "未配置"}
+                </span>
+              </div>
+              {!rep.cli_installed && rep.install_command && (
+                <div className="cc-dim" style={{ fontSize: 11, marginTop: 8, lineHeight: 1.5 }}>
+                  先装 CLI：<code>{rep.install_command}</code>
+                </div>
+              )}
+              <button
+                type="button"
+                className="cc-btn cc-btn--sm cc-btn--accent"
+                data-subscription-login={rep.provider}
+                disabled={!rep.cli_installed || loginProvider === rep.provider}
+                onClick={() => startSubscriptionLogin(rep.provider)}
+                style={{ marginTop: 10, width: "100%" }}
+              >
+                {loginProvider === rep.provider
+                  ? "登录中…（完成浏览器登录）"
+                  : rep.subscription_authed
+                    ? "重新登录订阅"
+                    : "登录订阅账号"}
+              </button>
+              {rep.guided_command && (
+                <div className="cc-dim" style={{ fontSize: 11, marginTop: 6, lineHeight: 1.5 }}>
+                  或在终端运行：<code>{rep.guided_command}</code>
+                </div>
+              )}
+            </div>
+          ))}
+          {authReports.length === 0 && (
+            <span className="cc-dim" style={{ fontSize: 12 }} data-auth-reports-empty>
+              无订阅认证信息（需机器级 LLM admin 权限；或后端离线）
+            </span>
+          )}
+        </div>
+        {loginMsg && (
+          <div
+            data-subscription-login-result
+            className={`cc-chip ${loginMsg.ok ? "cc-chip--success" : "cc-chip--danger"}`}
+            style={{ padding: "8px 12px", whiteSpace: "normal", lineHeight: 1.5, marginTop: 10 }}
+          >
+            {loginMsg.msg}
+          </div>
+        )}
+      </section>
 
       {/* === Hermes 预设（Fork1：用订阅额度，经本地 OAuth 代理）=== */}
       <section className="cc-card" data-hermes-preset>

@@ -9,8 +9,9 @@
 - 跨厂商真独立:builder=claude(claude CLI) / verifier=gpt(codex CLI)是两个不同厂商的
   官方客户端 → dual-model 独立性主张更强。
 
-交互 auth(用户在终端做一次,本 adapter 不碰凭据):
-- Anthropic 订阅:`claude setup-token`(或已登录的 Claude Code)。
+交互 auth(用户在终端/浏览器做一次,本 adapter 不碰凭据):
+- Anthropic 订阅:`claude auth login --claudeai`(弹浏览器登 claude.ai,凭据存 CLI keychain)。
+  刻意**不用** `claude setup-token`——它把长效 token 打到 stdout,一旦被程序读到即泄漏面(K4)。
 - OpenAI/ChatGPT 订阅:`codex login`(Sign in with ChatGPT)。
 
 诚实边界:
@@ -38,14 +39,19 @@ _CLI_META: dict[str, dict[str, Any]] = {
         "cli": "claude",
         "label": "Claude 订阅 (Pro/Max)",
         "install": "npm install -g @anthropic-ai/claude-code",
-        "login": "claude setup-token   （或 claude auth login，弹浏览器登 claude.ai）",
+        # 交互登录：弹浏览器登 claude.ai，凭据存进 claude CLI 自己的 keychain——后端全程不碰 token。
+        # 刻意**不用** `claude setup-token`：它把长效 token 打到 stdout，后端一旦读就构成泄漏面（K4 红线）。
+        "login": "claude auth login --claudeai",
+        "login_cmd": ["claude", "auth", "login", "--claudeai"],
         "status_cmd": ["claude", "auth", "status"],
     },
     "openai": {
         "cli": "codex",
         "label": "ChatGPT 订阅 (Plus/Pro)",
         "install": "npm install -g @openai/codex",
-        "login": "codex login   （Sign in with ChatGPT，弹浏览器）",
+        # Sign in with ChatGPT，弹浏览器；token 存进 codex CLI 自己的 ~/.codex——后端不碰。
+        "login": "codex login",
+        "login_cmd": ["codex", "login"],
         "status_cmd": ["codex", "login", "status"],
     },
 }
@@ -79,15 +85,32 @@ def subscription_auth_status(provider: str, *, timeout_s: float = 20.0) -> tuple
     if key == "anthropic":
         try:
             data = json.loads(r.stdout or "{}")
-            logged = bool(data.get("loggedIn"))
-            method = str(data.get("authMethod") or "")
-            return logged, ("已登录" + (f"（{method}）" if method else "")) if logged else "未登录"
         except (json.JSONDecodeError, AttributeError):
-            return (r.returncode == 0 and "loggedIn" in out and "false" not in out.lower()), "状态未知"
-    # openai / codex：文本 "Logged in using ChatGPT"
+            # JSON 解析失败 → 保守 fail-safe:仅当原始输出明确含订阅信号才认订阅(不认 console/按量计费)。
+            low = out.lower()
+            authed = r.returncode == 0 and ("claude.ai" in low or "firstparty" in low)
+            return authed, "状态未知"
+        if not bool(data.get("loggedIn")):
+            return False, "未登录"
+        # `claude auth login` 有两条:--claudeai(订阅·免按量费) 与 --console(Anthropic Console·按量计费)。
+        # console 登录也 loggedIn=true,但**绝不能**冒充「订阅·无按量费」(§3 诚实,否则用户以为免费实则按量扣费)。
+        # 订阅正信号:authMethod=claude.ai / apiProvider=firstParty / 有 subscriptionType;console 负信号:含 console。
+        method = str(data.get("authMethod") or "").strip().lower()
+        api_provider = str(data.get("apiProvider") or "").strip().lower()
+        sub_type = str(data.get("subscriptionType") or "").strip()
+        is_console = "console" in method or "console" in api_provider
+        is_subscription = (not is_console) and (
+            method == "claude.ai" or api_provider == "firstparty" or bool(sub_type)
+        )
+        if is_subscription:
+            bits = "·".join(b for b in (method, sub_type) if b)
+            return True, "已登录（订阅" + (f"·{bits}" if bits else "") + "）"
+        # 登录了但不是订阅(console/按量计费,或方式未知)→ 不认订阅(免按量费的承诺不成立)。
+        return False, "已登录但非订阅（Console/按量计费）——免按量费请用订阅登录 claude auth login --claudeai，或走 API key 线"
+    # openai / codex：文本 "Logged in using ChatGPT"。不回显 CLI 原始 stdout(固定状态串,
+    # 防未来 codex 版本在首行打出账号/敏感信息经本 note 泄漏 → 防御纵深)。
     logged = r.returncode == 0 and "logged in" in out.lower() and "not logged" not in out.lower()
-    note = out.strip().splitlines()[0][:60] if logged and out.strip() else ("已登录" if logged else "未登录")
-    return logged, note
+    return logged, ("已登录（ChatGPT 订阅）" if logged else "未登录")
 
 
 def _api_key_configured(provider: str, secrets_path: Path | None = None) -> bool:
@@ -105,12 +128,20 @@ def _api_key_configured(provider: str, secrets_path: Path | None = None) -> bool
     return isinstance(entry, dict) and bool(str(entry.get("api_key") or "").strip())
 
 
-def provider_auth_report(provider: str, *, secrets_path: Path | None = None) -> dict[str, Any]:
-    """一个 provider 的完整认证画像 + 缺口的确切下一步(陌生用户 onboarding)。"""
+def provider_auth_report(
+    provider: str, *, secrets_path: Path | None = None, timeout_s: float = 20.0
+) -> dict[str, Any]:
+    """一个 provider 的完整认证画像 + 缺口的确切下一步(陌生用户 onboarding)。
+
+    timeout_s 传给订阅登录探测子进程——轮询端点可传较短值,避免挂死的 status 命令长时间占 FastAPI 线程。
+    """
     key = (provider or "").strip().lower()
     meta = _CLI_META.get(key, {})
     installed = cli_installed(key)
-    sub_authed, sub_note = (subscription_auth_status(key) if installed else (False, f"{meta.get('cli', key)} CLI 未安装"))
+    sub_authed, sub_note = (
+        subscription_auth_status(key, timeout_s=timeout_s) if installed
+        else (False, f"{meta.get('cli', key)} CLI 未安装")
+    )
     api_key = _api_key_configured(key, secrets_path)
     ready = sub_authed or api_key
     if ready:
@@ -140,8 +171,81 @@ def provider_auth_report(provider: str, *, secrets_path: Path | None = None) -> 
     }
 
 
-def auth_status_all(*, secrets_path: Path | None = None) -> list[dict[str, Any]]:
-    return [provider_auth_report(p, secrets_path=secrets_path) for p in ("anthropic", "openai")]
+def auth_status_all(
+    *, secrets_path: Path | None = None, timeout_s: float = 20.0
+) -> list[dict[str, Any]]:
+    return [
+        provider_auth_report(p, secrets_path=secrets_path, timeout_s=timeout_s)
+        for p in ("anthropic", "openai")
+    ]
+
+
+def _spawn_detached_login(cmd: list[str]) -> None:
+    """把厂商 CLI 的交互登录作为**分离子进程**拉起：CLI 自己开浏览器、等 OAuth 回调、把凭据
+    存进它自己的 keychain/config。后端刻意：
+    - stdin=DEVNULL —— 不喂键盘输入（也防它等 TTY 挂死本进程）；
+    - stdout/stderr=DEVNULL —— **绝不捕获**（token/URL 一旦经 stdout 就可能被后端读到 → 泄漏面）；
+    - 不 wait —— 登录可能耗时几十秒，挂住 HTTP 请求不可接受；进程完成后自行退出。
+    这就是「后端不碰 token」边界的落点：把 stdout 换成 PIPE 的变异必须被测试打红。
+    """
+    subprocess.Popen(  # noqa: S603 —— cmd 来自 _CLI_META 固定 argv，非用户输入，无 shell 注入面
+        cmd,
+        stdin=subprocess.DEVNULL,
+        stdout=subprocess.DEVNULL,
+        stderr=subprocess.DEVNULL,
+        start_new_session=True,
+        env=os.environ.copy(),
+    )
+
+
+def begin_subscription_login(provider: str, *, spawn: Any = None) -> dict[str, Any]:
+    """发起某 provider 的订阅账号交互登录（in-app relay）。
+
+    机制：拉起厂商 CLI 的浏览器登录（本地机上弹用户自己的浏览器）；后端全程不读/不存/不返回
+    token——凭据只落进 CLI 自己的 keychain。返回体**只含**流程信息（launched / cli / 引导命令），
+    绝不含任何凭据字段。登录后由 subscription_auth_status（另起 `... status` 子进程读 keychain）
+    检测到已登录，前端轮询即可转绿；不需要重启后端。
+
+    诚实降级：detached-spawn 是**便利**（本地能弹浏览器时一键），若浏览器没弹（如 headless），
+    guided_command 始终给出可在终端直接跑的命令——承重的是「状态检测 + 轮询」，不是这个 spawn。
+    """
+    key = (provider or "").strip().lower()
+    meta = _CLI_META.get(key)
+    if not meta:
+        return {"launched": False, "provider": key, "error": f"未知 provider={provider!r}"}
+    guided = " ".join(meta.get("login_cmd") or []) or str(meta.get("login") or "")
+    base = {
+        "launched": False,
+        "provider": key,
+        "cli": meta.get("cli", ""),
+        "guided_command": guided,
+    }
+    if shutil.which(meta["cli"]) is None:
+        return {
+            **base,
+            "cli_installed": False,
+            "install_command": meta.get("install", ""),
+            "error": f"{meta['cli']} CLI 未安装——先安装再登录",
+        }
+    login_cmd = list(meta.get("login_cmd") or [])
+    if not login_cmd:
+        return {**base, "cli_installed": True, "error": f"{key} 未配置 login_cmd"}
+    runner = spawn or _spawn_detached_login
+    try:
+        runner(login_cmd)
+    except OSError as exc:
+        return {**base, "cli_installed": True, "error": f"启动登录失败：{exc}"}
+    return {
+        "launched": True,
+        "provider": key,
+        "cli": meta.get("cli", ""),
+        "cli_installed": True,
+        "guided_command": guided,
+        "hint": (
+            "已尝试打开浏览器完成登录；请在浏览器里登入你的订阅账号。完成后本页会自动检测到已登录。"
+            "若浏览器未弹出（如远程/无桌面环境），在终端直接运行上面的命令即可。"
+        ),
+    }
 
 
 class SubscriptionCLIError(RuntimeError):
@@ -174,7 +278,7 @@ class ClaudeSubscriptionLLM(LLMClient):
             raise NoLLMConfigured("ClaudeSubscriptionLLM 需要 model(如 claude-sonnet-4-5)")
         if not shutil.which(cli_path):
             raise NoLLMConfigured(
-                f"未找到 claude CLI({cli_path})——订阅调用需安装 Claude Code 并 `claude setup-token`"
+                f"未找到 claude CLI({cli_path})——订阅调用需安装 Claude Code 并 `claude auth login --claudeai`"
             )
         self._cli = cli_path
         self._model = model
@@ -308,4 +412,5 @@ __all__ = [
     "subscription_auth_status",
     "provider_auth_report",
     "auth_status_all",
+    "begin_subscription_login",
 ]

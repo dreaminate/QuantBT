@@ -14087,6 +14087,42 @@ def llm_status(user=Depends(require_user_dependency)) -> dict:
     }
 
 
+# ── 订阅账号 in-app 认证（onboarding 面板）──
+# 逐 provider 认证画像（订阅 CLI 是否登录 + API key 是否配置 + 确切下一步）+ 交互登录 relay。
+# 机器级 LLM admin 才可见/可触发（同 configure/revoke 口径）。后端全程不碰 token——订阅凭据只落进
+# 厂商 CLI 自己的 keychain，本端点只读登录**状态**（loggedIn/方法），返回体绝无 token/key 字段。
+@app.get("/api/llm/providers/auth")
+def llm_providers_auth(user=Depends(require_user_dependency)) -> dict:
+    """订阅账号 + API key 的逐 provider 认证画像（陌生用户 onboarding 用）。
+
+    实时探测（不吃 60s 缓存）——登录后轮询要立刻看到转绿。subscription_auth_status 只解析
+    loggedIn/authMethod，绝不读 token；本端点因此可诚实回显「已登录」而不触碰任何凭据。
+    """
+    _require_machine_llm_admin(user)
+    from .agent.subscription_cli_llm import auth_status_all
+
+    # 较短探测超时:此端点会被前端登录轮询高频调用,挂死的 status 命令不应长时间占用线程。
+    return {"providers": auth_status_all(timeout_s=8.0)}
+
+
+@app.post("/api/llm/subscription/login/{provider}")
+def llm_subscription_login(provider: str, user=Depends(require_user_dependency)) -> dict:
+    """发起订阅账号交互登录：拉起厂商 CLI 的浏览器登录（本地弹用户自己的浏览器）。
+
+    机器级 admin 才可触发（登录会开浏览器 / 起子进程，非只读）。后端不读/不存/不返回 token——
+    凭据只落进 CLI 自己的 keychain；返回体只含流程信息（launched / cli / guided_command），无凭据字段。
+    登录成功由后续 GET /api/llm/providers/auth 轮询检测（另起 `... status` 子进程读 keychain）。
+    """
+    _require_machine_llm_admin(user)
+    from .agent.subscription_cli_llm import begin_subscription_login
+
+    result = begin_subscription_login(provider)
+    if result.get("launched"):
+        # 清订阅探测缓存：下次 /api/llm/models 与状态轮询立刻重算，不吃 60s 陈旧值。
+        _invalidate_llm_catalog_caches()
+    return result
+
+
 # ── 跨厂商切模型（S1）：模型目录端点 ──
 # 逐 provider 列可选模型：api-key 厂商 live 拉 {base}/models（非聊天模型 selectable=false）；
 # 订阅厂商 curated（supports_tools=false，订阅 adapter 拒 tools）。未 auth 厂商模型不可选。

@@ -26,9 +26,11 @@ python scripts/llm_auth.py status
 ```bash
 # 1) 装 Claude Code CLI（若未装）
 npm install -g @anthropic-ai/claude-code
-# 2) 登录（弹浏览器登 claude.ai，登完把 code 贴回终端）
-claude setup-token
+# 2) 登录（弹浏览器登 claude.ai，凭据存进 CLI keychain）
+claude auth login --claudeai
 ```
+> 用 `claude auth login`，不要用 `claude setup-token`——后者把长效 token 打到终端 stdout，
+> 一旦被脚本/日志读到就是泄漏面；`auth login` 把凭据存进 CLI 自己的 keychain，谁都不经手 token。
 
 ### OpenAI（ChatGPT Plus/Pro）
 ```bash
@@ -84,4 +86,5 @@ python scripts/llm_auth.py verify                 # 真调验活（两家）
 python scripts/llm_auth.py verify openai          # 只验一家
 ```
 
-**token 过期了怎么办**：重跑对应的 `claude setup-token` / `codex login` 即可。
+**token 过期了怎么办**：重跑对应的 `claude auth login --claudeai` / `codex login` 即可（或直接
+在应用「模型连接配置」页点『登录订阅账号』，浏览器里登一次即可）。

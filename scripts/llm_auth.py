@@ -25,10 +25,9 @@ from pathlib import Path
 REPO_ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(REPO_ROOT / "app" / "backend"))
 
-_LOGIN_CMD = {
-    "anthropic": ["claude", "setup-token"],
-    "openai": ["codex", "login"],
-}
+# 登录命令的单一源 = subscription_cli_llm._CLI_META[...]["login_cmd"]（in-app relay 与本 CLI 同一份，
+# 不重复维护、不漂移）。anthropic 走 `claude auth login --claudeai`（浏览器→keychain），
+# 刻意不用 `claude setup-token`（会把长效 token 打到 stdout=泄漏面，K4）。
 
 
 def _print_status() -> int:
@@ -57,19 +56,21 @@ def _print_status() -> int:
 
 def _login(provider: str) -> int:
     key = (provider or "").strip().lower()
-    if key not in _LOGIN_CMD:
-        raise SystemExit(f"login 只支持 anthropic / openai，收到 {provider!r}")
     from app.agent.subscription_cli_llm import cli_installed, _CLI_META
 
+    if key not in _CLI_META:
+        raise SystemExit(f"login 只支持 anthropic / openai，收到 {provider!r}")
+    meta = _CLI_META[key]
     if not cli_installed(key):
-        meta = _CLI_META[key]
         raise SystemExit(
             f"{meta['cli']} CLI 未安装 —— 先装: {meta['install']}\n然后重跑本命令。"
         )
-    cmd = _LOGIN_CMD[key]
+    cmd = list(meta.get("login_cmd") or [])
+    if not cmd:
+        raise SystemExit(f"{key} 未配置 login_cmd")
     print(f"启动交互登录（{key}）: {' '.join(cmd)}\n"
           "按提示在浏览器完成登录，回来后跑 `python scripts/llm_auth.py verify` 验活。\n")
-    # 交互式登录：不捕获输出，让 CLI 直接接管终端/浏览器流。
+    # 交互式登录：不捕获输出，让 CLI 直接接管终端/浏览器流（token 存 CLI keychain，本脚本不碰）。
     return subprocess.run(cmd).returncode
 
 

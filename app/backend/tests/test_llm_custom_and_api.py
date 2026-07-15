@@ -133,6 +133,81 @@ def test_get_llm_status(client) -> None:
     assert providers == {"anthropic", "openai", "qwen", "custom"}
 
 
+def test_providers_auth_and_login_endpoints_admin_no_leak(client, monkeypatch) -> None:
+    """GET /providers/auth 走真解析(非 vacuous)列画像;未装 CLI 时登录端点如实降级(不 spawn)。"""
+    from app.agent import subscription_cli_llm as scl
+
+    # (A) CLIs 已装 + 真实 status 输出 → 报告经真解析,no-leak 断言不 vacuous。
+    monkeypatch.setattr(scl.shutil, "which", lambda name: f"/usr/bin/{name}")
+
+    def _status(cmd, **kw):
+        joined = " ".join(cmd)
+        if "claude" in joined:
+            return SimpleNamespace(
+                returncode=0,
+                stdout='{"loggedIn": true, "authMethod": "claude.ai", "subscriptionType": "max"}',
+                stderr="",
+            )
+        return SimpleNamespace(returncode=0, stdout="Logged in using ChatGPT", stderr="")
+
+    monkeypatch.setattr(scl.subprocess, "run", _status)
+    r = client.get("/api/llm/providers/auth")
+    assert r.status_code == 200
+    providers = r.json()["providers"]
+    assert {p["provider"] for p in providers} == {"anthropic", "openai"}
+    by = {p["provider"]: p for p in providers}
+    # 真解析:订阅态如实(不 vacuous——若解析错这里会红)
+    assert by["anthropic"]["subscription_authed"] is True
+    assert by["openai"]["subscription_authed"] is True
+    # 端点返回体绝不出现凭据值(只有布尔状态 + 引导文案;codex 原始 stdout 也不回显)
+    blob = json.dumps(providers).lower()
+    assert all(m not in blob for m in ("sk-ant-", "sk-proj-", "bearer ", "token="))
+
+    # (B) CLIs 未装 → 登录端点 not-launched + install 引导(K4:引导绝不含 setup-token)
+    monkeypatch.setattr(scl.shutil, "which", lambda name: None)
+    lr = client.post("/api/llm/subscription/login/anthropic")
+    assert lr.status_code == 200
+    body = lr.json()
+    assert body["launched"] is False and body["cli_installed"] is False
+    assert "setup-token" not in body.get("guided_command", "")
+
+
+def test_subscription_login_spawns_and_invalidates_when_cli_present(client, monkeypatch) -> None:
+    """CLI 已装 → 登录端点起厂商 CLI 浏览器登录(正确 argv)并清订阅探测缓存。"""
+    from app import main
+    from app.agent import subscription_cli_llm as scl
+
+    monkeypatch.setattr(scl.shutil, "which", lambda name: f"/usr/bin/{name}")
+    spawned: list = []
+    monkeypatch.setattr(scl, "_spawn_detached_login", lambda cmd: spawned.append(cmd))
+    invalidated: list = []
+    monkeypatch.setattr(main, "_invalidate_llm_catalog_caches", lambda: invalidated.append(True))
+
+    r = client.post("/api/llm/subscription/login/openai")
+    assert r.status_code == 200
+    body = r.json()
+    assert body["launched"] is True and body["cli"] == "codex"
+    assert spawned == [["codex", "login"]]  # 固定 argv,无用户输入拼接
+    assert invalidated == [True]  # 登录后清缓存 → 状态轮询立刻新鲜
+
+
+def test_subscription_auth_routes_require_machine_admin(monkeypatch) -> None:
+    """普通用户(非机器级 LLM admin)不能读认证画像 / 触发登录(会开浏览器·起子进程)。"""
+    from app import main
+
+    monkeypatch.setenv("QUANTBT_LLM_ADMIN_USER_IDS", "actual-admin")
+    main.app.dependency_overrides[require_user_dependency] = lambda: SimpleNamespace(
+        user_id="ordinary-user",
+        username="ordinary-user",
+    )
+    ordinary = TestClient(main.app)
+    try:
+        assert ordinary.get("/api/llm/providers/auth").status_code == 403
+        assert ordinary.post("/api/llm/subscription/login/anthropic").status_code == 403
+    finally:
+        main.app.dependency_overrides.pop(require_user_dependency, None)
+
+
 def test_machine_global_llm_routes_require_auth_and_admin(monkeypatch) -> None:
     from app import main
 

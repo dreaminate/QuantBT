@@ -155,13 +155,88 @@ def test_auth_detect_cli_missing(monkeypatch):
     assert authed is False and "未安装" in note
 
 
+def test_anthropic_console_login_not_reported_as_subscription(monkeypatch):
+    # §3 false-green 防护:console(--console)=按量计费,loggedIn=true 但**绝不能**标「订阅·无按量费」。
+    monkeypatch.setattr(scl.shutil, "which", lambda name: f"/usr/bin/{name}")
+    monkeypatch.setattr(
+        scl.subprocess, "run",
+        lambda cmd, **kw: _FakeCompleted(0, '{"loggedIn": true, "authMethod": "console", "apiProvider": "console"}'),
+    )
+    authed, note = scl.subscription_auth_status("anthropic")
+    assert authed is False
+    assert "非订阅" in note or "Console" in note
+
+
+def test_anthropic_real_subscription_format_is_authed(monkeypatch):
+    # 真实 `claude auth status --json` 订阅输出(claude.ai / firstParty / max)→ 认订阅。
+    monkeypatch.setattr(scl.shutil, "which", lambda name: f"/usr/bin/{name}")
+    monkeypatch.setattr(
+        scl.subprocess, "run",
+        lambda cmd, **kw: _FakeCompleted(
+            0,
+            '{"loggedIn": true, "authMethod": "claude.ai", "apiProvider": "firstParty", "subscriptionType": "max"}',
+        ),
+    )
+    authed, note = scl.subscription_auth_status("anthropic")
+    assert authed is True and "claude.ai" in note and "max" in note
+
+
+def test_report_console_login_not_ready_as_subscription(monkeypatch, tmp_path):
+    # 报告层(UI/端点消费):console 登录 + 无 api key → subscription_authed=False 且 ready=False(不误报免费可用)。
+    monkeypatch.setattr(scl.shutil, "which", lambda name: f"/usr/bin/{name}")
+    monkeypatch.setattr(
+        scl.subprocess, "run",
+        lambda cmd, **kw: _FakeCompleted(0, '{"loggedIn": true, "authMethod": "console"}'),
+    )
+    rep = scl.provider_auth_report("anthropic", secrets_path=tmp_path / "none.yaml")
+    assert rep["subscription_authed"] is False
+    assert rep["ready"] is False
+
+
+def test_codex_note_does_not_echo_raw_cli_output(monkeypatch):
+    # 防御纵深:codex status 原始 stdout 绝不回显进 note(未来版本首行可能打账号/敏感串)。
+    monkeypatch.setattr(scl.shutil, "which", lambda name: f"/usr/bin/{name}")
+    leak = "Logged in using ChatGPT (token=sk-secret-LEAK)"
+    monkeypatch.setattr(scl.subprocess, "run", lambda cmd, **kw: _FakeCompleted(0, leak + "\n"))
+    authed, note = scl.subscription_auth_status("openai")
+    assert authed is True
+    assert "sk-secret-LEAK" not in note and "token=" not in note
+    assert note == "已登录（ChatGPT 订阅）"
+
+
+def test_onboarding_cli_login_uses_clean_argv_not_setup_token(monkeypatch):
+    # K4 回归门(覆盖 scripts/llm_auth.py 调用点):onboarding CLI 的 login 必须走 _CLI_META login_cmd
+    # (claude auth login --claudeai),**绝不** setup-token——否则用户终端会被打出长效 token。
+    import sys
+    from pathlib import Path
+
+    scripts_dir = Path(__file__).resolve().parents[3] / "scripts"
+    sys.path.insert(0, str(scripts_dir))
+    import llm_auth  # noqa: E402
+
+    monkeypatch.setattr(scl.shutil, "which", lambda name: f"/usr/bin/{name}")
+    captured: dict = {}
+
+    def _fake_run(cmd, **kw):
+        captured["cmd"] = cmd
+        return _FakeCompleted(0)
+
+    monkeypatch.setattr(llm_auth.subprocess, "run", _fake_run)
+    llm_auth._login("anthropic")
+    assert captured["cmd"] == ["claude", "auth", "login", "--claudeai"]
+    assert "setup-token" not in " ".join(captured["cmd"])
+
+
 def test_report_fresh_user_gets_install_and_login_steps(monkeypatch, tmp_path):
     # 陌生用户:CLI 没装 + 无 api key → next_action 必含安装+登录+api-key 三条路
     monkeypatch.setattr(scl.shutil, "which", lambda name: None)
     rep = scl.provider_auth_report("anthropic", secrets_path=tmp_path / "none.yaml")
     assert rep["ready"] is False and rep["cli_installed"] is False
     assert "install" in rep["next_action"] or "装 CLI" in rep["next_action"]
-    assert "setup-token" in rep["next_action"]
+    # K4 修正:引导走 `claude auth login`(浏览器→keychain,后端不碰 token),
+    # 不再推 `claude setup-token`——后者把长效 token 打到 stdout,后端一旦读即泄漏面。
+    assert "auth login" in rep["next_action"]
+    assert "setup-token" not in rep["next_action"]
     assert "api_key" in rep["next_action"]
 
 
@@ -180,6 +255,89 @@ def test_report_cli_installed_not_logged_in(monkeypatch, tmp_path):
     rep = scl.provider_auth_report("openai", secrets_path=tmp_path / "none.yaml")
     assert rep["ready"] is False and rep["cli_installed"] is True
     assert "登录" in rep["next_action"]
+
+
+_CREDENTIAL_MARKERS = ("token", "secret", "api_key", "apikey", "password", "sk-", "bearer")
+
+
+def _has_credential_leak(obj) -> bool:
+    """返回体里是否混进了凭据味的 key/value(login relay 绝不该回显任何凭据)。"""
+    for k, v in obj.items():
+        key = str(k).lower()
+        if any(m in key for m in _CREDENTIAL_MARKERS):
+            return True
+        if isinstance(v, str) and any(m in v.lower() for m in ("token=", "secret=", "sk-ant-", "sk-proj-")):
+            return True
+    return False
+
+
+def test_login_cmd_uses_auth_login_not_setup_token():
+    # K4:登录走 `claude auth login --claudeai`(浏览器→keychain,后端不碰 token)。
+    # 绝不用 `claude setup-token`(把长效 token 打到 stdout=泄漏面)。
+    assert scl._CLI_META["anthropic"]["login_cmd"] == ["claude", "auth", "login", "--claudeai"]
+    assert "setup-token" not in " ".join(scl._CLI_META["anthropic"]["login_cmd"])
+    assert "setup-token" not in scl._CLI_META["anthropic"]["login"]
+    assert scl._CLI_META["openai"]["login_cmd"] == ["codex", "login"]
+
+
+def test_begin_login_unknown_provider_not_launched():
+    spawned = []
+    r = scl.begin_subscription_login("gemini", spawn=lambda cmd: spawned.append(cmd))
+    assert r["launched"] is False and "未知 provider" in r["error"]
+    assert spawned == []  # 未知 provider 绝不 spawn 任何进程
+
+
+def test_begin_login_cli_not_installed_returns_install_no_spawn(monkeypatch):
+    monkeypatch.setattr(scl.shutil, "which", lambda name: None)
+    spawned = []
+    r = scl.begin_subscription_login("anthropic", spawn=lambda cmd: spawned.append(cmd))
+    assert r["launched"] is False and r["cli_installed"] is False
+    assert r["install_command"] and "未安装" in r["error"]
+    assert r["guided_command"] == "claude auth login --claudeai"
+    assert spawned == []  # 没装 CLI 不 spawn
+
+
+def test_begin_login_installed_spawns_correct_argv(monkeypatch):
+    monkeypatch.setattr(scl.shutil, "which", lambda name: f"/usr/bin/{name}")
+    spawned = []
+    ra = scl.begin_subscription_login("anthropic", spawn=lambda cmd: spawned.append(cmd))
+    ro = scl.begin_subscription_login("openai", spawn=lambda cmd: spawned.append(cmd))
+    assert ra["launched"] is True and ro["launched"] is True
+    assert spawned[0] == ["claude", "auth", "login", "--claudeai"]
+    assert spawned[1] == ["codex", "login"]
+    # 返回体绝无凭据字段
+    assert not _has_credential_leak(ra) and not _has_credential_leak(ro)
+
+
+def test_begin_login_spawn_oserror_returns_guided(monkeypatch):
+    monkeypatch.setattr(scl.shutil, "which", lambda name: f"/usr/bin/{name}")
+
+    def _boom(cmd):
+        raise OSError("no display")
+
+    r = scl.begin_subscription_login("openai", spawn=_boom)
+    assert r["launched"] is False and "启动登录失败" in r["error"]
+    assert r["guided_command"] == "codex login"  # 降级:终端可直接跑的命令仍给出
+
+
+def test_spawn_detached_never_captures_output(monkeypatch):
+    # 承重安全门:登录子进程 stdout/stderr/stdin 必须全 DEVNULL——后端绝不捕获(不碰 token)。
+    # 把任一改成 PIPE 的变异必须打红本测试。
+    captured = {}
+
+    class _FakePopen:
+        def __init__(self, cmd, **kw):
+            captured["cmd"] = cmd
+            captured["kw"] = kw
+
+    monkeypatch.setattr(scl.subprocess, "Popen", _FakePopen)
+    scl._spawn_detached_login(["claude", "auth", "login", "--claudeai"])
+    assert captured["cmd"] == ["claude", "auth", "login", "--claudeai"]
+    assert captured["kw"]["stdout"] == scl.subprocess.DEVNULL
+    assert captured["kw"]["stderr"] == scl.subprocess.DEVNULL
+    assert captured["kw"]["stdin"] == scl.subprocess.DEVNULL
+    # 不 wait:分离会话(start_new_session)防登录挂住后端
+    assert captured["kw"].get("start_new_session") is True
 
 
 def test_flatten_messages_preserves_order_and_roles():

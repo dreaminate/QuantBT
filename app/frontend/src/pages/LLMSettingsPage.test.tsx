@@ -490,6 +490,131 @@ describe("LLMSettingsPage · 配置流程", () => {
     ).toHaveLength(0);
   });
 
+  it("订阅面板：从 /api/llm/providers/auth 渲染 provider 卡 + 登录态；未装 CLI 按钮禁用+显示安装命令", async () => {
+    const fetchMock = vi.fn().mockImplementation((url: string) => {
+      const u = String(url);
+      if (u.includes("/api/llm/providers/auth")) {
+        return Promise.resolve(
+          new Response(
+            JSON.stringify({
+              providers: [
+                {
+                  provider: "anthropic",
+                  label: "Claude 订阅 (Pro/Max)",
+                  cli: "claude",
+                  cli_installed: true,
+                  subscription_authed: true,
+                  api_key_configured: false,
+                  ready: true,
+                  guided_command: "claude auth login --claudeai",
+                },
+                {
+                  provider: "openai",
+                  label: "ChatGPT 订阅 (Plus/Pro)",
+                  cli: "codex",
+                  cli_installed: false,
+                  subscription_authed: false,
+                  api_key_configured: false,
+                  ready: false,
+                  install_command: "npm install -g @openai/codex",
+                  guided_command: "codex login",
+                },
+              ],
+            }),
+            { status: 200 },
+          ),
+        );
+      }
+      if (u.includes("/api/llm/status")) {
+        return Promise.resolve(new Response(JSON.stringify({ providers: [] }), { status: 200 }));
+      }
+      return Promise.resolve(new Response("{}", { status: 200 }));
+    });
+    vi.stubGlobal("fetch", fetchMock);
+
+    const { container } = renderWithDesk(<LLMSettingsPage />);
+    await waitFor(() => {
+      expect(container.querySelector("[data-auth-report='anthropic']")).not.toBeNull();
+      expect(container.querySelector("[data-auth-report='openai']")).not.toBeNull();
+    });
+    // anthropic 订阅已登录
+    expect(
+      (container.querySelector("[data-subscription-authed='anthropic']") as HTMLElement).textContent,
+    ).toContain("已登录");
+    // openai CLI 未装 → 登录按钮禁用 + 显示安装命令
+    const openaiBtn = container.querySelector("[data-subscription-login='openai']") as HTMLButtonElement;
+    expect(openaiBtn.disabled).toBe(true);
+    expect((container.querySelector("[data-auth-report='openai']") as HTMLElement).textContent).toContain(
+      "npm install -g @openai/codex",
+    );
+    // K4:面板里绝不出现 setup-token 引导
+    expect((container.querySelector("[data-subscription-auth-panel]") as HTMLElement).textContent).not.toContain(
+      "setup-token",
+    );
+  });
+
+  it("订阅面板：点『登录订阅账号』→ POST /subscription/login/{provider}，请求体不带任何凭据", async () => {
+    const fetchMock = vi.fn().mockImplementation((url: string) => {
+      const u = String(url);
+      if (u.includes("/api/llm/providers/auth")) {
+        return Promise.resolve(
+          new Response(
+            JSON.stringify({
+              providers: [
+                {
+                  provider: "anthropic",
+                  cli: "claude",
+                  cli_installed: true,
+                  subscription_authed: false,
+                  ready: false,
+                  guided_command: "claude auth login --claudeai",
+                },
+              ],
+            }),
+            { status: 200 },
+          ),
+        );
+      }
+      if (u.includes("/api/llm/subscription/login/anthropic")) {
+        // launched:false → 跳过 2.5s 轮询，测试确定性；仍回引导命令
+        return Promise.resolve(
+          new Response(
+            JSON.stringify({ launched: false, error: "浏览器未弹出", guided_command: "claude auth login --claudeai" }),
+            { status: 200 },
+          ),
+        );
+      }
+      if (u.includes("/api/llm/status")) {
+        return Promise.resolve(new Response(JSON.stringify({ providers: [] }), { status: 200 }));
+      }
+      return Promise.resolve(new Response("{}", { status: 200 }));
+    });
+    vi.stubGlobal("fetch", fetchMock);
+
+    const { container } = renderWithDesk(<LLMSettingsPage />);
+    await waitFor(() =>
+      expect(container.querySelector("[data-subscription-login='anthropic']")).not.toBeNull(),
+    );
+    fireEvent.click(container.querySelector("[data-subscription-login='anthropic']") as HTMLElement);
+
+    await waitFor(() => {
+      const call = fetchMock.mock.calls.find((c) =>
+        String(c[0]).includes("/api/llm/subscription/login/anthropic"),
+      );
+      expect(call).toBeDefined();
+      const init = (call![1] || {}) as RequestInit;
+      expect(init.method).toBe("POST");
+      // 凭据从不经前端：请求无 body（只 URL 里带 provider 名）
+      expect(init.body ?? "").toBe("");
+    });
+    // 降级：终端可跑的命令仍呈现给用户
+    await waitFor(() => {
+      expect(
+        (container.querySelector("[data-subscription-login-result]") as HTMLElement).textContent,
+      ).toContain("claude auth login");
+    });
+  });
+
   it("health snapshot：后端拒绝时显示失败，不假装记录成功", async () => {
     const fetchMock = vi.fn().mockImplementation((url: string) => {
       if (String(url).includes("/api/llm/status")) {
