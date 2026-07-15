@@ -39,20 +39,19 @@ docker compose up -d
 
 ## 3. UI 总览
 
-顶栏有两个区：
+导航已收口为 **6 个全屏台（desk）+ 冻结的回测详情页**；旧的分散路由都重定向到对应台（防外部直链 404）。
 
-### 回测研究
-- `/runs` 回测列表（带 search / filter / sort）
+### 6 个台（canonical）
+- `/overview` 总览台：回测列表（search / filter / sort）+ 多 run 对比 + 数据中心（拉数 / preview / 数据集 catalog）子视图
+- `/strategy` 策略台：策略工坊（自然语言 → StrategyGoal slot-fill）+ IDE + 模板
+- `/factors` 因子台：因子市场，30 alpha_lite + 用户表达式因子，按 lifecycle_state 分组
+- `/models` Model 台：实验追踪（experiments + runs + lineage）+ 训练
+- `/paper` 模拟台（原 Binance 交易台）：keystore + testnet/mainnet 顶部色块 + 二次确认 + Kill Switch
+- `/agent-workbench` Agent 工作台（原研究执行台）：结构化研究意图、生成候选实现；可看 provider 状态 + 连接测试
 - `/runs/{id}` 回测详情（**冻结，仅排版/显示逻辑/加字段允许修改**）
-- `/compare` 多 run 对比
-- `/data` 数据中心（拉数 / preview / 数据集 catalog）
 
-### 工坊
-- `/workshop` 策略工坊：自然语言 → StrategyGoal slot-fill
-- `/agent` 研究执行台：结构化研究意图、生成候选实现；可看 provider 状态 + 连接测试
-- `/factors` 因子市场：30 alpha_lite + 用户表达式因子，按 lifecycle_state 分组
-- `/trading` Binance 交易台：keystore + testnet/mainnet 顶部色块 + 二次确认 + Kill Switch
-- `/experiments` 实验追踪：experiments + runs + lineage
+### 旧路由 → 重定向落点（兼容外部直链）
+`/runs`→`/overview`、`/compare`→`/overview?view=compare`、`/data`→`/overview?view=data`、`/workshop`·`/ide`·`/templates`→`/strategy`、`/agent`·`/chat`→`/agent-workbench`、`/trading`→`/paper`、`/experiments`·`/training`→`/models`、`/strategies`→`/overview?view=runs`。
 
 ---
 

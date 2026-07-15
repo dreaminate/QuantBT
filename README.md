@@ -79,15 +79,15 @@ docker compose up -d
 
 ## 立即看到的产物
 
-- **5 个 demo run** 入仓可在 RunDetail 直接打开：
+- **4 个 demo run** 入仓可在 RunDetail 直接打开：
   - http://localhost:5173/runs/a_share_real_demo （历史 A 股 artifact；当前 `run.json` 未绑定 DatasetVersion/source provenance，不能作为“真 Tushare 已验证”证据）
   - http://localhost:5173/runs/a_share_ml_demo （合成）
   - http://localhost:5173/runs/crypto_perp_demo （加密永续）
   - http://localhost:5173/runs/quant1-demo
 - **30 个内置 alpha_lite 因子** http://localhost:5173/factors
-- **研究执行台** 使用真实模型流生成候选研究实现 http://localhost:5173/agent
-- **Binance 交易台** http://localhost:5173/trading
-- **策略索引（quantpedia 风）** http://localhost:5173/strategies
+- **Agent 工作台**（原研究执行台）使用真实模型流生成候选研究实现 http://localhost:5173/agent-workbench
+- **模拟台**（原 Binance 交易台） http://localhost:5173/paper
+- **策略索引（quantpedia 风）** 已并入总览台 http://localhost:5173/overview?view=runs
 
 ---
 

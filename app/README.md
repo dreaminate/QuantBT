@@ -2,12 +2,16 @@
 
 `qb` 是从 `quant1` 蒸馏出来的单体本地 App，运行时不依赖 `quant1` 包或它的后端服务。
 
-现在统一包含 4 个页面：
+导航已收口为 **6 个全屏台（desk）+ 冻结的回测详情页**（旧的分散页——回测列表/对比/数据中心/策略索引/工坊/IDE/交易/实验/训练——都已搬进对应台，旧路由仍保留为重定向，防外部直链 404）：
 
-- 回测列表
-- 对比分析
-- 数据中心
-- 回测详情
+- 总览台 `/overview`（含回测列表 / 对比分析 / 数据中心子视图）
+- 策略台 `/strategy`（工坊 / IDE / 模板）
+- 因子台 `/factors`
+- Model 台 `/models`（实验 / 训练）
+- 模拟台 `/paper`（原交易）
+- Agent 工作台 `/agent-workbench`（原对话 / IDE agent）
+- 回测详情 `/runs/{run_id}`（GOAL §M15 冻结的 jq-* SPA，唯一冻结例外）
+- 首页 `/` 与社区 / 设置 / 定价走通用 Shell
 
 ## 当前目录形态
 
@@ -82,10 +86,17 @@ npm run dev
 
 ## 页面路由
 
-- `/runs`: 回测列表
-- `/compare`: 对比分析
-- `/data`: 数据中心
-- `/runs/{run_id}`: 回测详情
+**当前台（canonical）**：
+
+- `/overview`: 总览台（回测列表 / 对比分析 / 数据中心子视图）
+- `/strategy`: 策略台
+- `/factors`: 因子台
+- `/models`: Model 台
+- `/paper`: 模拟台
+- `/agent-workbench`: Agent 工作台
+- `/runs/{run_id}`: 回测详情（冻结页）
+
+**旧路由（自动重定向到上面的台，兼容外部直链）**：`/runs`→`/overview`、`/compare`→`/overview?view=compare`、`/data`→`/overview?view=data`、`/strategies`→`/overview?view=runs`、`/workshop`·`/ide`·`/templates`→`/strategy`、`/chat`·`/agent`→`/agent-workbench`、`/trading`→`/paper`、`/experiments`·`/training`→`/models`。
 
 ## 数据目录约定
 
@@ -129,9 +140,8 @@ npm run dev
 
 建议直接打开：
 
-- `http://127.0.0.1:5173/runs`
-- `http://127.0.0.1:5173/runs/quant1-demo`
-- `http://127.0.0.1:5173/compare`
+- `http://127.0.0.1:5173/overview`（总览台：回测列表 / 对比分析入口）
+- `http://127.0.0.1:5173/runs/quant1-demo`（回测详情冻结页）
 
 如果要重新生成这个演示样例，可以运行：
 
