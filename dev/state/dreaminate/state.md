@@ -24,6 +24,17 @@
   →修=单快照)②`research_quality_report`(hs300_pipeline.py:645)仍称签名链挡对抗=对研究面假。**未 land、代码 parked 本地
   `slice/f3-readside-parked`(d2ec4238,不 push),main 干净**。redo spec + 全 arc 见 [[f3-readside-manifest-reverify-crossvendor-20260715]]。
   **本 session 第 4 次跨厂商 skeptic 守边界(同厂商 pre-review 两次漏)**。
+- **§16 Run 首屏门 Explore 侦察结论=infra-blocked(未做)**:Playwright driver + strict validator **已建已测**在
+  perf_harness.py(`measure_run_first_screen`:2426·`_playwright_run_first_screen_probe`:2159-2365·validator
+  `_RUN_REQUIRED_SERIES` 六键:88/2077),缺的只是 runtime——live 鉴权后端 + seeded run(equity/benchmark 有点+coach)+
+  同源 served SPA + Chromium 二进制 + 三 env var。**<2s 门在 2 核 CI 本质 flaky·harness 刻意设计为诚实 KNOWN_RUN_GAP
+  不算 fail**(ci.yml:1-4)。一次性 dev receipt 可行(~30min,无新码)但非可复现门+触碰全栈起服务(keystore)——低价值,不强做。
+- **本地干净可收口切片已渐近清零(停止条件③临界)**:mechanical gap 全 land(on_event/bundle/validate_dev warn/worktree 盘点/
+  GoalProofLedger LRU/IDE 沙箱 P0 止血)。**剩全撞真实依赖/用户拍板**:①Run 首屏(infra:live 栈+Chromium+flaky)②卡 8be0e547
+  dual-model 加固(**registered 工程取舍待用户权衡**:4 adapter+全桩改+6356 测试回归 vs 边际防御)③F3 单快照 redo(我 no-3rd-round
+  自限·subtle·触共享 verify_manifest)④dual-model 真调用(待用户凭据)⑤Claude-Code agent epic fork-2(**用户命门·本 session 顶级优先**)
+  ⑥用户裁:worktree 删除/DVC ADR/Ed25519/质量门 scope/echarts lazy。真实数据/第二模型(dev codex 已用)/CI 皆已收口非 blocker。
+  **→ 报 blocker 清单等用户挑高价值方向(尤其 Claude-Code fork-2)。**
 - **断点**:**当前战役=Claudian 式「每对话跨厂商切模型」(卡 db95c0c6,in_progress)**。蓝图 + 参考实现 + S6 记录见 findings。
   **✅ S1 目录 · ✅ S2 路由 · ✅ S3a-b gateway+pin 穿链 · ✅ S4 隔离(证成) · ✅ S6 订阅 in-app 登录 · ✅ S7 前端切换器**
   ——**API-key 每对话切模型端到端可用+有 UI;订阅账号可在应用内登录(设置页『登录订阅账号』→浏览器→轮询转绿,
