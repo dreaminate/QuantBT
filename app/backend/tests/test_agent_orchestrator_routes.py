@@ -277,6 +277,74 @@ def test_all_production_agent_routes_use_orchestrator_and_owner_scoped_events(
         assert OUTPUT_TRIPWIRE.encode() not in payload, path
 
 
+def test_pinned_conversation_threads_model_pin_into_gateway(tmp_path: Path, monkeypatch):
+    """[跨厂商切模型 S3b · skeptic MEDIUM 修复] 端到端:pin 一个对话 → POST /message & GET /stream
+    → _current_agent_gateway 收到 model_pin。捕获 model_pin——若端点漏读 _thread_model_pin 或漏传
+    model_pin=model_pin(「pin 静默失效」变异),这里必红。auto → model_pin=None(回自动路由)。"""
+    import app.main as main
+
+    llm_store = LLMCallRecordStore(tmp_path / "audit" / "llm-calls.jsonl")
+    event_ledger = PersistentWorkflowEventLedger(tmp_path / "audit" / "workflow-events.jsonl")
+    kernel_root = tmp_path / "kernel" / "agent-orchestrator"
+    graph = ResearchGraphStore()
+    offline_client = _OfflineRouteClient()
+
+    monkeypatch.setattr(main, "LLM_CALL_RECORD_STORE", llm_store)
+    monkeypatch.setattr(main, "AGENT_WORKFLOW_EVENT_LEDGER", event_ledger)
+    monkeypatch.setattr(main, "AGENT_ORCHESTRATOR_ROOT", kernel_root)
+    _patch_goal_proof_stores(main, tmp_path / "audit", monkeypatch, graph=graph)
+    svc = ChatService(tmp_path / "chat.db")
+    monkeypatch.setattr(main, "CHAT_SERVICE", svc)
+
+    captured_pins: list = []
+
+    def _capturing_gateway(run_id=None, *, model_pin=None):
+        captured_pins.append(model_pin)  # ← 记录端点穿下来的 pin
+        return build_test_agent_gateway(offline_client, seal_secret=llm_store.seal_secret)
+
+    monkeypatch.setattr(main, "_current_agent_gateway", _capturing_gateway)
+
+    def rag_provider_factory(_payload, _user):  # noqa: ANN001
+        return lambda query: AgentRAGContext(prompt_context="")
+
+    monkeypatch.setattr(main, "_agent_shell_rag_context_provider", rag_provider_factory)
+    monkeypatch.setattr(main, "_provider_is_gateway_routable", lambda p: True)  # 测试环境无真配置
+    main.app.dependency_overrides[main.require_user_dependency] = lambda: SimpleNamespace(
+        username="u1", user_id="u1"
+    )
+    client = TestClient(main.app)
+    try:
+        tid = svc.start_thread(user_id="u1").thread_id
+        assert client.patch(
+            f"/api/agent/chat/{tid}/llm-selection",
+            json={"mode": "pinned", "provider": "openai", "model": "gpt-4o"},
+        ).status_code == 200
+
+        # POST /message：pin 必须穿到 gateway
+        captured_pins.clear()
+        m = client.post(f"/api/agent/chat/{tid}/message", json={"content": "hi", "request_id": "req-pin-msg"})
+        assert m.status_code == 200, m.text
+        assert ("openai", "gpt-4o") in captured_pins, f"pin 未穿到 gateway(message): {captured_pins}"
+
+        # GET /stream：同样
+        captured_pins.clear()
+        with client.stream(
+            "GET", f"/api/agent/chat/{tid}/stream", params={"q": "hi2", "request_id": "req-pin-stream"},
+        ) as resp:
+            assert resp.status_code == 200
+            "".join(resp.iter_text())
+        assert ("openai", "gpt-4o") in captured_pins, f"pin 未穿到 gateway(stream): {captured_pins}"
+
+        # 切回 auto → 无 pin
+        client.patch(f"/api/agent/chat/{tid}/llm-selection", json={"mode": "auto"})
+        captured_pins.clear()
+        m2 = client.post(f"/api/agent/chat/{tid}/message", json={"content": "hi3", "request_id": "req-auto-msg"})
+        assert m2.status_code == 200, m2.text
+        assert captured_pins and all(p is None for p in captured_pins), f"auto 应无 pin: {captured_pins}"
+    finally:
+        main.app.dependency_overrides.pop(main.require_user_dependency, None)
+
+
 def test_chat_endpoint_server_routes_data_factor_model_backtest_risk_and_report_roles(
     tmp_path: Path,
     monkeypatch,
