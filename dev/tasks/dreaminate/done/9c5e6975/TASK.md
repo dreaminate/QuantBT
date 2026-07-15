@@ -1,7 +1,7 @@
 ---
 uuid: 9c5e69752fec4a19939e8504ce5bd53e  # 全 32 位 hex 无连字符;生成:python -c "import uuid;print(uuid.uuid4().hex)"(或直接 os.py mint 全自动)
 title: dual-model gate 应用内跨厂商接线——真实 anthropic builder × openai verifier 端到端(gateway 路由+HMAC 密封 LLMCallRecord+ReviewSubjectBinding+IndependenceVerdict 落盘)
-status: in_progress  # todo | in_progress | done
+status: done  # todo | in_progress | done
 owner: dreaminate  # wait(在 pool) | <developer_id>;须 == 所在文件夹(validate 校验一致;os.py assign 两处同改)
 assigned_by: dreaminate  # 分配者 developer_id(leader/admin);pool 中留空
 review_status: 1 # 被分配者 self-review:0 未过目 | 1 已过目/确认
@@ -10,7 +10,7 @@ area: research-os  # 功能域 slug,须已在 ../_areas.md 注册(语法 ^[a-z0-
 source: goal  # research | goal | interaction(三晋升源出身)
 source_ref:   # 溯源句柄:finding 路径 / GOAL §x / 对话
 goal_section: §7  # 服务 GOAL 哪个子系统节(如 §3);build_trace.py 据此聚合覆盖,可空
-done_at:         # 落档日期 YYYY-MM-DD(os.py done 自动填;归档按它分季)
+done_at: 2026-07-15  # 落档日期 YYYY-MM-DD(os.py done 自动填;归档按它分季)
 depends_on: []   # 上游卡 uuid 列表(全 32 位)= DAG 的边;os.py mint --depends-on 可用 uuid8 前缀自动解析
 ---
 
@@ -76,6 +76,13 @@ evidence 带机器可读 independence_claim_scope=cross_vendor_as_configured + c
 全量基线不破。
 **机制级残余 → 已立卡 tasks/pool/8be0e547:①binding 未绑 provider 实收 prompt(adapter
 之后不可证)②provider 身份是声明式(槽名+模型名判族),不同 key 同后端伪装无单侧证伪。**
-**真实调用现状:本机中继 key 双 401(脱敏诊断留档);且 anthropic 槽必须配原生 /messages
-端点(OpenAI 兼容中继形态打不通 AnthropicLLM,preflight 与实调同协议探测会如实拦)。
-登记待用户提供有效 anthropic 原生 + openai 凭据后跑通并落真实证据。**
+**真实跨厂商调用已跑通(2026-07-15,订阅路径)**:改走厂商官方 CLI 订阅账号
+(app/backend/app/agent/subscription_cli_llm.py:ClaudeSubscriptionLLM/CodexSubscriptionLLM)——
+builder=anthropic claude-sonnet-4-5(claude CLI 订阅) / verifier=openai gpt-5.6-sol
+(codex CLI 订阅),`python scripts/dual_model_review.py --subscription` 实测 independent=True
+(provider+foundation-model family 均异)、verifier 独立重算 IC=0.996834 并逮到 builder 夸大、
+evidence HMAC 密封。auth_mode=subscription_cli、claim_scope=cross_vendor_via_official_cli,
+caveats=[](两独立 CLI 无中继)。彻底绕过 api-key/中继 401 blocker;CLI 自理 OAuth/刷新/签名,
+比 token 重放稳、受支持、ToS 灰度低。陌生用户 onboarding:scripts/llm_auth.py + docs/llm-auth-quickstart.md。
+**历史(api-key 路径)**:本机中继 key 双 401,anthropic 槽须原生 /messages;api-key 路径保留可用。
+**机制级残余(卡 8be0e547)不变**:binding 未绑 adapter 实收 prompt / provider 身份声明式。

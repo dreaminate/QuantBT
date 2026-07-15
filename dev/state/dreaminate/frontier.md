@@ -6,6 +6,23 @@
 
 ## 现在打到哪了
 - **/loop 15m 自主循环运行中**(cron ce958a8c)。首轮启动切片 ✅(脏区收口 land `f41789dc`)。
+- **【最新·2026-07-15】切片② dual-model 真跨厂商调用收口 + 订阅账号 auth 从零做全**(卡
+  9c5e6975 ✅ done)——用户 PIVOT「先做 auth 登陆,openai 和 anthropic 订阅账号都要能登陆、能
+  切换模型」:
+  - **订阅 auth 机制**(origin/main `6945b887`+`4235f09c`):`app/agent/subscription_cli_llm.py`
+    经厂商官方 CLI(`claude -p` / `codex exec -o`)用**订阅账号**调模型——绕开 sk-ant-oat 直连被
+    Messages API 拒的坑,CLI 自理 OAuth/刷新/签名。auth 检测层(存在性检测,**从不读 token**)+
+    `scripts/llm_auth.py`(status/login/verify 三子命令)+ `docs/llm-auth-quickstart.md`。**陌生
+    用户从零**:status 看缺口→login 弹浏览器登→verify 真调 pong。16 测 passed。两家订阅真调通、
+    model 可切换。
+  - **dual-model 真收口**(本分支 `bc4514c5`):`dual_model_review.py --subscription` 真跑——
+    builder=anthropic `claude-sonnet-4-5` / verifier=openai `gpt-5.6-sol`,independent=True、
+    auth_mode=subscription_cli、claim_scope=cross_vendor_via_official_cli;verifier 独立重算
+    Pearson **IC=0.996834** 逮 builder「预测能力优秀」夸大、verdict=incorrect,evidence HMAC
+    密封。**这是真跨厂商官方 CLI,天然独立**——比此前 api-key 中继(双 401 blocker)强。
+  - **诚实边界**:订阅账号跑官方 app/CLI 之外的自动化,ToS 由用户自担(个人本地),已在
+    docs/state 标注;非替用户拍板。机制级残余=卡 8be0e547(binding 绑 adapter 实发的
+    request_payload_digest,蓝图已落 `research/findings/dreaminate/8be0e547-*`)。
 - **切片① 39d08df8 · HS300 真数据证据链:核心目标已达成,本批已 land**——
   **GOAL §16「沪深300×10年日频读取<3s」以完整诚实链真数据转绿:measured=True / 0.0185s**。
   链条全走:pull(产线化,180/分限流+退避+幂等)→ preflight(12 项镜像门)→ DatasetVersion

@@ -6,6 +6,11 @@
 ## <日期> · <标题>
 - 建/改了什么 + 命门  - 验收：<对抗测试 + 变异 + 全量数字>  - 下一步：<…> -->
 
+## 2026-07-15-0046 切片② dual-model 真跨厂商调用跑通(订阅路径)——卡 9c5e6975 done
+- 订阅账号 auth+onboarding 做全(subscription_cli_llm.py adapter+llm_auth.py onboarding+docs;陌生用户从零 status/login/verify)——两家订阅 CLI 真调通 pong,model 可切换
+- dual_model_review.py 接订阅(--subscription):builder=anthropic claude-sonnet-4-5/verifier=openai gpt-5.6-sol 真跑 independent=True,verifier 独立重算 IC=0.996834 逮 builder 夸大,evidence 密封;绕过 api-key/中继 401 blocker,真跨厂商比中继强
+- CLI 子进程路径(非 HTTP token 重放):CLI 自理 OAuth/刷新/签名,受支持(为 CI/脚本设计)、ToS 灰度低。机制级残余(卡 8be0e547)不变
+
 ## 2026-07-14-2330 5 未合并分支全核完:1 救回(autopolish sandbox)+4 可删
 - Explore 子代理核查:S13(a400943)/S16(a763)producer 已换位重实现进 promote_assembler.py:_assemble_section13/16(typed dataclass fail-closed)+test_runjson_producers.py 覆盖;prodbuilder=两者 merge 无额外码;wip/uncommitted-closure 是作者自标 fake-green,main 主动加守卫(goal_coverage.py:359/579)拒绝其 goal_closure ref——与 autopolish-w1 正好相反
 - destructive 删除留用户/确认无并行 session 在用 worktree 后执行(89 agent worktree 共享 stash 栈,盲删跨 session 损伤风险);盘点 doc 命令用户可自跑

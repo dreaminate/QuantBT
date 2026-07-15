@@ -5,8 +5,10 @@
 > 本版 2026-07-14 整篇重写(蒸馏此前 2026-06 全部追加块——原文在 git 历史 `git log dev/state/dreaminate/state.md`)。
 
 ## 进行中
-- 39d08df8 已 done(2026-07-14)。切片③ CI ✅、切片② dual-model 应用内接线已 land(卡 9c5e6975
-  in_progress:真实跨厂商调用待用户凭据)。/loop 15m 自主循环运行中;队列见 frontier。
+- 卡 9c5e6975 已 done(2026-07-15):切片② dual-model **真跨厂商调用收口**——订阅账号 auth+
+  onboarding 全做(陌生用户从零)、dual_model_review 接订阅、真跑 independent=True 逮 builder
+  夸大。切片③ CI ✅、on_event 迁移 ✅、bundle 拆分 ✅ 均已 land。/loop 15m 自主循环运行中;
+  下一步转用户可感知面(队列见 frontier)。
 
 ### 顶部刷新块（本轮值 · 每轮覆写）
 - **六字段**:1 Local checkout=slice/on-event-lifespan @ d940aed3(on_event→lifespan 迁移,
@@ -39,12 +41,16 @@
 | §13/§17 RDP | 🟡 | manifest/store/materialize/publish 已建;本切片链产物未组 RDP(residual) |
 | GoalProofLedger snapshot cache | ✅ LRU | 无界 dict→OrderedDict 有界(maxsize 256,读命中 move_to_end/写后逐最旧);命中正确性仍由 token+WAL 文件状态绑定独立门控,淘汰只重算不 stale(WAL 边界一字未动);test_goal_proof_ledger 42 passed(2 新 LRU 对抗)+codex APPROVE(commit cbdc9617) |
 | dual-model 独立审查(流程级) | ✅ | builder=claude(anthropic)/verifier=gpt-5.6-sol(openai) 跨厂商;HS300 链三轮 verdict 留档证据包 |
-| §7/§8 dual-model 应用内接线(脚本化端到端) | 🟡 | scripts/dual_model_review.py:secrets 窄读→内存 keystore→build_agent_llm_gateway→builder(anthropic)→binding→verifier(openai,independence_required)→HMAC 密封记录+独立性判定;test_dual_model_review_script 36 passed(桩注入,零网络);codex 九轮对抗全修+回归钉死。**真实跨厂商调用待用户凭据**(本机中继 key 双 401);机制级残余(binding 绑 adapter 实发/身份可验证)=卡 8be0e547 |
+| §7/§8 dual-model 应用内接线(脚本化端到端) | ✅ 真跨厂商跑通 | scripts/dual_model_review.py 两模式:api_key(secrets 窄读→内存 keystore→gateway) + **--subscription**(经厂商官方 CLI,无 key/无中继);test_dual_model_review_script 36 passed(桩注入,零网络)。**真实跨厂商调用已收口(2026-07-15)**:builder=anthropic claude-sonnet-4-5 / verifier=openai gpt-5.6-sol 真跑 independent=True、auth_mode=subscription_cli、claim_scope=cross_vendor_via_official_cli,verifier 独立重算 Pearson IC=0.996834 逮 builder「优秀」夸大、verdict=incorrect,evidence HMAC 密封;绕过此前本机中继 key 双 401 blocker。机制级残余(binding 绑 adapter 实发 request_payload_digest/身份可验证)=卡 8be0e547(蓝图已落 research/findings) |
+| 订阅账号 LLM auth + onboarding(陌生用户从零) | ✅ | app/agent/subscription_cli_llm.py:ClaudeSubscriptionLLM(anthropic,`claude -p`)+CodexSubscriptionLLM(openai,`codex exec -o`) adapter+auth 检测(`subscription_auth_status`/`provider_auth_report`/`auth_status_all`,存在性检测不读 token);scripts/llm_auth.py 三子命令(status/login/verify);docs/llm-auth-quickstart.md 两法(订阅荐/api key)。test_subscription_cli_llm 16 passed(9 adapter fail-closed+7 onboarding)。两家订阅真调通 pong、model 可切换。诚实边界:订阅账号自动化 ToS 由用户自担(个人本地),token 存 CLI 自身安全存储、本仓不读/不复制/不记录 |
 | CI(GitHub Actions) | ✅ | .github/workflows/ci.yml 双 job;run 29377617245 gh 实查 success:后端 6315 passed/0 failed(17:18)+前端 423+build;七轮迭代账目在 log/证据包 |
 | FastAPI on_event→lifespan 迁移 | ✅ | main.py _app_lifespan asynccontextmanager(try/finally 无条件 shutdown 等价旧 _DefaultLifespan.__aexit__);test_app_lifespan 5 passed;codex 修复轮 APPROVE(commit f8d1f1cd+d940aed3) |
 | 前端 bundle 拆分 | ✅ | vite manualChunks:单 2,557.79 kB JS→9 可缓存 chunk(echarts 1.38MB/index 813/react-vendor 142/…);build 绿+423 前端测试 passed(commit 593ffa02)。边界:首屏字节未减(echarts 随 §M15 冻结页 eager),lazy-load=用户拍板 |
 
 ## 下一步
-- 切片②真实调用待用户凭据(非阻塞)→ 用户可感知面(Run 首屏门/前端 bundle 拆分)→ FastAPI
-  on_event 迁移 → pool 三张 eval 卡 + 卡 8be0e547 机制层加固 → 90+ worktree 盘点(只列)。
+- 切片② 真跨厂商已收口(订阅路径)、on_event 已迁移、CI/bundle 已 land → 转**用户可感知面**:
+  Run 首屏门(harness 第二 gap,需 Playwright 实测)→ pool 三张 eval 卡 → 卡 8be0e547 机制层
+  加固(binding 绑 adapter 实发,蓝图已落)→ 90+ worktree 盘点(只列清单等拍板)。
+- 待拍板(非阻塞,已登记):用户贴的「金融数学主干架构设计」文档 A/B/C(默认 C=继续 loop);
+  订阅账号自动化 ToS 归用户自担(已在 docs/state 诚实标注)。
 - 详单与残余见 frontier.md;战略提示(转用户可感知面)已记。
