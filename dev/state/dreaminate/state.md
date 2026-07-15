@@ -11,8 +11,8 @@
   下一步转用户可感知面(队列见 frontier)。
 
 ### 顶部刷新块（本轮值 · 每轮覆写）
-- **六字段**:1 Local checkout=slice/model-switch-crossvendor @ **918daf7f**(= origin/main,干净;**F3 §11 读侧 manifest 完整性门产品码已 land 于此**);
-  2 Remote=**origin/main 同 918daf7f**(F3 产品码 918daf7f + 上游 dev-docs;本 tick 之后另落 dev-docs commit);
+- **六字段**:1 Local checkout=slice/model-switch-crossvendor @ **21a14abd**(= origin/main,干净;**F3 §11 完整性门(918daf7f)** + UI 路由文档同步 desk 架构(21a14abd,能信/onboarding 准确性,纯文档));
+  2 Remote=**origin/main 同 21a14abd**;
   3 Local tests=**后端全量 6487 passed/13 skipped/0 failed**(真汇总行,508s 实跑)+ perf harness 72 passed + 前端 40 files/430 passed + build ✓;
   4 CI=**passed**(gh 实查:b998f7ee[=F3 码+docs] completed **success**,19min;918daf7f 被 concurrency 取消非 fail);5 Production=Unqueried;6 User acceptance=**Unverified**。
   本 session 累计 land 进 main:S6 订阅 in-app 登录(656c85eb)·§11 PIT(0c926235)·F1 建侧(a2b6d534)·**F3 读侧完整性门(918daf7f,3 轮跨厂商 SOUND)**。

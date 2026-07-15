@@ -6,6 +6,11 @@
 ## <日期> · <标题>
 - 建/改了什么 + 命门  - 验收：<对抗测试 + 变异 + 全量数字>  - 下一步：<…> -->
 
+## 2026-07-15-1415 UI 路由文档同步 desk 架构 land(21a14abd)—onboarding/能信 准确性
+- Explore 侦察 onboarding(能装/能用/能信)判 **SOLID**(install 链/demo run/CLI 命令/诚实边界全对得上代码),唯一具体可修低杠杆项=前端 desk 重构后 3 份文档仍写 refactor 前分散路由。改:app/README.md「4 页面 /runs·/compare·/data」→6 台+冻结 /runs/{id}+重定向表;README.md demo 计数 5→4·/agent→/agent-workbench·/trading→/paper·/strategies→/overview;docs/user-manual.md UI 总览两区→6 台 canonical。全对照 App.tsx 核实。
+- 验收:纯文档零码改;git diff --check OK·GOAL 零 diff·validate_dev PASS;3 文件仅 README.md/app/README.md/docs/user-manual.md。无需测试套件(无可执行改动)。
+- 下一步:本地干净切片仍渐近清零(停止条件③);高价值余项全用户拍板(Claude-Code fork-2 等),报 blocker 等方向。
+
 ## 2026-07-15-1330 F3 §11 读侧 manifest 完整性门 land(918daf7f)—3 轮跨厂商 codex 收敛
 - 真实 ashare_hs300 读价【前】拿磁盘字节 re-verify 注册的不可变 manifest per-file sha256→fail-closed(drift/corruption/误置 防御)。命门=单快照:manifest 解析一次,覆盖门(非空+逐条路径安全+覆盖将读文件)+per-file sha256(新加 verify_manifest_obj,复用 _sha256_file 单源)跑同一 DatasetManifest 对象、无二次读盘→split-manifest swap 不可绕;deletion 三态(absent/verdict≠pass→合成兜底保 CI、verdict=pass 缺文件→raise 绝不静默降级);verify-before-parse;research_quality_report 诚实收窄(未签名 manifest=defense-in-depth 非 authenticity)。
 - 验收:对抗测试 f3_01..f3_12(空/部分/不安全路径 manifest·bars/adj 篡改·缺 manifest·verify-before-parse·单快照 swap)带变异牙口(移门/two-read 翻红);**3 轮跨厂商 codex skeptic 4→2→0 洞收敛,round3 SOUND to land**(同厂商 pre-review 两轮全漏);land gate 全绿:后端全量 **6487 passed/13 skipped**、perf 72、前端 40 files/430+build ✓、compileall、validate_dev PASS、audit 基线 1c1788b0 不变。设计+arc 见 [[f3-readside-manifest-reverify-crossvendor-20260715]]。
