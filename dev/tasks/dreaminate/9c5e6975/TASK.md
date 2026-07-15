@@ -33,13 +33,19 @@ bind/validate→IndependenceVerdict,HMAC 密封 LLMCallRecord 落盘;含 preflig
 | app/backend/app/llm/gateway.py | build_agent_llm_gateway:1490 | 零改动,复用(keystore 装配/路由/密封) |
 | app/backend/app/llm/call_record.py | make/bind/validate binding+evaluate_independence | 零改动,复用 |
 | app/backend/app/llm/call_record_store.py | LLMCallRecordStore.append:130 | 零改动,record_sink 逐调用注入 |
-| app/backend/tests/test_dual_model_review_script.py | 新增 | 桩注入三测(端到端/单厂商诚实 False/缺凭据指路) |
+| app/backend/tests/test_dual_model_review_script.py | 新增 | 桩注入十一测(端到端/密封复验/逐坏门对抗) |
 
 ## 对抗测试设计（种已知 bug，门必抓）[必填]
-1. 单厂商冒充:只配 openai → independent 必为 False(同厂商换 prompt≠第二意见),绝不 True
-2. secret 卫生:密封记录与 evidence JSON 中任何 key 字面量出现 → 拒落盘(测试断言零泄漏)
-3. 凭据缺失:secrets 无 key → SystemExit 指路 store/配置(不静默降级 mock——gateway dev_local 永不进路由)
-4. (机制层已有,复用不重造)builder 输出篡改→binding digest 必炸;无共享 session→独立性判定拒:种 <已知的坏> → 门必 <抓的表现>(含变异要杀的点)
+经 codex(gpt-5.6-sol ultra) 增量审 REJECT 一轮后重设计(五条否决全修):
+1. 单厂商/缺凭据 → fail-closed 拒绝运行,零 evidence(同厂商换 prompt≠第二意见)
+2. 双槽同 api_key 冒充跨厂商 → 可证同源,拒绝(种坏必抓)
+3. verifier 实发 prompt 被偷换(种坏缝 _verifier_prompt_override)→ digest 互证门必抓;
+   复用 gateway 同一哈希族(ids.content_hash),不自立第二套
+4. key 回显三路径全堵:loader yaml 异常(原文含 key→消息整体抑制)/preflight 响应体
+   (对全部已加载 key 脱敏,非仅当前 provider)/verifier 输出直达 evidence(扫描拒落盘);
+   builder 输出回显则更早被 gateway._guard_prompt SecretLeakError 拒发(分层佐证测试)
+5. evidence 事后篡改(手翻 independent)→ HMAC 密封(与 LLMCallRecord 同 key)复验必红
+6. 同 base_url 中继 → 不拒但 evidence 如实披露「上游独立性不可证」(用户自判)
 
 ## 复用 [按需]
 <现有可复用的 file:符号,别重造>
@@ -56,6 +62,10 @@ bind/validate→IndependenceVerdict,HMAC 密封 LLMCallRecord 落盘;含 preflig
 从标签现算;validate 守「标签规范 + in_progress 时 [需拍板]=0」。非拍板的开口(留 hook / 归后续)不标。>
 
 ## 验收一句话 [必填]
-桩注入端到端产合法 binding+独立性判定+密封记录(3 tests passed);真实跨厂商调用在凭据有效时
-同一路径即通(preflight 指路);单厂商绝不产 independent=True;全量基线不破。
+桩注入端到端产合法 binding+独立性判定+密封记录且 11 对抗测试全绿;脚本可证边界=
+「双槽凭据不同源(同 key 即拒)+实发 prompt 与 binding 互证+证据密封防篡改」;真实跨厂商
+调用在凭据有效时同一路径即通(preflight 常开指路);全量基线不破。
+**机制级残余(登记,不冒充已证):provider 身份来自配置槽声明(model_identity 按模型名判族),
+双槽指向同一实际后端的伪装无单侧证伪手段;validate_review_subject_binding 本身不绑实发
+prompt(本脚本以 digest 互证补位,机制层扩展另立卡)。**
 **真实调用现状:本机中继 key 双 401(脱敏诊断留档),登记待用户换有效 anthropic+openai 凭据后跑通并落真实证据。**
