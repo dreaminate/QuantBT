@@ -40,11 +40,17 @@
   schema v3 向后不兼容·identity_basis 未下游传播)。**同厂商复审不足以守诚实边界——本次已证**(被审对象就是独立性机制、
   独立审查抓出自己越界)。收紧后诚实 scope + 逐条 findings 见 [[dual-model-binding-crossvendor-findings-20260715]];
   卡保持 pool/todo,重做须跨厂商复验。main 干净无脏码。
-  **🚩 大方向精化=Claude-Code 式内嵌 agent(非 OpenClaw)**:用户「claude code 更好更强」→ 编排 headless Claude Code
-  (订阅驱动)+ QuantBT MCP server(数据/因子/回测/**画布操作**工具)+ 量化 skill + workspace,扩现有 GraphCanvas。
-  **K3 经 MCP 化解**(Claude Code 原生 tool-use+MCP,订阅账号带工具干活通)。**已拍**:量化专用·权限分级(Claude Code
-  权限+MCP 工具层钉死红线)·扩 GraphCanvas。**待用户拍 A/B**:A 编排真 Claude Code(强推) vs B 自建循环。
-  下一步:等用户 A/B → 核 headless Claude Code+MCP 机制 → duet 设计 + 薄纵切。ultracode:每片落码后**跨厂商**对抗验证。
+  **🚩🔨 当前大活=Claude-Code 式内嵌量化 agent(用户拍 A 已启动)**:**两层架构**——
+  ①**服务层(订阅驱动·可插拔 agent 后端)**=`claude`(Claude Code v2.1.210:-p/--mcp-config/--permission-mode/
+  --add-dir/stream-json)+`codex`+**`opencode`**(serve/run/mcp/acp;三个本机均已装、都 headless+MCP-capable)抽象成
+  单一 AgentBackend 接口,各用自己订阅 auth(S6 登录地基)。②**QuantBT 层(量化专用)**=MCP server(数据/因子/回测/
+  **画布**工具,**红线在 MCP 工具层结构性钉死**:动钱/真实 venue/A股实盘/testnet/mainnet 任何权限档都拒)+编排器
+  (起后端·解析 stream·驱动 UI+GraphCanvas)+量化 skill+workspace+画布绑定。**造法**=融合 OpenClaw/Hermes(均 MIT,可融,
+  落码前 pin commit 复审 license)编排范式,按本仓架构重实现+量化提示词。**K3 经 MCP 化解**。**已拍**:量化专用·权限分级·
+  扩 GraphCanvas·A(编排真 agent 后端)·三后端(claude/codex/opencode)。
+  **进行中**:deep-opus 设计 agent a6668b18(设计基础+薄纵切:AgentBackend 抽象+MCP server+一工具+红线 floor+编排 seam+
+  一个端到端薄片[app 里 agent 经一 MCP 工具操作画布·订阅 headless 后端])。返回后**跨厂商 codex 复审**→实现薄片。
+  下一步:接 a6668b18 设计→codex 复审→薄纵切实现(每片跨厂商对抗验证,红线 floor 结构不可绕做成对抗测试)。
 
 ## 状态表（确定的才标 ✅,证据必挂）
 | 子系统/能力 | 状态 | 证据 |
