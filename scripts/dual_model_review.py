@@ -15,10 +15,13 @@ gateway 材料化,绝不打印/落盘/入 record(store 持久化字段是 digest
 异常路径同样收口:yaml 解析错误整体抑制(原文可能含 key)、preflight 诊断对全部
 已加载 key 脱敏、evidence 落盘前全文扫描拒泄。
 
-诚实边界(不装成机制能证明的):脚本能证明的是「两个配置槽凭据不同源(同 key 即拒)、
-verifier 实发 prompt 与 binding 派生 instruction 一致(digest 互证)、证据 HMAC 密封
-防篡改」。provider 身份仍来自配置槽声明(model_identity 按模型名判族)——双槽指向
-同一实际后端的伪装无法由单侧脚本证伪,同 base_url 中继场景在 evidence 里如实披露。
+诚实边界(不装成机制能证明的):脚本能证明的只有三件——①两个配置槽的 key 字面量
+不同(同 key 即拒;不同 key 仍可指向同一实际后端,单侧不可证伪)②gateway 调用前
+记账的 verifier prompt digest 与 binding 派生 instruction 一致(adapter/中继之后
+provider 实收什么,本机不可证)③在 seal key 可信前提下,evidence 内层的未重签修改
+可被检出(不防持 key 重签/删除/整包回滚)。provider 身份来自配置槽声明(model_identity
+按模型名判族);同 base_url 中继场景在 evidence 里落机器可读 caveat 如实披露。
+机制层加固(实发 payload 回带/身份可验证升级)另立卡 tasks/pool/8be0e547。
 """
 
 from __future__ import annotations
@@ -74,14 +77,35 @@ def _load_llm_keys() -> dict[str, dict[str, str]]:
                 f"secrets.yaml 的 llm.{provider}.api_key 缺失或不是非空字符串,"
                 "双厂商审查无法进行(值不回显)"
             )
-        base_url = entry.get("base_url", "") or ""
-        model = entry.get("model", "") or ""
+        # 只把「缺失/None」当空串;0/False/[] 这类 falsy 非字符串是误配,必须拒
+        # (`or ""` 会把它们静默吞掉),值不回显
+        base_url = entry.get("base_url")
+        base_url = "" if base_url is None else base_url
+        model = entry.get("model")
+        model = "" if model is None else model
         if not isinstance(base_url, str) or not isinstance(model, str):
             raise SystemExit(
                 f"secrets.yaml 的 llm.{provider}.base_url/model 必须是字符串(值不回显)"
             )
         out[provider] = {"api_key": key, "base_url": base_url, "model": model}
     return out
+
+
+def _key_variants(key: str) -> tuple[str, ...]:
+    """key 的字面量 + 常见转义表示(JSON 转义/repr 转义)。
+
+    响应体或异常文本里的 key 可能已经是 JSON-escaped(引号→\\",反斜杠→\\\\)或
+    repr-escaped 形态——只匹配 raw 字面量会漏掉可逆还原的泄漏。
+    """
+    variants = {key}
+    variants.add(json.dumps(key, ensure_ascii=False)[1:-1])  # JSON 转义形态
+    variants.add(json.dumps(key)[1:-1])                       # ASCII JSON 转义形态
+    variants.add(repr(key)[1:-1])                             # repr 转义形态
+    return tuple(v for v in variants if v)
+
+
+def _contains_key(text: str, key: str) -> bool:
+    return any(v in text for v in _key_variants(key))
 
 
 def preflight(keys: dict[str, dict[str, str]]) -> list[str]:
@@ -91,9 +115,11 @@ def preflight(keys: dict[str, dict[str, str]]) -> list[str]:
     all_keys = [e["api_key"] for e in keys.values() if e.get("api_key")]
 
     def _redact(text: str) -> str:
-        # 对全部已加载 key 脱敏:中继/网关可能在任一 provider 的响应体里回显另一个 key
+        # 对全部已加载 key 的全部转义形态脱敏:中继/网关可能在任一 provider 的
+        # 响应体/异常文本里回显另一个 key(且可能已被 JSON/repr 转义)
         for k in all_keys:
-            text = text.replace(k, "[REDACTED]")
+            for v in _key_variants(k):
+                text = text.replace(v, "[REDACTED]")
         return text
 
     failures: list[str] = []
@@ -181,9 +207,20 @@ def run_review(out_dir: Path, *, task: str = BUILDER_TASK,
             "独立性主张不成立,拒绝运行"
         )
     def _norm_base(url: str) -> str:
-        # 归一化后比较(尾斜杠/大小写);host 别名与默认端口等价性属 DNS 层,
-        # 本披露是 best-effort,不是同源性证明
-        return url.strip().rstrip("/").lower()
+        # 归一化后比较:尾斜杠/大小写/scheme 默认端口(https:443, http:80)。
+        # host 别名(CNAME 等)属 DNS 层,本披露是 best-effort,不是同源性证明
+        from urllib.parse import urlsplit
+
+        u = url.strip().rstrip("/").lower()
+        if not u:
+            return ""
+        parts = urlsplit(u)
+        netloc = parts.netloc
+        if parts.scheme == "https" and netloc.endswith(":443"):
+            netloc = netloc[: -len(":443")]
+        elif parts.scheme == "http" and netloc.endswith(":80"):
+            netloc = netloc[: -len(":80")]
+        return f"{parts.scheme}://{netloc}{parts.path}"
 
     same_base_relay = bool(_norm_base(keys["anthropic"]["base_url"])) and (
         _norm_base(keys["anthropic"]["base_url"]) == _norm_base(keys["openai"]["base_url"])
@@ -310,10 +347,11 @@ def run_review(out_dir: Path, *, task: str = BUILDER_TASK,
     doc = {"evidence": evidence, "evidence_seal": seal, "seal_algo": seal_algo}
     text = json.dumps(doc, ensure_ascii=False, indent=2)
     for provider, entry in keys.items():
-        # 双扫:序列化文本 + 反序列化对象逐字符串(key 含引号/反斜杠等 JSON 转义
-        # 字符时,序列化文本匹配会漏,对象层不会)。不用 assert:-O 剥断言。
-        if entry["api_key"] in text or any(
-            entry["api_key"] in s for s in _iter_strings(doc)
+        # 双扫 × 全转义形态:序列化文本 + 对象逐字符串,每处都匹配 raw/JSON 转义/
+        # repr 转义形态——模型输出里已被转义的 key 同样可逆还原,必须拒。
+        # 不用 assert:-O 剥断言。
+        if _contains_key(text, entry["api_key"]) or any(
+            _contains_key(s, entry["api_key"]) for s in _iter_strings(doc)
         ):
             raise SystemExit("内部错误:key 泄入证据输出,拒绝落盘")
     (out_dir / "review_evidence.json").write_text(text, encoding="utf-8")

@@ -340,6 +340,66 @@ def test_preflight_exception_branch_redacts_all_keys(monkeypatch):
     assert "[REDACTED]" in joined
 
 
+def test_escaped_key_representations_still_caught(monkeypatch, tmp_path):
+    # 种坏:key 以 JSON 转义形态出现(引号→\\",反斜杠→\\\\,可逆还原)——
+    # ① preflight 响应体转义回显 → 必脱敏;② verifier 输出转义回显 → 必拒落盘
+    import requests
+
+    tricky = 'test-key-with"quote-and\\backslash-000000'
+    escaped = json.dumps(tricky)[1:-1]
+    assert escaped != tricky  # 前提:转义形态确实不同于字面量
+
+    class _Resp:
+        status_code = 401
+        text = f"denied for {escaped}"
+
+    monkeypatch.setattr(requests, "post", lambda *a, **kw: _Resp())
+    failures = dmr.preflight(_fake_keys(anthropic={"api_key": tricky}))
+    joined = "\n".join(failures)
+    assert tricky not in joined and escaped not in joined
+    assert "[REDACTED]" in joined
+
+    out = tmp_path / "out12"
+    with pytest.raises(SystemExit, match="拒绝落盘"):
+        dmr.run_review(
+            out,
+            keys=_fake_keys(anthropic={"api_key": tricky}),
+            client_factory=lambda cred: _StubClient(
+                cred.provider,
+                echo_secret=escaped if cred.provider == "openai" else None,
+            ),
+        )
+    assert not (out / "review_evidence.json").exists()
+
+
+def test_loader_rejects_falsy_nonstring_base_url(monkeypatch, tmp_path):
+    # 种坏:base_url 误配成 0(falsy 非字符串,`or \"\"` 会静默吞)→ 必须拒
+    qdir = tmp_path / ".quantbt"
+    qdir.mkdir()
+    (qdir / "secrets.yaml").write_text(
+        "llm:\n  anthropic:\n    api_key: test-anthropic-key-x\n    base_url: 0\n"
+        "  openai:\n    api_key: test-openai-key-x\n",
+        encoding="utf-8",
+    )
+    monkeypatch.setattr(Path, "home", classmethod(lambda cls: tmp_path))
+    with pytest.raises(SystemExit, match="必须是字符串"):
+        dmr._load_llm_keys()
+
+
+def test_relay_default_port_normalized(tmp_path):
+    # 种坏::443 显式端口 ≠ 无端口的等价 https 端点 → 归一化后仍判同 relay
+    out = tmp_path / "out13"
+    evidence = dmr.run_review(
+        out,
+        keys=_fake_keys(
+            anthropic={"base_url": "https://relay.example:443/v1"},
+            openai={"base_url": "https://relay.example/v1"},
+        ),
+        client_factory=lambda cred: _StubClient(cred.provider),
+    )
+    assert "same_base_url_relay" in evidence["caveats"]
+
+
 def test_preflight_redacts_every_loaded_key(monkeypatch):
     # 种坏:中继 401 响应体同时回显两个 provider 的 key → 诊断输出全脱敏
     import requests
