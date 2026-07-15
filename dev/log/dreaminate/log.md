@@ -6,6 +6,13 @@
 ## <日期> · <标题>
 - 建/改了什么 + 命门  - 验收：<对抗测试 + 变异 + 全量数字>  - 下一步：<…> -->
 
+## 2026-07-15-0709 S6 订阅账号 in-app 登录中继 + K4 token 泄漏面收口 + §3 假绿灯修复(跨厂商切模型伞卡 db95c0c6)
+- 后端 begin_subscription_login/_spawn_detached_login(DEVNULL 三流·不 wait·固定 argv,后端不碰 token)+2 端点(机器级 admin gated)+前端订阅登录面板(状态卡/一键登录/终端降级)
+- K4:全仓弃 claude setup-token(打长效 token 到 stdout)→ claude auth login --claudeai(存 keychain);清 scripts/llm_auth.py+docstring+错误串+quickstart,login_cmd 单一源防漂
+- §3 假绿灯:subscription_authed 按 authMethod=claude.ai/firstParty/subscriptionType 正信号闸,console(--console 按量计费)不再冒充订阅(deep-opus skeptic 逮·变异确认)
+- 验证:后端 6462 passed/0 failed·前端 430 passed·build 绿;skeptic 判 token 边界 sound,5 findings(假绿灯/K4/echo/DoS/vacuous 测试)全修+变异门。真浏览器登录端到端 Unverified(用户本人按)
+- 残余:K3(订阅带工具对话跑不了,待拍板 tool bridge/纯聊天/保持现状)、S5(订阅接生产 gateway,K3 所限)
+
 ## 2026-07-15-0539 跨厂商切模型 S7 前端切换器落 main——API-key 线端到端可用+有 UI
 - ModelSwitcher.tsx 挂 Mode2ChatPage active-thread header:原生 select+optgroup+Auto 顶项;GET /api/llm/models(filter authed&&selectable)+GET /llm-selection 回显,选中 PATCH(下条消息即生效,对话中途切);仅 API-key 可路由厂商可切,凭据不经前端,stale pin 兜底显示;前端测试 5,前端全 428 passed+build 绿;S5-piece1 scaffold+K3 记账一并 land 803d0e27
 - **特性状态**:S1 目录/S2 路由/S3a-b gateway+pin 穿链/S4 隔离(证成)/S7 前端 全 done——**API-key 每对话切模型+中途切 端到端可用+CI 绿+有 UI(北极星:能用)**。残余:S5 订阅接生产 gateway(K3 待拍板 tool bridge,暂缓)/S6 内嵌登录中继(订阅 auth 用,优先级降)。卡 db95c0c6 主体交付、S5/S6 待拍板,保持 in_progress

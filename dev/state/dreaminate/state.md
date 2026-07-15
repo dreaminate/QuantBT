@@ -11,19 +11,21 @@
   下一步转用户可感知面(队列见 frontier)。
 
 ### 顶部刷新块（本轮值 · 每轮覆写）
-- **六字段**:1 Local checkout=slice/model-switch-crossvendor @ 803d0e27(**S7 前端切换器 + S5-piece1 + K3 记账
-  落 main**——API-key 每对话切模型端到端可用+有 UI);2 Remote=origin/main ff 到 803d0e27;3 Local tests=后端全量
-  **6448 passed/13 skipped/0 failed**(真汇总行,9分22秒);前端 **428 passed + build 绿**(S7);4 CI=**✅ 4a5f882b
-  success** + 803d0e27 in_progress(下 tick 查);5 Production=Unqueried;6 User acceptance=Unverified。
-- **audit 基线四项**(不变):61 files / 20,339 lines / 26,209,663 bytes / sha `1c1788b0bbe2`。(改动全在 app/*/dev,基线按构造不变。)
-- **断点**:**当前战役=Claudian 式「每对话跨厂商切模型」(卡 db95c0c6,in_progress)**。蓝图 + 参考实现见 findings。
-  **✅ S1 目录 · ✅ S2 路由 · ✅ S3a-b gateway+pin 穿链 · ✅ S4 隔离(证成) · ✅ S7 前端切换器**
-  ——**API-key 每对话切模型+中途切 端到端可用 + CI 绿 + 有 UI**(北极星:能用。普通用户配 api-key→诊断台 chat header
-  下拉切模型→下条消息即生效)。各切片经 skeptic 对抗验证(S1 假绿灯/S2 3MEDIUM/S3a CRITICAL 泄漏/S3b MEDIUM,全修+变异门)。
+- **六字段**:1 Local checkout=slice/model-switch-crossvendor @ fb7d253e(**S6 订阅账号 in-app 登录中继 + K4
+  token 泄漏面收口 + §3 假绿灯修复**;+ 本轮 dev 落档 commit);2 Remote=**待 land**(ff origin/main 到本轮 HEAD);
+  3 Local tests=后端全量 **6462 passed/13 skipped/0 failed**(真汇总行,9分48秒)+ 前端 **430 passed + build 绿**;
+  4 CI=**Unqueried**(push 后 gh 查);5 Production=Unqueried;6 User acceptance=**Unverified**(真浏览器登录端到端要用户本人按,
+  我只验了状态检测/authMethod 解析)。
+- **audit 基线四项**(不变):61 files / 20,339 lines / 26,209,663 bytes / sha `1c1788b0bbe2`。(改动全在 app/scripts/docs/dev,基线按构造不变。)
+- **断点**:**当前战役=Claudian 式「每对话跨厂商切模型」(卡 db95c0c6,in_progress)**。蓝图 + 参考实现 + S6 记录见 findings。
+  **✅ S1 目录 · ✅ S2 路由 · ✅ S3a-b gateway+pin 穿链 · ✅ S4 隔离(证成) · ✅ S6 订阅 in-app 登录 · ✅ S7 前端切换器**
+  ——**API-key 每对话切模型端到端可用+有 UI;订阅账号可在应用内登录(设置页『登录订阅账号』→浏览器→轮询转绿,
+  终端降级命令兜底)**。各切片经 skeptic 对抗验证(S1 假绿灯/S2 3MEDIUM/S3a CRITICAL 泄漏/S3b MEDIUM/S6 5 findings,全修+变异门)。
+  S6 skeptic 判 **token 边界 sound**(后端全程不碰凭据),逮 §3 假绿灯(console 按量计费冒充订阅)已修+变异确认。
   **K3 约束+待拍板(用户已知悉·非阻塞)**:订阅模型跑不了带工具 agentic 对话(厂商 CLI 拒工具)——订阅只无工具场景
-  (dual-model 审查已可用);订阅进带工具对话=需 tool bridge(大·ToS 灰)或纯聊天模式(中),默认保持现状。
-  **残余(非阻塞)**:S5 订阅接生产 gateway(暂缓,S5-piece1 scaffold 已 land 无害)、S6 内嵌登录中继(订阅 auth 用,优先级降)。
-  下一步:等用户拍板订阅方向;或收尾 autoplan 评审/可上线成品尺复盘;或转 GOAL 其他 gap。ultracode:每片落码后对抗验证。
+  (dual-model 审查/纯聊天);订阅进带工具对话=需 tool bridge(大·ToS 灰)或纯聊天模式(中),默认保持现状。
+  **残余(非阻塞)**:S5 订阅接生产 gateway(K3 所限,S5-piece1 scaffold 已 land 无害)。
+  下一步:land 后 gh 查 CI;等用户拍板 K3 订阅方向;或转 GOAL 其他 gap(§11 PIT 读侧接线设计已备,见 design agent 产出)。ultracode:每片落码后对抗验证。
 
 ## 状态表（确定的才标 ✅,证据必挂）
 | 子系统/能力 | 状态 | 证据 |
@@ -53,7 +55,7 @@
 | GoalProofLedger snapshot cache | ✅ LRU | 无界 dict→OrderedDict 有界(maxsize 256,读命中 move_to_end/写后逐最旧);命中正确性仍由 token+WAL 文件状态绑定独立门控,淘汰只重算不 stale(WAL 边界一字未动);test_goal_proof_ledger 42 passed(2 新 LRU 对抗)+codex APPROVE(commit cbdc9617) |
 | dual-model 独立审查(流程级) | ✅ | builder=claude(anthropic)/verifier=gpt-5.6-sol(openai) 跨厂商;HS300 链三轮 verdict 留档证据包 |
 | §7/§8 dual-model 应用内接线(脚本化端到端) | ✅ 真跨厂商跑通 | scripts/dual_model_review.py 两模式:api_key(secrets 窄读→内存 keystore→gateway) + **--subscription**(经厂商官方 CLI,无 key/无中继);test_dual_model_review_script 36 passed(桩注入,零网络)。**真实跨厂商调用已收口(2026-07-15)**:builder=anthropic claude-sonnet-4-5 / verifier=openai gpt-5.6-sol 真跑 independent=True、auth_mode=subscription_cli、claim_scope=cross_vendor_via_official_cli,verifier 独立重算 Pearson IC=0.996834 逮 builder「优秀」夸大、verdict=incorrect,evidence HMAC 密封;绕过此前本机中继 key 双 401 blocker。机制级残余(binding 绑 adapter 实发 request_payload_digest/身份可验证)=卡 8be0e547(蓝图已落 research/findings) |
-| 订阅账号 LLM auth + onboarding(陌生用户从零) | ✅ | app/agent/subscription_cli_llm.py:ClaudeSubscriptionLLM(anthropic,`claude -p`)+CodexSubscriptionLLM(openai,`codex exec -o`) adapter+auth 检测(`subscription_auth_status`/`provider_auth_report`/`auth_status_all`,存在性检测不读 token);scripts/llm_auth.py 三子命令(status/login/verify);docs/llm-auth-quickstart.md 两法(订阅荐/api key)。test_subscription_cli_llm 16 passed(9 adapter fail-closed+7 onboarding)。两家订阅真调通 pong、model 可切换。诚实边界:订阅账号自动化 ToS 由用户自担(个人本地),token 存 CLI 自身安全存储、本仓不读/不复制/不记录 |
+| 订阅账号 LLM auth + onboarding(陌生用户从零) | ✅ + **in-app 登录(S6)** | adapter(ClaudeSubscriptionLLM/CodexSubscriptionLLM)+auth 检测(`subscription_auth_status`/`provider_auth_report`/`auth_status_all`,不读 token);CLI 三子命令(status/login/verify)+quickstart。**S6 in-app 登录中继(2026-07-15)**:`begin_subscription_login`+`_spawn_detached_login`(stdin/stdout/stderr=DEVNULL·不 wait·固定 argv,后端不碰 token)+端点 GET `/api/llm/providers/auth`·POST `/api/llm/subscription/login/{provider}`(机器级 admin gated)+前端订阅登录面板(状态卡+一键登录+终端降级)。**K4**:全仓弃 `setup-token`(打 token 到 stdout)→`claude auth login --claudeai`(存 keychain)。**§3 假绿灯修复**:console(按量计费)不再冒充「订阅·无按量费」(按 authMethod=claude.ai/firstParty 正信号闸)。test_subscription_cli_llm 21 passed+test_llm_custom_and_api 端点门+前端面板测试;skeptic 判 token 边界 sound、5 findings 全修+变异门。诚实边界:真浏览器登录端到端要用户本人按(我只验状态检测);订阅自动化 ToS 用户自担;token 存 CLI keychain、本仓不读/不复制/不记录 |
 | CI(GitHub Actions) | ✅ | .github/workflows/ci.yml 双 job;run 29377617245 gh 实查 success:后端 6315 passed/0 failed(17:18)+前端 423+build;七轮迭代账目在 log/证据包 |
 | FastAPI on_event→lifespan 迁移 | ✅ | main.py _app_lifespan asynccontextmanager(try/finally 无条件 shutdown 等价旧 _DefaultLifespan.__aexit__);test_app_lifespan 5 passed;codex 修复轮 APPROVE(commit f8d1f1cd+d940aed3) |
 | 前端 bundle 拆分 | ✅ | vite manualChunks:单 2,557.79 kB JS→9 可缓存 chunk(echarts 1.38MB/index 813/react-vendor 142/…);build 绿+423 前端测试 passed(commit 593ffa02)。边界:首屏字节未减(echarts 随 §M15 冻结页 eager),lazy-load=用户拍板 |
