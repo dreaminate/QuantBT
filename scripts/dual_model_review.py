@@ -124,9 +124,12 @@ def _json_unescape(text: str) -> str:
 
     - UTF-16 代理对(\\ud83d\\ude00 → 非 BMP 字符)先合并再处理单个转义,
       否则 chr(高位)+chr(低位) 两个孤立代理拼不出原字符。
-    - 迭代到不动点:对端可能多层 JSON 编码(每层只还原一级,如 \\\\ud83d 需先
-      \\\\→\\ 再合并代理对)。每轮严格减少转义反斜杠/合并代理,必收敛;上限防病理输入。
-    - 过度还原只会导致脱敏侧多遮蔽(安全方向),不会漏。
+    - 迭代到真·不动点(不设人为轮数上限,否则 N+1 层嵌套可绕过任意固定 N):
+      每轮每处替换(\\uXXXX 6 字符→1、\\\\→\\、代理对 12→1)都严格缩短字符串,
+      故最多 len(text) 轮必达不动点——用 len(text)+2 作纯安全兜底,真正终止条件是
+      cur==prev。多层 JSON 编码(每层只还原一级)由此逐层剥到 raw。
+    - 过度还原只会导致脱敏侧多遮蔽(安全方向),不会漏;haystack 里字面出现的 raw key
+      不含转义、不受本还原影响,literal 命中另由 _key_variants 首项保证。
     """
     def _pair(match: re.Match) -> str:
         hi, lo = int(match.group(1), 16), int(match.group(2), 16)
@@ -138,7 +141,7 @@ def _json_unescape(text: str) -> str:
         return _JSON_ESCAPE_MAP[match.group(2)]
 
     prev, cur = None, text
-    for _ in range(16):
+    for _ in range(len(text) + 2):  # 硬兜底;每轮必缩短,实际提前在 cur==prev 停
         if cur == prev:
             break
         prev = cur
@@ -262,8 +265,11 @@ def run_review(out_dir: Path, *, task: str = BUILDER_TASK,
         # 仍是同一操作方控制两侧响应,独立性主张不成立——所以用 path/query 区分是
         # 错的方向(会漏报 relay/anthropic 与 relay/openai 这类同中继)。
         # 完备性优先(宁多披露不漏报);字符串归一无法穷举 URL 变体,故不做整串归一。
-        # DNS 别名/IP↔域名等价属 DNS 层,单侧不可判,机制层收口归卡 8be0e547。
-        from urllib.parse import urlsplit
+        # host 按真实 client(requests)会做的规范化对齐:百分号解码(%72→r)、
+        # 小写、去尾点(FQDN 尾点等价)——否则 https://%72elay.example 与
+        # https://relay.example 会漏报同中继。IDNA punycode / DNS 别名 / IP↔域名
+        # 等价属更深层,单侧不可判,机制层收口归卡 8be0e547。
+        from urllib.parse import unquote, urlsplit
 
         u = url.strip()
         if not u:  # 空 base = 用各自厂商默认原生端点(不同 host),不算同中继
@@ -273,8 +279,8 @@ def run_review(out_dir: Path, *, task: str = BUILDER_TASK,
         try:
             port = parts.port  # 数值解析(0443→443)
         except ValueError:
-            return (scheme, parts.netloc.lower(), "invalid-port")
-        host = (parts.hostname or parts.netloc).lower()
+            return (scheme, unquote(parts.netloc).lower(), "invalid-port")
+        host = unquote(parts.hostname or parts.netloc).lower().rstrip(".")
         if port == {"https": 443, "http": 80}.get(scheme):
             port = None
         return (scheme, host, port)

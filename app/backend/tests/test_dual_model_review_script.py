@@ -628,6 +628,71 @@ def test_multi_level_json_encoded_key_caught(monkeypatch, tmp_path):
     assert not (out / "review_evidence.json").exists()
 
 
+def test_deeply_nested_json_encoded_key_caught(monkeypatch, tmp_path):
+    # 种坏:key 用 \\u005c(=反斜杠)嵌套编码 17+ 层,超过任何固定轮数上限 →
+    # 迭代到真·不动点必须逐层剥到 raw;preflight 兜底遮蔽 + evidence 拒落盘都必抓
+    import requests
+
+    key = FAKE_KEYS["anthropic"]["api_key"]
+    encoded = "\\" + "u005c" * 20 + "u00" + format(ord(key[0]), "02x") + key[1:]
+    # 前提:该编码经足够多次 json.loads 能完整还原 key,且直接扫不到
+    probe = encoded
+    for _ in range(64):
+        try:
+            probe = json.loads('"' + probe + '"')
+        except Exception:
+            break
+    assert probe == key and key not in encoded
+
+    class _Resp:
+        status_code = 401
+        text = f'{{"error":"{encoded}"}}'
+
+    monkeypatch.setattr(requests, "post", lambda *a, **kw: _Resp())
+    failures = dmr.preflight(_fake_keys(anthropic={"api_key": key}))
+    joined = "\n".join(failures)
+    assert key not in joined and encoded not in joined
+    assert "REDACTED" in joined
+
+    out = tmp_path / "out25"
+    with pytest.raises(SystemExit, match="拒绝落盘"):
+        dmr.run_review(
+            out,
+            keys=_fake_keys(),
+            client_factory=lambda cred: _StubClient(
+                cred.provider,
+                echo_secret=encoded if cred.provider == "openai" else None,
+            ),
+        )
+    assert not (out / "review_evidence.json").exists()
+
+
+def test_percent_encoded_host_is_same_relay(tmp_path):
+    # 种坏:%72elay.example 经 requests 规范化 = relay.example → 真同中继,必须披露
+    out = tmp_path / "out26"
+    evidence = dmr.run_review(
+        out,
+        keys=_fake_keys(
+            anthropic={"base_url": "https://%72elay.example/anthropic/v1"},
+            openai={"base_url": "https://relay.example/openai/v1"},
+        ),
+        client_factory=lambda cred: _StubClient(cred.provider),
+    )
+    assert "same_base_url_relay" in evidence["caveats"]
+
+    # 尾点 FQDN 等价:relay.example. == relay.example
+    out2 = tmp_path / "out27"
+    evidence2 = dmr.run_review(
+        out2,
+        keys=_fake_keys(
+            anthropic={"base_url": "https://relay.example./v1"},
+            openai={"base_url": "https://relay.example/v1"},
+        ),
+        client_factory=lambda cred: _StubClient(cred.provider),
+    )
+    assert "same_base_url_relay" in evidence2["caveats"]
+
+
 def test_preflight_redacts_every_loaded_key(monkeypatch):
     # 种坏:中继 401 响应体同时回显两个 provider 的 key → 诊断输出全脱敏
     import requests
