@@ -31,6 +31,7 @@ import hashlib
 import hmac
 import json
 import os
+import re
 import sys
 import tempfile
 from pathlib import Path
@@ -108,8 +109,27 @@ def _key_variants(key: str) -> tuple[str, ...]:
     return tuple(v for v in variants if v)
 
 
+_JSON_ESCAPE_RE = re.compile(r'\\u([0-9a-fA-F]{4})|\\(["\\/bfnrt])')
+_JSON_ESCAPE_MAP = {'"': '"', "\\": "\\", "/": "/",
+                    "b": "\b", "f": "\f", "n": "\n", "r": "\r", "t": "\t"}
+
+
+def _json_unescape(text: str) -> str:
+    """把文本里的标准 JSON 转义序列统一还原(容忍混合/部分转义)。"""
+    def _sub(match: re.Match) -> str:
+        if match.group(1) is not None:
+            return chr(int(match.group(1), 16))
+        return _JSON_ESCAPE_MAP[match.group(2)]
+
+    return _JSON_ESCAPE_RE.sub(_sub, text)
+
+
 def _contains_key(text: str, key: str) -> bool:
-    return any(v in text for v in _key_variants(key))
+    # 变体枚举打不完混合转义(如仅第一个 / 被转义):先枚举常见形态,
+    # 再把文本整体反转义还原后按 raw 扫——任意混合形态还原后都会现出 raw key
+    if any(v in text for v in _key_variants(key)):
+        return True
+    return key in _json_unescape(text)
 
 
 def preflight(keys: dict[str, dict[str, str]]) -> list[str]:
@@ -124,6 +144,10 @@ def preflight(keys: dict[str, dict[str, str]]) -> list[str]:
         for k in all_keys:
             for v in _key_variants(k):
                 text = text.replace(v, "[REDACTED]")
+        # 兜底(fail-closed):混合/奇异转义形态定位不了具体片段时,整体遮蔽——
+        # 宁可丢诊断信息也不泄 key
+        if any(_contains_key(text, k) for k in all_keys):
+            return "[REDACTED-UNSAFE-DIAGNOSTIC:响应含无法定位的 key 转义形态,已全文遮蔽]"
         return text
 
     failures: list[str] = []
@@ -210,28 +234,30 @@ def run_review(out_dir: Path, *, task: str = BUILDER_TASK,
             "llm.anthropic 与 llm.openai 配置了同一个 api_key——可证同源,"
             "独立性主张不成立,拒绝运行"
         )
-    def _norm_base(url: str) -> str:
-        # 归一化后比较:尾斜杠/大小写/scheme 默认端口(数值等价,443==0443)。
-        # query 保留(?tenant=a 与 ?tenant=b 是不同租户端点,不得错并)。
+    def _norm_base(url: str):
+        # 结构化归一比较,不重建字符串(重组会引入 IPv6 方括号等歧义):
+        # scheme/host 大小写不敏感、端口数值等价(默认端口略去)、path 只去尾斜杠、
+        # query 原样保真(?tenant=A ≠ ?tenant=a,?token=a/ ≠ ?token=a)。
         # host 别名(CNAME 等)属 DNS 层,本披露是 best-effort,不是同源性证明
         from urllib.parse import urlsplit
 
-        u = url.strip().rstrip("/").lower()
+        u = url.strip()
         if not u:
-            return ""
+            return None
         parts = urlsplit(u)
-        host = parts.hostname or parts.netloc
+        scheme = parts.scheme.lower()
         try:
-            port = parts.port  # 数值解析(0443→443);非法端口→按原样保留 netloc
+            port = parts.port  # 数值解析(0443→443)
         except ValueError:
-            host, port = parts.netloc, None
-        default = {"https": 443, "http": 80}.get(parts.scheme)
-        netloc = host if port is None or port == default else f"{host}:{port}"
-        query = f"?{parts.query}" if parts.query else ""
-        return f"{parts.scheme}://{netloc}{parts.path}{query}"
+            return (scheme, parts.netloc, None, parts.path.rstrip("/"), parts.query)
+        host = (parts.hostname or parts.netloc).lower()
+        if port == {"https": 443, "http": 80}.get(scheme):
+            port = None
+        return (scheme, host, port, parts.path.rstrip("/"), parts.query)
 
-    same_base_relay = bool(_norm_base(keys["anthropic"]["base_url"])) and (
-        _norm_base(keys["anthropic"]["base_url"]) == _norm_base(keys["openai"]["base_url"])
+    _base_a = _norm_base(keys["anthropic"]["base_url"])
+    same_base_relay = _base_a is not None and (
+        _base_a == _norm_base(keys["openai"]["base_url"])
     )
     ks = SecureKeystore(InMemoryKeystore())
     for provider, entry in keys.items():

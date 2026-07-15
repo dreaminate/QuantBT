@@ -461,6 +461,90 @@ def test_relay_default_port_normalized(tmp_path):
     assert "same_base_url_relay" in evidence["caveats"]
 
 
+def test_mixed_partial_solidus_escaping_caught(monkeypatch, tmp_path):
+    # 种坏:合法 JSON 允许只转义部分斜杠(如仅第一个 / 变 \\/,其余保持)——
+    # 变体枚举抓不到,必须靠反转义还原扫。preflight 侧兜底全文遮蔽,evidence 侧拒落盘
+    import requests
+
+    slashy = "test/key/with-solidus-000000000000000000"
+    mixed = slashy.replace("/", "\\/", 1)  # 只转义第一个斜杠(手写混合形态)
+    assert mixed != slashy and mixed != slashy.replace("/", "\\/")
+
+    class _Resp:
+        status_code = 401
+        text = f"denied for {mixed}"
+
+    monkeypatch.setattr(requests, "post", lambda *a, **kw: _Resp())
+    failures = dmr.preflight(_fake_keys(anthropic={"api_key": slashy}))
+    joined = "\n".join(failures)
+    assert slashy not in joined and mixed not in joined
+    assert "REDACTED" in joined
+
+    out = tmp_path / "out17"
+    with pytest.raises(SystemExit, match="拒绝落盘"):
+        dmr.run_review(
+            out,
+            keys=_fake_keys(anthropic={"api_key": slashy}),
+            client_factory=lambda cred: _StubClient(
+                cred.provider,
+                echo_secret=mixed if cred.provider == "openai" else None,
+            ),
+        )
+    assert not (out / "review_evidence.json").exists()
+
+
+def test_norm_base_query_fidelity(tmp_path):
+    # query 必须保真:大小写(?tenant=A ≠ ?tenant=a)与尾斜杠(?token=a/ ≠ ?token=a)
+    # 都是不同端点,不得错并成同 relay
+    out = tmp_path / "out18"
+    evidence = dmr.run_review(
+        out,
+        keys=_fake_keys(
+            anthropic={"base_url": "https://relay.example/v1?tenant=A"},
+            openai={"base_url": "https://relay.example/v1?tenant=a"},
+        ),
+        client_factory=lambda cred: _StubClient(cred.provider),
+    )
+    assert evidence["caveats"] == []
+
+    out2 = tmp_path / "out19"
+    evidence2 = dmr.run_review(
+        out2,
+        keys=_fake_keys(
+            anthropic={"base_url": "https://relay.example/v1?token=a/"},
+            openai={"base_url": "https://relay.example/v1?token=a"},
+        ),
+        client_factory=lambda cred: _StubClient(cred.provider),
+    )
+    assert evidence2["caveats"] == []
+
+
+def test_norm_base_ipv6_brackets_no_collision(tmp_path):
+    # IPv6 方括号不得在重组时丢失:[::1]:8443(host ::1,port 8443)与
+    # [::1:8443](host ::1:8443,无 port)是不同 authority,不得碰撞
+    out = tmp_path / "out20"
+    evidence = dmr.run_review(
+        out,
+        keys=_fake_keys(
+            anthropic={"base_url": "https://[::1]:8443/v1"},
+            openai={"base_url": "https://[::1:8443]/v1"},
+        ),
+        client_factory=lambda cred: _StubClient(cred.provider),
+    )
+    assert evidence["caveats"] == []
+
+    out2 = tmp_path / "out21"
+    evidence2 = dmr.run_review(
+        out2,
+        keys=_fake_keys(
+            anthropic={"base_url": "https://[::1]:8443/v1/"},
+            openai={"base_url": "https://[::1]:8443/v1"},
+        ),
+        client_factory=lambda cred: _StubClient(cred.provider),
+    )
+    assert "same_base_url_relay" in evidence2["caveats"]
+
+
 def test_preflight_redacts_every_loaded_key(monkeypatch):
     # 种坏:中继 401 响应体同时回显两个 provider 的 key → 诊断输出全脱敏
     import requests
