@@ -227,7 +227,7 @@ def test_generated_pit_header_blocks_leak_in_subprocess(tmp_path: Path) -> None:
 
     # PIT 守卫在场：未来重述 + 未来行都被挡
     pit_code = _panel_load_header({"as_of_known": _AS_OF}) + body
-    res = run_code(pit_code, tmp_path / "job_pit", env_extra=env, timeout=300)  # CI 2vCPU 满载时 120s 边际(run6 实证)
+    res = run_code(pit_code, tmp_path / "job_pit", env_extra=env, timeout=600)  # CI 慢/满载 runner:120→300→600(300s 仍在 22:48 慢 run 被杀,实证)
     assert res.ok, res.stderr[-800:]
     assert res.emit["oos_metrics"]["rows"] == 1.0
     assert res.emit["oos_metrics"]["roe_max"] == 10.0  # 99.0/10.5 都被挡
@@ -235,7 +235,7 @@ def test_generated_pit_header_blocks_leak_in_subprocess(tmp_path: Path) -> None:
     # 无 as_of_known（逐字 _HEADER 裸读）：现状全量可见（向后兼容对照）
     raw_code = _panel_load_header({}) + body
     assert raw_code.startswith(_HEADER)  # 确实走的是原 header
-    res2 = run_code(raw_code, tmp_path / "job_raw", env_extra=env, timeout=300)
+    res2 = run_code(raw_code, tmp_path / "job_raw", env_extra=env, timeout=600)
     assert res2.ok, res2.stderr[-800:]
     assert res2.emit["oos_metrics"]["rows"] == 3.0
     assert res2.emit["oos_metrics"]["roe_max"] == 99.0
