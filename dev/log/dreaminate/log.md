@@ -6,6 +6,11 @@
 ## <日期> · <标题>
 - 建/改了什么 + 命门  - 验收：<对抗测试 + 变异 + 全量数字>  - 下一步：<…> -->
 
+## 2026-07-15-0525 K3 约束确认+待拍板:订阅模型跑不了带工具 agentic 对话(厂商 CLI 拒工具)
+- 核实:orchestrator 按 role 算 role_tool_schema(_role_filtered_tool_schema,orchestrator.py:454),带工具 role 传非空 schema;订阅 adapter 拒非空 tools(test_tools_rejected)。故订阅模型只能跑无工具场景(dual-model 审查已可用/纯聊天),跑不了带工具生产 agent 对话
+- **待拍板(用户已知悉,非阻塞)**:订阅模型进带工具对话=需受治理 tool bridge(工作量大+ToS 更灰,登记等拍板)/或加纯聊天模式(中)。默认保持现状:订阅用于审查、对话切模型走 API-key(全场景已可用)。S5 订阅接生产 gateway 暂缓(避免建误导性「显示可切一切工具就崩」);S5-piece1 credential_pool/factory 认 subscription_cli 已本地 committed(无害 scaffold,任一方案都要)
+- 下一步转 S7 前端切换器——让 API-key 每对话切+中途切对普通用户可视化可用(北极星:能用)。用户确认两条线(订阅无工具场景/API-key 全场景)+对话中途可切的理解正确
+
 ## 2026-07-15-0456 跨厂商切模型 S3b 全部落 main——后端端到端功能可用(持久化+pin 穿生产链+selection API)
 - S3b-1 持久化(ChatService.update/get_llm_selection owner-scoped)+S3b-2/3 3 跳传参(_current_agent_gateway/_dispatch/两端点读传 model_pin,gateway.py 零改动)+GET/PATCH selection 端点(校验 gateway 可路由+owner-scoped)。用户 PATCH 对话手选模型→驱动那条对话生产 agent
 - S3b-2/3 skeptic:运行期无安全缺陷(dual 门/跨厂商/越权/假账/stale-pin 6 项亲验绕不过 fail-closed),逮 1 MEDIUM(核心接线零端到端覆盖,pin 静默失效变异存活)——补集成测试+**临时断 model_pin 传参确认测试变红**再还原(证明门有牙)。全量 6444 passed;land ae2e61b1
