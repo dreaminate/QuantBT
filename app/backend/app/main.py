@@ -11,7 +11,7 @@ import os
 import threading
 import re
 import uuid
-from contextlib import contextmanager, nullcontext
+from contextlib import asynccontextmanager, contextmanager, nullcontext
 from dataclasses import asdict, dataclass, replace
 from pathlib import Path
 from types import SimpleNamespace
@@ -704,7 +704,18 @@ from .research_os.goal_semantics import GoalSemanticCommitUncertain
 from .schemas import BinanceFullPullRequest, DataPullRequest, RunQueryRequest
 
 
-app = FastAPI(title="1Backtest API", version="0.2.0")
+@asynccontextmanager
+async def _app_lifespan(_app: "FastAPI"):
+    # FastAPI on_event("startup"/"shutdown") 已弃用 → lifespan 上下文管理器。
+    # startup_event/shutdown_event 在本模块靠后定义(引用贯穿全文的模块级状态);
+    # 本 lifespan 只在 server boot 时被调用,那时全模块已导入、两名字均已就绪,
+    # 故此处按名前向引用合法。语义与原 on_event 一致:进入=startup,退出=shutdown。
+    startup_event()
+    yield
+    shutdown_event()
+
+
+app = FastAPI(title="1Backtest API", version="0.2.0", lifespan=_app_lifespan)
 app.add_middleware(
     CORSMiddleware,
     allow_origins=["http://127.0.0.1:5173", "http://localhost:5173"],
@@ -10780,8 +10791,8 @@ def _record_model_serving_invocation_qro(record: ModelServingInvocationRecord, *
     return {"qro_id": qro.qro_id, "research_graph_command_id": command_id, **compiler_refs}
 
 
-@app.on_event("startup")
 def startup_event() -> None:
+    # 由 _app_lifespan 在 server boot 调用(原 @app.on_event("startup") 已迁移)
     global MONITOR_SCHEDULER
     ensure_runtime_dirs()
     configure_monitor_runtime(
@@ -10796,8 +10807,8 @@ def startup_event() -> None:
     _start_copy_trade_reconciler()
 
 
-@app.on_event("shutdown")
 def shutdown_event() -> None:
+    # 由 _app_lifespan 退出时调用(原 @app.on_event("shutdown") 已迁移)
     _stop_copy_trade_reconciler()
     stop_monitor_driver()
 
