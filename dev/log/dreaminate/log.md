@@ -6,6 +6,12 @@
 ## <日期> · <标题>
 - 建/改了什么 + 命门  - 验收：<对抗测试 + 变异 + 全量数字>  - 下一步：<…> -->
 
+## 2026-07-15-1540 停止条件③独立复核 + state.md 状态自洽修(纯 dev/)
+- 停止条件③临界疑虑→派独立 Explore 全库穷尽复核(不信记忆信现场,对照 HEAD d444567b):**判无可收口本地切片**——最后一个干净 correctness 切片 F3(§11 读时 manifest 复验)本 session 已 land 918daf7f;余项逐条确认全 user-gated/infra-blocked/blocked-agent-epic(§8 完整 codegen=大 feature 非 fail-open·§4 OAuth=外部网络·§13/17 RDP=打包非门·monitor/production 残余=诚实 fail-closed 待方法学·Stripe/kill-switch=动钱红线已诚实守·agent floor=NOT SOUND 未批·Run 首屏=infra·卡 8be0e547/worktree/DVC/Ed25519/echarts=待拍板)。
+- 复核唯一捞出可修项=**state.md 自相矛盾**:顶部刷新块记 F3 已 land SOUND,但 §11 status 行(l98)+断点 follow-up(l57)仍列「读时 manifest 复验(F3)」「producer factors_all_finite 建门」为未闭 residual——两处均已 land(F3=918daf7f·F1 建侧=a2b6d534)。属 false-red(完成的活误标未闭),同源真相自相矛盾。修:两处 follow-up/残余陈述同步为已闭+登记真残余(未签名 manifest co-tamper→研究面签名 receipt 后续卡);顺带六字段 Local checkout SHA 21a14abd→d444567b(3 个后续 CI-flake 收口 commit 未刷该字段留下的漂)。
+- 验收:纯 dev/ 零码改;门=validate_dev PASS + git diff --check;GOAL 零 diff。无需测试套件(无可执行改动)。
+- 下一步:③已独立复核确认;所有高价值余项待用户拍——尤其 Claude-Code agent epic fork-2(floor v2 OS 沙箱 scope + A股 live 治理矛盾 RULES.project:11↔GOAL:1787 + MCP 依赖)。报 blocker 清单等方向。
+
 ## 2026-07-15-1415 UI 路由文档同步 desk 架构 land(21a14abd)—onboarding/能信 准确性
 - Explore 侦察 onboarding(能装/能用/能信)判 **SOLID**(install 链/demo run/CLI 命令/诚实边界全对得上代码),唯一具体可修低杠杆项=前端 desk 重构后 3 份文档仍写 refactor 前分散路由。改:app/README.md「4 页面 /runs·/compare·/data」→6 台+冻结 /runs/{id}+重定向表;README.md demo 计数 5→4·/agent→/agent-workbench·/trading→/paper·/strategies→/overview;docs/user-manual.md UI 总览两区→6 台 canonical。全对照 App.tsx 核实。
 - 验收:纯文档零码改;git diff --check OK·GOAL 零 diff·validate_dev PASS;3 文件仅 README.md/app/README.md/docs/user-manual.md。无需测试套件(无可执行改动)。

@@ -11,8 +11,8 @@
   下一步转用户可感知面(队列见 frontier)。
 
 ### 顶部刷新块（本轮值 · 每轮覆写）
-- **六字段**:1 Local checkout=slice/model-switch-crossvendor @ **21a14abd**(= origin/main,干净;**F3 §11 完整性门(918daf7f)** + UI 路由文档同步 desk 架构(21a14abd,能信/onboarding 准确性,纯文档));
-  2 Remote=**origin/main 同 21a14abd**;
+- **六字段**:1 Local checkout=slice/model-switch-crossvendor @ **d444567b**(= origin/main;**F3 §11 完整性门(918daf7f)** + UI 路由文档同步 desk 架构(21a14abd,能信/onboarding 准确性,纯文档) + 文档 commit CI flake 收口(25dac5af/d444567b,证训练超时非回归) + **本 tick:§11 status 行+断点 follow-up 陈述同步——F3(918daf7f)·F1 建侧(a2b6d534)均已 land、原文误列未闭 residual,纯 dev/ 状态自洽修非新码**);
+  2 Remote=**origin/main 同 d444567b**(本 tick 自洽 commit 过纯 dev/ 门后 push 更新);
   3 Local tests=**后端全量 6487 passed/13 skipped/0 failed**(真汇总行,508s 实跑)+ perf harness 72 passed + 前端 40 files/430 passed + build ✓;
   4 CI=**passed**(gh 实查:**b998f7ee[=F3 码] completed success**,19min + **25dac5af[=最新·F3 码+全 docs] completed success**=代码真绿;
   中途文档 commit 1a8b2cff CI 首跑撞 `test_training_runner::test_service_code_path_succeeds` 训练子进程 300s 超时[慢 2 核 runner 资源边际 flake·
@@ -54,8 +54,8 @@
   **✅ §11 PIT 读侧接线已 land 0c926235**(11a+11b+11c 一次落):真实 HS300 后复权 hfq(raw×adj_factor 四价列·
   volume raw·缺因子/非正/**非有限**/dup 全 fail-closed)·absent 逐字节合成兜底·registry 单一源=paths.DATA_ROOT
   (D-11-DATA-ROOT=b)·§16 隔离。deep-opus clean-context 实现 + 独立 skeptic(判 §16 sound,逮 F1 非有限 factor 漏拦已修+
-  变异确认)。设计 [[pit-adjustment-readside-design-20260715]]。**follow-up(非 §16,登记)**:读时 manifest hash 复验(F3)、
-  producer hs300_pipeline factors_all_finite 建门(defense-in-depth,建侧现只 <=0 无 finite 检查)。
+  变异确认)。设计 [[pit-adjustment-readside-design-20260715]]。**follow-up 均已闭(非 §16)**:读时 manifest hash 复验(F3,land 918daf7f·3 轮跨厂商 SOUND)、
+  producer hs300_pipeline factors_all_finite 建门(F1 建侧,land a2b6d534,镜 bars_all_finite)。
   **dual-model binding(卡 8be0e547)尝试→跨厂商 skeptic 判 NOT SOUND→已 revert 未 land**:deep-opus 实现 + 我同厂商
   复审判 sound,但 **codex 跨厂商 skeptic 逮 4×P1**(digest 哈希 messages 非实发 payload=label 越界·订阅模式 opt-in 后必崩·
   schema v3 向后不兼容·identity_basis 未下游传播)。**同厂商复审不足以守诚实边界——本次已证**(被审对象就是独立性机制、
@@ -95,7 +95,7 @@
 | §11 数据层·基准面(readbench cohort) | ✅ | DatasetVersion hs300_daily_10y_readbench_cohort@…856b67b1(metadata 四键防误用);preflight 12/12 真数据 PASS |
 | §11 数据层·研究面(union 含退市) | ✅ | hs300_research_universe_10y@…332bebc0(1.38M bars/622 只/19,200 停复牌);12 质量门真数据 PASS(含探针 #6 bar日因子完备/#7 停牌伪 bar含退化窗);质量门经 codex 四轮对抗收敛到 factor-价格补偿不变量,scope 裁定见 frontier 待复核 |
 | §11 数据接入·Tushare 管线 | ✅ | scripts/hs300_onboard.py 六子命令(store-token/keygen/pull/preflight/build/build-research/bench);限流 180/分+退避+幂等;docs/hs300-quickstart.md;data_onboarding 测试 41 passed(含 codex 全部反例回归) |
-| §11 PIT/复权读侧接线 | ✅ | panel_source.py 接真实 HS300 后复权 hfq(market `ashare_hs300`:registry present→raw×adj_factor 四价列同乘·volume raw·缺因子/非正/**非有限**(NaN/±inf,F1)/dup 全 fail-closed raise;absent→逐字节合成兜底,零行为变更)。registry 路径单一源=paths.DATA_ROOT(=main.py:734,D-11-DATA-ROOT=b 无双源漂移)。§16 隔离(≠perf harness·perf_baseline_claim=False·拒 forbidden cohort)。12 对抗测试+变异门(×→÷、is_finite 均 red-then-revert)+byte-identity 双证;后端 6474 passed;deep-opus 实现+独立 skeptic 判 §16 sound;land 0c926235。**F1 双拦已闭**:读侧(0c926235)+ 建侧 research_quality_report `factors_all_finite`(a2b6d534,镜 bars_all_finite;NaN/±inf factor→quality_verdict≠pass·对抗测试+变异门·6475 passed)。**残余(follow-up,非 §16)**:读时 manifest hash 复验(F3) |
+| §11 PIT/复权读侧接线 | ✅ | panel_source.py 接真实 HS300 后复权 hfq(market `ashare_hs300`:registry present→raw×adj_factor 四价列同乘·volume raw·缺因子/非正/**非有限**(NaN/±inf,F1)/dup 全 fail-closed raise;absent→逐字节合成兜底,零行为变更)。registry 路径单一源=paths.DATA_ROOT(=main.py:734,D-11-DATA-ROOT=b 无双源漂移)。§16 隔离(≠perf harness·perf_baseline_claim=False·拒 forbidden cohort)。12 对抗测试+变异门(×→÷、is_finite 均 red-then-revert)+byte-identity 双证;后端 6474 passed;deep-opus 实现+独立 skeptic 判 §16 sound;land 0c926235。**F1 双拦已闭**:读侧(0c926235)+ 建侧 research_quality_report `factors_all_finite`(a2b6d534,镜 bars_all_finite;NaN/±inf factor→quality_verdict≠pass·对抗测试+变异门·6475 passed)。**F3 读时 manifest 完整性门已闭(918daf7f·3 轮跨厂商 SOUND)**:读价前逐字节 re-verify 注册 manifest per-file sha256→fail-closed(drift/corruption 防御)。**残余(如实登记非 fail-open)**:未签名 manifest co-tamper·size+mtime 保持的原子 swap→需研究面签名 receipt(后续卡) |
 | §4 跨厂商切模型·S1 模型目录 | ✅ | app/llm/model_catalog.py 唯一 LLM 模型清单源(api-key live 拉/models 加固 stream 上限+禁 redirect+fail-closed、非聊天 selectable=false、订阅 curated supports_tools=false、TTL+single-flight+凭据零触碰)+GET /api/llm/models(订阅探测 60s TTL 缓存);对抗测试 29(deep-opus skeptic 逮 1 假绿灯+6 项全修+回归);后端 6409 passed;land e89964a8+CI success。卡 db95c0c6 |
 | §4 跨厂商切模型·S2 hard-pin routing | ✅ | routing.py pin_provider/pin_model 硬约束+resolve 硬 pin 过滤(仅 !independence_required 生效→dual 门物理免疫、pool 不变保 no-mix、pin 无候选→PinnedModelUnavailable 绝不跨厂商 fallback、pin_model tier 优先用登记档);对抗测试 14(skeptic 逮 3 MEDIUM:degraded 判反/fallback 锁死实靠断路器/命门测试弱,全修+补测);gateway 76+全量 6423 passed;land 6a8990e9 |
 | §4 跨厂商切模型·S3a gateway pin 注入 | ✅ | LLMGateway(default_pin) 在 complete() 盖章成 hard pin(仅非独立且非 verifier role→dual 门物理免疫叠双层);盖章后 effective_capability 贯穿 _invoke_with_fallback→S2 跨厂商锁死端到端成立(K1:真实主链走 GatewayLLMAdapter);对抗测试 6(skeptic 逮 **CRITICAL 跨厂商泄漏**——盖章在 fallback 蒸发,已修+变异门钉死;+MEDIUM-2 spy 门+LOW-4 role 纵深);全量 6429 passed;land dc940949 |
