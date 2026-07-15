@@ -91,7 +91,10 @@ goal_section: §4（Settings/LLM Gateway）
   subprocess 加固（K7）+ 订阅 profile supports_tools=false（K3）。
   测：logged-out 不建 profile / logged-in subscription-only 可建路由调 CLI（mock subprocess）/ 无 dev_local /
   prompt 不在 argv / secret env 不进子进程 / tools 明确拒且不 fallback / 四家全空仍 NoLLMConfigured。
-- **S6 登录 state machine**：`app/backend/app/llm/subscription_login.py` + `POST /api/llm/subscription/login/{provider}`
+- **S6 登录 state machine**（**参考实现见 [[model-switch-reference-impls-20260715]]**：采 Hermes session-relay REST
+  骨架[verifier/token 全留服务端] + OpenClaw VPS-aware 贴码兜远程；**不采指纹直连**[ToS 红线，签名计费绕过=
+  计费规避，只学不落地]；OAuth 常量[client_id/端点/端口 53692]已核实可复用但版本号是移动靶别写死）：
+  `app/backend/app/llm/subscription_login.py` + `POST /api/llm/subscription/login/{provider}`
   （action: start/poll/submit_code/cancel；`_require_machine_llm_admin` K6；PTY/process group；每 provider 一 flow；
   TTL 5min；只回 login_url/user_code/status/error_code、绝不回 raw stdout/stderr；unknown prompt/版本不在
   allowlist/token-shaped output→杀 process group 降级；成功唯一证明=重跑 subscription_auth_status==True；
