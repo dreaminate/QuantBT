@@ -36,16 +36,22 @@ bind/validate→IndependenceVerdict,HMAC 密封 LLMCallRecord 落盘;含 preflig
 | app/backend/tests/test_dual_model_review_script.py | 新增 | 桩注入十一测(端到端/密封复验/逐坏门对抗) |
 
 ## 对抗测试设计（种已知 bug，门必抓）[必填]
-经 codex(gpt-5.6-sol ultra) 增量审 REJECT 一轮后重设计(五条否决全修):
+经 codex(gpt-5.6-sol ultra) 增量审两轮 REJECT 迭代后定型(17 测):
 1. 单厂商/缺凭据 → fail-closed 拒绝运行,零 evidence(同厂商换 prompt≠第二意见)
-2. 双槽同 api_key 冒充跨厂商 → 可证同源,拒绝(种坏必抓)
-3. verifier 实发 prompt 被偷换(种坏缝 _verifier_prompt_override)→ digest 互证门必抓;
-   复用 gateway 同一哈希族(ids.content_hash),不自立第二套
-4. key 回显三路径全堵:loader yaml 异常(原文含 key→消息整体抑制)/preflight 响应体
-   (对全部已加载 key 脱敏,非仅当前 provider)/verifier 输出直达 evidence(扫描拒落盘);
-   builder 输出回显则更早被 gateway._guard_prompt SecretLeakError 拒发(分层佐证测试)
-5. evidence 事后篡改(手翻 independent)→ HMAC 密封(与 LLMCallRecord 同 key)复验必红
-6. 同 base_url 中继 → 不拒但 evidence 如实披露「上游独立性不可证」(用户自判)
+2. 双槽同 api_key 字面量 → 拒绝(注意:只拦字面量相同;不同 key 仍可指向同一实际
+   后端——那是机制级缺口,卡 8be0e547)
+3. verifier 送入 gateway 的 prompt 被偷换(种坏缝 _verifier_prompt_override)→
+   记账 digest 互证必抓(复用 ids.content_hash 同哈希族);边界:互证覆盖到 gateway
+   记账为止,adapter/中继之后的实收 payload 不可证(卡 8be0e547)
+4. key 回显全路径:loader yaml 异常抑制+非字符串 key 拒收不回显/preflight 响应体与
+   异常分支对全部已加载 key 脱敏/verifier 输出直达 evidence 双扫(序列化文本+对象
+   递归,含 JSON 转义 key)拒落盘;builder 侧回显被 gateway SecretLeakError 更早拒发
+5. evidence 篡改三态(翻 independent/改非 independent 字段/改 seal_algo 声明)→
+   HMAC 复验必红;伪验证器变异(只看 independent)被非 independent 篡改态杀死
+6. 同 base_url 中继(归一化比较)→ 不拒但 evidence 落机器可读 caveat + 披露文本
+7. 变异杀手:机制 verdict 强制 False 时脚本必须如实转录(杀 independent 硬编码
+   True)/binding 校验强制炸必须外传(杀删调用)/preflight 失败 main 必须停在
+   run_review 之前(哨兵)
 
 ## 复用 [按需]
 <现有可复用的 file:符号,别重造>
@@ -62,10 +68,14 @@ bind/validate→IndependenceVerdict,HMAC 密封 LLMCallRecord 落盘;含 preflig
 从标签现算;validate 守「标签规范 + in_progress 时 [需拍板]=0」。非拍板的开口(留 hook / 归后续)不标。>
 
 ## 验收一句话 [必填]
-桩注入端到端产合法 binding+独立性判定+密封记录且 11 对抗测试全绿;脚本可证边界=
-「双槽凭据不同源(同 key 即拒)+实发 prompt 与 binding 互证+证据密封防篡改」;真实跨厂商
-调用在凭据有效时同一路径即通(preflight 常开指路);全量基线不破。
-**机制级残余(登记,不冒充已证):provider 身份来自配置槽声明(model_identity 按模型名判族),
-双槽指向同一实际后端的伪装无单侧证伪手段;validate_review_subject_binding 本身不绑实发
-prompt(本脚本以 digest 互证补位,机制层扩展另立卡)。**
-**真实调用现状:本机中继 key 双 401(脱敏诊断留档),登记待用户换有效 anthropic+openai 凭据后跑通并落真实证据。**
+桩注入端到端产合法 binding+独立性判定+密封记录且 17 对抗测试全绿;脚本可证边界(措辞
+精确,不夸大)=「两个 key 字面量不同 + gateway 记账 prompt digest 与 binding 派生
+instruction 互证 + 可信 seal key 下检出内层 evidence/seal_algo 的未重签修改」;
+preflight 在 CLI 与 keys=None 编程路径常开(keys 显式注入是测试缝,生产不走);
+evidence 带机器可读 independence_claim_scope=cross_vendor_as_configured + caveats;
+全量基线不破。
+**机制级残余 → 已立卡 tasks/pool/8be0e547:①binding 未绑 provider 实收 prompt(adapter
+之后不可证)②provider 身份是声明式(槽名+模型名判族),不同 key 同后端伪装无单侧证伪。**
+**真实调用现状:本机中继 key 双 401(脱敏诊断留档);且 anthropic 槽必须配原生 /messages
+端点(OpenAI 兼容中继形态打不通 AnthropicLLM,preflight 与实调同协议探测会如实拦)。
+登记待用户提供有效 anthropic 原生 + openai 凭据后跑通并落真实证据。**
