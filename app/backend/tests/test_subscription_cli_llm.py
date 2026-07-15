@@ -122,6 +122,66 @@ def test_factory_provider_switch_and_identity(monkeypatch):
         scl.make_subscription_cli_client("gemini")
 
 
+def test_auth_detect_claude_logged_in_json(monkeypatch):
+    monkeypatch.setattr(
+        scl.subprocess, "run",
+        lambda cmd, **kw: _FakeCompleted(0, '{"loggedIn": true, "authMethod": "claude.ai"}'),
+    )
+    authed, note = scl.subscription_auth_status("anthropic")
+    assert authed is True and "claude.ai" in note
+
+
+def test_auth_detect_claude_logged_out(monkeypatch):
+    monkeypatch.setattr(
+        scl.subprocess, "run",
+        lambda cmd, **kw: _FakeCompleted(0, '{"loggedIn": false}'),
+    )
+    authed, _ = scl.subscription_auth_status("anthropic")
+    assert authed is False
+
+
+def test_auth_detect_codex_logged_in_text(monkeypatch):
+    monkeypatch.setattr(
+        scl.subprocess, "run",
+        lambda cmd, **kw: _FakeCompleted(0, "Logged in using ChatGPT\n"),
+    )
+    authed, note = scl.subscription_auth_status("openai")
+    assert authed is True and "ChatGPT" in note
+
+
+def test_auth_detect_cli_missing(monkeypatch):
+    monkeypatch.setattr(scl.shutil, "which", lambda name: None)
+    authed, note = scl.subscription_auth_status("openai")
+    assert authed is False and "未安装" in note
+
+
+def test_report_fresh_user_gets_install_and_login_steps(monkeypatch, tmp_path):
+    # 陌生用户:CLI 没装 + 无 api key → next_action 必含安装+登录+api-key 三条路
+    monkeypatch.setattr(scl.shutil, "which", lambda name: None)
+    rep = scl.provider_auth_report("anthropic", secrets_path=tmp_path / "none.yaml")
+    assert rep["ready"] is False and rep["cli_installed"] is False
+    assert "install" in rep["next_action"] or "装 CLI" in rep["next_action"]
+    assert "setup-token" in rep["next_action"]
+    assert "api_key" in rep["next_action"]
+
+
+def test_report_api_key_only_is_ready(monkeypatch, tmp_path):
+    # 只配了 api key(没装 CLI)也算就绪
+    monkeypatch.setattr(scl.shutil, "which", lambda name: None)
+    sec = tmp_path / "secrets.yaml"
+    sec.write_text("llm:\n  openai:\n    api_key: sk-test-xyz\n", encoding="utf-8")
+    rep = scl.provider_auth_report("openai", secrets_path=sec)
+    assert rep["ready"] is True and rep["api_key_configured"] is True
+
+
+def test_report_cli_installed_not_logged_in(monkeypatch, tmp_path):
+    monkeypatch.setattr(scl.shutil, "which", lambda name: f"/usr/bin/{name}")
+    monkeypatch.setattr(scl.subprocess, "run", lambda cmd, **kw: _FakeCompleted(0, "Not logged in"))
+    rep = scl.provider_auth_report("openai", secrets_path=tmp_path / "none.yaml")
+    assert rep["ready"] is False and rep["cli_installed"] is True
+    assert "登录" in rep["next_action"]
+
+
 def test_flatten_messages_preserves_order_and_roles():
     txt = scl._flatten_messages([
         LLMMessage(role="system", content="be terse"),

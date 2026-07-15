@@ -22,6 +22,7 @@
 
 from __future__ import annotations
 
+import json
 import os
 import shutil
 import subprocess
@@ -30,6 +31,117 @@ from pathlib import Path
 from typing import Any
 
 from .llm_client import LLMClient, LLMMessage, LLMResponse, NoLLMConfigured
+
+# provider → 厂商 CLI onboarding 元数据(陌生用户从零 auth 用)。
+_CLI_META: dict[str, dict[str, Any]] = {
+    "anthropic": {
+        "cli": "claude",
+        "label": "Claude 订阅 (Pro/Max)",
+        "install": "npm install -g @anthropic-ai/claude-code",
+        "login": "claude setup-token   （或 claude auth login，弹浏览器登 claude.ai）",
+        "status_cmd": ["claude", "auth", "status"],
+    },
+    "openai": {
+        "cli": "codex",
+        "label": "ChatGPT 订阅 (Plus/Pro)",
+        "install": "npm install -g @openai/codex",
+        "login": "codex login   （Sign in with ChatGPT，弹浏览器）",
+        "status_cmd": ["codex", "login", "status"],
+    },
+}
+
+
+def cli_installed(provider: str) -> bool:
+    meta = _CLI_META.get((provider or "").strip().lower())
+    return bool(meta) and shutil.which(meta["cli"]) is not None
+
+
+def subscription_auth_status(provider: str, *, timeout_s: float = 20.0) -> tuple[bool, str]:
+    """检测某 provider 的订阅 CLI 是否已登录。返回 (authed, 人读说明)。
+
+    不暴露账号细节、不烧 token(用 CLI 自带的 status 命令,零真实模型调用)。
+    - claude auth status → JSON {"loggedIn": bool, "authMethod": ...}
+    - codex login status → "Logged in using ChatGPT" / not-logged-in
+    """
+    key = (provider or "").strip().lower()
+    meta = _CLI_META.get(key)
+    if not meta:
+        return False, f"未知 provider={provider!r}"
+    if shutil.which(meta["cli"]) is None:
+        return False, f"{meta['cli']} CLI 未安装"
+    try:
+        r = subprocess.run(
+            meta["status_cmd"], capture_output=True, text=True, timeout=timeout_s,
+        )
+    except (subprocess.TimeoutExpired, OSError):
+        return False, f"{meta['cli']} 状态检测失败"
+    out = (r.stdout or "") + (r.stderr or "")
+    if key == "anthropic":
+        try:
+            data = json.loads(r.stdout or "{}")
+            logged = bool(data.get("loggedIn"))
+            method = str(data.get("authMethod") or "")
+            return logged, ("已登录" + (f"（{method}）" if method else "")) if logged else "未登录"
+        except (json.JSONDecodeError, AttributeError):
+            return (r.returncode == 0 and "loggedIn" in out and "false" not in out.lower()), "状态未知"
+    # openai / codex：文本 "Logged in using ChatGPT"
+    logged = r.returncode == 0 and "logged in" in out.lower() and "not logged" not in out.lower()
+    note = out.strip().splitlines()[0][:60] if logged and out.strip() else ("已登录" if logged else "未登录")
+    return logged, note
+
+
+def _api_key_configured(provider: str, secrets_path: Path | None = None) -> bool:
+    """secrets.yaml 里该 provider 有没有 api_key(不读值,只看存在性)。"""
+    path = secrets_path or (Path.home() / ".quantbt" / "secrets.yaml")
+    if not path.exists():
+        return False
+    try:
+        import yaml
+
+        raw = yaml.safe_load(path.read_text()) or {}
+    except Exception:  # noqa: BLE001
+        return False
+    entry = ((raw.get("llm") or {}).get(provider) or {})
+    return isinstance(entry, dict) and bool(str(entry.get("api_key") or "").strip())
+
+
+def provider_auth_report(provider: str, *, secrets_path: Path | None = None) -> dict[str, Any]:
+    """一个 provider 的完整认证画像 + 缺口的确切下一步(陌生用户 onboarding)。"""
+    key = (provider or "").strip().lower()
+    meta = _CLI_META.get(key, {})
+    installed = cli_installed(key)
+    sub_authed, sub_note = (subscription_auth_status(key) if installed else (False, f"{meta.get('cli', key)} CLI 未安装"))
+    api_key = _api_key_configured(key, secrets_path)
+    ready = sub_authed or api_key
+    if ready:
+        method = "订阅" if sub_authed else "API key"
+        next_action = f"就绪（{method}）——无需操作"
+    elif not installed:
+        next_action = (
+            f"方式A(订阅·推荐·无按量费): 1) 装 CLI: {meta.get('install', '?')}  "
+            f"2) 登录: {meta.get('login', '?')}   |   "
+            f"方式B(API key): 编辑 ~/.quantbt/secrets.yaml 填 llm.{key}.api_key"
+        )
+    else:
+        next_action = (
+            f"CLI 已装但未登录 → 交互登录一次: {meta.get('login', '?')}   |   "
+            f"或用 API key: 编辑 ~/.quantbt/secrets.yaml 填 llm.{key}.api_key"
+        )
+    return {
+        "provider": key,
+        "label": meta.get("label", key),
+        "cli": meta.get("cli", ""),
+        "cli_installed": installed,
+        "subscription_authed": sub_authed,
+        "subscription_note": sub_note,
+        "api_key_configured": api_key,
+        "ready": ready,
+        "next_action": next_action,
+    }
+
+
+def auth_status_all(*, secrets_path: Path | None = None) -> list[dict[str, Any]]:
+    return [provider_auth_report(p, secrets_path=secrets_path) for p in ("anthropic", "openai")]
 
 
 class SubscriptionCLIError(RuntimeError):
@@ -192,4 +304,8 @@ __all__ = [
     "CodexSubscriptionLLM",
     "SubscriptionCLIError",
     "make_subscription_cli_client",
+    "cli_installed",
+    "subscription_auth_status",
+    "provider_auth_report",
+    "auth_status_all",
 ]
