@@ -710,9 +710,14 @@ async def _app_lifespan(_app: "FastAPI"):
     # startup_event/shutdown_event 在本模块靠后定义(引用贯穿全文的模块级状态);
     # 本 lifespan 只在 server boot 时被调用,那时全模块已导入、两名字均已就绪,
     # 故此处按名前向引用合法。语义与原 on_event 一致:进入=startup,退出=shutdown。
+    # try/finally 是为严格等价 Starlette 旧 _DefaultLifespan.__aexit__ 的无条件
+    # shutdown——serving 阶段异常穿过 yield 时,shutdown 仍必须执行(否则 driver/
+    # reconciler 线程泄漏)。
     startup_event()
-    yield
-    shutdown_event()
+    try:
+        yield
+    finally:
+        shutdown_event()
 
 
 app = FastAPI(title="1Backtest API", version="0.2.0", lifespan=_app_lifespan)

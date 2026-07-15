@@ -34,6 +34,32 @@ def test_no_legacy_on_event_handlers_remain():
     assert main.app.router.on_shutdown == []
 
 
+def test_lifespan_is_actually_wired_to_app():
+    # 接线牙:app 真的用 _app_lifespan 作 lifespan_context(MUT:构造处删 lifespan=
+    # 参数 → router 退回 _DefaultLifespan、app 变无 startup 静默态 → 本断言红)。
+    assert main.app.router.lifespan_context is main._app_lifespan
+
+
+def test_lifespan_runs_shutdown_even_on_serving_error(monkeypatch):
+    # serving 阶段异常穿过 → shutdown 仍必须跑(严格等价旧 on_event 无条件 shutdown;
+    # MUT:_app_lifespan 去掉 try/finally → shutdown 被跳过、线程泄漏 → 本测红)。
+    calls: list[str] = []
+    monkeypatch.setattr(main, "startup_event", lambda: calls.append("startup"))
+    monkeypatch.setattr(main, "shutdown_event", lambda: calls.append("shutdown"))
+
+    async def _drive() -> None:
+        async with main._app_lifespan(main.app):
+            raise RuntimeError("serving boom")
+
+    try:
+        asyncio.run(_drive())
+    except RuntimeError as exc:
+        assert "serving boom" in str(exc)
+    else:  # pragma: no cover
+        raise AssertionError("serving 异常未外传")
+    assert calls == ["startup", "shutdown"]  # shutdown 未被跳过
+
+
 def test_lifespan_propagates_startup_failure(monkeypatch):
     # startup 抛错必须外传(不被 lifespan 吞),否则 boot 失败会被静默成"已启动"假绿。
     def _boom() -> None:
