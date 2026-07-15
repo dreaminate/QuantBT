@@ -6,6 +6,10 @@
 ## <日期> · <标题>
 - 建/改了什么 + 命门  - 验收：<对抗测试 + 变异 + 全量数字>  - 下一步：<…> -->
 
+## 2026-07-15-0539 跨厂商切模型 S7 前端切换器落 main——API-key 线端到端可用+有 UI
+- ModelSwitcher.tsx 挂 Mode2ChatPage active-thread header:原生 select+optgroup+Auto 顶项;GET /api/llm/models(filter authed&&selectable)+GET /llm-selection 回显,选中 PATCH(下条消息即生效,对话中途切);仅 API-key 可路由厂商可切,凭据不经前端,stale pin 兜底显示;前端测试 5,前端全 428 passed+build 绿;S5-piece1 scaffold+K3 记账一并 land 803d0e27
+- **特性状态**:S1 目录/S2 路由/S3a-b gateway+pin 穿链/S4 隔离(证成)/S7 前端 全 done——**API-key 每对话切模型+中途切 端到端可用+CI 绿+有 UI(北极星:能用)**。残余:S5 订阅接生产 gateway(K3 待拍板 tool bridge,暂缓)/S6 内嵌登录中继(订阅 auth 用,优先级降)。卡 db95c0c6 主体交付、S5/S6 待拍板,保持 in_progress
+
 ## 2026-07-15-0525 K3 约束确认+待拍板:订阅模型跑不了带工具 agentic 对话(厂商 CLI 拒工具)
 - 核实:orchestrator 按 role 算 role_tool_schema(_role_filtered_tool_schema,orchestrator.py:454),带工具 role 传非空 schema;订阅 adapter 拒非空 tools(test_tools_rejected)。故订阅模型只能跑无工具场景(dual-model 审查已可用/纯聊天),跑不了带工具生产 agent 对话
 - **待拍板(用户已知悉,非阻塞)**:订阅模型进带工具对话=需受治理 tool bridge(工作量大+ToS 更灰,登记等拍板)/或加纯聊天模式(中)。默认保持现状:订阅用于审查、对话切模型走 API-key(全场景已可用)。S5 订阅接生产 gateway 暂缓(避免建误导性「显示可切一切工具就崩」);S5-piece1 credential_pool/factory 认 subscription_cli 已本地 committed(无害 scaffold,任一方案都要)

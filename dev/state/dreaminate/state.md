@@ -11,23 +11,19 @@
   下一步转用户可感知面(队列见 frontier)。
 
 ### 顶部刷新块（本轮值 · 每轮覆写）
-- **六字段**:1 Local checkout=slice/model-switch-crossvendor(本地领先 origin 2:S5-piece1 credential_pool/factory
-  认 subscription_cli scaffold + dev 记账,未 push);2 Remote=origin/main @ ae2e61b1..4a5f882b(S1-S3b 全 land);
-  3 Local tests=后端全量 **6444 passed/13 skipped/0 failed**(4a5f882b,真汇总行);S5-piece1 隔离 4 passed;
-  4 CI=**✅ 4a5f882b run 29413489103 success(S1-S3b 完整,后端+前端+build)** + 88c30703 success——flaky 训练
-  超时彻底恢复,整个 model-switch 后端 CI 验证绿;5 Production=Unqueried;6 User acceptance=Unverified。
-- **audit 基线四项**(不变):61 files / 20,339 lines / 26,209,663 bytes / sha `1c1788b0bbe2`。
-  (本特性改动全在 app/backend/dev,不跑数据管线,基线按构造不变。)
+- **六字段**:1 Local checkout=slice/model-switch-crossvendor @ 803d0e27(**S7 前端切换器 + S5-piece1 + K3 记账
+  落 main**——API-key 每对话切模型端到端可用+有 UI);2 Remote=origin/main ff 到 803d0e27;3 Local tests=后端全量
+  **6448 passed/13 skipped/0 failed**(真汇总行,9分22秒);前端 **428 passed + build 绿**(S7);4 CI=**✅ 4a5f882b
+  success** + 803d0e27 in_progress(下 tick 查);5 Production=Unqueried;6 User acceptance=Unverified。
+- **audit 基线四项**(不变):61 files / 20,339 lines / 26,209,663 bytes / sha `1c1788b0bbe2`。(改动全在 app/*/dev,基线按构造不变。)
 - **断点**:**当前战役=Claudian 式「每对话跨厂商切模型」(卡 db95c0c6,in_progress)**。蓝图 + 参考实现见 findings。
-  **✅ S1 目录 · ✅ S2 hard-pin routing · ✅ S3a gateway pin 注入 · ✅ S3b(持久化+pin 穿生产链+selection API)**
-  ——**后端跨厂商切模型端到端功能可用 + CI 绿**(用户 PATCH `/api/agent/chat/{tid}/llm-selection` 手选→驱动那条对话生产 agent,
-  对话中途切下条消息即生效)。各切片经 skeptic 对抗验证(S1 假绿灯/S2 3MEDIUM/S3a CRITICAL 泄漏/S3b MEDIUM,全修+变异门)。
-  **S4=已证成**(dual 门 3 层+skeptic 亲验+强测试+conversation 层集成测试组合覆盖,无新代码)。
-  **K3 约束确认+待拍板(用户已知悉·非阻塞)**:订阅模型跑不了带工具 agentic 对话(厂商 CLI 拒工具,生产 role 传 tool schema)——
-  订阅只能无工具场景(dual-model 审查已可用/纯聊天);API-key 线全场景可切(已可用)。订阅进带工具对话=需受治理 tool bridge(大·ToS 灰)
-  或纯聊天模式(中),默认保持现状。**S5 订阅接生产 gateway 暂缓**(避免建误导性成品);S5-piece1 scaffold 本地留存(无害·任一方案都要)。
-  **下一步 S7 前端切换器**:让 API-key 每对话切+中途切对普通用户可视化可用(北极星:能用)。前端 vite/react,chat 页
-  Mode2ChatPage.tsx/AgentWorkbenchPage.tsx。S6 内嵌登录中继(订阅 auth 用,优先级降)。ultracode:每片落码后对抗验证。
+  **✅ S1 目录 · ✅ S2 路由 · ✅ S3a-b gateway+pin 穿链 · ✅ S4 隔离(证成) · ✅ S7 前端切换器**
+  ——**API-key 每对话切模型+中途切 端到端可用 + CI 绿 + 有 UI**(北极星:能用。普通用户配 api-key→诊断台 chat header
+  下拉切模型→下条消息即生效)。各切片经 skeptic 对抗验证(S1 假绿灯/S2 3MEDIUM/S3a CRITICAL 泄漏/S3b MEDIUM,全修+变异门)。
+  **K3 约束+待拍板(用户已知悉·非阻塞)**:订阅模型跑不了带工具 agentic 对话(厂商 CLI 拒工具)——订阅只无工具场景
+  (dual-model 审查已可用);订阅进带工具对话=需 tool bridge(大·ToS 灰)或纯聊天模式(中),默认保持现状。
+  **残余(非阻塞)**:S5 订阅接生产 gateway(暂缓,S5-piece1 scaffold 已 land 无害)、S6 内嵌登录中继(订阅 auth 用,优先级降)。
+  下一步:等用户拍板订阅方向;或收尾 autoplan 评审/可上线成品尺复盘;或转 GOAL 其他 gap。ultracode:每片落码后对抗验证。
 
 ## 状态表（确定的才标 ✅,证据必挂）
 | 子系统/能力 | 状态 | 证据 |
@@ -43,6 +39,7 @@
 | §4 跨厂商切模型·S2 hard-pin routing | ✅ | routing.py pin_provider/pin_model 硬约束+resolve 硬 pin 过滤(仅 !independence_required 生效→dual 门物理免疫、pool 不变保 no-mix、pin 无候选→PinnedModelUnavailable 绝不跨厂商 fallback、pin_model tier 优先用登记档);对抗测试 14(skeptic 逮 3 MEDIUM:degraded 判反/fallback 锁死实靠断路器/命门测试弱,全修+补测);gateway 76+全量 6423 passed;land 6a8990e9 |
 | §4 跨厂商切模型·S3a gateway pin 注入 | ✅ | LLMGateway(default_pin) 在 complete() 盖章成 hard pin(仅非独立且非 verifier role→dual 门物理免疫叠双层);盖章后 effective_capability 贯穿 _invoke_with_fallback→S2 跨厂商锁死端到端成立(K1:真实主链走 GatewayLLMAdapter);对抗测试 6(skeptic 逮 **CRITICAL 跨厂商泄漏**——盖章在 fallback 蒸发,已修+变异门钉死;+MEDIUM-2 spy 门+LOW-4 role 纵深);全量 6429 passed;land dc940949 |
 | §4 跨厂商切模型·S3b 持久化+pin 穿链+端点 | ✅ **端到端可用** | ChatService.update/get_llm_selection(owner-scoped 原子,S3b-1) + `_current_agent_gateway(model_pin)`/`_dispatch(model_pin)`/两端点经 `_thread_model_pin` 服务端读传(S3b-2,gateway.py 零改动) + GET/PATCH `/api/agent/chat/{tid}/llm-selection`(校验 gateway 可路由+owner-scoped,S3b-3);对抗测试 6+8+集成 1(skeptic 判运行期无安全缺陷,逮 MEDIUM 接线零覆盖→补集成测试+**临时断 model_pin 传参确认变红**);全量 6444 passed;land ae2e61b1。用户 PATCH 手选→驱动那条对话生产 agent。**订阅 pin 待 S5**(gateway 未接订阅) |
+| §4 跨厂商切模型·S7 前端切换器 | ✅ **有 UI 可用** | ModelSwitcher.tsx 挂 Mode2ChatPage active-thread header(原生 select+optgroup+Auto 顶项);GET /api/llm/models(filter authed&&selectable)+GET /llm-selection 回显,选中 PATCH(下条消息即生效·对话中途切);仅 API-key 可路由厂商可切、凭据不经前端、stale pin 兜底显示;前端测试 5(分组/未 auth 不显/非聊天不可选/回显/PATCH body/auto),前端全 428 passed+build 绿;land 803d0e27。**北极星:普通用户可视化切模型** |
 | §6 数学链门(§6 gate) | ✅ | section6_mathchain_gate.py 委托 spine_gate 8 deny 子句;gate_registry 7 门(2026-06-29 land ad7b9d4e,原文 git 历史) |
 | §5 Research Asset RAG | ✅ | /api/agent/chat+workbench+legacy Mode2 全接;test_agent_runtime_research_graph 等系列在当日后端全量 6313 passed/0 failed(2026-07-14 实跑)内全绿;建设明细见 git 历史 |
 | §6 Document Intelligence | ✅ | text/MD/PDF(PyMuPDF+OCR fallback)/HTML snapshot parser+batch+upload+目录同步;test_document_intelligence_parser_rag 在当日全量 6313 passed(2026-07-14 实跑)内全绿;边界:非联网 crawler/非表格理解 |
