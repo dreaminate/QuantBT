@@ -421,9 +421,8 @@ def test_solidus_escaped_key_still_caught(monkeypatch, tmp_path):
     assert not (out / "review_evidence.json").exists()
 
 
-def test_norm_base_query_and_leading_zero_port(tmp_path):
-    # ① 数值等价端口(:0443)+ 同 query → 判同 relay;
-    # ② query 不同(?tenant=a vs ?tenant=b)→ 不同端点,不得错并
+def test_relay_endpoint_identity_leading_zero_port(tmp_path):
+    # 数值等价端口(:0443==默认 443)同 host → 判同 relay
     out = tmp_path / "out15"
     evidence = dmr.run_review(
         out,
@@ -435,16 +434,37 @@ def test_norm_base_query_and_leading_zero_port(tmp_path):
     )
     assert "same_base_url_relay" in evidence["caveats"]
 
-    out2 = tmp_path / "out16"
-    evidence2 = dmr.run_review(
-        out2,
+
+def test_same_host_different_path_is_same_relay(tmp_path):
+    # 关键(修旧漏报):同 host 不同 path(relay/anthropic vs relay/openai,或不同
+    # tenant 参数)仍是同一中继操作方控制两侧 → 必须披露,不得因 path/query 差异漏报
+    for a_url, o_url in [
+        ("https://relay.example/anthropic/v1", "https://relay.example/openai/v1"),
+        ("https://relay.example/v1?tenant=a", "https://relay.example/v1?tenant=b"),
+    ]:
+        out = tmp_path / f"out16-{hash((a_url, o_url)) & 0xffff}"
+        evidence = dmr.run_review(
+            out,
+            keys=_fake_keys(
+                anthropic={"base_url": a_url}, openai={"base_url": o_url},
+            ),
+            client_factory=lambda cred: _StubClient(cred.provider),
+        )
+        assert "same_base_url_relay" in evidence["caveats"], (a_url, o_url)
+
+
+def test_different_host_not_flagged(tmp_path):
+    # 不同 host(各厂商真原生端点)→ 不披露(genuinely 独立端点)
+    out = tmp_path / "out16b"
+    evidence = dmr.run_review(
+        out,
         keys=_fake_keys(
-            anthropic={"base_url": "https://relay.example/v1?tenant=a"},
-            openai={"base_url": "https://relay.example/v1?tenant=b"},
+            anthropic={"base_url": "https://api.anthropic.com/v1"},
+            openai={"base_url": "https://api.openai.com/v1"},
         ),
         client_factory=lambda cred: _StubClient(cred.provider),
     )
-    assert evidence2["caveats"] == []
+    assert evidence["caveats"] == []
 
 
 def test_relay_default_port_normalized(tmp_path):
@@ -493,35 +513,9 @@ def test_mixed_partial_solidus_escaping_caught(monkeypatch, tmp_path):
     assert not (out / "review_evidence.json").exists()
 
 
-def test_norm_base_query_fidelity(tmp_path):
-    # query 必须保真:大小写(?tenant=A ≠ ?tenant=a)与尾斜杠(?token=a/ ≠ ?token=a)
-    # 都是不同端点,不得错并成同 relay
-    out = tmp_path / "out18"
-    evidence = dmr.run_review(
-        out,
-        keys=_fake_keys(
-            anthropic={"base_url": "https://relay.example/v1?tenant=A"},
-            openai={"base_url": "https://relay.example/v1?tenant=a"},
-        ),
-        client_factory=lambda cred: _StubClient(cred.provider),
-    )
-    assert evidence["caveats"] == []
-
-    out2 = tmp_path / "out19"
-    evidence2 = dmr.run_review(
-        out2,
-        keys=_fake_keys(
-            anthropic={"base_url": "https://relay.example/v1?token=a/"},
-            openai={"base_url": "https://relay.example/v1?token=a"},
-        ),
-        client_factory=lambda cred: _StubClient(cred.provider),
-    )
-    assert evidence2["caveats"] == []
-
-
-def test_norm_base_ipv6_brackets_no_collision(tmp_path):
-    # IPv6 方括号不得在重组时丢失:[::1]:8443(host ::1,port 8443)与
-    # [::1:8443](host ::1:8443,无 port)是不同 authority,不得碰撞
+def test_relay_endpoint_ipv6_host_distinguished(tmp_path):
+    # IPv6 host 解析:[::1]:8443(host ::1,port 8443)与 [::1:8443](host
+    # ::1:8443,无 port)是不同 host → 不同 relay,不得碰撞
     out = tmp_path / "out20"
     evidence = dmr.run_review(
         out,
@@ -533,12 +527,13 @@ def test_norm_base_ipv6_brackets_no_collision(tmp_path):
     )
     assert evidence["caveats"] == []
 
+    # 同 IPv6 host+port,path 差异 → 仍判同 relay(端点身份,不看 path)
     out2 = tmp_path / "out21"
     evidence2 = dmr.run_review(
         out2,
         keys=_fake_keys(
-            anthropic={"base_url": "https://[::1]:8443/v1/"},
-            openai={"base_url": "https://[::1]:8443/v1"},
+            anthropic={"base_url": "https://[::1]:8443/anthropic/v1"},
+            openai={"base_url": "https://[::1]:8443/openai/v1"},
         ),
         client_factory=lambda cred: _StubClient(cred.provider),
     )
@@ -580,19 +575,57 @@ def test_surrogate_pair_escaped_key_caught(monkeypatch, tmp_path):
     assert not (out / "review_evidence.json").exists()
 
 
-def test_norm_base_empty_query_vs_no_query(tmp_path):
-    # /v1? 与 /v1 在 urlsplit 里 query 同为 ""——但下游拼出的请求路径不同,
-    # 不得错并成同 relay
-    out = tmp_path / "out23"
-    evidence = dmr.run_review(
-        out,
-        keys=_fake_keys(
-            anthropic={"base_url": "https://relay.example/v1?"},
-            openai={"base_url": "https://relay.example/v1"},
-        ),
-        client_factory=lambda cred: _StubClient(cred.provider),
-    )
-    assert evidence["caveats"] == []
+def test_relay_endpoint_ignores_query_and_fragment_forms(tmp_path):
+    # 端点身份只看 scheme+host+port:/v1? /v1#? /v1/ 等 path/query/fragment 变体
+    # 在同 host 下一律判同 relay(codex 七轮列的 URL 变体全归此类,不再逐个纠缠)
+    for a_url, o_url in [
+        ("https://relay.example/v1?", "https://relay.example/v1"),
+        ("https://relay.example/v1#?", "https://relay.example/v1"),
+        ("https://relay.example/v1/?", "https://relay.example/v1?"),
+    ]:
+        out = tmp_path / f"out23-{hash((a_url, o_url)) & 0xffff}"
+        evidence = dmr.run_review(
+            out,
+            keys=_fake_keys(
+                anthropic={"base_url": a_url}, openai={"base_url": o_url},
+            ),
+            client_factory=lambda cred: _StubClient(cred.provider),
+        )
+        assert "same_base_url_relay" in evidence["caveats"], (a_url, o_url)
+
+
+def test_multi_level_json_encoded_key_caught(monkeypatch, tmp_path):
+    # 种坏:key 被合法 JSON 编码两层(每层 \\ 再翻倍)——单次反转义只到中间态,
+    # 迭代到不动点才现出 raw。preflight 兜底遮蔽 + evidence 拒落盘都必须抓
+    import requests
+
+    emoji_key = "test/😀/key-000000000000000000"
+    one = emoji_key.replace("/", "\\/", 1).replace("😀", "\\ud83d\\ude00")
+    two = json.dumps(one, ensure_ascii=True)[1:-1]  # 再编码一层
+    assert json.loads('"' + json.loads('"' + two + '"') + '"') == emoji_key
+    assert emoji_key not in two
+
+    class _Resp:
+        status_code = 401
+        text = f'{{"error":"denied for {two}"}}'
+
+    monkeypatch.setattr(requests, "post", lambda *a, **kw: _Resp())
+    failures = dmr.preflight(_fake_keys(anthropic={"api_key": emoji_key}))
+    joined = "\n".join(failures)
+    assert emoji_key not in joined and two not in joined
+    assert "REDACTED" in joined
+
+    out = tmp_path / "out24"
+    with pytest.raises(SystemExit, match="拒绝落盘"):
+        dmr.run_review(
+            out,
+            keys=_fake_keys(anthropic={"api_key": emoji_key}),
+            client_factory=lambda cred: _StubClient(
+                cred.provider,
+                echo_secret=two if cred.provider == "openai" else None,
+            ),
+        )
+    assert not (out / "review_evidence.json").exists()
 
 
 def test_preflight_redacts_every_loaded_key(monkeypatch):
