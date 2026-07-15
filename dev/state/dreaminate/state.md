@@ -9,13 +9,13 @@
   in_progress:真实跨厂商调用待用户凭据)。/loop 15m 自主循环运行中;队列见 frontier。
 
 ### 顶部刷新块（本轮值 · 每轮覆写）
-- **六字段**:1 Local checkout=slice/39d08df8-hs300-chain @ b5473f38(dual-model 脚本九轮 codex
-  加固,36 桩测 passed);2 Remote=待合并 main 后 push(本条落档 commit 后执行);3 Local tests=
-  后端全量 6351 passed/13 skipped(2026-07-15Z 实跑)+dual_model 定向 36 passed;4 CI=Unqueried
-  (合并 push 后 gh 查);5 Production=Unqueried;6 User acceptance=Unverified(真实跨厂商调用待
-  用户有效 anthropic 原生+openai 凭据)。
+- **六字段**:1 Local checkout=slice/on-event-lifespan @ d940aed3(on_event→lifespan 迁移,
+  codex 修复轮 APPROVE,lifespan 5 测 passed);2 Remote=切片② 已 push(origin/main 2e237b1f),
+  on_event 切片本条落档后合并 push;3 Local tests=后端全量 6356 passed/13 skipped(2026-07-15Z
+  实跑);4 CI=✅ 切片② run 29387569832 success(后端+前端);on_event 切片合并 push 后 gh 查;
+  5 Production=Unqueried;6 User acceptance=Unverified(dual-model 真实跨厂商调用待用户凭据)。
 - **audit 基线四项**(不变):61 files / 20,339 lines / 26,209,663 bytes / sha `1c1788b0bbe2`。
-- **断点**:切片② wiring land→合并 main→push→六字段汇报;真实调用待凭据(非阻塞,已登记)。
+- **断点**:on_event 切片 land→合并 main→push→续下一切片(用户可感知面/eval 卡)。
 
 ## 状态表（确定的才标 ✅,证据必挂）
 | 子系统/能力 | 状态 | 证据 |
@@ -39,7 +39,8 @@
 | dual-model 独立审查(流程级) | ✅ | builder=claude(anthropic)/verifier=gpt-5.6-sol(openai) 跨厂商;HS300 链三轮 verdict 留档证据包 |
 | §7/§8 dual-model 应用内接线(脚本化端到端) | 🟡 | scripts/dual_model_review.py:secrets 窄读→内存 keystore→build_agent_llm_gateway→builder(anthropic)→binding→verifier(openai,independence_required)→HMAC 密封记录+独立性判定;test_dual_model_review_script 36 passed(桩注入,零网络);codex 九轮对抗全修+回归钉死。**真实跨厂商调用待用户凭据**(本机中继 key 双 401);机制级残余(binding 绑 adapter 实发/身份可验证)=卡 8be0e547 |
 | CI(GitHub Actions) | ✅ | .github/workflows/ci.yml 双 job;run 29377617245 gh 实查 success:后端 6315 passed/0 failed(17:18)+前端 423+build;七轮迭代账目在 log/证据包 |
-| 前端 bundle 拆分 / FastAPI on_event 迁移 | ⬜ | 已知本地 gap,排队中 |
+| FastAPI on_event→lifespan 迁移 | ✅ | main.py _app_lifespan asynccontextmanager(try/finally 无条件 shutdown 等价旧 _DefaultLifespan.__aexit__);test_app_lifespan 5 passed;codex 修复轮 APPROVE(commit f8d1f1cd+d940aed3) |
+| 前端 bundle 拆分 | ⬜ | 已知本地 gap(2,557.79 kB/gzip 767.39),排队中 |
 
 ## 下一步
 - 切片②真实调用待用户凭据(非阻塞)→ 用户可感知面(Run 首屏门/前端 bundle 拆分)→ FastAPI

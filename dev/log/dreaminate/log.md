@@ -6,6 +6,11 @@
 ## <日期> · <标题>
 - 建/改了什么 + 命门  - 验收：<对抗测试 + 变异 + 全量数字>  - 下一步：<…> -->
 
+## 2026-07-14-2129 FastAPI on_event→lifespan 迁移 land + 切片② CI 确认绿
+- main.py @app.on_event(startup/shutdown)→_app_lifespan asynccontextmanager;try/finally 无条件 shutdown 严格等价旧 _DefaultLifespan.__aexit__;startup_event/shutdown_event 保留模块级函数(直调不破)
+- codex(gpt-5.6-sol ultra)复核首轮 REJECT 两真缺陷(serving 异常 shutdown 被跳过/缺'真绑 app'牙)→try/finally+2 新测修复→修复轮 APPROVE;test_app_lifespan 5 测
+- 后端全量 6356 passed;切片② dual-model CI run 29387569832 gh 实查 success(后端+前端),CI 面转真绿
+
 ## 2026-07-14-2050 切片② dual-model 应用内跨厂商接线 land(卡 9c5e6975 in_progress)
 - scripts/dual_model_review.py:secrets 窄读→内存 keystore→build_agent_llm_gateway→builder(anthropic)→binding→verifier(openai,indep)→HMAC 密封记录+独立性判定
 - codex(gpt-5.6-sol ultra)九轮对抗:R1 五缺口(同源伪装/未互证/未密封/非 fail-closed/判别力)→逐轮修复重验;R5-R8 结构性关类(反转义迭代到真不动点/relay 端点身份 requests 规范化);R9 被厂商网安分类器掐断非缺陷

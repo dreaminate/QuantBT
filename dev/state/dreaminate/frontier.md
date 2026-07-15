@@ -71,9 +71,17 @@
   key 泄漏/百分号 host 同中继/篡改三态/变异杀手)全绿。**真实跨厂商调用登记待用户提供有效
   anthropic 原生+openai 凭据**(本机中继 key 双 401,脱敏诊断留档;凭据有效时同一路径即通)。
   机制级残余(binding 未绑 adapter 实发 payload/provider 身份声明式)→**新卡 tasks/pool/8be0e547**。
+- **切片② CI 已确认绿**:run 29387569832(2e237b1f)success——后端+前端全 job 绿,
+  gh 实查落定。dual-model 应用内接线的 CI 面从此为真绿(非 Unqueried)。
+- **FastAPI on_event→lifespan 迁移已 land**(分支 slice/on-event-lifespan,commit
+  f8d1f1cd+d940aed3):@app.on_event(startup/shutdown)→_app_lifespan asynccontextmanager
+  (707 行构造挂载,boot 期按名解析靠后 handler,try/finally 无条件 shutdown 严格等价旧
+  _DefaultLifespan.__aexit__)。codex 复核首轮 REJECT 两点(serving 异常 shutdown 被跳过/
+  缺"真绑 app"牙)→修复轮 APPROVE。test_app_lifespan.py 5 测(顺序/无 legacy/真绑 app/
+  startup 异常外传/serving 异常仍 shutdown)。后端全量 6356 passed。
 - **下一步(优先序)**:① 切片②真实调用(待用户凭据,非阻塞) ② 用户可感知面
-  (Run 首屏门/前端 bundle 拆分,CEO 声道战略提示) ③ FastAPI on_event 迁移
-  ④ pool 三张 eval 卡 + 8be0e547 机制层加固 ⑤ 90+ worktree 盘点(只列)。
+  (Run 首屏门/前端 bundle 拆分,CEO 声道战略提示) ③ pool 三张 eval 卡 + 8be0e547
+  机制层加固 ④ validate_dev 两 warning(state.md 蒸馏归档) ⑤ 90+ worktree 盘点(只列)。
 
 ## 待裁 / 卡点
 - **[待用户复核] 研究面质量门 scope 裁定**:codex 轮7 最终 reject(对抗性标准) vs operator
