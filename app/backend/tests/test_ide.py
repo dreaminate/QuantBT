@@ -825,6 +825,13 @@ def test_sandbox_rejects_ctypes_dunder_import():
     assert r.error is not None and "ctypes" in r.error
 
 
+def test_sandbox_rejects_ctypes_dunder_import_keyword():
+    """__import__(name='ctypes') 关键字参数形式也拒（codex 复核逮到位置参数外的漏网变体）。
+    MUT（AST 预检只查 node.args[0]、漏 node.keywords）→ 关键字形式真导入 ctypes，红。"""
+    r = run_user_strategy("m = __import__(name='ctypes')\n")
+    assert r.error is not None and "ctypes" in r.error
+
+
 def test_sandbox_allows_normal_imports_not_overblocked():
     """不误伤：普通 import（json/math）正常跑（AST 预检只拒 FFI·不影响合法策略）。"""
     r = run_user_strategy("import json, math\nquantbt.emit_result({'ok': math.floor(1.5)})")

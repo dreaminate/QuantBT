@@ -182,12 +182,23 @@ def _scan_forbidden_imports(code: str) -> str | None:
         elif isinstance(node, ast.ImportFrom):
             if (node.module or "").split(".")[0] in _FORBIDDEN_USER_IMPORTS:
                 return f"沙箱拒绝：禁止 from {node.module} import（FFI 可逃逸·安全审计 pass3 #1）"
-        elif (
-            isinstance(node, ast.Call) and isinstance(node.func, ast.Name) and node.func.id == "__import__"
-            and node.args and isinstance(node.args[0], ast.Constant) and isinstance(node.args[0].value, str)
-            and node.args[0].value.split(".")[0] in _FORBIDDEN_USER_IMPORTS
-        ):
-            return f"沙箱拒绝：禁止 __import__('{node.args[0].value}')（FFI 可逃逸·安全审计 pass3 #1）"
+        elif isinstance(node, ast.Call) and isinstance(node.func, ast.Name) and node.func.id == "__import__":
+            # name 可能走位置参数 __import__("ctypes") 或关键字 __import__(name="ctypes")
+            # ——两种都是直接调用,都要拦(codex 复核逮到关键字形式漏网)。
+            name_node = None
+            if node.args and isinstance(node.args[0], ast.Constant):
+                name_node = node.args[0]
+            else:
+                for _kw in node.keywords:
+                    if _kw.arg == "name" and isinstance(_kw.value, ast.Constant):
+                        name_node = _kw.value
+                        break
+            if (
+                name_node is not None
+                and isinstance(name_node.value, str)
+                and name_node.value.split(".")[0] in _FORBIDDEN_USER_IMPORTS
+            ):
+                return f"沙箱拒绝：禁止 __import__('{name_node.value}')（FFI 可逃逸·安全审计 pass3 #1）"
     return None
 
 
