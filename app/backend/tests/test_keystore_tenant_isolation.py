@@ -208,6 +208,39 @@ def test_disabling_per_order_password_requires_trusted_ip_second_factor_and_stat
         main.app.dependency_overrides.pop(require_user_dependency, None)
 
 
+def test_disabling_per_order_password_rejects_typeconfused_statement(monkeypatch, tmp_path):
+    """★ §资金 red-line：standing_authorization_statement 传 dict/list（其 repr 含授权短语）→ 400。
+    旧 `str(payload.get(...) or "")` 让 `str({"我授权自动跟单":..})` 含短语 → substring 检查通过 →
+    bypass 显式授权门 → 洗白 mainnet 自动跟单授权(资金安全不变量)。★ 变异：把 isinstance-str 守卫弱回
+    `str(... or "")` → 下列 dict/list 洗白成 200 → RED；还原→GREEN。"""
+
+    guards = MainnetGuardsService(tmp_path / "guards.sqlite3")
+    guards.upsert_config(
+        MainnetGuardConfig(user_id="alice", trusted_ips=["127.0.0.1"], require_password_per_order=True)
+    )
+    monkeypatch.setattr(main, "MAINNET_GUARDS", guards)
+    monkeypatch.setattr(main, "_verify_second_factor_result", lambda *_args: (True, False))
+    main.app.dependency_overrides[require_user_dependency] = lambda: SimpleNamespace(user_id="alice")
+    client = TestClient(main.app, client=("127.0.0.1", 9000))
+    try:
+        for bad in ({"我授权自动跟单": "x"}, ["我授权自动跟单"], {"I authorize automatic copy trading": 1}):
+            resp = client.post(
+                "/api/security/mainnet/config",
+                json={
+                    "require_password_per_order": False,
+                    "password": "pw",
+                    "standing_authorization_statement": bad,
+                },
+            )
+            assert resp.status_code == 400, (
+                f"type-confused statement {bad!r} 应 400（非 str-coerce 含短语洗白成 200）: {resp.text[:200]}"
+            )
+        # 授权门未被绕过 → per-order password 仍强制开
+        assert guards.get_config("alice").require_password_per_order is True
+    finally:
+        main.app.dependency_overrides.pop(require_user_dependency, None)
+
+
 def test_durable_credential_survives_restart_with_exact_full_material_binding(tmp_path):
     security = tmp_path / "security"
     keystore_path = security / "credentials.enc"

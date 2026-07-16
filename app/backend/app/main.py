@@ -14306,8 +14306,15 @@ def mainnet_update_config(
         password_verified, totp_verified = _verify_second_factor_result(user.user_id, payload)
         if not (password_verified or totp_verified):
             raise HTTPException(403, "disabling per-order password requires server-verified password or TOTP")
-        statement = str(payload.get("standing_authorization_statement") or "")
-        if "我授权自动跟单" not in statement and "I authorize automatic copy trading" not in statement:
+        # §资金 red-line: the standing-authorization statement is an explicit typed
+        # confirmation. The old `str(payload.get(...) or "")` let a dict/list whose repr
+        # CONTAINS the phrase (e.g. {"我授权自动跟单": "x"}) pass the substring check —
+        # a type-confused bypass of the explicit-authorization requirement for disabling
+        # mainnet per-order password. Require a real str; reject non-str with the same 400.
+        statement = payload.get("standing_authorization_statement")
+        if not isinstance(statement, str) or (
+            "我授权自动跟单" not in statement and "I authorize automatic copy trading" not in statement
+        ):
             raise HTTPException(400, "explicit standing automatic-copy authorization statement is required")
         MAINNET_GUARDS.log_operation(
             user.user_id,
