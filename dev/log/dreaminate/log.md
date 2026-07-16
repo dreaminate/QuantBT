@@ -6,6 +6,10 @@
 ## <日期> · <标题>
 - 建/改了什么 + 命门  - 验收：<对抗测试 + 变异 + 全量数字>  - 下一步：<…> -->
 
+## 2026-07-16-0811 agent M4b 会话流路由+claude stream-json 解析器 land——内嵌 agent 一个 turn 端到端(spawn 真 claude→解析→SSE),L-C 白名单守 spawn env,跨厂商 codex R1 逮 3 洞→修→R2 FLOOR-HOLD,后端 6873/0 failed
+- 解析器真样本 oracle(实采 claude v2.1.210 消毒)逮 thinking 块/tool_result 省 is_error——手猜 schema 会洗错成绿
+- 变异四门:os.environ.copy→master key 泄漏 RED/thinking 外显 RED/error→Done RED/route refresh=None RED
+
 ## 2026-07-16-0718 agent M5b canvas_create_node 写工具 land——no-key MCP server 增 OFFLINE-only 建节点工具(Axis F agent 全供+tool 强制信封+store L-D 双层守),跨厂商 codex FLOOR-HOLD,后端 6855/0 failed
 - 变异四门 RED-then-revert:owner-from-args/forced-PAPER→store L-D/registry-drift/keystore-import
 - 本轮并归档金融数学 b4 gap 原文+P0-P3 分解草案+3 决策(D-CANVAS-NODE-FIELDS/D-CODEGEN-BRANCH-SESSION/D-B5-AUTO-RULINGS)
