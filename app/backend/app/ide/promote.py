@@ -552,6 +552,7 @@ def promote_ide_run(
     rdp_store: Any = None,
     reproduction_receipt_store: Any = None,
     require_reproduction_receipt: bool = False,
+    attach_advisory_rdp: bool = False,
     requested_label: str = "exploratory",
     promotion_evidence_resolver: Any = None,
     promotion_receipt_registry: Any = None,
@@ -887,6 +888,41 @@ def promote_ide_run(
     try:
         from ..release_gate.promote_assembler import assemble_promote_sections
 
+        # §17 advisory-first producer (opt-in · reversible · require_rdp stays False,
+        # producer stays non-green): with no persisted canonical RDP, assemble a
+        # transparent advisory RDP from the chain artifacts genuinely in scope
+        # (run identity + result artifact + any resolved LLMCallRecords) and feed it
+        # into the existing honest-empty §17 seam. SA-2 keeps the section advisory
+        # (producer not green), so its honest gaps record but never block. Default
+        # (flag off) leaves the no-RDP path byte-identical to the prior baseline.
+        section_rdp = resolved_rdp
+        advisory_rdp_assembly = None
+        if section_rdp is None and attach_advisory_rdp:
+            from .promotion_evidence import assemble_advisory_rdp
+
+            advisory_rdp_assembly = assemble_advisory_rdp(
+                asset_ref=run_id,
+                source_ref=f"ide_run:{ide_run_id}",
+                artifact=result,
+                created_by=owner_username,
+                llm_call_records=llm_call_records,
+            )
+            if advisory_rdp_assembly is not None:
+                section_rdp = advisory_rdp_assembly.rdp
+                manifest["section17_rdp_advisory"] = {
+                    "ok": advisory_rdp_assembly.ok,
+                    "honest_gaps": list(advisory_rdp_assembly.honest_gaps),
+                    "rejections": [
+                        {"gate_id": o.gate_id, "missing": list(o.missing)}
+                        for o in advisory_rdp_assembly.validation.rejections
+                    ],
+                    "note": (
+                        "advisory-only §17 RDP: require_rdp=False 且 "
+                        "s17_rdp_runjson_producers 未转绿——仅透明披露、不强制 gate"
+                        "（enforcement 待用户拍 D-SCOPE-CONSERVATIVE）"
+                    ),
+                }
+
         section_assembly = assemble_promote_sections(
             manifest,
             mathchain_claims=(
@@ -929,7 +965,7 @@ def promote_ide_run(
                 if promotion_evidence is not None
                 else ()
             ),
-            rdp=resolved_rdp,
+            rdp=section_rdp,
             promotion=rdp_promotion,
             expert_reviews=(
                 promotion_evidence.expert_reviews

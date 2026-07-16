@@ -2,9 +2,11 @@
 
 from __future__ import annotations
 
+from collections.abc import Iterable, Sequence
 from dataclasses import dataclass
 from typing import Any, Callable
 
+from ..delivery.aggregator import RDPAssembly, aggregate_rdp
 from ..delivery.rdp import RDPManifest
 from ..governance.enforcement_policy import ProducerStatusLedger
 from ..lineage.spine import (
@@ -820,8 +822,144 @@ class CanonicalPromotionEvidenceResolver:
         )
 
 
+# ════════════════════════════════════════════════════════════════════════════
+# Advisory-first §17 RDP producer (GOAL §17 · D-SCOPE-CONSERVATIVE · advisory-only)
+# ════════════════════════════════════════════════════════════════════════════
+# The canonical enforcement path is ``CanonicalPromotionEvidenceResolver.resolve``
+# above: it greens ``SECTION17_RDP_PRODUCER_KEY`` only from a full persisted owner
+# RDP + verified Mathematical Spine closure.  Until the user green-lights that
+# enforcement (require_rdp=True) *and* the real cross-vendor evidence exists (real
+# LLMCallRecords partly await user credentials), the promote path can still emit a
+# **transparent advisory** RDP: assemble whatever chain artifacts are genuinely in
+# scope through the existing ``delivery.aggregate_rdp`` single source and attach it
+# under the §17 manifest key **without** marking the producer green.  Because the
+# producer stays non-green, SA-2 downgrades the enforce_intent §17 gate to advisory,
+# so an incomplete advisory RDP records its own honest gaps but never blocks an
+# existing promote (require_rdp=False baseline unchanged).
+#
+# HONESTY (RULES §3 — the crux): the two honest-authored gate fields are truthful,
+# never fabricated.  ``reproducibility_command`` is explicitly documentary ("not
+# executable authority"; authority is a §17 ReproductionReceipt this advisory RDP
+# does NOT claim).  ``unverified_residual`` truthfully enumerates what is NOT
+# verified — the cross-vendor external LLM review is pending user credentials, no
+# reproduction receipt was issued, and typed dataset/verdict/approval lineage is
+# unresolved on the advisory path (so gate2/gate4 honestly reject through the wiring
+# rather than being whitewashed).  Nothing here claims verified what is not; missing
+# real evidence is disclosed, not synthesized.
+
+# advisory RDP 的 §17 gate3 诚实残余（**手写·绝不编造**·RULES §3）——声明"未验证什么"。
+_ADVISORY_RESIDUAL_ENFORCEMENT = (
+    "advisory-only §17 RDP：require_rdp=False 且 s17_rdp_runjson_producers 未转绿"
+    "——仅透明披露、不强制 gate（enforcement 待用户拍 D-SCOPE-CONSERVATIVE）"
+)
+_ADVISORY_RESIDUAL_LLM_REVIEW = (
+    "跨厂商外部 LLM 复审未做：真 LLMCallRecord 部分待用户凭据"
+    "——本 advisory RDP 不声称任何 LLM 结论已验证"
+)
+_ADVISORY_RESIDUAL_NO_RECEIPT = (
+    "无 §17 ReproductionReceipt：reproducibility_command 仅文档、"
+    "未经独立重现签发账本核验"
+)
+_ADVISORY_RESIDUAL_UNRESOLVED_LINEAGE = (
+    "typed 数据血统/裁决/审批未在 advisory 路解析"
+    "——门2/门4 缺项由本 RDP 诚实暴露（非洗白）"
+)
+_ADVISORY_RESIDUAL_NO_LLM_RECORD = (
+    "本 promote 未解析到任何 LLMCallRecord（缺凭据/未记账）"
+    "——非断言『未用 LLM』，只声明无调用账证据"
+)
+
+
+def advisory_rdp_unverified_residual(*, has_llm_records: bool) -> tuple[str, ...]:
+    """The honestly-authored §17 gate3 residual for an advisory RDP (never fabricated).
+
+    Every entry is a true statement about what is NOT verified.  When no LLMCallRecord
+    was resolved, that absence is disclosed as "no call-record evidence" — explicitly
+    NOT the false claim "no LLM was used" (mirrors ``_resolve_llm_call_records`` honesty).
+    """
+
+    residual = [
+        _ADVISORY_RESIDUAL_ENFORCEMENT,
+        _ADVISORY_RESIDUAL_LLM_REVIEW,
+        _ADVISORY_RESIDUAL_NO_RECEIPT,
+        _ADVISORY_RESIDUAL_UNRESOLVED_LINEAGE,
+    ]
+    if not has_llm_records:
+        residual.append(_ADVISORY_RESIDUAL_NO_LLM_RECORD)
+    return tuple(residual)
+
+
+def advisory_reproducibility_command(source_ref: str) -> str:
+    """Honest documentary §17 gate1 repro command (never executed; authority = receipt).
+
+    Matches the repo idiom (``test_promotion_receipt_integration``: "documentation only;
+    not executable authority").  The system reproduces deterministically from pinned
+    code + dataset_version + seed (RULES.project ±1e-6), which this string documents; the
+    actual authority is a §17 ReproductionReceipt the advisory RDP does not claim to hold.
+    """
+
+    ref = str(source_ref or "").strip() or "ide_run"
+    return (
+        f"documentation only; not executable authority: reproduce {ref} by re-running "
+        "the pinned strategy_code + dataset_version + seed "
+        "(authority = §17 ReproductionReceipt, not this string)"
+    )
+
+
+def assemble_advisory_rdp(
+    *,
+    asset_ref: str,
+    source_ref: str = "",
+    artifact: Any = None,
+    artifact_hash: str = "",
+    created_by: str = "",
+    llm_call_records: Sequence[Any] = (),
+    dataset_versions: Sequence[Any] = (),
+    verdicts: Sequence[Any] = (),
+    approvals: Sequence[Any] = (),
+    known_limitations: Sequence[str] = (),
+    known_secrets: Iterable[str] = (),
+) -> RDPAssembly | None:
+    """Assemble a transparent advisory §17 RDP from genuinely-available chain objects.
+
+    Advisory-only (RULES §3 / D-SCOPE-CONSERVATIVE): the §17 producer is **not** marked
+    green and ``require_rdp`` is **not** flipped by this function.  Returns ``None`` when
+    there is not even a resolvable asset identity (nothing honest to assemble).  Delegates
+    the real assembly + the 4 canonical gates + the live-key safety scan to the single
+    source ``delivery.aggregate_rdp``; only the honest residual/repro text is authored
+    here.  ``known_secrets`` is forwarded so a plaintext live key that reached a free-text
+    field raises ``SecretLeakError`` **before** the manifest is ever attached.
+    """
+
+    ref = str(asset_ref or "").strip()
+    if not ref:
+        return None
+    return aggregate_rdp(
+        asset_ref=ref,
+        # A promoted run is not a legacy factor/model/signal/strategybook asset kind;
+        # RDPManifest rejects any other non-empty kind, and "" asserts nothing (honest).
+        asset_kind="",
+        artifact=artifact,
+        artifact_hash=artifact_hash,
+        reproducibility_command=advisory_reproducibility_command(source_ref or ref),
+        unverified_residual=advisory_rdp_unverified_residual(
+            has_llm_records=bool(tuple(llm_call_records))
+        ),
+        dataset_versions=tuple(dataset_versions),
+        llm_call_records=tuple(llm_call_records),
+        verdicts=tuple(verdicts),
+        approvals=tuple(approvals),
+        known_limitations=tuple(known_limitations),
+        created_by=str(created_by or ""),
+        known_secrets=known_secrets,
+    )
+
+
 __all__ = [
     "CanonicalPromotionEvidence",
     "CanonicalPromotionEvidenceResolver",
     "PromotionEvidenceError",
+    "advisory_rdp_unverified_residual",
+    "advisory_reproducibility_command",
+    "assemble_advisory_rdp",
 ]
