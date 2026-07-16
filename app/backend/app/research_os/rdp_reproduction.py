@@ -23,7 +23,7 @@ from typing import Any, Iterator, TypeAlias
 
 from ..cross_process_lock import acquire_exclusive_fd
 from ..lineage.ids import canonical_json, content_hash
-from .rdp import RDPManifest, validate_rdp_manifest
+from .rdp import RDPManifest, _validate_rdp_record_shape, validate_rdp_manifest
 
 
 REPRODUCTION_SPEC_VERSION = "rdp.reproduction_spec.v2"
@@ -91,6 +91,7 @@ class RDPReproductionSourceEvidence:
     source_evidence_hash: str = ""
 
     def __post_init__(self) -> None:
+        _validate_rdp_record_shape(self)  # 穷尽 coercion 门·gate5 重现收据链统一 shape 校验
         for field_name in self.__dataclass_fields__:
             object.__setattr__(self, field_name, _text(getattr(self, field_name)))
         for field_name in (
@@ -143,6 +144,7 @@ class ResolvedRDPReproductionSource:
     strategy_code: str = field(repr=False)
 
     def __post_init__(self) -> None:
+        _validate_rdp_record_shape(self)  # 穷尽 coercion 门·gate5 重现收据链统一 shape 校验
         if not isinstance(self.evidence, RDPReproductionSourceEvidence):
             raise TypeError("resolved reproduction source evidence is required")
         if not isinstance(self.strategy_code, str) or not self.strategy_code:
@@ -182,6 +184,7 @@ class RDPReproductionSpec:
     spec_version: str = REPRODUCTION_SPEC_VERSION
 
     def __post_init__(self) -> None:
+        _validate_rdp_record_shape(self)  # 穷尽 coercion 门·gate5 重现收据链统一 shape 校验
         for field_name in (
             "package_id",
             "manifest_hash",
@@ -322,6 +325,7 @@ class RDPReproductionVerificationSnapshot:
     residuals: tuple[str, ...] = ()
 
     def __post_init__(self) -> None:
+        _validate_rdp_record_shape(self)  # 穷尽 coercion 门·gate5 重现收据链统一 shape 校验
         for field_name in (
             "package_id",
             "manifest_hash",
@@ -383,6 +387,7 @@ class RDPReproductionReceipt:
     receipt_version: str = REPRODUCTION_RECEIPT_VERSION
 
     def __post_init__(self) -> None:
+        _validate_rdp_record_shape(self)  # 穷尽 coercion 门·gate5 重现收据链统一 shape 校验
         for field_name in (
             "receipt_ref",
             "owner_user_id",

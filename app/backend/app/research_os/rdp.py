@@ -18,7 +18,7 @@ import threading
 import urllib.parse
 import zipfile
 from contextlib import contextmanager
-from dataclasses import asdict, dataclass, field, is_dataclass
+from dataclasses import asdict, dataclass, field, fields, is_dataclass
 from enum import Enum
 from pathlib import Path
 from typing import Any, Iterator
@@ -90,6 +90,41 @@ def _ref_sequence(name: str, value: Any) -> tuple[str, ...]:
                 f"(a blank element whitewashes the §17 non-empty gate; use an empty tuple for zero content)"
             )
     return result
+
+
+def _validate_rdp_record_shape(instance: Any) -> None:
+    """Shared canonical scalar-str + ref-tuple shape gate for **every** RDP-family record.
+
+    Applied at the top of each record's ``__post_init__`` — before any ``str(ref)`` / merge /
+    projection derives a canonical ref from the field — so a dict/list/int in a ``str`` /
+    ``tuple[str, ...]`` field can never be str()-coerced downstream into a fabricated non-empty
+    attestation/§17 ref that whitewashes a §17 / live-deployment gate (RULES §2 种坏门必抓 · §3
+    不假绿灯). Introspection-driven (``dataclasses.fields``) so new fields are covered
+    automatically — the single canonical entry the exhaustive coercion-fail-open audit standardises on.
+    """
+
+    for f in fields(instance):
+        ann = f.type
+        if ann in ("str", "str | None", "Optional[str]"):
+            v = getattr(instance, f.name)
+            if v is not None and not isinstance(v, str):
+                raise TypeError(
+                    f"{type(instance).__name__}.{f.name} must be a string, not {type(v).__name__} "
+                    f"(a non-str scalar would be str()-coerced into a fabricated §17/attestation ref)"
+                )
+        elif ann in ("tuple[str, ...]", "tuple[str, ...] | None"):
+            v = getattr(instance, f.name)
+            if v is None:
+                continue
+            if not isinstance(v, (list, tuple)):
+                raise TypeError(
+                    f"{type(instance).__name__}.{f.name} must be a list/tuple of strings, not {type(v).__name__}"
+                )
+            for elem in v:
+                if not isinstance(elem, str):
+                    raise TypeError(
+                        f"{type(instance).__name__}.{f.name} elements must be strings, not {type(elem).__name__}"
+                    )
 
 
 def _jsonable(value: Any) -> Any:
@@ -261,6 +296,19 @@ class RDPManifest:
     environment_lock: str = ""
 
     def __post_init__(self) -> None:
+        # ── 单一 canonical scalar-string shape 门（穷尽·introspection 驱动）─────────────
+        # 每个 str / str|None 标量字段（身份 / 别名源 / legacy 词汇）在**任何**投影/merge 从它
+        # 派生 canonical ref 之前，在这里统一校验必是 str 或 None。一个 dict/list/int 落进 str
+        # 字段，否则会在下游被 `str()` 洗成伪造非空 ref/值 → 洗白 §17 / live 门（RULES §2/§3）。
+        # 用 dataclasses.fields 反射匹配注解，新增 str 字段自动纳入（单一入口·不漏字段）。
+        for _f in fields(self):
+            if _f.type in ("str", "str | None", "Optional[str]"):
+                _v = getattr(self, _f.name)
+                if _v is not None and not isinstance(_v, str):
+                    raise TypeError(
+                        f"RDPManifest.{_f.name} must be a string, not {type(_v).__name__} "
+                        f"(a non-str scalar would be str()-coerced into a fabricated §17 ref/value)"
+                    )
         if self.asset_kind and self.asset_kind not in _LEGACY_ASSET_KINDS:
             raise ValueError(
                 f"asset_kind invalid: {self.asset_kind!r} not in {sorted(_LEGACY_ASSET_KINDS)}"
@@ -1199,6 +1247,7 @@ class RDPExternalPublicationProofRecord:
     proof_version: str = "rdp.external_publication_proof.v1"
 
     def __post_init__(self) -> None:
+        _validate_rdp_record_shape(self)  # 穷尽 coercion 门·统一 shape 校验（安全相邻 receipt/attestation）
         object.__setattr__(self, "evidence_refs", tuple(str(ref) for ref in _tuple(self.evidence_refs)))
         payload = {
             "proof_version": self.proof_version,
@@ -1252,6 +1301,7 @@ class RDPCIReleaseAttestationRecord:
     attestation_version: str = "rdp.ci_release_attestation.v1"
 
     def __post_init__(self) -> None:
+        _validate_rdp_record_shape(self)  # 穷尽 coercion 门·统一 shape 校验（安全相邻 receipt/attestation）
         object.__setattr__(self, "required_check_refs", tuple(str(ref) for ref in _tuple(self.required_check_refs)))
         object.__setattr__(self, "evidence_refs", tuple(str(ref) for ref in _tuple(self.evidence_refs)))
         payload = {
@@ -1432,6 +1482,7 @@ class RDPSourceFileBundleRecord:
     bundle_version: str = "rdp.source_bundle.v1"
 
     def __post_init__(self) -> None:
+        _validate_rdp_record_shape(self)  # 穷尽 coercion 门·统一 shape 校验（安全相邻 receipt/attestation）
         object.__setattr__(self, "source_files", tuple(self.source_files))
 
     def to_open_dict(self) -> dict[str, Any]:
@@ -1774,6 +1825,7 @@ class RDPDeploymentAttestationRecord:
     attestation_version: str = "rdp.deployment_attestation.v1"
 
     def __post_init__(self) -> None:
+        _validate_rdp_record_shape(self)  # 穷尽 coercion 门·统一 shape 校验（安全相邻 receipt/attestation）
         object.__setattr__(self, "monitor_refs", tuple(self.monitor_refs))
         object.__setattr__(self, "evidence_refs", tuple(str(ref) for ref in _tuple(self.evidence_refs)))
         payload = {
@@ -1831,6 +1883,7 @@ class RDPDeploymentHealthCheckRecord:
     proof_version: str = "rdp.deployment_health.v1"
 
     def __post_init__(self) -> None:
+        _validate_rdp_record_shape(self)  # 穷尽 coercion 门·统一 shape 校验（安全相邻 receipt/attestation）
         object.__setattr__(self, "health_check_refs", tuple(str(ref) for ref in _tuple(self.health_check_refs)))
         object.__setattr__(self, "monitor_refs", tuple(str(ref) for ref in _tuple(self.monitor_refs)))
         object.__setattr__(self, "evidence_refs", tuple(str(ref) for ref in _tuple(self.evidence_refs)))
@@ -1882,6 +1935,7 @@ class RDPSourceRunIntegrityRecord:
     attestation_version: str = "rdp.source_run_integrity.v1"
 
     def __post_init__(self) -> None:
+        _validate_rdp_record_shape(self)  # 穷尽 coercion 门·统一 shape 校验（安全相邻 receipt/attestation）
         payload = {
             "attestation_version": self.attestation_version,
             "package_id": self.package_id,

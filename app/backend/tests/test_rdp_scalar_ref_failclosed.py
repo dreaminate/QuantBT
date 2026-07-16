@@ -449,12 +449,13 @@ def test_live_rdp_dict_safety_field_no_longer_whitewashes(field):
     """★ 安全相邻：LIVE RDP 的 approval/rollback/retire 传 dict → required_text 必判 missing_*
     （原 `str(dict)` 非空洗白掉 live-部署必填门）。"""
 
-    m = RDPManifest(
-        asset_ref="f::x", asset_kind="factor", artifact_hash="h", reproducibility_command="d",
-        target_runtime=RuntimeStatus.LIVE, **{field: {"fake": "ref"}},
-    )
-    codes = {v.code for v in validate_rdp_manifest(m)}
-    assert f"missing_{field}" in codes, f"dict {field} 应判 missing（非 str-coerce 洗白）"
+    # canonical str-field 门在**构造期**即拒 dict 安全字段（比下游 required_text 更早更强）——
+    # dict deployment/rollback/retire 根本无法进入一个 manifest 去洗白 live 门。
+    with pytest.raises(TypeError, match="must be a string"):
+        RDPManifest(
+            asset_ref="f::x", asset_kind="factor", artifact_hash="h", reproducibility_command="d",
+            target_runtime=RuntimeStatus.LIVE, **{field: {"fake": "ref"}},
+        )
 
 
 def test_live_rdp_real_safety_fields_pass():
@@ -473,12 +474,11 @@ def test_live_rdp_real_safety_fields_pass():
 def test_dict_residual_attestation_no_longer_whitewashes_zero_residual():
     """零残余（空 tuple）+ dict residual_attestation → 必判 missing_residual_attestation（非 str 洗白）。"""
 
-    m = RDPManifest(
-        asset_ref="f::x", asset_kind="factor", artifact_hash="h", reproducibility_command="d",
-        unverified_residuals=(), residual_attestation={"signed": "by-nobody"},
-    )
-    codes = {v.code for v in validate_rdp_manifest(m)}
-    assert "missing_residual_attestation" in codes
+    with pytest.raises(TypeError, match="must be a string"):
+        RDPManifest(
+            asset_ref="f::x", asset_kind="factor", artifact_hash="h", reproducibility_command="d",
+            unverified_residuals=(), residual_attestation={"signed": "by-nobody"},
+        )
 
 
 @pytest.mark.parametrize("bad", [{"a": 1}, ["a"], 123, True], ids=["dict", "list", "int", "bool"])
@@ -580,9 +580,10 @@ def test_gate4_matching_asset_kind_passes():
 )
 @pytest.mark.parametrize("bad", [{"fake": "x"}, ["x"], 123], ids=["dict", "list", "int"])
 def test_merge_alias_scalar_coercion_rejected(alias_field, bad):
-    """★ blocker①：merge 别名源非 str → 构造即拒（不 str-coerce 成伪造 canonical ref 洗白 live 门）。"""
+    """★ blocker①：merge 别名源非 str → 构造即拒（canonical str-field 门先逮·或 merge 守卫兜底·
+    都不 str-coerce 成伪造 canonical ref 洗白 live 门）。"""
 
-    with pytest.raises(TypeError, match="alias source must be a string"):
+    with pytest.raises(TypeError, match="must be a string"):
         RDPManifest(**_base_kwargs(**{alias_field: bad}))
 
 
@@ -615,3 +616,55 @@ def test_promotion_asset_ref_str_laundering_closed(raw):
     from app.release_gate.section17_rdp_gate import section17_rdp_check
     res = section17_rdp_check(_section17_manifest_with_promotion_asset_ref(raw))
     assert res.ok is False and "section17_rdp_promotion_malformed" in res.missing
+
+
+# ════════════════════════════════════════════════════════════════════════════
+# 穷尽审计（用户令「系统性穷尽」·2026-07-15）：单一 canonical shape 门覆盖**全部** RDP-family
+# record 的每个 str/str|None 标量字段（含全部别名源）+ tuple[str,...] 字段——introspection 驱动·
+# 一个门覆盖 RDPManifest + 11 个 receipt/attestation record（rdp.py 6 + rdp_reproduction.py 5）。
+# ════════════════════════════════════════════════════════════════════════════
+# RDPManifest 全部曾未守的 scalar str 别名源（R6 后经 canonical str-field 门统一收）。
+_SCALAR_STR_ALIAS_FIELDS = (
+    "research_proposition", "research_graph_ref", "environment_lock", "environment",
+    "honest_n_strategy_goal_ref", "cost_execution_assumptions", "attribution",
+    "model_routing_policy_ref", "llm_provider", "replay_state", "promotion_record",
+    "trust_release_ref", "verifier_verdict_ref", "approval_ref", "rollback_plan",
+    "retire_plan", "deployment_plan", "monitor_plan", "package_id", "created_by",
+)
+
+
+@pytest.mark.parametrize("alias_field", _SCALAR_STR_ALIAS_FIELDS)
+@pytest.mark.parametrize("bad", [{"m": 1}, ["x"], 123], ids=["dict", "list", "int"])
+def test_canonical_str_field_gate_covers_every_alias(alias_field, bad):
+    """★ 穷尽：任一 scalar str 别名源非 str → 构造期 canonical 门即拒（不 str-coerce 洗白下游门）。"""
+
+    with pytest.raises(TypeError, match="must be a string"):
+        RDPManifest(**_base_kwargs(**{alias_field: bad}))
+
+
+def test_canonical_str_field_gate_preserves_honest_and_none():
+    """诚实 str 别名 + None optional 全保真（门不误伤）。"""
+
+    m = RDPManifest(**_base_kwargs(
+        research_graph_ref="g::1", cost_execution_assumptions="c::1", attribution="a::1",
+        deployment_plan="d::1", monitor_plan="m::1",
+    ))
+    assert m.research_graph_ref == "g::1" and m.attribution_refs == ("a::1",)
+    assert m.approval_ref is None and m.rollback_plan_ref is None
+
+
+def test_shared_shape_gate_on_receipt_record_rejects_nonstr():
+    """★ 穷尽：receipt/attestation record（gate5 重现收据链）非 str 字段 → 共享 shape 门即拒。"""
+
+    from app.research_os.rdp_reproduction import RDPReproductionSourceEvidence
+    import inspect
+    # 用最小合法 kwargs 构造 + 单字段畸形；取第一个 str-annotated 字段做畸形注入。
+    sig = inspect.signature(RDPReproductionSourceEvidence)
+    str_fields = [n for n, p in sig.parameters.items()
+                  if getattr(p.annotation, "__name__", str(p.annotation)) in ("str",) or p.annotation is str]
+    assert str_fields, "expected at least one str field on the receipt record"
+    # 构造全 "" 合法 kwargs（str 字段）+ 把第一个 str 字段设 dict
+    base = {n: "" for n in str_fields}
+    base[str_fields[0]] = {"malformed": "dict"}
+    with pytest.raises(TypeError, match="must be a string"):
+        RDPReproductionSourceEvidence(**base)
