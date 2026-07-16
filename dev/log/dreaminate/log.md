@@ -6,6 +6,8 @@
 ## <日期> · <标题>
 - 建/改了什么 + 命门  - 验收：<对抗测试 + 变异 + 全量数字>  - 下一步：<…> -->
 
+## 2026-07-16-1207 M6b CI 收尾+金融数学 kernel P0 seam-analysis land: (1)M6b CI 首轮逮真洗白洞(test_cancel 依赖本机 claude CLI·经 orchestrator preflight)→直驱 run() 修 3346f4d9→新 run 29525109800 全绿·M6b CI 字段=success。(2)seam-analysis 三方并集(主+deep-opus‖codex/GPT·approver≠creator)→finding math-kernel-seam-matrix-20260716: 纠 GPT+草案夸大 spine typed 层(真类仅7·EstimatorSpec/RiskMeasure 皆 artifact_type str 非类)·16 主干 6缺+10部分·GPT 5 缺陷全铁证(risk_parity=逆波动率等)·P0-A=VaR/ES+组合correctness+measure typed(零新运行时依赖)·dep-hygiene(statsmodels 未进 requirements)。待用户拍主干/口径/deps(放权·登记仍开⑪)。NEXT=P0-A 首切(下轮 duet 建)。
+
 ## 2026-07-16-1129 M6b agent epic 收官 land main(a8549fa8): SSE liveness 守卫(A1 idle+total timeout·A2 确定性 cancel·A2.5 EOF-but-alive bounded wait·A2.6 EOF-no-terminal honest error)+A3 --add-dir 路径穿越守+B4 opt-in 真 claude 冒烟(CI KNOWN_RUN_GAP skip)。跨厂商 codex floor 5 轮逮 3 真 correctness/honesty 洞+多处过强描述→逐条修 RED-then-revert→R5 FLOOR-HOLD。后端 6931/0+前端 430+perf 72。recovery: 本地曾落后 origin 86 commit→clean FF 到 7aa19eed(dd5c1800 checkpoint)。audit: 原 61 文件字节全等完整性未破(1c1788b0)+新增 gitignored goal_proof_ledger.sqlite(codex 探针 import app.main 非隔离触发·登记待用户)。
 
 ## 2026-07-16-0903 agent M6a 红线总断言+canvas_create_node 接线 land——duet 逮 argv 免确认白名单≠可达集,用户拍板保留内建工具(放权),红线总断言合成 L-A/L-C/L-D 跨 tier,跨厂商 codex 2 轮 FLOOR-HOLD,后端 6887/0 failed
