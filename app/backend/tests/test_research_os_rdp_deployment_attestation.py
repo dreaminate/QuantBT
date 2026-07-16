@@ -495,3 +495,120 @@ def test_rdp_deployment_attestation_api_404s_for_unknown_manifest(tmp_path, monk
         assert response.status_code == 404
     finally:
         main.app.dependency_overrides.pop(require_user_dependency, None)
+
+
+# ════════════════════════════════════════════════════════════════════════════
+# C-S17-RDP-ADAPTER-COERCION · §17 RDP **HTTP 适配器层** scalar coercion 收口 · 对抗测试
+#
+# 起源（跨厂商 duet · 2026-07-16）：record 构造层穷尽收口后（canonical shape 门），
+# HTTP 适配器层仍在**构造前**用 `str(payload.get(x) or "")` 把 dict/list str-coerce 成
+# 伪造非空 ref → sail through record shape 门（`str(dict)` 是合法 str）。已把 9 个喂
+# §17/live-部署/attestation/release 门的适配器改走 `_rdp_str`（拒非 str → ValueError → 422）。
+#
+# 本组守 deployment-attestation / deployment-health 两个内联适配器面。
+# rollback_readiness_ref / rollback_drill_ref 是**纯非空检查**下游（rdp.py:2786-2791·无 manifest
+# 交叉校验）——`str(dict)` 在那洗白 live-部署 rollback-safety 门。★ 变异（种坏门必抓）：把
+# 这些 `_rdp_str` 弱回 `str(... or "")` → 纯非空字段返回 **200**（洗白）、交叉校验字段返回**异相 422**
+# → 下列用例（断言 422 + guard 短语归因）转 RED；还原 → GREEN。
+# ════════════════════════════════════════════════════════════════════════════
+_ADAPTER_GUARD_PHRASE = "must be a string"
+
+
+@pytest.mark.parametrize(
+    "field",
+    [
+        "deployment_ref",
+        "health_status",
+        "rollback_plan_ref",
+        "rollback_readiness_ref",
+        "rollback_drill_ref",
+        "retire_plan_ref",
+        "deployment_attestation_hash",
+    ],
+)
+def test_rdp_deployment_health_dict_scalar_field_rejected_422(tmp_path, monkeypatch, field):
+    """★ 每个 §17 deployment-health 标量 ref 传 dict → 422 且归因到 _rdp_str guard
+    （非 str-coerce 成伪造非空 ref 溜进 live-部署 health 门）。"""
+
+    client, store, materializer, bundler, attestation_store, health_store, source_root = _client_with_rdp_health(
+        tmp_path,
+        monkeypatch,
+    )
+    manifest = store.record_manifest(_manifest(), owner_user_id="u1", recorded_by="u1")
+    _materialize_and_bundle(materializer, bundler, manifest, source_root)
+    attestation = attestation_store.record_attestation(
+        manifest,
+        package_root=materializer.package_root,
+        deployment_ref="deploy:live-1",
+        deployment_event_ref="deployment_event:rdp-live-1",
+        deployment_artifact_digest="sha256:deployment-artifact",
+        evidence_refs=("deploy:evidence:summary",),
+        attested_by="u1",
+    )
+    try:
+        payload = _deployment_health_payload(attestation.attestation_hash, **{field: {"fake": "ref"}})
+        response = client.post(
+            f"/api/research-os/rdp/manifests/{manifest.package_id}/deployment_health_checks",
+            json=payload,
+        )
+        assert response.status_code == 422, (
+            f"{field}=dict 应 422（非洗白成 200），got {response.status_code}: {response.text[:200]}"
+        )
+        # attribution（防假绿）：422 必须来自 _rdp_str guard，而非下游缺字段/异相校验——
+        # neuter guard 后纯非空字段会返回 200（洗白），交叉校验字段返回异相 422，均无本短语。
+        assert _ADAPTER_GUARD_PHRASE in response.text, (
+            f"{field}=dict 的 422 未归因到 _rdp_str guard（可能是异相 422·假绿）：{response.text[:200]}"
+        )
+        assert len(health_store.health_checks(manifest.package_id)) == 0
+    finally:
+        main.app.dependency_overrides.pop(require_user_dependency, None)
+
+
+def test_rdp_deployment_health_honest_str_still_ok(tmp_path, monkeypatch):
+    """诚实 str 全字段 → 仍 200（真路径保真·不被 _rdp_str 误伤）。"""
+
+    client, store, materializer, bundler, attestation_store, health_store, source_root = _client_with_rdp_health(
+        tmp_path,
+        monkeypatch,
+    )
+    manifest = store.record_manifest(_manifest(), owner_user_id="u1", recorded_by="u1")
+    _materialize_and_bundle(materializer, bundler, manifest, source_root)
+    attestation = attestation_store.record_attestation(
+        manifest,
+        package_root=materializer.package_root,
+        deployment_ref="deploy:live-1",
+        deployment_event_ref="deployment_event:rdp-live-1",
+        deployment_artifact_digest="sha256:deployment-artifact",
+        evidence_refs=("deploy:evidence:summary",),
+        attested_by="u1",
+    )
+    try:
+        response = client.post(
+            f"/api/research-os/rdp/manifests/{manifest.package_id}/deployment_health_checks",
+            json=_deployment_health_payload(attestation.attestation_hash),
+        )
+        assert response.status_code == 200, response.text
+        assert len(health_store.health_checks(manifest.package_id)) == 1
+    finally:
+        main.app.dependency_overrides.pop(require_user_dependency, None)
+
+
+def test_rdp_deployment_attestation_dict_deployment_ref_rejected_422(tmp_path, monkeypatch):
+    """★ deployment-attestation 适配器 deployment_ref 传 dict → 422 归因到 _rdp_str guard。"""
+
+    client, store, materializer, bundler, attestation_store, source_root = _client_with_rdp_attestation(
+        tmp_path,
+        monkeypatch,
+    )
+    manifest = store.record_manifest(_manifest(), owner_user_id="u1", recorded_by="u1")
+    _materialize_and_bundle(materializer, bundler, manifest, source_root)
+    try:
+        response = client.post(
+            f"/api/research-os/rdp/manifests/{manifest.package_id}/deployment_attestations",
+            json={"deployment_ref": {"fake": "ref"}},
+        )
+        assert response.status_code == 422, response.text
+        assert _ADAPTER_GUARD_PHRASE in response.text, response.text[:200]
+        assert attestation_store.attestations(manifest.package_id) == []
+    finally:
+        main.app.dependency_overrides.pop(require_user_dependency, None)

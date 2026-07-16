@@ -45,7 +45,13 @@ from fastapi.testclient import TestClient  # noqa: E402
 
 from app import main  # noqa: E402
 from app.auth import require_user_dependency  # noqa: E402
-from app.main import _rdp_opt_str, _rdp_str, _rdp_tuple  # noqa: E402
+from app.main import (  # noqa: E402
+    _rdp_ci_release_attestation_fields,
+    _rdp_external_publication_fields,
+    _rdp_opt_str,
+    _rdp_str,
+    _rdp_tuple,
+)
 
 
 # 全部 39 个 string-ref tuple 字段（= RDPManifest.__post_init__ 的 tuple_fields 减去 object 字段
@@ -668,3 +674,71 @@ def test_shared_shape_gate_on_receipt_record_rejects_nonstr():
     base[str_fields[0]] = {"malformed": "dict"}
     with pytest.raises(TypeError, match="must be a string"):
         RDPReproductionSourceEvidence(**base)
+
+
+# ════════════════════════════════════════════════════════════════════════════
+# C-S17-RDP-ADAPTER-COERCION（2026-07-16）· §17 RDP HTTP **适配器层** choke-point field builder
+#   `_rdp_ci_release_attestation_fields` / `_rdp_external_publication_fields` 现走 `_rdp_str`——
+#   一处修，收 ci_release(#6/#7) + external_publication(#4/#5) 全部适配器。dict 标量 ref → ValueError。
+# ★ 变异（种坏门必抓）：把 helper 内 `_rdp_str(source.get(x))` 弱回 `str(source.get(x) or "")`
+#   → 下列 dict 用例不再 raise（str(dict) 伪造非空 ref）→ 转 RED；还原 → GREEN。
+# ════════════════════════════════════════════════════════════════════════════
+_CI_RELEASE_SCALAR_FIELDS = (
+    "ci_system_ref", "ci_workflow_ref", "ci_run_ref", "source_commit_ref", "ci_status",
+    "artifact_digest", "test_report_ref", "test_report_hash", "build_log_digest",
+)
+
+
+@pytest.mark.parametrize("field", _CI_RELEASE_SCALAR_FIELDS)
+@pytest.mark.parametrize("bad", [{"a": 1}, ["x"]], ids=["dict", "list"])
+def test_ci_release_attestation_fields_reject_nonstr_scalar(field, bad):
+    """★ CI-release attestation field builder 的每个标量 ref 传 dict/list → ValueError
+    （非 str-laundering 成伪造 ref 洗白 CI-release attestation 门）。"""
+
+    with pytest.raises(ValueError, match="must be a string"):
+        _rdp_ci_release_attestation_fields({field: bad})
+
+
+def test_ci_release_attestation_fields_honest_str_ok():
+    """诚实 str + 缺省 → 真路径保真（ci_status 缺省 'passed'·其余缺省 ''）。"""
+
+    out = _rdp_ci_release_attestation_fields({"ci_system_ref": "gha", "source_commit_ref": "abc123"})
+    assert out["ci_system_ref"] == "gha"
+    assert out["source_commit_ref"] == "abc123"
+    assert out["ci_status"] == "passed"
+    assert out["artifact_digest"] == ""
+
+
+@pytest.mark.parametrize(
+    "field", ["external_channel", "immutable_pointer_ref", "destination_allowlist_ref"]
+)
+@pytest.mark.parametrize("bad", [{"a": 1}, ["x"]], ids=["dict", "list"])
+def test_external_publication_fields_reject_nonstr_payload_ref(field, bad):
+    """★ external-publication field builder 的 HTTP payload 回退 ref 传 dict/list → ValueError
+    （source 已 shape-validated·但 payload 回退半原先未守·str(dict) 洗白 destination/pointer 安全 ref）。"""
+
+    with pytest.raises(ValueError, match="must be a string"):
+        _rdp_external_publication_fields({}, payload={field: bad})
+
+
+@pytest.mark.parametrize(
+    "field", ["external_channel", "external_uri_digest", "immutable_pointer_ref", "destination_allowlist_ref"]
+)
+@pytest.mark.parametrize("bad", [{"a": 1}, ["x"]], ids=["dict", "list"])
+def test_external_publication_fields_reject_nonstr_source_ref(field, bad):
+    """★ external-publication field builder 的 runner-result(source) 半标量 ref 传 dict/list → ValueError。"""
+
+    with pytest.raises(ValueError, match="must be a string"):
+        _rdp_external_publication_fields({field: bad}, payload={})
+
+
+def test_external_publication_fields_honest_str_ok():
+    """诚实 str + source-first 回退 → 真路径保真（source 优先·缺省回退 payload·再缺省 object_store）。"""
+
+    out = _rdp_external_publication_fields(
+        {"external_channel": "s3"}, payload={"immutable_pointer_ref": "ptr::1"}
+    )
+    assert out["external_channel"] == "s3"          # source 优先
+    assert out["immutable_pointer_ref"] == "ptr::1"  # source 缺 → payload 回退
+    out2 = _rdp_external_publication_fields({}, payload={})
+    assert out2["external_channel"] == "object_store"  # 双缺 → 缺省

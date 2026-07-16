@@ -33407,15 +33407,19 @@ def _rdp_validate_trust_release_refs(
 
 def _rdp_ci_release_attestation_fields(source: dict[str, Any]) -> dict[str, Any]:
     return {
-        "ci_system_ref": str(source.get("ci_system_ref") or ""),
-        "ci_workflow_ref": str(source.get("ci_workflow_ref") or ""),
-        "ci_run_ref": str(source.get("ci_run_ref") or ""),
-        "source_commit_ref": str(source.get("source_commit_ref") or ""),
-        "ci_status": str(source.get("ci_status") or "passed"),
-        "artifact_digest": str(source.get("artifact_digest") or ""),
-        "test_report_ref": str(source.get("test_report_ref") or ""),
-        "test_report_hash": str(source.get("test_report_hash") or ""),
-        "build_log_digest": str(source.get("build_log_digest") or ""),
+        # §17 RDP CI-release scalar refs: reject non-str (dict/list) instead of
+        # str()-coercing a mapping into a fabricated non-empty ref that whitewashes
+        # the CI-release attestation / release gate. _rdp_str raises ValueError →
+        # HTTPException 422 at the endpoint's except (ValueError,) handler.
+        "ci_system_ref": _rdp_str(source.get("ci_system_ref")),
+        "ci_workflow_ref": _rdp_str(source.get("ci_workflow_ref")),
+        "ci_run_ref": _rdp_str(source.get("ci_run_ref")),
+        "source_commit_ref": _rdp_str(source.get("source_commit_ref")),
+        "ci_status": _rdp_str(source.get("ci_status"), "passed"),
+        "artifact_digest": _rdp_str(source.get("artifact_digest")),
+        "test_report_ref": _rdp_str(source.get("test_report_ref")),
+        "test_report_hash": _rdp_str(source.get("test_report_hash")),
+        "build_log_digest": _rdp_str(source.get("build_log_digest")),
         "required_check_refs": source.get("required_check_refs") or (),
         "failed_check_refs": source.get("failed_check_refs") or (),
         "skipped_check_refs": source.get("skipped_check_refs") or (),
@@ -33471,13 +33475,19 @@ def _validate_rdp_external_uploader_field_shapes(source: dict[str, Any], *, labe
 
 
 def _rdp_external_publication_fields(source: dict[str, Any], *, payload: dict[str, Any]) -> dict[str, Any]:
+    # §17 RDP external-publication proof fields: reject a non-str runner-result OR
+    # HTTP-payload ref rather than str()-laundering a mapping into a fabricated
+    # non-empty destination/pointer ref (source-first fall-back preserved). _rdp_str
+    # raises ValueError → HTTPException 422 at the endpoint's except (ValueError,).
     return {
-        "external_channel": str(source.get("external_channel") or payload.get("external_channel") or "object_store"),
-        "external_uri_digest": str(source.get("external_uri_digest") or ""),
-        "immutable_pointer_ref": str(source.get("immutable_pointer_ref") or payload.get("immutable_pointer_ref") or ""),
-        "destination_allowlist_ref": str(
-            source.get("destination_allowlist_ref") or payload.get("destination_allowlist_ref") or ""
-        ),
+        "external_channel": _rdp_str(source.get("external_channel"))
+        or _rdp_str(payload.get("external_channel"))
+        or "object_store",
+        "external_uri_digest": _rdp_str(source.get("external_uri_digest")),
+        "immutable_pointer_ref": _rdp_str(source.get("immutable_pointer_ref"))
+        or _rdp_str(payload.get("immutable_pointer_ref")),
+        "destination_allowlist_ref": _rdp_str(source.get("destination_allowlist_ref"))
+        or _rdp_str(payload.get("destination_allowlist_ref")),
         "evidence_refs": source.get("evidence_refs") or payload.get("evidence_refs") or (),
     }
 
@@ -33672,9 +33682,11 @@ def _rdp_ci_release_runner_request(
         "trust_release_approval_ref": trust_release_approval_ref,
         "source_file_refs": list(manifest.source_file_refs),
         "run_refs": list(manifest.run_refs),
-        "ci_system_ref": str(payload.get("ci_system_ref") or ""),
-        "ci_workflow_ref": str(payload.get("ci_workflow_ref") or ""),
-        "source_commit_ref": str(payload.get("source_commit_ref") or ""),
+        # §17 RDP CI-runner scalar refs: reject non-str rather than str()-laundering a
+        # mapping into a fabricated ref (whitewashes the CI-release runner request).
+        "ci_system_ref": _rdp_str(payload.get("ci_system_ref")),
+        "ci_workflow_ref": _rdp_str(payload.get("ci_workflow_ref")),
+        "source_commit_ref": _rdp_str(payload.get("source_commit_ref")),
         "required_check_refs": payload.get("required_check_refs") or (),
         "evidence_refs": payload.get("evidence_refs") or (),
     }
@@ -33714,9 +33726,12 @@ def _rdp_external_publication_uploader_request(
         "trust_release_approval_ref": trust_release_approval_ref,
         "source_file_refs": list(manifest.source_file_refs),
         "run_refs": list(manifest.run_refs),
-        "external_channel": str(payload.get("external_channel") or "object_store"),
-        "immutable_pointer_ref": str(payload.get("immutable_pointer_ref") or ""),
-        "destination_allowlist_ref": str(payload.get("destination_allowlist_ref") or ""),
+        # §17 RDP external-uploader scalar refs: reject non-str rather than
+        # str()-laundering a mapping into a fabricated ref (whitewashes the
+        # external-publication destination/pointer safety refs).
+        "external_channel": _rdp_str(payload.get("external_channel"), "object_store"),
+        "immutable_pointer_ref": _rdp_str(payload.get("immutable_pointer_ref")),
+        "destination_allowlist_ref": _rdp_str(payload.get("destination_allowlist_ref")),
         "evidence_refs": payload.get("evidence_refs") or (),
     }
     if contains_plaintext_secret(request):
@@ -34166,7 +34181,7 @@ def research_os_rdp_record_deployment_attestation(
             manifest,
             owner_user_id=_formal_owner_user_id(user),
             package_root=RDP_PACKAGE_MATERIALIZER.package_root,
-            deployment_ref=str(payload.get("deployment_ref") or ""),
+            deployment_ref=_rdp_str(payload.get("deployment_ref")),
             attested_by=user.username,
             source_bundle_required=bool(payload.get("source_bundle_required", True)),
             has_user_waiver=bool(payload.get("has_user_waiver", False)),
@@ -34194,7 +34209,7 @@ def research_os_rdp_run_deployment_attestation(
     try:
         has_user_waiver = bool(payload.get("has_user_waiver", False))
         source_bundle_required = bool(payload.get("source_bundle_required", True))
-        deployment_ref = str(payload.get("deployment_ref") or "").strip()
+        deployment_ref = _rdp_str(payload.get("deployment_ref")).strip()
         _validate_rdp_manifest_for_runtime(
             manifest,
             has_user_waiver=has_user_waiver,
@@ -34258,15 +34273,20 @@ def research_os_rdp_record_deployment_health_check(
                 package_id,
                 owner_user_id=_formal_owner_user_id(user),
             ),
-            deployment_attestation_hash=str(payload.get("deployment_attestation_hash") or ""),
-            deployment_ref=str(payload.get("deployment_ref") or ""),
-            health_status=str(payload.get("health_status") or ""),
+            # §17 RDP deployment-health scalar refs: reject non-str rather than
+            # str()-laundering a mapping into a fabricated ref. rollback_readiness_ref
+            # / rollback_drill_ref are pure non-empty checks downstream (rdp.py:2786-2791,
+            # no manifest cross-validation) — a str(dict) there whitewashes a
+            # live-deployment rollback-safety gate. _rdp_str raises ValueError → 422.
+            deployment_attestation_hash=_rdp_str(payload.get("deployment_attestation_hash")),
+            deployment_ref=_rdp_str(payload.get("deployment_ref")),
+            health_status=_rdp_str(payload.get("health_status")),
             health_check_refs=payload.get("health_check_refs") or (),
             monitor_refs=payload.get("monitor_refs") or (),
-            rollback_plan_ref=str(payload.get("rollback_plan_ref") or ""),
-            rollback_readiness_ref=str(payload.get("rollback_readiness_ref") or ""),
-            rollback_drill_ref=str(payload.get("rollback_drill_ref") or ""),
-            retire_plan_ref=str(payload.get("retire_plan_ref") or ""),
+            rollback_plan_ref=_rdp_str(payload.get("rollback_plan_ref")),
+            rollback_readiness_ref=_rdp_str(payload.get("rollback_readiness_ref")),
+            rollback_drill_ref=_rdp_str(payload.get("rollback_drill_ref")),
+            retire_plan_ref=_rdp_str(payload.get("retire_plan_ref")),
             evidence_refs=payload.get("evidence_refs") or (),
             attested_by=user.username,
             has_user_waiver=has_user_waiver,
@@ -34333,7 +34353,7 @@ def research_os_rdp_record_source_run_integrity(
             owner=_formal_owner_user_id(user),
         )
         ide_run_id = _rdp_bound_ide_run_id(manifest)
-        requested_run_id = str(payload.get("run_id") or "").strip()
+        requested_run_id = _rdp_str(payload.get("run_id")).strip()
         if ide_run_id is not None and requested_run_id not in {"", ide_run_id}:
             raise ValueError("IDE RDP integrity run_id conflicts with the frozen source run")
         record = RDP_SOURCE_RUN_INTEGRITY_STORE.record_integrity(
@@ -34378,10 +34398,16 @@ def research_os_rdp_publish_package(
         raise HTTPException(status_code=404, detail="RDP package not found") from exc
 
     has_user_waiver = bool(payload.get("has_user_waiver", False))
-    trust_release_ref = str(payload.get("trust_release_ref") or "").strip()
+    # §17: reject a non-str release ref (dict/list) with a clean 422 rather than
+    # str()-laundering it into a fabricated non-empty ref. These two extractions sit
+    # OUTSIDE the main try below, so guard them locally to keep the 422 (not a 500).
+    try:
+        trust_release_ref = _rdp_str(payload.get("trust_release_ref")).strip()
+        trust_release_approval_ref = _rdp_str(payload.get("trust_release_approval_ref")).strip()
+    except ValueError as exc:
+        raise HTTPException(status_code=422, detail=str(exc)) from exc
     if not trust_release_ref:
         raise HTTPException(status_code=422, detail="trust_release_ref is required before RDP publish")
-    trust_release_approval_ref = str(payload.get("trust_release_approval_ref") or "").strip()
     if not trust_release_approval_ref:
         raise HTTPException(status_code=422, detail="trust_release_approval_ref is required before RDP publish")
     try:
@@ -34410,7 +34436,7 @@ def research_os_rdp_publish_package(
             manifest,
             archive,
             owner_user_id=owner,
-            channel=str(payload.get("channel") or "local_registry"),
+            channel=_rdp_str(payload.get("channel"), "local_registry"),
             published_by=user.username,
             has_user_waiver=has_user_waiver,
             trust_release_ref=trust_release_ref,
@@ -34460,12 +34486,18 @@ def research_os_rdp_record_external_publication(
         )
         local_publication = _rdp_publication_by_hash(
             package_id,
-            str(payload.get("local_publish_hash") or ""),
+            _rdp_str(payload.get("local_publish_hash")),
             owner_user_id=owner,
         )
-        trust_release_ref = str(payload.get("trust_release_ref") or local_publication.trust_release_ref or "").strip()
-        trust_release_approval_ref = str(
-            payload.get("trust_release_approval_ref") or local_publication.trust_release_approval_ref or ""
+        # §17: reject a non-str payload ref (dict/list) rather than str()-laundering it,
+        # while preserving the fall-back to the local publication's recorded refs.
+        trust_release_ref = (
+            _rdp_str(payload.get("trust_release_ref")) or local_publication.trust_release_ref or ""
+        ).strip()
+        trust_release_approval_ref = (
+            _rdp_str(payload.get("trust_release_approval_ref"))
+            or local_publication.trust_release_approval_ref
+            or ""
         ).strip()
         _rdp_validate_trust_release_refs(
             manifest,
@@ -34477,13 +34509,13 @@ def research_os_rdp_record_external_publication(
             manifest,
             local_publication,
             owner_user_id=owner,
-            external_channel=str(payload.get("external_channel") or ""),
-            external_uri=str(payload.get("external_uri") or ""),
-            immutable_pointer_ref=str(payload.get("immutable_pointer_ref") or ""),
-            destination_allowlist_ref=str(payload.get("destination_allowlist_ref") or ""),
+            external_channel=_rdp_str(payload.get("external_channel")),
+            external_uri=_rdp_str(payload.get("external_uri")),
+            immutable_pointer_ref=_rdp_str(payload.get("immutable_pointer_ref")),
+            destination_allowlist_ref=_rdp_str(payload.get("destination_allowlist_ref")),
             evidence_refs=payload.get("evidence_refs") or (),
             attested_by=user.username,
-            archive_sha256=str(payload.get("archive_sha256") or ""),
+            archive_sha256=_rdp_str(payload.get("archive_sha256")),
             trust_release_ref=trust_release_ref,
             trust_release_approval_ref=trust_release_approval_ref,
             has_user_waiver=bool(payload.get("has_user_waiver", False)),
@@ -34517,13 +34549,19 @@ def research_os_rdp_run_external_publication(
         )
         local_publication = _rdp_publication_by_hash(
             package_id,
-            str(payload.get("local_publish_hash") or ""),
+            _rdp_str(payload.get("local_publish_hash")),
             owner_user_id=owner,
         )
-        archive_sha256 = str(payload.get("archive_sha256") or local_publication.archive_sha256 or "").strip()
-        trust_release_ref = str(payload.get("trust_release_ref") or local_publication.trust_release_ref or "").strip()
-        trust_release_approval_ref = str(
-            payload.get("trust_release_approval_ref") or local_publication.trust_release_approval_ref or ""
+        archive_sha256 = (
+            _rdp_str(payload.get("archive_sha256")) or local_publication.archive_sha256 or ""
+        ).strip()
+        trust_release_ref = (
+            _rdp_str(payload.get("trust_release_ref")) or local_publication.trust_release_ref or ""
+        ).strip()
+        trust_release_approval_ref = (
+            _rdp_str(payload.get("trust_release_approval_ref"))
+            or local_publication.trust_release_approval_ref
+            or ""
         ).strip()
         _rdp_validate_trust_release_refs(
             manifest,
@@ -34580,17 +34618,21 @@ def research_os_rdp_record_ci_release_attestation(
         )
         local_publication = _rdp_publication_by_hash(
             package_id,
-            str(payload.get("local_publish_hash") or ""),
+            _rdp_str(payload.get("local_publish_hash")),
             owner_user_id=owner,
         )
         external_proof = _rdp_external_proof_by_hash(
             package_id,
-            str(payload.get("external_proof_hash") or ""),
+            _rdp_str(payload.get("external_proof_hash")),
             owner_user_id=owner,
         )
-        trust_release_ref = str(payload.get("trust_release_ref") or local_publication.trust_release_ref or "").strip()
-        trust_release_approval_ref = str(
-            payload.get("trust_release_approval_ref") or local_publication.trust_release_approval_ref or ""
+        trust_release_ref = (
+            _rdp_str(payload.get("trust_release_ref")) or local_publication.trust_release_ref or ""
+        ).strip()
+        trust_release_approval_ref = (
+            _rdp_str(payload.get("trust_release_approval_ref"))
+            or local_publication.trust_release_approval_ref
+            or ""
         ).strip()
         _rdp_validate_trust_release_refs(
             manifest,
@@ -34606,7 +34648,7 @@ def research_os_rdp_record_ci_release_attestation(
             owner_user_id=owner,
             **attestation_fields,
             attested_by=user.username,
-            archive_sha256=str(payload.get("archive_sha256") or ""),
+            archive_sha256=_rdp_str(payload.get("archive_sha256")),
             trust_release_ref=trust_release_ref,
             trust_release_approval_ref=trust_release_approval_ref,
             has_user_waiver=bool(payload.get("has_user_waiver", False)),
@@ -34642,17 +34684,21 @@ def research_os_rdp_run_ci_release_attestation(
         )
         local_publication = _rdp_publication_by_hash(
             package_id,
-            str(payload.get("local_publish_hash") or ""),
+            _rdp_str(payload.get("local_publish_hash")),
             owner_user_id=owner,
         )
         external_proof = _rdp_external_proof_by_hash(
             package_id,
-            str(payload.get("external_proof_hash") or ""),
+            _rdp_str(payload.get("external_proof_hash")),
             owner_user_id=owner,
         )
-        trust_release_ref = str(payload.get("trust_release_ref") or local_publication.trust_release_ref or "").strip()
-        trust_release_approval_ref = str(
-            payload.get("trust_release_approval_ref") or local_publication.trust_release_approval_ref or ""
+        trust_release_ref = (
+            _rdp_str(payload.get("trust_release_ref")) or local_publication.trust_release_ref or ""
+        ).strip()
+        trust_release_approval_ref = (
+            _rdp_str(payload.get("trust_release_approval_ref"))
+            or local_publication.trust_release_approval_ref
+            or ""
         ).strip()
         _rdp_validate_trust_release_refs(
             manifest,
@@ -34676,7 +34722,7 @@ def research_os_rdp_run_ci_release_attestation(
             owner_user_id=owner,
             **attestation_fields,
             attested_by=user.username,
-            archive_sha256=str(payload.get("archive_sha256") or local_publication.archive_sha256 or ""),
+            archive_sha256=_rdp_str(payload.get("archive_sha256")) or local_publication.archive_sha256 or "",
             trust_release_ref=trust_release_ref,
             trust_release_approval_ref=trust_release_approval_ref,
             has_user_waiver=bool(payload.get("has_user_waiver", False)),
