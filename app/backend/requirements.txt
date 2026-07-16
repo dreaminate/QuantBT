@@ -30,3 +30,6 @@ reportlab==5.0.0
 pypdf==6.12.2  # 本地 PDF 文本抽取(CI run4 暴露缺失)
 pymupdf==1.27.2.3  # layout-aware PDF parser
 catboost==1.2.10  # model cards runnable 集
+# 嵌入式 agent 的 no-key MCP 面(app/agent_mcp)：官方 mcp SDK 跑 stdio 独立进程。
+# 传入 anyio / httpx-sse / sse-starlette;服务器只暴露 canvas_read（红线地基 L-A/L-B）。
+mcp==1.28.1
