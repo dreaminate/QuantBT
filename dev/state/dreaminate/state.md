@@ -5,6 +5,12 @@
 > 本版 2026-07-14 整篇重写(蒸馏此前 2026-06 全部追加块——原文在 git 历史 `git log dev/state/dreaminate/state.md`)。
 
 ## 进行中
+- **🧭 module-convergence 扫描结论(2026-07-15 · 用户令「收敛具体模块直到 GOAL 全收口」后 Plan 独立扫)**:剩 3 个 🟡 模块**全撞用户门/外部依赖**,无 decision-free 干净本地切片。逐一(据 file:line 核实):
+  - **§8 Governed Compiler**:治理主干已建全(governed_compiler.py 5 命门);唯一「未做」=neural-graph codegen(training/codegen.py:239 仅支持线性链子集·分支/机制嵌套留后续)=**方法学重**(branch/merge 语义=设计空间无单一正解),且属 build 台 feature-completeness 非 correctness 治理。→**方法学待拍板**。
+  - **§4 Settings/LLM Gateway**:registry/keystore/routing/gateway 已建;残余 OAuth/device-code/全 connector(GOAL §4:610)=**外部阻塞**(需真 IdP 端点+浏览器同意+真凭据·踩 OAuth/明文 secret 边界)。→**external-blocked**。
+  - **§13/§17 RDP**:机制**已建全且已接进两条真 promote 路**(approval/gate.py:179·paper/desk.py:1001);末公里卡两处:①in-code scope 决策 `D-SCOPE-CONSERVATIVE`(aggregator.py:31·是否 require_rdp=True 强制)②**不可伪造真链证据**(gate1/gate3 需诚实 reproducibility_command+unverified_residual·真 LLMCallRecord 部分待用户凭据·自动填=honesty 门拒的假绿灯)。→**scope-gated + evidence-gated**。
+  - **推荐 unblock(=最接近可做·最高杠杆)**:§17 RDP **advisory-first**——用户绿灯保守版(用现有 aggregate_rdp 组装本链 RDP·挂 promote manifest·require_rdp 保持 False/producer 仍 advisory·residual/repro 诚实手写)即成干净加性可逆切片;骨架+3 对抗测试见 Plan 扫描(promote_assembler.py:1005 honest-empty seam·section17_rdp_gate.py:34)。**仍需用户 scope 绿灯 + 真链证据(凭据)**。
+  - **→ ③ 模块轴**:三门全待用户拍(§8 方法学 / §4 external / §17 scope+evidence)。报 decision-ready brief 等用户挑;§17 advisory-first 若绿灯即执行(跨厂商 duet)。
 - **✅ 系统级凭据 repr 泄露收口已 land(de002c86 · 2026-07-15 · 数据泄露红线 defense-in-depth)**。
   起源:loop ③ 期间选最高杠杆非用户门 correctness→深度红线审计(**A股永不实盘 判 HOLDS**:8 层 choke-point,
   单一 classify 源+OrderGuard+copy_trade 硬 crypto+7 处 execution_boundary 精确集+IMMUTABLE a_share_live 不可豁免+无 env bypass)。
