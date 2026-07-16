@@ -30,7 +30,14 @@
   下一步转用户可感知面(队列见 frontier)。
 
 ### 顶部刷新块（本轮值 · 每轮覆写）
-- **✅ Claude-Code 内嵌 agent M3「claude 后端 spawn 契约·L-C 红线」已过四门·待 land main(分支 `agent-m3-claude-backend-spawn-20260716`·从 main 2ef0bb9a·产品 commit a2c69ba1·用户已拍板「claudecode 式 agent 辅助可直接做」)**。
+- **✅ Claude-Code 内嵌 agent M4a「orchestrator + SSE 映射 core」已过四门·待 land main(分支 `agent-m4-orchestrator-sse-20260716`·从 main b0eed5f0·产品 commit ec506137·用户 2 次拍板「claudecode 式 agent/epic fork-2 可直接做」)**。
+  - **建**：`app/agent/backends/events.py`（BackendEvent 联合 + `backend_events_to_sse` 映现有 SSE 词汇 say/tool_start/tool_end/done/error·纯函数）+ `scripted_backend.py`（回放定序·无 subprocess·ready 开关）+ `session_orchestrator.py`（preflight not-ready→**诚实 error 不 fallback**·backend.run()→SSE·cross-process 写→`refresh_store()`）。复用 workbench_stream.sse_format。route 留 M4b。
+  - **对抗测试 17·5 变异有牙**（去 not-ready 门/去 refresh hook/去 terminal 强制/去 except/去 liveness cap→红·字节还原）。
+  - **🔴 跨厂商 codex 复审 2 轮 UNSOUND→修（诚实边界价值）**：R1 逮 ①**terminal 未强制**（多 Done/Done 后尾随帧漏）②**异常逃逸**（preflight/run/refresh raise 无 honest error 直崩 500）→ 修：首 done/error 终止+丢尾随、全程 try/except→honest error+done。R2 逮 ③BaseException seam 与 `except Exception` 契约不一致 ④**无 liveness 边界**（无限流永不终止）→ 修：seam 收 `Exception`（BaseException 控制流信号正确传播）、`max_events` cap（超限 honest error+done·无限流实测不挂）。**R3 复审中**（b9saalcwv）。
+  - **四门全绿**：①后端全量分块 **6834 passed/13 skipped/0 failed**（5 chunk:1451+1536+1517+1416+914·signal timeout·真汇总行·codex done 后干净跑无叠跑）+ 前端 430 passed + build✓ + compileall✓；②validate_dev PASS✓；③评审门=**跨厂商 codex 3 轮 R3 SOUND**；④data/audit 基线无异常。diff-check CLEAN·GOAL 零 diff。
+  - **六字段**：1 Local=分支 ec506137（+dev commit 待提）；2 Remote=待 push；3 Tests=后端 6834 passed/0 failed+前端 430；4 CI=Unqueried；5 Prod=Unqueried；6 User acceptance=Unverified。
+  - **NEXT**：dev/ commit（state+finding）→ ff main+push→gh 查 CI。M4a land 后 M4b（main.py 新路由 `GET /api/agent/session/stream` + claude stream-json→BackendEvent parser）。
+- **✅ Claude-Code 内嵌 agent M3「claude 后端 spawn 契约·L-C 红线」已 LAND main(分支 agent-m3-claude-backend-spawn-20260716·从 main 2ef0bb9a·产品 a2c69ba1+dev b0eed5f0·CI in_progress run 29496890528·跨厂商 codex floor 3 轮 R3 FLOOR-HOLD)**。
   - **建**：新 `app/backend/app/agent/backends/{__init__,base,claude_backend}.py`（纯 builder·不 spawn）——`build_agent_argv`（stream-json+`--strict-mcp-config`+canvas MCP 工具+`--permission-mode`）、`build_spawn_env`（**L-C 红线**·显式 allowlist·无 QUANTBT_MASTER_KEY/venue secret）、`build_mcp_config`、`preflight`（复用 provider_auth_report）。`PermissionTier` 用户可配（放权）。
   - **🔴 跨厂商 codex floor 3 轮·逮真红线破口（这正是强制复审的价值）**：R1 FLOOR-HOLE 逮 **prompt argv 注入**（claude 2.1.210 把 `--mcp-config=/evil.json` 当真 flag 解析·绕 strict-mcp 注入恶意 venue-tool MCP server）+ preflight 假绿（API key 冒充 ready）+ 外来 mcp__ + NODE_OPTIONS。→ 修：prompt 移出 argv 走 **stdin**、model dash-guard、preflight=cli_installed AND subscription_authed、去 NODE_OPTIONS/NODE_PATH、strip 外来 mcp__。R2 FLOOR-HOLE 逮 **comma-smuggling**（`"Bash,mcp__evil__x"` 单元素绕 per-element filter）。→ 修：先 comma-split·再 drop 含 `mcp__` 任意位置 token（**同时挡 comma+space smuggling**·paren spec `Bash(git *)` 存活）。**R3 复审中**（bff2atedk）。
   - **对抗测试 15**（`test_agent_backend_spawn_contract.py`）：env allowlist（master/venue/opaque/NODE_OPTIONS 排除）、strict-mcp、外来 mcp__ strip、comma+space smuggling、prompt 不在 argv、model dash reject、preflight 诚实。**7 变异全有牙**（copy-all env / 去 strict-mcp / 去 mcp__ strip / 去 node-var 排除 / 去 model-guard / preflight 信 generic / per-element filter）·均字节还原。
@@ -128,12 +135,9 @@
   凭据直连 venue,绕过 L0-L2)→**须 OS/网络沙箱**(非 CLI flag 够);P0-2 L0 无钥一旦 canvas_read import main.py 即塌(main 模块级
   import order broker/keystore)→须抽纯 projector 包;P0-3 env os.environ.copy 洗不净→白名单+OS 身份隔离;P1 canvas_read 非 owner-safe/
   L1 非封存/L2 关键词挡不住语义/claim 越界。**第三次跨厂商复审守住命门(同厂商设计+我复审都漏)**。
-  **blocking [需拍板]**（alignment doc line47:未批 fork2 前不落任何执行码;且 floor NOT SOUND 未批）:
-  ①**fork2 floor 须 v2 硬化**(OS/网络沙箱+纯 projector+env 白名单+owner-cap+封存注册+闭合 schema)再跨厂商复审再请批——
-  **P0-1 把范围抬到 OS 级沙箱基建=更大工程,可能本身待拍板(建多少沙箱/薄片是否等沙箱就绪)**;②**A股 live 矛盾请用户拍**:
-  `RULES.project.md:11「A股永不实盘」` vs `GOAL.md:1787「未来治理后可 live」`(codex P1-7 发现,我不碰 GOAL/RULES);
-  ③新 MCP 依赖(官方 mcp SDK 推 vs FastMCP vs 自建 stdio)+传输(stdio 独立进程 推);④薄片面(只读 canvas_read 推)。
-  下一步:请用户拍——A股矛盾澄清 + floor v2 范围(OS 沙箱建多深/薄片等不等沙箱)+ MCP 依赖;拍了再走 v2 硬化设计(跨厂商)→薄片。
+  **✅ 上述 blocking 已解（2026-07-16 用户 2 次 greenlight fork-2「可直接做」+ 放权 recalibrate）——此段以下为已 SUPERSEDED 历史**：
+  - fork-2 floor 从 v1 3层(判 NOT SOUND) → **v2 2层结构性 + L-C/L-D**（放权「minimal not a wall」删逐参数拒门）。M1-M4a **已按 v2 建并 land**，**每 milestone 走跨厂商 codex floor 复审**（M1 FLOOR-HOLD·M3 3轮 R3 FLOOR-HOLD 逮真 prompt-injection 红线破口·M4a 3轮 R3 SOUND）——即 impl-plan §6.4「每落码前跨厂商复审」已在执行。MCP 依赖=官方低层 SDK 钉 mcp==1.28.1；传输=stdio 独立进程；薄片=canvas_read 只读（写 canvas_create_node 延 M5）。均已定/已建。
+  - **残余真待拍板（仍开·非 blocking loop）**：①**A股 live 治理矛盾**（`RULES.project.md:11「A股永不实盘」`绝对红线 vs `GOAL.md:1787「未来治理后可 live」`留口·codex P1-7·我不碰 GOAL/RULES）——须用户澄清「永不」还是「治理后可」，决定 floor claim 边界；②**Axis F canvas_create_node 字段门槛**（QRORecord 强制 assumptions/known_limits/failure_modes/validation_plan：agent 全供[GOAL 对齐·门槛高] vs 工具合成占位[门槛低]）——M5 前请用户拍，摆代价不替拍；③**claim 诚实边界**（放权方案A：结构性无钥只证「经 QuantBT MCP dispatch 零执行」，不证「任意 shell 够不到用户自己宿主机凭据」——用户自带 bash+自有 venue 凭据=用户 ambient 风险，须写死当「放权显式代价」）。三项登记等用户挑，不停 loop。
 
 ## 状态表（确定的才标 ✅,证据必挂）
 | 子系统/能力 | 状态 | 证据 |
