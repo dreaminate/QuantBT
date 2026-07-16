@@ -156,7 +156,7 @@ class PullBatch:
 @dataclass
 class TokenClient:
     slot: int
-    token: str
+    token: str = field(repr=False)  # 防明文：活跃 Tushare token，repr/str/%s/traceback 永不渲染全值（token_mask 留作诊断）
     token_mask: str
     points: int
     expires_at: str | None

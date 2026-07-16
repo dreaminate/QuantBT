@@ -26,7 +26,7 @@ import hashlib
 import hmac
 import json
 import secrets
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from typing import Any, Callable
 
 ToolHandler = Callable[[str, dict[str, Any]], dict[str, Any]]
@@ -56,7 +56,7 @@ class NodeExecutionContext:
     task_id: str
     role: str
     permitted_tools: frozenset[str]
-    token: str
+    token: str = field(repr=False)  # 防明文：HMAC 准入令牌，repr/str/traceback 永不渲染全值（伪造即拒·见 verify）
 
 
 def _canon(permitted: frozenset[str]) -> str:

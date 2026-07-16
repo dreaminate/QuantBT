@@ -15,7 +15,7 @@ import os
 import re
 import threading
 from contextlib import contextmanager
-from dataclasses import asdict, dataclass, is_dataclass
+from dataclasses import asdict, dataclass, field, is_dataclass
 from enum import Enum
 from pathlib import Path
 from typing import Any, Iterator
@@ -392,7 +392,7 @@ class LLMProviderRecord:
     health_status: str
     quota_status: str
     auth_refs: tuple[str, ...]
-    plaintext_credential: str | None = None
+    plaintext_credential: str | None = field(default=None, repr=False)  # 防明文：LLM provider 凭据，repr/str 永不渲染（model_dump 仍暴露·功能边界）
 
     def __post_init__(self) -> None:
         for name in ("auth_methods", "model_profiles", "capability_tags", "allowed_roles", "allowed_desks", "auth_refs"):
@@ -495,8 +495,8 @@ class LLMGatewayCallRequest:
     auth_ref: str
     via_gateway: bool
     replay_record_ref: str | None = None
-    plaintext_credential: str | None = None
-    payload_preview: dict[str, Any] | None = None
+    plaintext_credential: str | None = field(default=None, repr=False)  # 防明文：LLM 凭据，repr/str 永不渲染
+    payload_preview: dict[str, Any] | None = field(default=None, repr=False)  # 防明文：预览可能内嵌 prompt/secret，repr/str 永不渲染
 
 
 def _require_text(

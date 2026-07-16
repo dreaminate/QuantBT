@@ -75,7 +75,7 @@ class _AuthSpec(BaseModel):
     header_name: str | None = None
     query_param: str | None = None
     value_env: str | None = None
-    static_value: str | None = None  # 仅用于本地调试；生产请用 value_env
+    static_value: str | None = Field(default=None, repr=False)  # 仅本地调试；生产用 value_env。防明文：repr/str 永不渲染（含内嵌本 spec 的 GenericRESTConfig）
 
 
 class _PaginationSpec(BaseModel):

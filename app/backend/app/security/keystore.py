@@ -43,6 +43,14 @@ class KeystoreRecord:
     def to_dict(self) -> dict[str, Any]:
         return asdict(self)
 
+    def __repr__(self) -> str:  # 防明文：repr / str 永不暴露 api_key / api_secret（本模块 docstring 契约：secret 从不落 YAML/DB/日志）
+        return (
+            f"KeystoreRecord(name={self.name!r}, api_key=<redacted>, "
+            f"api_secret=<redacted>, note={self.note!r})"
+        )
+
+    __str__ = __repr__
+
 
 class KeystoreBackend(ABC):
     backend_name: str

@@ -40,7 +40,7 @@
 
 from __future__ import annotations
 
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from typing import Any, Mapping, Sequence
 
 # —— 收编只读：各已建门按其单一源直接 import（只引轻量子模块·不拉 polars 等重依赖）——
@@ -199,8 +199,8 @@ class ReleaseCandidate:
     # —— §16 ⑦ LLM Gateway ——
     llm_used: bool | None = None              # None=由 records/provider 推断
     llm_call_records: tuple[LLMCallRecord, ...] = ()
-    gateway_secret: bytes | None = None       # 给则验每条账封印（证明 Gateway 铸出）
-    known_secrets: tuple[str, ...] = ()       # 给则扫明文 secret 泄露（撞即停）
+    gateway_secret: bytes | None = field(default=None, repr=False)   # 防明文：Gateway HMAC 封印密钥，repr/str 永不渲染（给则验每条账封印）
+    known_secrets: tuple[str, ...] = field(default=(), repr=False)    # 防明文：扫描用的已知 secret 集，repr/str 永不渲染（给则扫明文泄露·撞即停）
 
     # —— 附·聚合已建证据（给则核·缺则软披露）——
     verifier_verdict: VerdictRecord | None = None

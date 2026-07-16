@@ -22,7 +22,7 @@ import time
 from collections.abc import Callable
 from dataclasses import dataclass, field
 from datetime import UTC, datetime
-from typing import Any, Literal
+from typing import Any, Iterable, Literal
 
 from ..lineage.ids import content_hash
 from .base import ExecutionAuditLog, ExecutionReport, Position, canonical_raw_event_hash
@@ -40,6 +40,35 @@ _WS_BASES: dict[tuple[str, str], str] = {
 }
 
 
+def _redact_secret(text: str, secret: str) -> str:
+    """把 bearer 密钥（WS ``listen_key``）从自由文本错误串里抹掉。
+
+    从 user-data 端点捕获的异常文本会内嵌完整 listen_key——它是失败请求 URL 的
+    路径段（``/ws/<listen_key>``）或 query 参数（``?listenKey=<listen_key>``）。
+    ``last_error``（及 ``ws_error`` 审计条）经 ``snapshot()`` / ``export()`` 外流，
+    故在赋值处就打码。``WSStreamerState.__repr__`` 只打码 listen_key 字段本身，
+    这里补上 last_error / 审计错误串这条路径。
+    """
+
+    if not secret:
+        return text
+    return text.replace(secret, "<lk-redacted>")
+
+
+def _redact_secrets(text: str, secrets: Iterable[str]) -> str:
+    """抹掉 text 里出现的**任一**已知 bearer 密钥（含已轮换的旧 listen_key）。
+
+    异步回调（_on_error / _ws_loop）里，出错的老连接携带的是**当时**的 listen_key；
+    若期间 create_listen_key 轮换过，``self._state.listen_key`` 已是新 key，只打码当前 key
+    会漏掉旧 key（跨厂商 skeptic P1）。故对「历来签发过的所有 key ∪ 当前 key」全打码。
+    """
+
+    # 长者优先替换：避免短 key 是长 key 前缀时只抹掉短的、留下长 key 尾巴（精确总契约）
+    for secret in sorted((s for s in secrets if s), key=len, reverse=True):
+        text = text.replace(secret, "<lk-redacted>")
+    return text
+
+
 @dataclass
 class WSStreamerState:
     listen_key: str = ""
@@ -51,6 +80,18 @@ class WSStreamerState:
     orphan_count: int = 0
     last_error: str | None = None
     backoff_seconds: float = 1.0
+
+    def __repr__(self) -> str:  # 防明文：listen_key 是 WS user-data bearer 凭据，repr/str 永不暴露全值（别处日志仅打前缀）
+        key = "<redacted>" if self.listen_key else "''"
+        return (
+            f"WSStreamerState(listen_key={key}, last_renew_at_utc={self.last_renew_at_utc!r}, "
+            f"last_message_at_utc={self.last_message_at_utc!r}, connected={self.connected!r}, "
+            f"reconnect_count={self.reconnect_count!r}, reconcile_count={self.reconcile_count!r}, "
+            f"orphan_count={self.orphan_count!r}, last_error={self.last_error!r}, "
+            f"backoff_seconds={self.backoff_seconds!r})"
+        )
+
+    __str__ = __repr__
 
 
 @dataclass
@@ -87,6 +128,8 @@ class BinanceUserDataStream:
         self._max_backoff = max_backoff_s
         self._audit = audit or ExecutionAuditLog()
         self._state = WSStreamerState()
+        # 历来签发过的 listen_key（含已轮换旧值·有界）——异步回调按此全打码防 stale-key 泄露
+        self._known_listen_keys: tuple[str, ...] = ()
         self._stop_event = threading.Event()
         self._ws_thread: threading.Thread | None = None
         self._renew_thread: threading.Thread | None = None
@@ -118,8 +161,14 @@ class BinanceUserDataStream:
             raise RuntimeError(f"未拿到 listenKey, response={data}")
         with self._lock:
             self._state.listen_key = key
+            # 记进有界历史（末 64 个）——轮换后老连接 error 携旧 key 仍被打码
+            self._known_listen_keys = (*self._known_listen_keys[-63:], key)
             self._state.last_renew_at_utc = datetime.now(UTC).isoformat()
         return key
+
+    def _redact(self, text: str) -> str:
+        """打码 text 里出现的任一已知 listen_key（历史 ∪ 当前）——防 stale-rotated 泄露(P1)。"""
+        return _redact_secrets(text, (*self._known_listen_keys, self._state.listen_key))
 
     def renew_listen_key(self) -> bool:
         if not self._state.listen_key:
@@ -138,7 +187,7 @@ class BinanceUserDataStream:
             self._audit.log("listenkey_renew", {"product": self._product})
             return True
         except Exception as exc:  # noqa: BLE001
-            self._state.last_error = f"renew_listen_key 失败：{exc}"
+            self._state.last_error = self._redact(f"renew_listen_key 失败：{exc}")
             return False
 
     def close_listen_key(self) -> None:
@@ -201,7 +250,7 @@ class BinanceUserDataStream:
                 ws.run_forever(ping_interval=180, ping_timeout=20)
             except Exception as exc:  # noqa: BLE001
                 with self._lock:
-                    self._state.last_error = f"ws_loop: {exc}"
+                    self._state.last_error = self._redact(f"ws_loop: {exc}")
             with self._lock:
                 self._state.connected = False
                 self._state.reconnect_count += 1
@@ -235,8 +284,8 @@ class BinanceUserDataStream:
 
     def _on_error(self, _ws: Any, error: Any) -> None:
         with self._lock:
-            self._state.last_error = f"ws error: {error}"
-        self._audit.log("ws_error", {"error": str(error)[:200]})
+            self._state.last_error = self._redact(f"ws error: {error}")
+        self._audit.log("ws_error", {"error": self._redact(str(error))[:200]})
 
     def _on_close(self, _ws: Any, *_args: Any) -> None:
         with self._lock:
@@ -252,7 +301,7 @@ class BinanceUserDataStream:
             try:
                 self.reconcile_once()
             except Exception as exc:  # noqa: BLE001
-                self._state.last_error = f"reconcile: {exc}"
+                self._state.last_error = self._redact(f"reconcile: {exc}")
 
     # ----- execution 派发 + 对账 -----
 
@@ -323,7 +372,7 @@ class BinanceUserDataStream:
                 {},
             )
         except Exception as exc:  # noqa: BLE001
-            self._state.last_error = f"reconcile fetch: {exc}"
+            self._state.last_error = self._redact(f"reconcile fetch: {exc}")
             return []
         remote_ids = {str(o.get("orderId")): o for o in (remote or [])}
         with self._lock:

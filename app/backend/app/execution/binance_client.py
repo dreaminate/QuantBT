@@ -57,6 +57,14 @@ class BinanceCredentials:
     def from_record(cls, record: KeystoreRecord, network: BinanceNetwork = "testnet") -> "BinanceCredentials":
         return cls(api_key=record.api_key, api_secret=record.api_secret, network=network)
 
+    def __repr__(self) -> str:  # 防明文：repr / str 永不暴露 api_key / api_secret
+        return (
+            f"BinanceCredentials(network={self.network!r}, api_key=<redacted>, "
+            f"api_secret=<redacted>)"
+        )
+
+    __str__ = __repr__
+
 
 class BinanceWithdrawPermissionError(PermissionError):
     """API key 检测到资金外流类权限 → 立即停。

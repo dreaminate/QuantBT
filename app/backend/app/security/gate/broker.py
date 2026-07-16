@@ -17,7 +17,7 @@ from datetime import UTC, datetime, timedelta
 from pathlib import Path
 from typing import Any, Callable, Literal
 
-from pydantic import BaseModel, ConfigDict
+from pydantic import BaseModel, ConfigDict, Field
 
 from ...lineage.ids import canonical_json
 from .account_halt import PersistentAccountHaltBarrier
@@ -45,7 +45,7 @@ class CapabilityToken(BaseModel):
     credential_binding_ref: str | None = None
     requires_halt_fence: bool = False
     account_halt_epoch: int | None = None
-    sig: str = ""                        # HMAC 签（防伪造）
+    sig: str = Field(default="", repr=False)  # HMAC 签（防伪造）。防明文：repr/str 永不渲染；model_dump 仍暴露——verify_capability 需 sig 校验（功能边界·勿排除）
 
     model_config = ConfigDict(frozen=True)
 
