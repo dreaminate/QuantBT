@@ -1489,3 +1489,59 @@ def test_independence_disclosure_honest_str_still_ok(tmp_path, monkeypatch):
         assert resp.status_code == 200, resp.text
     finally:
         main.app.dependency_overrides.pop(require_user_dependency, None)
+
+
+# ════════════════════════════════════════════════════════════════════════════
+# C-TRUST-COERCION-ROUND2 · codex 跨厂商复审逮 ~8 未覆盖同族洗门 · 补收对抗测试(2026-07-16)
+#
+# Trust batch 首轮跨厂商 codex 判 INCOMPLETE：已修 5 adapter+5 deserializer 行为保真·但 HTTP-probe
+# 逮 8 面同族洗门(release-approval/release-gate/expert-signature/suite checks[*]/pressure-run
+# scenarios[*]/release-check check_ref/signature deser+persist)。补修：全走 _req_str/_opt_str +
+# 内联 _rdp_str/_rdp_opt_str。★ 变异：弱回 str()/data.get() → dict 洗白 → 下列转 RED。
+# ════════════════════════════════════════════════════════════════════════════
+from app.research_os.trust_layer import (  # noqa: E402
+    external_expert_signature_from_dict,
+    trust_release_approval_record_from_dict,
+    trust_release_check_record_from_dict,
+    trust_release_gate_record_from_dict,
+    trust_pressure_run_record_from_dict,
+)
+
+_DESERIALIZER_CASES = [
+    (trust_release_approval_record_from_dict, "approval_ref"),
+    (trust_release_approval_record_from_dict, "verdict"),
+    (trust_release_approval_record_from_dict, "artifact_ref"),
+    (trust_release_gate_record_from_dict, "release_ref"),
+    (trust_release_gate_record_from_dict, "expert_veto_ref"),
+    (trust_release_check_record_from_dict, "check_ref"),
+    (trust_release_check_record_from_dict, "scenario_ref"),
+    (trust_pressure_run_record_from_dict, "runner_ref"),
+    (trust_pressure_run_record_from_dict, "release_gate_ref"),
+    (external_expert_signature_from_dict, "signature_b64"),
+    (external_expert_signature_from_dict, "review_ref"),
+]
+
+
+@pytest.mark.parametrize("fn,field", _DESERIALIZER_CASES, ids=[f"{fn.__name__}:{f}" for fn, f in _DESERIALIZER_CASES])
+def test_trust_deserializer_rejects_dict_scalar(fn, field):
+    """★ codex round-2 逮的 5 deserializer 标量 ref 传 dict → ValueError（非 str-coerce 成伪造非空 ref）。"""
+
+    with pytest.raises(ValueError, match="must be a string"):
+        fn({field: {"forged": 1}})
+
+
+def test_release_check_suite_nested_scenario_dict_rejected_422(tmp_path, monkeypatch):
+    """★ suite checks[*] 嵌套 scenario_ref 传 dict → 422（旧 str(raw_check.get) 洗白嵌套 ref）。"""
+
+    client, *_ = _client_with_trust_store(tmp_path, monkeypatch)
+    body = {
+        "release_ref": "release:v1",
+        "checks": [{"check_kind": "adversarial_scenario", "scenario_ref": {"forged": 1},
+                    "expected_behavior_ref": "e", "observed_behavior_ref": "o", "verdict": "passed"}],
+    }
+    try:
+        resp = client.post("/api/research-os/trust/release_check_suites", json=body)
+        assert resp.status_code == 422, f"nested scenario_ref=dict 应 422: {resp.text[:200]}"
+        assert _TRUST_GUARD_PHRASE in resp.text, resp.text[:200]
+    finally:
+        main.app.dependency_overrides.pop(require_user_dependency, None)

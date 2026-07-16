@@ -32035,8 +32035,8 @@ def _external_expert_review_from_payload(payload: dict[str, Any]) -> ExternalExp
         verdict=_rdp_str(raw.get("verdict")),
         evidence_refs=_rdp_tuple(raw.get("evidence_refs")),
         veto_reason_refs=_rdp_tuple(raw.get("veto_reason_refs")),
-        signed_attestation_ref=raw.get("signed_attestation_ref"),
-        review_ref=raw.get("review_ref"),
+        signed_attestation_ref=_rdp_opt_str(raw.get("signed_attestation_ref")),
+        review_ref=_rdp_opt_str(raw.get("review_ref")),
         silent_mock_fallback_used=bool(raw.get("silent_mock_fallback_used", False)),
     )
 
@@ -32431,7 +32431,7 @@ def research_os_trust_record_release_check(
                 evidence_refs=_rdp_tuple(payload.get("evidence_refs")),
                 validation_result_refs=_rdp_tuple(payload.get("validation_result_refs")),
                 verdict=_rdp_str(payload.get("verdict"), "passed"),
-                check_ref=payload.get("check_ref"),
+                check_ref=_rdp_opt_str(payload.get("check_ref")),
                 silent_mock_fallback_used=bool(payload.get("silent_mock_fallback_used", False)),
             ),
             owner_user_id=_formal_owner_user_id(user),
@@ -32506,10 +32506,10 @@ def research_os_trust_record_release_approval(
 ) -> dict[str, Any]:
     try:
         owner = _formal_owner_user_id(user)
-        release_ref = str(payload.get("release_ref") or "")
-        gate_ref = str(payload.get("release_gate_ref") or "")
-        pressure_run_ref = str(payload.get("pressure_run_ref") or "")
-        expert_review_ref = str(payload.get("expert_review_ref") or "")
+        release_ref = _rdp_str(payload.get("release_ref"))
+        gate_ref = _rdp_str(payload.get("release_gate_ref"))
+        pressure_run_ref = _rdp_str(payload.get("pressure_run_ref"))
+        expert_review_ref = _rdp_str(payload.get("expert_review_ref"))
         gate = TRUST_RELEASE_GATE_REGISTRY.gate(gate_ref, owner_user_id=owner)
         pressure_run = TRUST_PRESSURE_RUN_REGISTRY.run(pressure_run_ref, owner_user_id=owner)
         expert_review = TRUST_DISCLOSURE_REGISTRY.external_expert_review(
@@ -32520,13 +32520,13 @@ def research_os_trust_record_release_approval(
             release_gate=gate,
             pressure_run=pressure_run,
             expert_review=expert_review,
-            artifact_ref=str(payload.get("artifact_ref") or ""),
-            approval_protocol_ref=str(payload.get("approval_protocol_ref") or ""),
-            verdict=str(payload.get("verdict") or ""),
-            evidence_refs=tuple(str(v) for v in payload.get("evidence_refs") or ()),
-            signed_approval_ref=payload.get("signed_approval_ref"),
-            residual_blocker_refs=tuple(str(v) for v in payload.get("residual_blocker_refs") or ()),
-            approval_ref=payload.get("approval_ref"),
+            artifact_ref=_rdp_str(payload.get("artifact_ref")),
+            approval_protocol_ref=_rdp_str(payload.get("approval_protocol_ref")),
+            verdict=_rdp_str(payload.get("verdict")),
+            evidence_refs=_rdp_tuple(payload.get("evidence_refs")),
+            signed_approval_ref=_rdp_opt_str(payload.get("signed_approval_ref")),
+            residual_blocker_refs=_rdp_tuple(payload.get("residual_blocker_refs")),
+            approval_ref=_rdp_opt_str(payload.get("approval_ref")),
             silent_mock_fallback_used=bool(payload.get("silent_mock_fallback_used", False)),
         )
         _validate_trust_release_approval_dependencies(record, owner_user_id=owner)

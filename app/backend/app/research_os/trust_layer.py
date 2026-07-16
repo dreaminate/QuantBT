@@ -1227,7 +1227,7 @@ def record_trust_release_check_suite(
     for raw_check in checks:
         if not isinstance(raw_check, dict):
             raise ValueError("trust_release_check_suite_check_payload_invalid")
-        check_kind = str(raw_check.get("check_kind") or "")
+        check_kind = _req_str(raw_check, "check_kind")
         if check_kind in seen:
             raise ValueError("trust_release_check_suite_duplicate_kind")
         seen.add(check_kind)
@@ -1235,13 +1235,13 @@ def record_trust_release_check_suite(
             record_trust_release_check(
                 release_ref=release_ref,
                 check_kind=check_kind,
-                scenario_ref=str(raw_check.get("scenario_ref") or ""),
-                expected_behavior_ref=str(raw_check.get("expected_behavior_ref") or ""),
-                observed_behavior_ref=str(raw_check.get("observed_behavior_ref") or ""),
+                scenario_ref=_req_str(raw_check, "scenario_ref"),
+                expected_behavior_ref=_req_str(raw_check, "expected_behavior_ref"),
+                observed_behavior_ref=_req_str(raw_check, "observed_behavior_ref"),
                 evidence_refs=_tuple(raw_check.get("evidence_refs")),
                 validation_result_refs=_tuple(raw_check.get("validation_result_refs")),
-                verdict=str(raw_check.get("verdict") or "passed"),
-                check_ref=raw_check.get("check_ref"),
+                verdict=_req_str(raw_check, "verdict", "passed"),
+                check_ref=_opt_str(raw_check, "check_ref"),
                 silent_mock_fallback_used=_bool_value(raw_check.get("silent_mock_fallback_used")),
             )
         )
@@ -1304,10 +1304,10 @@ def record_trust_pressure_run(
     for raw_scenario in scenarios:
         if not isinstance(raw_scenario, dict):
             raise ValueError("trust_pressure_run_scenario_payload_invalid")
-        check_kind = str(raw_scenario.get("check_kind") or "")
-        scenario_ref = str(raw_scenario.get("scenario_ref") or "")
-        expected_behavior_ref = str(raw_scenario.get("expected_behavior_ref") or "")
-        observed_behavior_ref = str(raw_scenario.get("observed_behavior_ref") or "")
+        check_kind = _req_str(raw_scenario, "check_kind")
+        scenario_ref = _req_str(raw_scenario, "scenario_ref")
+        expected_behavior_ref = _req_str(raw_scenario, "expected_behavior_ref")
+        observed_behavior_ref = _req_str(raw_scenario, "observed_behavior_ref")
         outcome_flags = tuple(str(v).strip() for v in _tuple(raw_scenario.get("outcome_flags")) if str(v).strip())
         if check_kind in seen:
             raise ValueError("trust_pressure_run_duplicate_kind")
@@ -1657,18 +1657,18 @@ def external_reviewer_identity_from_dict(data: dict[str, Any]) -> ExternalReview
 
 def external_expert_signature_from_dict(data: dict[str, Any]) -> ExternalExpertSignatureRecord:
     return ExternalExpertSignatureRecord(
-        verified_signature_ref=str(data.get("verified_signature_ref") or ""),
-        attestation_ref=str(data.get("attestation_ref") or ""),
-        review_ref=str(data.get("review_ref") or ""),
-        reviewer_ref=str(data.get("reviewer_ref") or ""),
-        identity_ref=str(data.get("identity_ref") or ""),
-        public_key_ref=str(data.get("public_key_ref") or ""),
-        public_key_fingerprint=str(data.get("public_key_fingerprint") or ""),
-        signed_payload_hash=str(data.get("signed_payload_hash") or ""),
-        signature_b64=str(data.get("signature_b64") or ""),
-        verified_at=str(data.get("verified_at") or ""),
-        verification_hash=str(data.get("verification_hash") or ""),
-        verification_version=str(data.get("verification_version") or "trust.external_expert_signature.v1"),
+        verified_signature_ref=_req_str(data, "verified_signature_ref"),
+        attestation_ref=_req_str(data, "attestation_ref"),
+        review_ref=_req_str(data, "review_ref"),
+        reviewer_ref=_req_str(data, "reviewer_ref"),
+        identity_ref=_req_str(data, "identity_ref"),
+        public_key_ref=_req_str(data, "public_key_ref"),
+        public_key_fingerprint=_req_str(data, "public_key_fingerprint"),
+        signed_payload_hash=_req_str(data, "signed_payload_hash"),
+        signature_b64=_req_str(data, "signature_b64"),
+        verified_at=_req_str(data, "verified_at"),
+        verification_hash=_req_str(data, "verification_hash"),
+        verification_version=_req_str(data, "verification_version", "trust.external_expert_signature.v1"),
     )
 
 
@@ -1688,26 +1688,26 @@ def user_autonomy_record_from_dict(data: dict[str, Any]) -> UserAutonomyRecord:
 
 def trust_release_gate_record_from_dict(data: dict[str, Any]) -> TrustReleaseGateRecord:
     return TrustReleaseGateRecord(
-        release_ref=str(data.get("release_ref") or ""),
-        anti_flattery_pressure_test_ref=data.get("anti_flattery_pressure_test_ref"),
-        multi_turn_pressure_test_ref=data.get("multi_turn_pressure_test_ref"),
-        expert_veto_ref=data.get("expert_veto_ref"),
-        weakness_collapse_check_ref=data.get("weakness_collapse_check_ref"),
-        mock_honesty_check_ref=data.get("mock_honesty_check_ref"),
-        cold_start_honesty_check_ref=data.get("cold_start_honesty_check_ref"),
+        release_ref=_req_str(data, "release_ref"),
+        anti_flattery_pressure_test_ref=_opt_str(data, "anti_flattery_pressure_test_ref"),
+        multi_turn_pressure_test_ref=_opt_str(data, "multi_turn_pressure_test_ref"),
+        expert_veto_ref=_opt_str(data, "expert_veto_ref"),
+        weakness_collapse_check_ref=_opt_str(data, "weakness_collapse_check_ref"),
+        mock_honesty_check_ref=_opt_str(data, "mock_honesty_check_ref"),
+        cold_start_honesty_check_ref=_opt_str(data, "cold_start_honesty_check_ref"),
     )
 
 
 def trust_release_check_record_from_dict(data: dict[str, Any]) -> TrustReleaseCheckRecord:
     return TrustReleaseCheckRecord(
-        check_ref=str(data.get("check_ref") or ""),
-        release_ref=str(data.get("release_ref") or ""),
-        check_kind=str(data.get("check_kind") or ""),
-        scenario_ref=str(data.get("scenario_ref") or ""),
-        expected_behavior_ref=str(data.get("expected_behavior_ref") or ""),
-        observed_behavior_ref=str(data.get("observed_behavior_ref") or ""),
-        verdict=str(data.get("verdict") or ""),
-        source_hash=str(data.get("source_hash") or ""),
+        check_ref=_req_str(data, "check_ref"),
+        release_ref=_req_str(data, "release_ref"),
+        check_kind=_req_str(data, "check_kind"),
+        scenario_ref=_req_str(data, "scenario_ref"),
+        expected_behavior_ref=_req_str(data, "expected_behavior_ref"),
+        observed_behavior_ref=_req_str(data, "observed_behavior_ref"),
+        verdict=_req_str(data, "verdict"),
+        source_hash=_req_str(data, "source_hash"),
         evidence_refs=_tuple(data.get("evidence_refs")),
         validation_result_refs=_tuple(data.get("validation_result_refs")),
         silent_mock_fallback_used=bool(data.get("silent_mock_fallback_used", False)),
@@ -1716,11 +1716,11 @@ def trust_release_check_record_from_dict(data: dict[str, Any]) -> TrustReleaseCh
 
 def trust_pressure_run_record_from_dict(data: dict[str, Any]) -> TrustPressureRunRecord:
     return TrustPressureRunRecord(
-        runner_ref=str(data.get("runner_ref") or ""),
-        release_ref=str(data.get("release_ref") or ""),
-        runner_mode=str(data.get("runner_mode") or ""),
-        source_hash=str(data.get("source_hash") or ""),
-        release_gate_ref=str(data.get("release_gate_ref") or ""),
+        runner_ref=_req_str(data, "runner_ref"),
+        release_ref=_req_str(data, "release_ref"),
+        runner_mode=_req_str(data, "runner_mode"),
+        source_hash=_req_str(data, "source_hash"),
+        release_gate_ref=_req_str(data, "release_gate_ref"),
         check_refs=_tuple(data.get("check_refs")),
         scenario_refs=_tuple(data.get("scenario_refs")),
         evidence_refs=_tuple(data.get("evidence_refs")),
@@ -1732,17 +1732,17 @@ def trust_pressure_run_record_from_dict(data: dict[str, Any]) -> TrustPressureRu
 
 def trust_release_approval_record_from_dict(data: dict[str, Any]) -> TrustReleaseApprovalRecord:
     return TrustReleaseApprovalRecord(
-        approval_ref=str(data.get("approval_ref") or ""),
-        release_ref=str(data.get("release_ref") or ""),
-        release_gate_ref=str(data.get("release_gate_ref") or ""),
-        pressure_run_ref=str(data.get("pressure_run_ref") or ""),
-        expert_review_ref=str(data.get("expert_review_ref") or ""),
-        artifact_ref=str(data.get("artifact_ref") or ""),
-        approval_protocol_ref=str(data.get("approval_protocol_ref") or ""),
-        verdict=str(data.get("verdict") or ""),
-        source_hash=str(data.get("source_hash") or ""),
+        approval_ref=_req_str(data, "approval_ref"),
+        release_ref=_req_str(data, "release_ref"),
+        release_gate_ref=_req_str(data, "release_gate_ref"),
+        pressure_run_ref=_req_str(data, "pressure_run_ref"),
+        expert_review_ref=_req_str(data, "expert_review_ref"),
+        artifact_ref=_req_str(data, "artifact_ref"),
+        approval_protocol_ref=_req_str(data, "approval_protocol_ref"),
+        verdict=_req_str(data, "verdict"),
+        source_hash=_req_str(data, "source_hash"),
         evidence_refs=_tuple(data.get("evidence_refs")),
-        signed_approval_ref=data.get("signed_approval_ref"),
+        signed_approval_ref=_opt_str(data, "signed_approval_ref"),
         residual_blocker_refs=_tuple(data.get("residual_blocker_refs")),
         silent_mock_fallback_used=_bool_value(data.get("silent_mock_fallback_used")),
     )
