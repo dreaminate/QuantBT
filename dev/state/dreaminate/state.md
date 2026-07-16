@@ -6,7 +6,7 @@
 
 ## 进行中
 - **🧭 module-convergence 扫描结论(2026-07-15 · 用户令「收敛具体模块直到 GOAL 全收口」后 Plan 独立扫)**:剩 3 个 🟡 模块**全撞用户门/外部依赖**,无 decision-free 干净本地切片。逐一(据 file:line 核实):
-  - **§8 Governed Compiler**:治理主干已建全(governed_compiler.py 5 命门);唯一「未做」=neural-graph codegen(training/codegen.py:239 仅支持线性链子集·分支/机制嵌套留后续)=**方法学重**(branch/merge 语义=设计空间无单一正解),且属 build 台 feature-completeness 非 correctness 治理。→**方法学待拍板**。
+  - **§8 Governed Compiler**:治理主干已建全(governed_compiler.py 5 命门);唯一「未做」=neural-graph codegen(training/codegen.py:239 仅支持线性链子集·分支/机制嵌套留后续)=**方法学重**(branch/merge 语义=设计空间无单一正解),且属 build 台 feature-completeness 非 correctness 治理。→**方向已拍板**(2026-07-16 用户 b3=[[D-CODEGEN-BRANCH-SESSION]]:codegen 构建走 git 分支/合并·「存为 session」与 session_orchestrator 统一)，具体接线未实装·登记 pending 切片。
   - **§4 Settings/LLM Gateway**:registry/keystore/routing/gateway 已建;残余 OAuth/device-code/全 connector(GOAL §4:610)=**外部阻塞**(需真 IdP 端点+浏览器同意+真凭据·踩 OAuth/明文 secret 边界)。→**external-blocked**。
   - **§13/§17 RDP**:机制**已建全且已接进两条真 promote 路**(approval/gate.py:179·paper/desk.py:1001);末公里卡两处:①in-code scope 决策 `D-SCOPE-CONSERVATIVE`(aggregator.py:31·是否 require_rdp=True 强制)②**不可伪造真链证据**(gate1/gate3 需诚实 reproducibility_command+unverified_residual·真 LLMCallRecord 部分待用户凭据·自动填=honesty 门拒的假绿灯)。→**scope-gated + evidence-gated**。
   - **推荐 unblock(=最接近可做·最高杠杆)**:§17 RDP **advisory-first**——用户绿灯保守版(用现有 aggregate_rdp 组装本链 RDP·挂 promote manifest·require_rdp 保持 False/producer 仍 advisory·residual/repro 诚实手写)即成干净加性可逆切片;骨架+3 对抗测试见 Plan 扫描(promote_assembler.py:1005 honest-empty seam·section17_rdp_gate.py:34)。**仍需用户 scope 绿灯 + 真链证据(凭据)**。
@@ -177,7 +177,7 @@
 | 订阅账号 LLM auth + onboarding(陌生用户从零) | ✅ + **in-app 登录(S6)** | adapter(ClaudeSubscriptionLLM/CodexSubscriptionLLM)+auth 检测(`subscription_auth_status`/`provider_auth_report`/`auth_status_all`,不读 token);CLI 三子命令(status/login/verify)+quickstart。**S6 in-app 登录中继(2026-07-15)**:`begin_subscription_login`+`_spawn_detached_login`(stdin/stdout/stderr=DEVNULL·不 wait·固定 argv,后端不碰 token)+端点 GET `/api/llm/providers/auth`·POST `/api/llm/subscription/login/{provider}`(机器级 admin gated)+前端订阅登录面板(状态卡+一键登录+终端降级)。**K4**:全仓弃 `setup-token`(打 token 到 stdout)→`claude auth login --claudeai`(存 keychain)。**§3 假绿灯修复**:console(按量计费)不再冒充「订阅·无按量费」(按 authMethod=claude.ai/firstParty 正信号闸)。test_subscription_cli_llm 21 passed+test_llm_custom_and_api 端点门+前端面板测试;skeptic 判 token 边界 sound、5 findings 全修+变异门。诚实边界:真浏览器登录端到端要用户本人按(我只验状态检测);订阅自动化 ToS 用户自担;token 存 CLI keychain、本仓不读/不复制/不记录 |
 | CI(GitHub Actions) | ✅ | .github/workflows/ci.yml 双 job;run 29377617245 gh 实查 success:后端 6315 passed/0 failed(17:18)+前端 423+build;七轮迭代账目在 log/证据包 |
 | FastAPI on_event→lifespan 迁移 | ✅ | main.py _app_lifespan asynccontextmanager(try/finally 无条件 shutdown 等价旧 _DefaultLifespan.__aexit__);test_app_lifespan 5 passed;codex 修复轮 APPROVE(commit f8d1f1cd+d940aed3) |
-| 前端 bundle 拆分 | ✅ | vite manualChunks:单 2,557.79 kB JS→9 可缓存 chunk(echarts 1.38MB/index 813/react-vendor 142/…);build 绿+423 前端测试 passed(commit 593ffa02)。边界:首屏字节未减(echarts 随 §M15 冻结页 eager),lazy-load=用户拍板 |
+| 前端 bundle 拆分 | ✅ | vite manualChunks:单 2,557.79 kB JS→9 可缓存 chunk(echarts 1.38MB/index 813/react-vendor 142/…);build 绿+423 前端测试 passed(commit 593ffa02)。边界:首屏字节未减(echarts 随 §M15 冻结页 eager)。**lazy-load 已定方向**(2026-07-16 b5①=[[D-B5-AUTO-RULINGS]]:echarts 走动态 import 懒加载·待实装接首屏切片) |
 
 ## 下一步
 - 切片② 真跨厂商已收口(订阅路径)、on_event 已迁移、CI/bundle 已 land → 转**用户可感知面**:
