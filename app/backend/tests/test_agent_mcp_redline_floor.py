@@ -131,9 +131,11 @@ def test_canvas_read_is_read_only_and_returns_projection_shape():
     from app.agent_mcp import server
 
     result = server.canvas_read({})
-    assert set(result.keys()) == {"nodes", "count"}
+    assert set(result.keys()) == {"nodes", "edges", "count", "edge_count"}
     assert isinstance(result["nodes"], list)
+    assert isinstance(result["edges"], list)
     assert result["count"] == len(result["nodes"])
+    assert result["edge_count"] == len(result["edges"])
 
 
 def test_canvas_read_tolerates_none_arguments():

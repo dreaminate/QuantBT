@@ -88,6 +88,17 @@ def _store() -> PersistentResearchGraphStore:
     return _STORE
 
 
+def _edge_to_dict(edge: Any) -> dict[str, Any]:
+    """Semantic view of a graph edge — lineage relation only, no render wiring."""
+
+    return {
+        "edge_ref": edge.edge_ref,
+        "from_qro_id": edge.from_qro_id,
+        "to_qro_id": edge.to_qro_id,
+        "relation_type": edge.relation_type,
+    }
+
+
 def _projection_to_dict(record: ResearchGraphProjectionRecord) -> dict[str, Any]:
     return {
         "projection_ref": record.projection_ref,
@@ -115,6 +126,13 @@ def canvas_read(arguments: dict[str, Any] | None = None) -> dict[str, Any]:
     ``universe``, ``definition_status``, ``evidence_status``, ``runtime_status``.
     Empty / missing filters match everything.
 
+    Returns ``{nodes, edges, count, edge_count}``. ``nodes`` are the SEMANTIC
+    projection records (type, owner, status axes, lineage, evidence/mathematical
+    refs) — what the agent reasons over, NOT the frontend's pixel-layout nodes.
+    ``edges`` are lineage relations (``from_qro_id``/``to_qro_id``/``relation_type``)
+    restricted to edges whose both endpoints are in the filtered node set, so an
+    ``owner`` filter isolates edges too.
+
     "Read-only" is scoped precisely: this creates no QRO and appends no command —
     it never mutates a single line of the graph log. It is NOT filesystem-inert,
     though: the store's cross-process protocol ensures the ``audit/`` directory
@@ -133,9 +151,21 @@ def canvas_read(arguments: dict[str, Any] | None = None) -> dict[str, Any]:
         evidence_status=(args.get("evidence_status") or None),
         runtime_status=(args.get("runtime_status") or None),
     )
+    # Lineage edges, scoped to the projected QRO set: an edge surfaces only when
+    # BOTH endpoints are in the (owner-)filtered node set. So owner-scoping the
+    # nodes transitively isolates the edges — owner A never sees an edge that
+    # touches owner B's QRO. Mirrors the endpoint's edge gate (main.py:15544).
+    projected_ids = {record.qro_id for record in records}
+    edges = [
+        _edge_to_dict(edge)
+        for edge in store.graph_edges()
+        if edge.from_qro_id in projected_ids and edge.to_qro_id in projected_ids
+    ]
     return {
         "nodes": [_projection_to_dict(r) for r in records],
+        "edges": edges,
         "count": len(records),
+        "edge_count": len(edges),
     }
 
 
@@ -169,10 +199,11 @@ def build_tools() -> list[Any]:
         types.Tool(
             name=CANVAS_READ,
             description=(
-                "Read the research-graph canvas projection (read-only). "
-                "Returns matching nodes with their status axes, lineage, and "
-                "evidence/mathematical refs. Cannot mutate the graph or touch "
-                "keys/venues."
+                "Read the research-graph canvas projection (read-only). Returns "
+                "matching nodes (type, owner, status axes, lineage, evidence/"
+                "mathematical refs) plus the lineage edges between them. An "
+                "owner filter isolates both nodes and edges. Cannot mutate the "
+                "graph or touch keys/venues."
             ),
             inputSchema=_CANVAS_READ_INPUT_SCHEMA,
         ),
