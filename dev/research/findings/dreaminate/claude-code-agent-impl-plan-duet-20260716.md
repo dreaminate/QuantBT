@@ -1,0 +1,70 @@
+# Claude-Code 式内嵌量化 agent — 第一薄纵切 工程实现图（duet 并集·recalibrated 放权）2026-07-16
+
+> 状态：**设计定稿·零代码落地**。duet 并集（deep-opus 全案 ‖ codex 跨厂商校正 ‖ 我骨架+裁决），据用户
+> 2026-07-16「放权给 user·只提供平台·别太严厉」recalibrate 上一版 [[claude-code-agent-foundation-design-20260715]]。
+> **红线 floor（3→2 层结构性）属安全相关改动 → 落码前必须跨厂商 codex 复审**（沿用命门纪律）。全部 file:line
+> 采自当前 worktree 真码；claude CLI 确切 flag 落地时复核（见 §6 未验证项）。
+
+## 0. duet 收敛 + 跨厂商校正（据实）
+**两半独立收敛**：stdio MCP 独立进程 · **import 隔离 = 真 L0 无钥**（MCP 只从 `spine.py`+`paths.py` import·绝不 `app.main`/`app.agent.__init__`——后者拖入 keystore/OrderGuard/execution）· 非注册 floor · 复用现有 GraphCanvas。
+
+**codex 跨厂商校正（独立实测·推翻上一版假设·已并入）**：
+1. `--permission-mode default` **对 claude 2.1.210 非法**——合法值 `dontAsk/acceptEdits/auto/manual/plan/bypassPermissions`。落地取正确值（默认 tier 无 CLI 工具时 permission-mode 影响小·但必须合法值·build 时核实）。
+2. 现有 canvas projection 路由**非 owner-scoped**——新 agent 路径必须**加** owner 过滤（别假设已有）。
+3. MCP 生产入口不能 `import app.main`、不能走普通 `app.agent` 包入口（`app.agent.__init__` 连带加载凭据/venue 模块）——需**独立最小模块**入口（这正是 L0 无钥结构成立的机制·codex+deep-opus 双证）。
+
+## 1. 模块结构（新文件·职责·复用锚点 file:line·扩展不替换 RULES §4）
+| 新文件 | 职责 | 复用锚点 |
+|---|---|---|
+| `app/agent/backends/base.py` | `AgentBackend` Protocol·`PermissionTier`(用户可配)·`BackendEvent` union·`BackendReadiness` | 语义参照 `subscription_cli_llm.py`(token 不出进程 :20/:191-198)·**不扩** `ClaudeSubscriptionLLM.chat`(:287 一次性拒 tools :295)——新兄弟抽象 |
+| `app/agent/backends/claude_backend.py` | claude v2.1.210 headless：拼 argv·spawn·`stream-json`→`BackendEvent` | `preflight()`=`provider_auth_report`(`subscription_cli_llm.py:131`)·`cli_installed`(:60)·spawn env 洁净参照 `_spawn_detached_login`(:183-198) |
+| `app/agent/backends/{codex,opencode}_backend.py` | 仅 `preflight()`·`run()` `NotImplementedError`(诚实无静默 fallback RULES §3) | `provider_auth_report:131` |
+| `app/agent/mcp/server.py` | stdio MCP 进程入口(官方 `mcp` SDK)·注册**恰好** `{canvas_read,canvas_create_node}`·**绝不** import `main`/execution/security.gate | 直连 `PersistentResearchGraphStore`(`spine.py:1913`)+`DATA_ROOT`(`paths.py:9`)→ 附着 `DATA_ROOT/audit/research_graph_commands.jsonl`(= `main.py:775` 同一 JSONL) |
+| `app/agent/mcp/tools.py` | 两工具 handler+schema。read=`_graph_canvas_projection` 投影·write=构造 `QRORecord`→CANVAS `upsert_qro` | read `_graph_canvas_projection`(`main.py:15477`)·write `QRORecord`(`spine.py:840`)+`ResearchGraphCommand(source=EntrySource.CANVAS,command_type="upsert_qro")`(`spine.py:951/1367/1683-1694`)+`store.apply`(`spine.py:2050`) |
+| `app/agent/session_orchestrator.py` | 驱动外部 CLI agent 跑自身循环：preflight→建 ws+写 `.mcp.json`→`backend.run()`→`BackendEvent`→现有 SSE 词汇·写后 `RESEARCH_GRAPH_STORE.refresh()` 令跨进程写可见 | **非改** `orchestrator/orchestrator.py`(那驱动内部 role agent)·SSE `workbench_stream.py`(`start_background_workflow:45`·`sse_format:163`)·`refresh()`(`spine.py:1959`) |
+| `main.py` 新路由 `GET /api/agent/session/stream` | 镜 `agent_workbench_stream`(`main.py:36060`)：`require_user_dependency`+owner scoping+SSE·**不碰** `_dispatch_production_agent_turn`(:5618) | `require_user_dependency`(:36071)·`_formal_owner_user_id`(:36084) |
+| 前端 `agentSession.ts`(或 `agentLive.ts` 参数化 URL) | 新路由 SSE reader | `agentLive.streamAgentWorkbench`(`agentLive.ts:261`·URL 硬编码 :270 需参数化)·`dispatch`(:329)·`onToolEnd`(:82) |
+| 前端 `StrategyConsolePage.tsx` +onToolEnd→刷投影 | canvas 工具 tool_end→重取 projection→现有渲染出新节点 | `fetchResearchGraphCanvasProjection`(:74·mutation 后重取 :604/640…)·`setGraphProjection`(:271)·`<GraphCanvas>`(`GraphCanvas.tsx:64`) |
+
+测试文件(每 milestone 一组)：`test_agent_mcp_redline_floor.py`·`test_agent_backend_spawn_contract.py`·`test_agent_mcp_canvas_tools.py`·`test_agent_session_stream.py`。
+
+## 2. PermissionTier(用户可配·放权核心) + backend + 工具契约
+**PermissionTier**：`name`·`cli_allowed_tools`(CLI 自带 Bash/Write/Edit… 用户放宽)·`add_dirs`(--add-dir·用户可加真实目录)·`permission_mode`(合法值·见 §0.1)·`strict_mcp_config`(默认 True 只认我方 MCP·用户可关)·`allow_dangerous_skip`(默认 False)。
+- **平台默认 tier `quant-research-default`**(slice-1 ships)：CLI 工具全不给(只我方 MCP 两工具)·`add_dirs=(throwaway_ws,)`·`strict_mcp_config=True`。**是默认非天花板**——用户自建 tier 放宽随意。
+- **tier 唯一管不到=红线 floor(§3)**：tier 放到「全给 + dangerous-skip」·agent 仍**动不了钱/venue/A股-live**(那些工具在 MCP server 不存在·那些码不在 MCP 进程)。权限轴 ⟂ 红线轴。
+
+**claude v2.1.210 调用**(tier 派生)：`claude -p "<task>" --output-format stream-json --verbose --mcp-config <ws>/quantbt.mcp.json [--strict-mcp-config] --permission-mode <合法值> --allowedTools mcp__quantbt__canvas_read mcp__quantbt__canvas_create_node <tier.cli_allowed_tools> --add-dir <ws> <tier.add_dirs>`。`.mcp.json` env=`QB_OWNER/QB_CAP_TOKEN(短 TTL)/BACKTEST_DATA_ROOT`·**绝无订阅 token**(那在 claude CLI keychain)。
+
+**canvas_read**(只读·side_effect=none)：入参 `{limit?=24,asset_types?,visible_refs?}`→`store.refresh()`→owner-scoped `projection_index`→`_graph_canvas_projection` 逻辑→前端同 shape `ResearchGraphCanvasProjection`。**owner 过滤新加**(codex 校正：现路由非 owner-scoped)。
+
+**canvas_create_node**(写·写 owner 自己 DRAFT 研究节点·**不触红线**)：
+- **关键(据 `QRORecord.__post_init__` `spine.py:905-913`)**：QRORecord **强制**非空 `owner/market/frequency/lineage/implementation_hash/assumptions/known_limits/failure_modes/validation_plan`——工具**不能**只收 `{label,text}`。入参=`{qro_type,market,universe,horizon,frequency,assumptions[],known_limits[],failure_modes[],validation_plan[],input/output_contract?}`(agent 提假说+假设/边界/失败模式/验证计划=GOAL「画布表意+agent 辅助」)。
+- 工具强制安全默认(非门墙·是构造良构 QRO)：`owner=actor=QB_OWNER`·`version=1`·`definition_status=DRAFT`·`runtime_status=OFFLINE`·`evidence_status=UNTESTED`·`qro_id` content_hash 派生。写路径 `ResearchGraphCommand(source=CANVAS,upsert_qro)`→`store.apply`(CANVAS owner 强制 `spine.py:1683-1689`·`qro.owner!=actor`→拒)。返 `{qro_id,version,projection_node_id}`。
+- **为何非红线**：owner 自己 DRAFT/OFFLINE 节点·动不了钱·选不了 venue·不能置 LIVE(编辑 LIVE QRO 被 `spine.py:1705/1718/1735` 独立拒)·不缩 honest-N。
+
+## 3. 红线 floor（recalibrated 2 层结构性·非门墙）
+**3 硬禁**(RULES.project.md:11-12+GOAL)：不动真钱·无真实 venue·A股永不实盘。**只两条结构性事实·删逐参数拒门**(用户「minimal not a wall」)：
+- **L-A 不注册**：MCP 工具表**恰好** `{canvas_read,canvas_create_node}`·动钱/venue/A股-live/testnet/mainnet 工具根本不注册。镜现有范式 `main.py:5303`/`main.py:36078`(动钱/晋级永不注册给 agent)。
+- **L-B 不 import(架构无钥)**：MCP 进程 import 图排除 `place_order`/`OrderGuard`(`enforcer.py:20/50`)/`KeyBroker`(`broker.py:104`)/`execution/*`/`security.gate.*`——拿不到 key 因为码不在进程。机制：只 `from app.research_os.spine import (...)` + `from app.paths import DATA_ROOT`(spine import 面 :13-38 = stdlib+lineage+lock·零 execution/security)·绝不 import `app.main`。既有 OrderGuard/执行边界不动(place_order 仍全程过 OrderGuard·只是在 MCP 进程不可达)。
+- **诚实限界(RULES §3)**：若用户放宽 Bash/workspace 到宿主机大范围·「无危险工具/无危险 import」**不能**证明任意 shell 命令也够不着 venue——此为诚实边界·非 L0 级不可能。这是「放权」的显式代价·写清楚。
+
+## 4. 编排 + SSE + GraphCanvas 写回（含跨进程一致性·关键修正）
+编排流：preflight(未 auth→诚实 error·不 fallback 内部 agent)→建 ws+写 mcp.json→`backend.run()`迭代 `BackendEvent`→映现有 SSE 词汇(SessionStarted→say·Text→say·ToolCall→tool_start·ToolResult→tool_end·Done→done)→跑 `start_background_workflow`(`workbench_stream.py:45`)。新路由镜 `agent_workbench_stream`(`main.py:36060`)。
+**canvas_create_node 写回(跨进程)**：MCP 是独立进程 append JSONL·API 的 `RESEARCH_GRAPH_STORE`(`main.py:775`)读内存 dict 不自动重读磁盘 → 不处理则 agent 写的节点不现于 `GET canvas_projection`。**解**：①并发安全内建——`store.apply`/`refresh` 都取 `flock(LOCK_EX)`(`cross_process_lock.py:70/100`)·跨进程串行·JSONL 不撕。②可见性 `refresh()`(`spine.py:1959`「fresh replay of the log」一等操作)：编排器观察到 `ToolResult(canvas_create_node)` 时 API 进程内调 `RESEARCH_GRAPH_STORE.refresh()`(一次·恰在写时)→前端 `onToolEnd`→`fetchResearchGraphCanvasProjection`→`setGraphProjection`→`<GraphCanvas>` 重渲染。零新渲染路径(= 手动 canvas 编辑刷新那条)。给编排器加 refresh-on-write(非每 GET refresh·避免每读全量重放·perf)。
+
+## 5. 里程碑 M1–M6（顺序·各自独立测·每关对抗测试）
+- **M1 MCP 骨架+L-B 无钥(红线地基先立)**：起 stdio·附着规范 JSONL·注册 canvas_read。测：import server 断言 `OrderGuard/KeyBroker/place_order` 不可达+**不在 sys.modules**(镜 `test_realmoney_audit_killswitch` RULES.project.md:13)·注册表=={canvas_read}·变异让 server import main→红。
+- **M2 canvas_read 端到端**：owner-scoped 真投影。测：owner A/B 隔离·输出 shape==前端契约·另进程 append 后 read 能见(refresh 生效)。
+- **M3 claude 后端+spawn 契约**：argv/env builder(纯单测不 spawn)。测：默认 tier argv 含 canvas 工具+strict-mcp+add-dir·**无** dangerous-skip·env **无**订阅 token·codex 未 auth→诚实 error 不 fallback·变异注 Bash/掉 strict-mcp/注 venue env→红·**tier 放宽不破红线**(开 dangerous-skip+全 CLI 工具·可调 MCP 工具集仍只两个)。
+- **M4 orchestrator+新路由**：scripted/replay 后端驱动 SSE。测：帧含 tool_start/end·未 auth→SSE error 不 fallback·owner scoping。
+- **M5 canvas_create_node 写+跨进程写回**：测：真写(qro 存在·owner==QB_OWNER·OFFLINE)·**跨进程可见**(MCP 写→API refresh→projection 见)·owner 伪造被拒(`spine.py:1685`)·不能建 LIVE·漏 assumptions/failure_modes/validation_plan→`__post_init__` 拒。
+- **M6 全链真 claude 冒烟+红线总断言(核心)**：本地真订阅 claude 跑「读画布+加假说节点」(GOAL §0 可证伪)。测：真(非 mock)claude 发两 tool_use·UI 见节点+文本·静默 mock fallback→拒·**money/venue/A股-live/testnet/mainnet 工具缺席**(`list_tools`=={canvas_read,canvas_create_node})·**tier 放最宽仍动不了钱**·spawn 契约守·订阅 token 不现于 mcp.json/SSE/日志/ledger。**加**：cancel/timeout/backpressure/concurrent-append(codex flag)。
+
+## 6. 待拍板 + 新依赖 + 未验证边界
+**新依赖(方向已批)**：官方 `mcp` SDK(PyPI `mcp`·modelcontextprotocol/python-sdk·MIT)。requirements.txt 现无 mcp/fastmcp(grep 确认)·落地钉版本。传输=stdio 独立进程(强化 L-B)。**build 时核实确切符号**(`mcp.server.fastmcp.FastMCP` 高层 vs 低层 `Server`+`stdio_server`+`list_tools/call_tool`)——RULES §3 未验证·勿凭记忆。
+**待拍板(present·不 land)**：
+1. **canvas_create_node 必填字段面**：QRORecord 强制 assumptions/known_limits/failure_modes/validation_plan 非空。agent 全供(真画布表意·门槛高·GOAL 对齐·**推荐**)vs 工具合成占位(门槛低·弱研究契约)——方法学松紧属用户那摊·摆代价请拍。
+2. **跨进程可见接缝**：refresh-on-write(编排器内·推荐)vs projection 端点条件 refresh(兜底)。先上前者。
+3. **前端 URL**：参数化复用 `agentLive` vs 新 `agentSession.ts` 兄弟(推荐扩展不替换)。
+4. **★ 跨厂商复审(命门纪律)**：本稿红线 floor 3→2 层是安全相关·**落码前 parent 走 codex 跨厂商 skeptic 复审 floor**再 M1。
+**未验证边界(只读·本 session)**：wiring file:line 采自真码·跨进程锁=真 flock·spine import 面无 execution·QRORecord 强制字段·无现存 create-fresh-canvas-node 端点·requirements 无 mcp。**未碰**：无凭据·未登录 vendor CLI·未 spawn 真 claude·未改文件。claude CLI 确切 flag 沿用上一稿 §6 `--help` 结论(本 session 未复跑)+ codex permission-mode 校正(build 时定值)。
