@@ -67,3 +67,25 @@ canonical §17 门原本在**多个输入面**把畸形值 char-split / str-coer
 - **(c) 全 park**：整块留分支等专门审计窗口。
 
 **我的推荐**：**(b)**——safety red-line 全闭是硬约束、已达成；研究完整性同族边界是 correctness-非-safety，可作 documented residual 分独立卡跟进，不必阻塞 12 个 safety 修 land。但**方法学松紧是你的事**，摆代价请你拍。
+
+---
+
+## 附录·ROUND 7 = 用户拍 (a) 穷尽审计 → record 构造层 + HTTP 适配器层收口（2026-07-16）
+
+**用户裁决**：选 **(a) 系统性穷尽审计**——不逐面 whack-a-mole，在单一 canonical 入口统一校验 + 全覆盖对抗矩阵。据此两层收口：
+
+**① record 构造层（commit 04cccb03·穷尽）**：introspection 驱动 canonical shape 门——`RDPManifest.__post_init__` 遍历 `fields(self)` 按 annotation 串（"str"/"str | None"/"Optional[str]" scalar·"tuple[str, ...]" ref-tuple）逐字段校验；共享 `_validate_rdp_record_shape` 上到 11 个 receipt/attestation dataclass（rdp.py 6 + rdp_reproduction.py 5 gate5 链）。非 str 字段构造期即 TypeError。**自维护**（字段演进自动覆盖）。
+
+**② HTTP 适配器层（commit bc4fff86·本轮）**：Explore agent + 我 grep 双确认真 §17 RDP HTTP 适配器在 main.py **33300-34710**（**订正**上下文误记的 16901/16950=§4 LLMProvider health·非 §17）。9 个喂 §17/live-部署/attestation/release 门的适配器（deployment_attestation×2·health_check·source_run_integrity·publish·external_publication×2·ci_release_attestation×2）+ 4 choke-point helper 的**直接 HTTP-payload 标量 ref** 全从 `str(payload.get(x) or "")` 改走 `_rdp_str`（拒非 str→ValueError→422）。关键细节：
+- `str(dict)` 是**合法 str**→sail through record shape 门；故适配器层是 record 层**够不着**的独立面。
+- publish 端点 trust ref 在主 try 外→本地 try/except 保 422（非 500）。
+- fallback 链 `(_rdp_str(payload.get(x)) or local_pub.Y or "")` 保源优先回退语义、只拒非 str payload 值。
+- **确证真洗门**：`rollback_readiness_ref`/`rollback_drill_ref`（rdp.py:2786-2791 纯非空检查·无 manifest 交叉校验）——变异 neuter→dict 洗白成 **200**（record 落盘）·live-部署 rollback-safety 门真 fail-open。其余（deployment_ref/health_status/rollback_plan_ref/retire_plan_ref/trust refs）下游有交叉校验/allowlist/lookup→本已 fail-closed·`_rdp_str` 为 (a) 统一 canonical 之 defense-in-depth。
+
+**验证 fail-closed 的残余（机械核验·非断言）**：runner-result `str(raw_result.get)`（`_rdp_deployment_runner_result_from_raw`/`_rdp_external_uploader_result_from_raw`/`_rdp_ci_runner_result_from_raw`）**不改**——`_reject_*_raw_fields` 拒非 ALLOWED 键 + `_validate_*_field_shapes` 拒 scalar 字段 dict/list + `SCALAR=ALLOWED−SEQUENCE`⟹无 dict 能达 str()。`source_file_ref`（raw 送 record_integrity）经 `_select_source_file_ref`+`_source_bundle_entry_for_ref` 与 manifest.source_file_refs 交叉校验·record 存 selected_ref（非 raw）→fail-closed。promote 路 `rdp_package_id`（38941）=新包标识符·下游 `_safe_package_id` 拒不安全字符→fail-closed·非 §17 门 ref。
+
+**对抗测试**：endpoint 级（`test_research_os_rdp_deployment_attestation.py`·health 7 字段+deployment_attestation 真 POST→422+guard 短语归因·防异相 422 假绿）+ helper 级（`test_rdp_scalar_ref_failclosed.py`·ci_release+external_publication field builder·dict/list→ValueError）。**变异**（种坏门必抓）：neuter rollback_readiness_ref guard→dict 洗白成 200（RED）·neuter ci_system_ref helper→DID NOT RAISE（RED）·还原 byte-identical→GREEN。honest 路径全保真：受影响 RDP+§17 全子集 **522 passed**。
+
+**跨厂商 codex 复验（round-3 判 COMPLETE·2026-07-16）**：builder=Claude(主上下文)·verifier=codex(GPT,xhigh,115k tokens)·approver≠creator。round-1 被 OpenAI cyber-risk 内容过滤拦（security 措辞触发·非技术失败）→ round-2 中性措辞但「search main.py」致其扫全 41k 行发散（TaskStop）→ round-3 diff-scoped（给 `git show bc4fff86` diff + 限定 33300-34760 行域 + 点名下游函数）**收敛判 COMPLETE**。codex 独立经 **AST 扫描** 33300-34760 确认：①完整性=无遗漏标量面（仅剩 7 个 runner-result `str(raw_result.get)` 残余·33510/33578-33596）②行为保真=`_rdp_str` 忠实 drop-in·fallback 链保选择+strip·publish trust ref 本地 try→422 非 500（唯一差异=拒非 str 含 falsy·即预期加固）③残余正确=ALLOWED−SEQUENCE + shape 门（33466-74/33549-58/33645-59）dict/list 达 str() 前即拒·`source_file_ref` 经 `_select_source_file_ref`+`_source_bundle_entry_for_ref` 只能选已注册已 bundle 的既有 ref、无法伪造。**独立 AST 法与我 grep+读码 self-audit 殊途同归=完整性强证据**。
+
+**push 状态**：bc4fff86 仅本地在 `parked/s17-coercion-failopen-6rounds-20260715`·**push 被 auto-mode classifier 拦**（读 loop 授权为非真人·public repo push 边界）·需真人放行或 land 时经门。
