@@ -6,6 +6,14 @@
 ## <日期> · <标题>
 - 建/改了什么 + 命门  - 验收：<对抗测试 + 变异 + 全量数字>  - 下一步：<…> -->
 
+## 2026-07-15-1720 系统级凭据 repr 泄露收口 land(de002c86)——3 轮跨厂商 codex 到 SOUND
+- 用户拍「收敛具体模块直到 GOAL 全收口」后,选红线安全 module。深度审计先判 **A股永不实盘 HOLDS**(8 层 choke-point·无 env bypass),顺带逮**系统性**凭据泄露:裸 @dataclass/Pydantic 的 secret 字段经默认 repr/str/%s/traceback 明文渲染。
+- 跨厂商 codex 3 轮把关(**同厂商审+我自审两次漏,codex 每轮 refute**):①系统性 scope(我只锚 api_key/api_secret 字段名·漏 listen_key 等,codex 枚举 16 候选 runtime-probe 逮全)②**P1 stale-generation**(create_listen_key 轮换后老连接 `_on_error` 携【旧】key,`_redact` 只打码当前 key 漏→经 snapshot+audit export 外流,codex rotation 探针逮 leak=True)③SOUND to land。
+- 修 **10 类 + GenericRESTConfig 传递面**:dataclass→`field(repr=False)`(TokenClient.token·ReleaseCandidate.gateway_secret/known_secrets·NodeExecutionContext.token·LLMProvider/LLMGatewayCall.plaintext_credential)·Pydantic→`Field(repr=False)`(CapabilityToken.sig·_AuthSpec.static_value)·WSStreamerState 打码 listen_key 字段 + `_redact`(历史∪当前 key,有界 64)封 6 处 error 串。**原则**:accidental(repr/str/log/traceback) 必闭·functional(to_dict/model_dump 供签名/持久化/传输) 显式边界保真。
+- 验收:对抗测试 8→23(+12 系统对象 +3 P1 stale-gen/site,**三处变异均 red-then-revert 实证牙口**);后端全量 **6511 passed/13 skipped/0 failed**——**分块 5 段实跑**(环境反复 kill ~5-9min 长 bg pytest:a-d 1623·e-l+bench 1258·m-r 2783·s-z+onboarding 846·training 1),每块<5min 规避 kill 窗;compileall✓·diff-check CLEAN·GOAL 零 diff。builder=Claude(deep-opus 实现+我 P1 补丁)/verifier=codex(GPT) 跨厂商 approver≠creator。
+- 残余(非阻塞·模块未接线原型):64-key 上界(>65 轮换漏最旧·现不可达)·asdict 面 tripwire-gated·真 generation rotation 待实现重估。全弧+inventory 见 [[redline-audit-ashare-credential-repr-crossvendor-20260715]]。
+- 下一步:续「收敛具体模块」——§8 完整 codegen / §13-17 RDP 组装 / §4 gateway,择最高杠杆。
+
 ## 2026-07-15-1540 停止条件③独立复核 + state.md 状态自洽修(纯 dev/)
 - 停止条件③临界疑虑→派独立 Explore 全库穷尽复核(不信记忆信现场,对照 HEAD d444567b):**判无可收口本地切片**——最后一个干净 correctness 切片 F3(§11 读时 manifest 复验)本 session 已 land 918daf7f;余项逐条确认全 user-gated/infra-blocked/blocked-agent-epic(§8 完整 codegen=大 feature 非 fail-open·§4 OAuth=外部网络·§13/17 RDP=打包非门·monitor/production 残余=诚实 fail-closed 待方法学·Stripe/kill-switch=动钱红线已诚实守·agent floor=NOT SOUND 未批·Run 首屏=infra·卡 8be0e547/worktree/DVC/Ed25519/echarts=待拍板)。
 - 复核唯一捞出可修项=**state.md 自相矛盾**:顶部刷新块记 F3 已 land SOUND,但 §11 status 行(l98)+断点 follow-up(l57)仍列「读时 manifest 复验(F3)」「producer factors_all_finite 建门」为未闭 residual——两处均已 land(F3=918daf7f·F1 建侧=a2b6d534)。属 false-red(完成的活误标未闭),同源真相自相矛盾。修:两处 follow-up/残余陈述同步为已闭+登记真残余(未签名 manifest co-tamper→研究面签名 receipt 后续卡);顺带六字段 Local checkout SHA 21a14abd→d444567b(3 个后续 CI-flake 收口 commit 未刷该字段留下的漂)。

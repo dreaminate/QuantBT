@@ -5,19 +5,31 @@
 > 本版 2026-07-14 整篇重写(蒸馏此前 2026-06 全部追加块——原文在 git 历史 `git log dev/state/dreaminate/state.md`)。
 
 ## 进行中
+- **✅ 系统级凭据 repr 泄露收口已 land(de002c86 · 2026-07-15 · 数据泄露红线 defense-in-depth)**。
+  起源:loop ③ 期间选最高杠杆非用户门 correctness→深度红线审计(**A股永不实盘 判 HOLDS**:8 层 choke-point,
+  单一 classify 源+OrderGuard+copy_trade 硬 crypto+7 处 execution_boundary 精确集+IMMUTABLE a_share_live 不可豁免+无 env bypass)。
+  审计逮裸 @dataclass/Pydantic 的 secret 字段经默认 repr/str/%s/traceback 明文泄露。**跨厂商 codex 3 轮收敛**:
+  ①系统性 scope(逮第 3 处 WSStreamerState + 越出 3 处)②P1 stale-generation(create_listen_key 轮换后老连接 error 携旧 key,
+  只打码当前 key 漏)③**SOUND to land**。**修 10 类**:dataclass→field(repr=False)(TokenClient.token·ReleaseCandidate
+  .gateway_secret/known_secrets·NodeExecutionContext.token·LLMProviderRecord/LLMGatewayCallRequest.plaintext_credential)·
+  Pydantic→Field(repr=False)(CapabilityToken.sig·_AuthSpec.static_value→GenericRESTConfig)·WSStreamerState 打码 listen_key
+  字段+`_redact`(历史∪当前 key)封 6 处 error 串 capture 点。原则:**accidental(repr/str/log/traceback)必闭;functional
+  序列化(to_dict/model_dump 供签名/持久化/传输)是显式边界保真**。对抗测试 8→23(+12 系统 +3 P1,变异牙口全 red-then-revert)。
+  builder=Claude(deep-opus+我 P1 补丁)/verifier=codex(GPT) 跨厂商 SOUND。**后端全量 6511 passed/13 skipped/0 failed(分块实跑规避环境 kill)**。
+  残余(如实登记非阻塞·模块未接线原型):64-key 历史上界(>65 轮换后最旧 key 漏·现生命周期不可达)·asdict 面 tripwire-gated·真 generation rotation 待实现时重估。
+  证据/全弧见 [[redline-audit-ashare-credential-repr-crossvendor-20260715]]。
 - 卡 9c5e6975 已 done(2026-07-15):切片② dual-model **真跨厂商调用收口**——订阅账号 auth+
   onboarding 全做(陌生用户从零)、dual_model_review 接订阅、真跑 independent=True 逮 builder
   夸大。切片③ CI ✅、on_event 迁移 ✅、bundle 拆分 ✅ 均已 land。/loop 15m 自主循环运行中;
   下一步转用户可感知面(队列见 frontier)。
 
 ### 顶部刷新块（本轮值 · 每轮覆写）
-- **六字段**:1 Local checkout=slice/model-switch-crossvendor @ **d444567b**(= origin/main;**F3 §11 完整性门(918daf7f)** + UI 路由文档同步 desk 架构(21a14abd,能信/onboarding 准确性,纯文档) + 文档 commit CI flake 收口(25dac5af/d444567b,证训练超时非回归) + **本 tick:§11 status 行+断点 follow-up 陈述同步——F3(918daf7f)·F1 建侧(a2b6d534)均已 land、原文误列未闭 residual,纯 dev/ 状态自洽修非新码**);
-  2 Remote=**origin/main 同 d444567b**(本 tick 自洽 commit 过纯 dev/ 门后 push 更新);
-  3 Local tests=**后端全量 6487 passed/13 skipped/0 failed**(真汇总行,508s 实跑)+ perf harness 72 passed + 前端 40 files/430 passed + build ✓;
-  4 CI=**passed**(gh 实查:**b998f7ee[=F3 码] completed success**,19min + **25dac5af[=最新·F3 码+全 docs] completed success**=代码真绿;
-  中途文档 commit 1a8b2cff CI 首跑撞 `test_training_runner::test_service_code_path_succeeds` 训练子进程 300s 超时[慢 2 核 runner 资源边际 flake·
-  非逻辑断言·backend 码逐字节同 b998f7ee 绿],`gh run rerun` 后 25dac5af 全绿=**证实 flake 非回归**);5 Production=Unqueried;6 User acceptance=**Unverified**。
-  本 session 累计 land 进 main:S6 订阅 in-app 登录(656c85eb)·§11 PIT(0c926235)·F1 建侧(a2b6d534)·**F3 读侧完整性门(918daf7f,3 轮跨厂商 SOUND)**。
+- **六字段**:1 Local checkout=slice/model-switch-crossvendor @ **de002c86**(产品:系统级凭据 repr 泄露收口·10 类 secret 字段 repr=False + WS listen_key 全代化)+ 顶一个纯 dev/ 落档 commit;
+  2 Remote=**推 main**(fast-forward 校验后);
+  3 Local tests=**后端全量 6511 passed/13 skipped/0 failed**(分块 5 段实跑规避环境 kill 长任务:a-d 1623·e-l+bench 1258·m-r 2783·s-z+onboarding 846·training 1;真汇总行)+ compileall ✓ + git diff --check CLEAN + GOAL 零 diff。前端未改(不受影响)·perf harness 在 bench 分块内 passed;
+  4 CI=**Unqueried**(未 gh 实查本 commit);5 Production=Unqueried;6 User acceptance=**Unverified**。
+  **跨厂商 dual-model**:builder=Claude(deep-opus 实现 + 我 P1 stale-generation 补丁)·verifier=codex(GPT,3 轮 NOT SOUND→SOUND);approver≠creator。
+  本 session 累计 land 进 main:S6 订阅 in-app 登录(656c85eb)·§11 PIT(0c926235)·F1 建侧(a2b6d534)·**F3 读侧完整性门(918daf7f,3 轮跨厂商 SOUND)**·状态自洽修(b7bc8f2f)·**凭据 repr 收口(de002c86,3 轮跨厂商 SOUND)**。
 - **audit 基线四项**(不变):61 files / 20,339 lines / 26,209,663 bytes / sha `1c1788b0bbe2`。(改动全在 app/scripts/docs/dev,基线按构造不变。)
 - **✅ F3 §11 读侧 manifest 完整性门已 land(918daf7f,3 轮跨厂商 SOUND)**:真实 ashare_hs300 读价【前】拿磁盘字节 re-verify
   注册的不可变 manifest per-file sha256→fail-closed(drift/corruption/误置 防御)。**跨厂商 3 轮收敛**:deep-opus 建→我同厂商
