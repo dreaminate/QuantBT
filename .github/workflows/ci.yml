@@ -1,5 +1,8 @@
-# QuantBT CI —— 后端全量 + 前端测试/构建。
+# QuantBT CI —— 后端全量(分块并行) + 前端测试/构建。
 # 语义与本地最低验证一致:pytest 隔离 BACKTEST_DATA_ROOT + timeout 兜底,凭汇总行判绿。
+# 后端分 5 块并行跑(matrix),每块独立 runner——避免单进程 25min 满载把
+# 起子进程的测试(如训练 timeout 600s)饿死(实证:未分块时 test_training_pit_wiring
+# 的训练子进程被 CI 满载饿过 600s→killed→假失败,与本地分块跑绿一致)。
 # 不携带任何 secret:HS300 性能门在无真数据/无 pinned-key 环境诚实 KNOWN_RUN_GAP,
 # benchmark 测试全部走 fixture/monkeypatch,不触 Tushare。
 name: ci
@@ -16,7 +19,11 @@ concurrency:
 jobs:
   backend:
     runs-on: ubuntu-latest
-    timeout-minutes: 45
+    timeout-minutes: 30
+    strategy:
+      fail-fast: false
+      matrix:
+        chunk: [0, 1, 2, 3, 4]
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-python@v5
@@ -30,10 +37,22 @@ jobs:
         run: python -m pip install --upgrade pip && python -m pip install -r app/backend/requirements.txt
       - name: Compile check
         run: python -m compileall -q app/backend/app
-      - name: Backend full suite (isolated DATA_ROOT, timeout 兜底)
+      - name: Backend suite chunk ${{ matrix.chunk }} (isolated DATA_ROOT, timeout 兜底)
         run: |
+          set -u
+          # Portable round-robin (no mapfile): every 5th test file → this chunk.
+          # Test filenames have no spaces, so unquoted word-split is safe.
+          i=0
+          chunk=""
+          for f in $(ls app/backend/tests/test_*.py app/backend/tests/*/test_*.py 2>/dev/null | sort); do
+            if [ $(( i % 5 )) -eq ${{ matrix.chunk }} ]; then chunk="$chunk $f"; fi
+            i=$(( i + 1 ))
+          done
+          n=$(echo $chunk | wc -w)
+          echo "chunk ${{ matrix.chunk }}: $n files"
+          if [ "$n" -eq 0 ]; then echo "no files in chunk — collection error"; exit 1; fi
           export BACKTEST_DATA_ROOT="$(mktemp -d)"
-          timeout 2400 python -m pytest -q app/backend/tests
+          timeout 1200 python -m pytest -q -p no:cacheprovider $chunk
 
   frontend:
     runs-on: ubuntu-latest
