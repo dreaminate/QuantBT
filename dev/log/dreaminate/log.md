@@ -6,6 +6,8 @@
 ## <日期> · <标题>
 - 建/改了什么 + 命门  - 验收：<对抗测试 + 变异 + 全量数字>  - 下一步：<…> -->
 
+## 2026-07-16-1129 M6b agent epic 收官 land main(a8549fa8): SSE liveness 守卫(A1 idle+total timeout·A2 确定性 cancel·A2.5 EOF-but-alive bounded wait·A2.6 EOF-no-terminal honest error)+A3 --add-dir 路径穿越守+B4 opt-in 真 claude 冒烟(CI KNOWN_RUN_GAP skip)。跨厂商 codex floor 5 轮逮 3 真 correctness/honesty 洞+多处过强描述→逐条修 RED-then-revert→R5 FLOOR-HOLD。后端 6931/0+前端 430+perf 72。recovery: 本地曾落后 origin 86 commit→clean FF 到 7aa19eed(dd5c1800 checkpoint)。audit: 原 61 文件字节全等完整性未破(1c1788b0)+新增 gitignored goal_proof_ledger.sqlite(codex 探针 import app.main 非隔离触发·登记待用户)。
+
 ## 2026-07-16-0903 agent M6a 红线总断言+canvas_create_node 接线 land——duet 逮 argv 免确认白名单≠可达集,用户拍板保留内建工具(放权),红线总断言合成 L-A/L-C/L-D 跨 tier,跨厂商 codex 2 轮 FLOOR-HOLD,后端 6887/0 failed
 - canvas_create_node 之前不在 --allowed-tools=M5b 写工具默认 tier 不可达→修(L-D 恒钳 OFFLINE 安全)
 - 变异三门:runtime→test/place_order 入 registry/copy-all-env→canary 全 RED;诚实教训=duet 在写断言前拦下假红线断言
