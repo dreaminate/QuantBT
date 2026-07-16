@@ -42,6 +42,13 @@ from .events import (
 # ``Server("quantbt-agent-canvas")`` so the tool id resolves.
 MCP_SERVER_NAME = "quantbt-agent-canvas"
 CANVAS_READ_TOOL = f"mcp__{MCP_SERVER_NAME}__canvas_read"
+CANVAS_CREATE_NODE_TOOL = f"mcp__{MCP_SERVER_NAME}__canvas_create_node"
+# The two canvas MCP tools the agent may auto-use. Both are pre-approved in
+# --allowed-tools so a headless (-p) turn can actually create a node — the M5b
+# write tool would otherwise hit an unanswerable permission prompt at the default
+# tier. Auto-approving canvas_create_node is safe: the store clamps every canvas
+# create to an OFFLINE draft (L-D), owner==QB_OWNER, no live/venue reach.
+_CANVAS_MCP_TOOLS = (CANVAS_READ_TOOL, CANVAS_CREATE_NODE_TOOL)
 
 # Operational env vars the CLI + its node runtime need to start. Copied from the
 # parent env when present. SECRETS ARE DELIBERATELY ABSENT — the keystore master
@@ -189,22 +196,24 @@ def build_agent_argv(
         raise ValueError(f"model must not start with '-' (argv-injection guard): {model!r}")
 
     # Defense-in-depth atop --strict-mcp-config: strip ANY foreign mcp__* tool a
-    # caller passes. Only our canvas MCP tool may be an mcp__ tool. So even if
+    # caller passes. Only our TWO canvas MCP tools may be an mcp__ tool. So even if
     # --strict-mcp-config were ever bypassed, --allowed-tools alone cannot grant a
     # second MCP surface (e.g. a venue/order tool). Non-mcp CLI tools pass through.
     #
     # Claude re-splits --allowed-tools on comma OR space. So (a) split each element
     # on commas first (cleanly separates legit tools from a comma-smuggled one),
-    # and (b) drop any resulting token that contains "mcp__" ANYWHERE — not just at
-    # the start. That catches every smuggling separator: "Bash,mcp__evil__x"
-    # (comma) and "Bash mcp__evil__x" (space, dropped whole) both die, while the
-    # canvas tool is the sole permitted mcp token and paren specs like "Bash(git *)"
-    # (no "mcp__") pass through untouched. Cross-vendor floor finding (rounds 2-3).
+    # and (b) drop any resulting token that contains "mcp__" ANYWHERE unless it is
+    # one of our two canvas tools — not just at the start. That catches every
+    # smuggling separator: "Bash,mcp__evil__x" (comma) and "Bash mcp__evil__x"
+    # (space, dropped whole) both die, while the canvas tools are the sole permitted
+    # mcp tokens and paren specs like "Bash(git *)" (no "mcp__") pass through.
+    # Cross-vendor floor finding (rounds 2-3); both canvas tools pre-approved so a
+    # headless create-node turn is not blocked on an unanswerable permission prompt.
     tokens: list[str] = []
     for raw in allowed_tools:
         tokens.extend(part.strip() for part in str(raw).split(",") if part.strip())
-    safe_extra = [t for t in tokens if t != CANVAS_READ_TOOL and "mcp__" not in t]
-    tools = [CANVAS_READ_TOOL, *safe_extra]
+    safe_extra = [t for t in tokens if t not in _CANVAS_MCP_TOOLS and "mcp__" not in t]
+    tools = [*_CANVAS_MCP_TOOLS, *safe_extra]
     return [
         cli_path,
         "-p",

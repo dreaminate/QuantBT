@@ -16,11 +16,15 @@ from __future__ import annotations
 
 from app.agent.backends.base import BackendReadiness, PermissionTier
 from app.agent.backends.claude_backend import (
+    CANVAS_CREATE_NODE_TOOL,
     CANVAS_READ_TOOL,
     build_agent_argv,
     build_mcp_config,
     build_spawn_env,
 )
+
+# Both canvas MCP tools are pre-approved (M6): read + the OFFLINE-clamped write.
+_CANVAS_MCP = [CANVAS_READ_TOOL, CANVAS_CREATE_NODE_TOOL]
 
 _POISONED_ENV = {
     "PATH": "/usr/local/bin:/usr/bin",
@@ -143,7 +147,7 @@ def test_widening_tier_and_cli_tools_keeps_the_mcp_redline():
     assert "--strict-mcp-config" in argv
     tools = argv[argv.index("--allowed-tools") + 1].split(",")
     mcp_tools = [t for t in tools if t.startswith("mcp__")]
-    assert mcp_tools == [CANVAS_READ_TOOL], "widening tier must not add a second MCP tool"
+    assert mcp_tools == _CANVAS_MCP, "widening tier must not add an MCP tool beyond the two canvas tools"
 
 
 def test_argv_strips_foreign_mcp_tools_from_allowed_tools():
@@ -153,7 +157,7 @@ def test_argv_strips_foreign_mcp_tools_from_allowed_tools():
     argv = _argv(allowed_tools=("mcp__evil-server__place_order", "Bash", "mcp__venue__submit_order"))
     tools = argv[argv.index("--allowed-tools") + 1].split(",")
     mcp_tools = [t for t in tools if t.startswith("mcp__")]
-    assert mcp_tools == [CANVAS_READ_TOOL], f"foreign MCP tool leaked into allowed-tools: {mcp_tools}"
+    assert mcp_tools == _CANVAS_MCP, f"foreign MCP tool leaked into allowed-tools: {mcp_tools}"
     assert "Bash" in tools, "non-mcp CLI tools must still pass through"
 
 
@@ -164,7 +168,7 @@ def test_argv_rejects_comma_smuggled_foreign_mcp_tool():
     argv = _argv(allowed_tools=("Bash,mcp__evil__place_order", "Read,mcp__venue__submit"))
     tools = argv[argv.index("--allowed-tools") + 1].split(",")
     mcp_tools = [t for t in tools if t.startswith("mcp__")]
-    assert mcp_tools == [CANVAS_READ_TOOL], f"comma-smuggled foreign MCP tool leaked: {mcp_tools}"
+    assert mcp_tools == _CANVAS_MCP, f"comma-smuggled foreign MCP tool leaked: {mcp_tools}"
     assert "Bash" in tools and "Read" in tools, "the legitimate CLI tools should survive the split"
 
 
@@ -175,7 +179,7 @@ def test_argv_rejects_space_smuggled_foreign_mcp_and_keeps_paren_specs():
     argv = _argv(allowed_tools=("Bash mcp__evil__place_order", "Bash(git *)"))
     tools = argv[argv.index("--allowed-tools") + 1].split(",")
     mcp_tools = [t for t in tools if "mcp__" in t]
-    assert mcp_tools == [CANVAS_READ_TOOL], f"space-smuggled foreign MCP tool leaked: {mcp_tools}"
+    assert mcp_tools == _CANVAS_MCP, f"space-smuggled foreign MCP tool leaked: {mcp_tools}"
     assert "Bash(git *)" in tools, "a legitimate paren spec with a space must pass through"
 
 
