@@ -30,7 +30,7 @@
   下一步转用户可感知面(队列见 frontier)。
 
 ### 顶部刷新块（本轮值 · 每轮覆写）
-- **🔄 IN-PROGRESS 切片 = agent M5a「L-D CANVAS store 级 OFFLINE 红线（写命门地基）」(分支 `agent-m5-canvas-write-20260716`·从 main dc76b089·未 land)**。
+- **✅ agent M5a「L-D CANVAS store 级 OFFLINE 红线」已过四门·待 push land main(分支 `agent-m5-canvas-write-20260716`·从 main dc76b089·产品 c9c62630+dev 04a51557)**。**四门**：①后端全量分块 **6845 passed/13 skipped/0 failed**（5 chunk:940+1479+1508+1518+1400·signal timeout·真汇总行）+前端 430+build✓+compileall✓；②validate_dev PASS；③评审门=**跨厂商 codex floor tight-review FLOOR-HOLD**（design B·spiral run 61cmd 被 TaskStop→tight run 判 create-LIVE/escalate 拒·edit-preserve 放行·扩展不替换·replay/persist 覆盖·无 bypass）；④data/audit 基线无异常。**六字段**：1 Local=分支 04a51557；2 Remote=待 push；3 Tests=后端 6845/0 failed+前端 430；4 CI=Unqueried；5 Prod=Unqueried；6 User=Unverified。**NEXT**：push land→M5b（canvas_create_node 写工具·两 duet 思考者设计已备·Axis F=agent 全供[A.2 用户拍+UI 可改]·server.py 扩 3 注册点·QB_OWNER 从 env·扩 M1 floor 测 L-A/L-B）。
   - **背景**：实测确认红线 gap——CANVAS upsert runtime_status=LIVE 当前**成功落**（spine.py QRORecord 只默认 OFFLINE 非强制）。M5a = store 级不变量堵死（M5b canvas_create_node 写工具建于其上）。
   - **🔥 火力全开真 duet（用户令「多agent火力全开」后·deep-opus ‖ codex 并行独立设计 M5·我取并集裁决）**：**codex 出 design A（一律 CANVAS→OFFLINE），deep-opus 逮出 design A 会误伤 non-OFFLINE 资产的画布编辑**（set_canvas_parameter 用 replace() 保持 runtime·main.py:16183-16199·编辑 IDE 建的 PAPER 节点会带 runtime=PAPER 被 design A 误拒）。**采 deep-opus design B**：create-scoped OFFLINE 地板 + edit 保持 runtime（画布不转 runtime/env）——既拦红线又不误伤编辑。**并集裁决=parallel duet 逮出单思考者漏的 latent regression**。
   - **建**：spine.py ResearchGraphStore.apply CANVAS 分支加 design B 不变量（扩展不替换·owner 检查后·复用 existing）+ allowed_environment 防御加固。
