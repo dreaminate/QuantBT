@@ -30,7 +30,13 @@
   下一步转用户可感知面(队列见 frontier)。
 
 ### 顶部刷新块（本轮值 · 每轮覆写）
-- **✅ Claude-Code 内嵌 agent M1「无钥地基先立」已 LAND main(origin/main 7de74f9c→39c29092·产品 920eeaa5+dev 39c29092·CI in_progress run 29490458231)**。
+- **✅ Claude-Code 内嵌 agent M2「canvas_read 端到端」已过四门·待 land main(分支 `agent-m2-canvas-read-e2e-20260716`·从 main 9eec88b1·产品 commit 7e1dd20f)**。
+  - **建**：无钥 `canvas_read` 从只读节点扩到 **nodes+edges 语义投影**——`store.graph_edges()` lineage 关系（from/to/relation_type）限定双端点都在投影(owner 过滤)节点集内 → **owner 过滤透传隔离边**（A 永不见 A↔B / B↔B 边）。shape `{nodes, edges, count, edge_count}`·节点仍语义记录（**非前端像素布局**·refine finding §5「shape==前端契约」为 Inference·可翻案）。
+  - **对抗测试 4**（`test_agent_mcp_canvas_read_e2e.py`·e2e·经 `upsert_qro`/`record_graph_edge` 真命令路径播种）：owner A/B 节点隔离、**跨进程 append→read 可见**（另进程 store 写·agent store `refresh()` 见）、边 owner 隔离、边 shape。变异去双端点门→Bob 泄露 A 的边=红→字节还原。M1 floor 测 shape 断言同步更新。
+  - **四门全绿**：①后端全量分块 **6802 passed/13 skipped/0 failed**（5 chunk:1517+1395+971+1438+1481·各 gtimeout+`--timeout=120`·真汇总行·perf harness 在 chunk_3 内跑过）+ 前端 test:run **430 passed** + build✓ + compileall✓；②validate_dev PASS✓；③评审门=**跨厂商 codex 复审 SOUND**（probe 验 A-B/A-A/B-B 边隔离·tombstoned 排除·floor 仍 {canvas_read} 无新 import·读侧 byte-identical）；④data/audit 基线无异常（不碰 data/）。diff-check CLEAN·GOAL 零 diff。
+  - **六字段**：1 Local=分支 7e1dd20f（+dev commit 待提）；2 Remote=待 push；3 Tests=后端 6802 passed/0 failed+前端 430 passed（真汇总行·分块带 timeout）；4 CI=Unqueried（push 后 gh 查）；5 Prod=Unqueried；6 User acceptance=Unverified。
+  - **NEXT**：dev/ commit（finding+state）→ ff main+push→gh 查 CI。M2 land 后 M3（claude 后端 spawn 契约·argv/env builder 纯单测·**L-C spawn env 白名单**在此落·env 无订阅 token 无 master key）。
+- **✅ Claude-Code 内嵌 agent M1「无钥地基先立」已 LAND main+CI 绿(origin/main 39c29092·产品 920eeaa5+dev 39c29092·CI success run 29490552427[9eec88b1])**。
   用户 2026-07-16「放权给 user·只提供平台·别太严厉」+「含 canvas 写」+ 火力全开 duet 后，按 finding `[[claude-code-agent-impl-plan-duet-20260716]]` §5 起 M1（红线地基·只读 canvas_read；write 延 M5·先证无钥再上写工具）。
   - **建**：新兄弟包 `app/backend/app/agent_mcp/`（bare `__init__`）+ `server.py`（stdio 官方 mcp SDK 低层 `Server`+`stdio_server`·注册**恰好** `{canvas_read}`·只 import `app.paths`+`app.research_os.spine`）+ `tests/test_agent_mcp_redline_floor.py`（8 测）+ `requirements.txt` 钉 `mcp==1.28.1`。
   - **★ build 时逮 L-B 定位错并修**：finding 原写 `app/agent/mcp/`＝**错**——实测 `import app.agent` 级联载 `app.security.keystore`+`trading_credentials`（`__init__.py:17`→llm_providers）。Python 导子模块必先跑父包 `__init__`·无法 opt-out→server 必须落**兄弟包 `app/agent_mcp/`**（实测 `import app.agent_mcp.server`→**0 danger 模块**）。已回写 finding §3 ★M1 落地校正 + 模块表。

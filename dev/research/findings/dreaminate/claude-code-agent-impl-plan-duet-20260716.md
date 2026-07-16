@@ -68,7 +68,7 @@
 
 ## 5. 里程碑 M1–M6（顺序·各自独立测·每关对抗测试）
 - **M1 MCP 骨架+L-B 无钥(红线地基先立)**：起 stdio·附着规范 JSONL·注册 canvas_read。测：import server 断言 `OrderGuard/KeyBroker/place_order` 不可达+**不在 sys.modules**(镜 `test_realmoney_audit_killswitch` RULES.project.md:13)·注册表=={canvas_read}·变异让 server import main→红。
-- **M2 canvas_read 端到端**：owner-scoped 真投影。测：owner A/B 隔离·输出 shape==前端契约·另进程 append 后 read 能见(refresh 生效)。
+- **M2 canvas_read 端到端**（✅ **已建·commit 7e1dd20f**）：owner-scoped 真投影 + lineage edges。测：owner A/B 隔离·另进程 append 后 read 能见(refresh 生效)。**★ M2 落地校正**：原写「shape==前端契约」——**改为语义投影**（Inference·可翻案）。理由：前端 `_graph_canvas_projection`(main.py:15477) 产**像素布局节点**（x/y/w·ports·badge）供人看，且耦合 main.py 全局（L-B 不可 import）；嵌入 agent 的 LLM 要**语义内容**（type/owner/status/lineage/evidence）不要坐标。故 canvas_read 返 `{nodes[语义记录], edges[from/to/relation], count, edge_count}`·edges 限双端点在投影集内（owner 透传隔离）。跨厂商 codex SOUND（A-B/A-A/B-B 边隔离 probe）。
 - **M3 claude 后端+spawn 契约**：argv/env builder(纯单测不 spawn)。测：默认 tier argv 含 canvas 工具+strict-mcp+add-dir·**无** dangerous-skip·env **无**订阅 token·codex 未 auth→诚实 error 不 fallback·变异注 Bash/掉 strict-mcp/注 venue env→红·**tier 放宽不破红线**(开 dangerous-skip+全 CLI 工具·可调 MCP 工具集仍只两个)。
 - **M4 orchestrator+新路由**：scripted/replay 后端驱动 SSE。测：帧含 tool_start/end·未 auth→SSE error 不 fallback·owner scoping。
 - **M5 canvas_create_node 写+跨进程写回**：测：真写(qro 存在·owner==QB_OWNER·OFFLINE)·**跨进程可见**(MCP 写→API refresh→projection 见)·owner 伪造被拒(`spine.py:1685`)·不能建 LIVE·漏 assumptions/failure_modes/validation_plan→`__post_init__` 拒。
