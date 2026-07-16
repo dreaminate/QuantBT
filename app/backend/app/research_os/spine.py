@@ -1687,6 +1687,29 @@ class ResearchGraphStore:
                 existing = self._qros.get(qro.qro_id)
                 if existing is not None and str(existing.owner or "") != actor:
                     raise ResearchGraphError("Canvas QRO upsert cannot transfer ownership")
+                # ★ L-D 红线（agent 写命门·store 级不变量·跨厂商 duet design B）：canvas 是研究意图/
+                # 草稿面；paper/testnet/live 是经治理晋级达成的运行态，绝不许在画布【创建】或【晋级】。
+                # create-scoped OFFLINE 地板 + edit 保持 runtime（画布不转 runtime/env）——既拦红线
+                # （agent 不能建 live 节点、不能把 OFFLINE 节点在画布升 live），又不误伤合法编辑（如
+                # set_canvas_parameter 用 replace() 保持既有 runtime 改别的参数·main.py:16183-16199）。
+                # 覆盖内存 apply/持久预投影/replay 三路，与工具层默认独立。RULES A股永不实盘/不动真钱
+                # 在 agent 写路径的落点。design A（一律 OFFLINE）会误伤 non-OFFLINE 资产的画布编辑，已弃。
+                _canvas_incoming_runtime = _enum_text(qro.runtime_status)
+                _canvas_incoming_env = _enum_text(qro.allowed_environment)
+                if existing is None:  # 建：画布只能铸 OFFLINE 草稿
+                    if _canvas_incoming_runtime != RuntimeStatus.OFFLINE.value:
+                        raise ResearchGraphError(
+                            "Canvas can only create OFFLINE QROs; runtime promotion is governed off-canvas"
+                        )
+                    if _canvas_incoming_env != RuntimeStatus.OFFLINE.value:
+                        raise ResearchGraphError("Canvas can only create OFFLINE-environment QROs")
+                else:  # 改：画布不许转 runtime/env（晋级走治理，不走画布）
+                    if _canvas_incoming_runtime != _enum_text(existing.runtime_status):
+                        raise ResearchGraphError(
+                            "Canvas upsert cannot change runtime_status; runtime transitions are governed off-canvas"
+                        )
+                    if _canvas_incoming_env != _enum_text(existing.allowed_environment):
+                        raise ResearchGraphError("Canvas upsert cannot change allowed_environment")
             self._qros[qro.qro_id] = qro
             self._projection_index[qro.qro_id] = ResearchGraphProjectionRecord.from_qro_command(
                 command=command,
