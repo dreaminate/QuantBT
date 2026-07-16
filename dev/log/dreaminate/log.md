@@ -6,6 +6,10 @@
 ## <日期> · <标题>
 - 建/改了什么 + 命门  - 验收：<对抗测试 + 变异 + 全量数字>  - 下一步：<…> -->
 
+## 2026-07-16-0903 agent M6a 红线总断言+canvas_create_node 接线 land——duet 逮 argv 免确认白名单≠可达集,用户拍板保留内建工具(放权),红线总断言合成 L-A/L-C/L-D 跨 tier,跨厂商 codex 2 轮 FLOOR-HOLD,后端 6887/0 failed
+- canvas_create_node 之前不在 --allowed-tools=M5b 写工具默认 tier 不可达→修(L-D 恒钳 OFFLINE 安全)
+- 变异三门:runtime→test/place_order 入 registry/copy-all-env→canary 全 RED;诚实教训=duet 在写断言前拦下假红线断言
+
 ## 2026-07-16-0811 agent M4b 会话流路由+claude stream-json 解析器 land——内嵌 agent 一个 turn 端到端(spawn 真 claude→解析→SSE),L-C 白名单守 spawn env,跨厂商 codex R1 逮 3 洞→修→R2 FLOOR-HOLD,后端 6873/0 failed
 - 解析器真样本 oracle(实采 claude v2.1.210 消毒)逮 thinking 块/tool_result 省 is_error——手猜 schema 会洗错成绿
 - 变异四门:os.environ.copy→master key 泄漏 RED/thinking 外显 RED/error→Done RED/route refresh=None RED
