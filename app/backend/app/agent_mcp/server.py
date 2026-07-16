@@ -1,18 +1,20 @@
-"""No-key stdio MCP server — canvas-read floor (agent M1).
+"""No-key stdio MCP server — canvas read + create-node (agent M1 floor + M5b write).
 
 The embedded Claude-Code agent is fed ONLY by this server, so its entire tool
-reach is exactly what we register here. This M1 milestone lays the *red-line
-floor* and ships one read-only tool (``canvas_read``); the canvas WRITE tool
-(``canvas_create_node``) lands in a later slice, once this floor is
-cross-vendor verified. Sequencing the read-only floor first is deliberate: no
-write tool is registered before the no-key isolation is proven.
+reach is exactly what we register here. The M1 milestone laid the *red-line
+floor* and shipped the read-only tool (``canvas_read``); the canvas WRITE tool
+(``canvas_create_node``) is added here in M5b, built on top of the store-level
+L-D invariant (CANVAS create → OFFLINE only) proven in M5a. Sequencing the
+read-only floor first was deliberate: no write tool was registered before the
+no-key isolation was cross-vendor verified.
 
 Red-line floor (dev/research/findings/dreaminate/claude-code-agent-impl-plan-duet-20260716.md §3):
 
 - **L-A (non-registration).** ``registered_tool_names()`` is the single source of
-  truth for what the agent can call, and it is exactly ``{"canvas_read"}``. The
-  dispatcher rejects every other name. No venue / key / order-placement tool is
-  registered — not disabled, *absent*.
+  truth for what the agent can call, and it is exactly
+  ``{"canvas_read", "canvas_create_node"}``. The dispatcher rejects every other
+  name. No venue / key / order-placement tool is registered — not disabled,
+  *absent*. The write tool mints only OFFLINE drafts (L-D, store-enforced).
 - **L-B (no-import).** This module imports ONLY ``app.paths`` (os+pathlib) and
   ``app.research_os.spine``. Neither cascades into ``app.security.keystore``,
   ``KeyBroker``, ``place_order``, or any venue gateway. That is why this package
@@ -27,6 +29,7 @@ Runs as an independent stdio process via the official ``mcp`` SDK.
 from __future__ import annotations
 
 import json
+import os
 from pathlib import Path
 from typing import Any
 
@@ -38,16 +41,34 @@ from typing import Any
 # parallel one. Importing it loads no new module (spine is already imported).
 from app.paths import DATA_ROOT
 from app.research_os.spine import (
+    ActorSource,
+    DefinitionStatus,
+    EntrySource,
+    EvidenceStatus,
+    GovernanceStatus,
     PersistentResearchGraphStore,
+    QRORecord,
+    ResearchGraphCommand,
+    ResearchGraphError,
     ResearchGraphProjectionRecord,
+    RuntimeStatus,
     _persistent_research_graph_write_lock,
+    content_hash,
 )
 
+# L-B note: every name above comes from ``app.research_os.spine`` (which the M1
+# floor already imports with 0 danger modules) or ``app.paths`` (os+pathlib).
+# ``content_hash`` lives in spine's namespace via its own ``from ..lineage.ids``.
+# Binding write-path names adds NO new module to sys.modules — no keystore /
+# KeyBroker / place_order — so the write tool keeps L-B (re-proven by the floor test).
+
 CANVAS_READ = "canvas_read"
+CANVAS_CREATE_NODE = "canvas_create_node"
 
 # L-A: the agent's entire tool reach. The dispatcher and the MCP ``list_tools``
-# handler both derive from this set; nothing else is callable.
-_TOOL_NAMES = frozenset({CANVAS_READ})
+# handler both derive from this set; nothing else is callable. Exactly these two —
+# no venue/order/promotion tool is registered.
+_TOOL_NAMES = frozenset({CANVAS_READ, CANVAS_CREATE_NODE})
 
 # Same JSONL the API process (app.main) writes to. Captured at import time under
 # the active BACKTEST_DATA_ROOT, mirroring app.main:775.
@@ -169,6 +190,122 @@ def canvas_read(arguments: dict[str, Any] | None = None) -> dict[str, Any]:
     }
 
 
+def _agent_str_field(args: dict[str, Any], key: str) -> str:
+    value = args.get(key)
+    if not isinstance(value, str) or not value.strip():
+        raise ResearchGraphError(f"canvas_create_node: field {key!r} must be a non-empty string")
+    return value.strip()
+
+
+def _agent_tuple_field(args: dict[str, Any], key: str) -> tuple[str, ...]:
+    value = args.get(key)
+    if not isinstance(value, list) or not value:
+        raise ResearchGraphError(f"canvas_create_node: field {key!r} must be a non-empty list of strings")
+    out = tuple(str(x).strip() for x in value if isinstance(x, str) and str(x).strip())
+    if not out:
+        raise ResearchGraphError(f"canvas_create_node: field {key!r} must contain non-empty entries")
+    return out
+
+
+def canvas_create_node(arguments: dict[str, Any] | None = None) -> dict[str, Any]:
+    """Create an OFFLINE research-graph draft node on the canvas (agent write).
+
+    Layered responsibility (Axis F = agent-provides, per user D-EPIC-PRIORITY/A.2):
+    - The AGENT supplies the RESEARCH CONTENT: ``qro_type``, ``market``, ``universe``,
+      ``horizon``, ``frequency``, and the mandatory articulated fields ``assumptions``
+      / ``known_limits`` / ``failure_modes`` / ``validation_plan`` (each a non-empty
+      list). Optional ``input_contract``/``output_contract`` dicts, optional
+      ``lineage`` refs. The tool never synthesizes placeholder research content —
+      an omitted field is rejected (``QRORecord.__post_init__`` + these validators),
+      so the mandatory-field gate stays real (not decorative).
+    - The TOOL forces the SAFE platform envelope: ``owner = QB_OWNER`` (process env —
+      the agent cannot request a foreign owner; there is no ``owner`` argument),
+      ``actor = AGENT``, a fresh DRAFT/UNTESTED/OFFLINE draft with
+      ``allowed_environment = OFFLINE``, ``version = 1``, a content-derived
+      ``implementation_hash``. It never accepts owner/actor/status/qro_id/version.
+    - The STORE independently enforces the L-D red-line (CANVAS create → OFFLINE only)
+      and owner==actor, so even a bug here cannot land a live node or a foreign owner.
+    """
+
+    args = arguments or {}
+    owner = str(os.environ.get("QB_OWNER", "")).strip()
+    if not owner:
+        raise ResearchGraphError("canvas_create_node: QB_OWNER absent in agent env — no write identity")
+
+    qro_type = _agent_str_field(args, "qro_type")
+    market = _agent_str_field(args, "market")
+    universe = _agent_str_field(args, "universe")
+    horizon = _agent_str_field(args, "horizon")
+    frequency = _agent_str_field(args, "frequency")
+    assumptions = _agent_tuple_field(args, "assumptions")
+    known_limits = _agent_tuple_field(args, "known_limits")
+    failure_modes = _agent_tuple_field(args, "failure_modes")
+    validation_plan = _agent_tuple_field(args, "validation_plan")
+    input_contract = args["input_contract"] if isinstance(args.get("input_contract"), dict) else {}
+    output_contract = args["output_contract"] if isinstance(args.get("output_contract"), dict) else {}
+    extra_lineage = tuple(
+        x.strip() for x in (args.get("lineage") or []) if isinstance(x, str) and x.strip()
+    )
+
+    implementation_hash = "canvas_agent_draft:" + content_hash(
+        {
+            "qro_type": qro_type,
+            "owner": owner,
+            "market": market,
+            "universe": universe,
+            "horizon": horizon,
+            "frequency": frequency,
+            "assumptions": assumptions,
+            "known_limits": known_limits,
+            "failure_modes": failure_modes,
+            "validation_plan": validation_plan,
+            "input_contract": input_contract,
+            "output_contract": output_contract,
+        }
+    )
+
+    qro = QRORecord(
+        qro_type=qro_type,
+        owner=owner,
+        actor=ActorSource.AGENT.value,
+        input_contract=input_contract,
+        output_contract=output_contract,
+        market=market,
+        universe=universe,
+        horizon=horizon,
+        frequency=frequency,
+        lineage=("canvas_agent_draft", *extra_lineage),
+        implementation_hash=implementation_hash,
+        assumptions=assumptions,
+        known_limits=known_limits,
+        failure_modes=failure_modes,
+        validation_plan=validation_plan,
+        definition_status=DefinitionStatus.DRAFT,
+        evidence_status=EvidenceStatus.UNTESTED,
+        governance_status=GovernanceStatus.UNREVIEWED,
+        runtime_status=RuntimeStatus.OFFLINE,
+        permission="canvas.agent.create:agent",
+        allowed_environment=RuntimeStatus.OFFLINE,
+        version=1,
+    )
+    command = ResearchGraphCommand(
+        source=EntrySource.CANVAS,
+        command_type="upsert_qro",
+        actor_source=ActorSource.AGENT,
+        actor=owner,  # store requires command.actor == qro.owner (spine.py:1685)
+        payload={"qro": qro},
+    )
+    command_id = _store().apply(command)
+    return {
+        "qro_id": qro.qro_id,
+        "version": qro.version,
+        "command_id": command_id,
+        "projection_node_id": f"canvas_node:qro:{qro.qro_id}",
+        "owner": owner,
+        "runtime_status": qro.runtime_status.value,
+    }
+
+
 # --- MCP wiring (official low-level SDK) -----------------------------------
 
 _CANVAS_READ_INPUT_SCHEMA: dict[str, Any] = {
@@ -182,6 +319,47 @@ _CANVAS_READ_INPUT_SCHEMA: dict[str, Any] = {
         "evidence_status": {"type": "string"},
         "runtime_status": {"type": "string"},
     },
+    "additionalProperties": False,
+}
+
+# Axis F: the agent supplies all research content; there is deliberately NO
+# ``owner``/``actor``/``status``/``runtime_status``/``qro_id``/``version`` property —
+# the tool forces the safe envelope (owner=QB_OWNER, AGENT/DRAFT/OFFLINE) and the
+# store re-enforces L-D. The four articulated lists are ``required`` so an agent
+# cannot mint a research node without stating its assumptions/limits/failure
+# modes/validation plan (the mandatory-field gate is real, not decorative).
+_NONEMPTY_STR_LIST = {"type": "array", "items": {"type": "string"}, "minItems": 1}
+_CANVAS_CREATE_NODE_INPUT_SCHEMA: dict[str, Any] = {
+    "type": "object",
+    "properties": {
+        "qro_type": {"type": "string", "description": "QRO type (e.g. factor, model, strategy)."},
+        "market": {"type": "string", "description": "Market the node targets."},
+        "universe": {"type": "string", "description": "Universe / instrument set."},
+        "horizon": {"type": "string", "description": "Research horizon."},
+        "frequency": {"type": "string", "description": "Data / rebalancing frequency."},
+        "assumptions": {**_NONEMPTY_STR_LIST, "description": "Stated assumptions (>=1)."},
+        "known_limits": {**_NONEMPTY_STR_LIST, "description": "Known limitations (>=1)."},
+        "failure_modes": {**_NONEMPTY_STR_LIST, "description": "Failure modes (>=1)."},
+        "validation_plan": {**_NONEMPTY_STR_LIST, "description": "Validation plan (>=1)."},
+        "input_contract": {"type": "object", "description": "Optional input contract."},
+        "output_contract": {"type": "object", "description": "Optional output contract."},
+        "lineage": {
+            "type": "array",
+            "items": {"type": "string"},
+            "description": "Optional extra lineage refs (canvas_agent_draft is always prepended).",
+        },
+    },
+    "required": [
+        "qro_type",
+        "market",
+        "universe",
+        "horizon",
+        "frequency",
+        "assumptions",
+        "known_limits",
+        "failure_modes",
+        "validation_plan",
+    ],
     "additionalProperties": False,
 }
 
@@ -207,6 +385,18 @@ def build_tools() -> list[Any]:
             ),
             inputSchema=_CANVAS_READ_INPUT_SCHEMA,
         ),
+        types.Tool(
+            name=CANVAS_CREATE_NODE,
+            description=(
+                "Create one OFFLINE research-graph draft node on the canvas. You "
+                "supply the research content (qro_type, market, universe, horizon, "
+                "frequency, and the required assumptions/known_limits/failure_modes/"
+                "validation_plan lists). Owner is fixed by the environment and the "
+                "node is always a DRAFT/UNTESTED/OFFLINE draft — you cannot set "
+                "owner, status, runtime, or promote to live. Cannot touch keys/venues."
+            ),
+            inputSchema=_CANVAS_CREATE_NODE_INPUT_SCHEMA,
+        ),
     ]
 
 
@@ -217,8 +407,10 @@ def _dispatch(name: str, arguments: dict[str, Any] | None) -> dict[str, Any]:
         raise ValueError(f"unknown tool: {name!r} (agent tool reach is {sorted(_TOOL_NAMES)})")
     if name == CANVAS_READ:
         return canvas_read(arguments)
-    # Unreachable while _TOOL_NAMES == {canvas_read}; guards against silent
-    # drift if a name is added to the set without a handler.
+    if name == CANVAS_CREATE_NODE:
+        return canvas_create_node(arguments)
+    # Unreachable while every name in _TOOL_NAMES is routed above; guards against
+    # silent drift if a name is added to the set without a handler.
     raise ValueError(f"no handler wired for tool: {name!r}")
 
 

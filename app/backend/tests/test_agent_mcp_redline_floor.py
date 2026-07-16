@@ -1,7 +1,13 @@
-"""Red-line floor proof for the no-key agent MCP server (agent M1).
+"""Red-line floor proof for the no-key agent MCP server (agent M1 + M5b write).
 
 Guards L-A (non-registration) + L-B (no-import) from
 dev/research/findings/dreaminate/claude-code-agent-impl-plan-duet-20260716.md §3.
+
+The agent's exact tool reach is ``{canvas_read, canvas_create_node}`` — a
+read tool plus one OFFLINE-only write tool (M5b). L-A pins that set: no venue /
+key / order tool is registered, and adding the write tool did NOT breach L-B
+(it only bound spine symbols the module already imported — the fresh-interpreter
+probe re-proves zero key/venue modules load).
 
 The L-B purity check runs in a FRESH interpreter on purpose: pytest's own
 process has already imported app.main / keystore via other tests, so
@@ -10,6 +16,7 @@ the server *alone* pulls in no key/venue module.
 
 Mutation contract (RULES §2 种坏门必抓):
 - Register any extra tool in ``_TOOL_NAMES`` / ``build_tools`` → the L-A tests go RED.
+- Drop ``canvas_create_node`` from the registry → the two-tool assertions go RED.
 - Add ``import app.security.keystore`` (or any venue/key import) to the server
   module → ``test_import_loads_no_key_or_venue_module`` goes RED.
 """
@@ -88,29 +95,33 @@ def test_import_loads_no_key_or_venue_module():
     )
 
 
-def test_probe_registers_exactly_canvas_read():
-    """L-A: the clean interpreter reports the tool reach is exactly {canvas_read}."""
+def test_probe_registers_exactly_canvas_read_and_create():
+    """L-A: the clean interpreter reports the reach is exactly the two-tool set."""
 
     report = _run_probe()
-    assert report["tools"] == ["canvas_read"], (
+    assert report["tools"] == ["canvas_create_node", "canvas_read"], (
         f"L-A floor breach: agent tool reach drifted to {report['tools']}"
     )
 
 
-def test_registered_tool_names_is_exactly_canvas_read():
-    """L-A (in-process): the registry constant is exactly {canvas_read}."""
+def test_registered_tool_names_is_exactly_read_and_create():
+    """L-A (in-process): the registry constant is exactly {canvas_read, canvas_create_node}."""
 
     from app.agent_mcp import server
 
-    assert server.registered_tool_names() == frozenset({"canvas_read"})
+    assert server.registered_tool_names() == frozenset({"canvas_read", "canvas_create_node"})
 
 
 def test_dispatch_rejects_venue_and_order_tools():
-    """L-A: the dispatcher refuses every name outside the registry — no silent pass."""
+    """L-A: the dispatcher refuses every name outside the registry — no silent pass.
+
+    ``canvas_create_node`` is NO LONGER forbidden (it is the M5b write tool); the
+    forbidden set here is venue/key/order names that must never be reachable.
+    """
 
     from app.agent_mcp import server
 
-    for forbidden in ("place_order", "canvas_create_node", "read_keystore", "submit_order", ""):
+    for forbidden in ("place_order", "canvas_delete_node", "read_keystore", "submit_order", ""):
         with pytest.raises(ValueError):
             server._dispatch(forbidden, {})
 
