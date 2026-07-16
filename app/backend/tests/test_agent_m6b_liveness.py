@@ -355,17 +355,23 @@ def test_cancel_deterministically_kills_via_explicit_close():
 
 
 def test_cancel_reaps_real_spawned_child(stub_cli, tmp_path):
-    """End-to-end: cancel a real spawned (hanging) child via the orchestrator → reaped.
+    """End-to-end: cancel a real spawned (hanging) child by closing run()'s generator
+    → run()'s finally reaps it.
 
-    Long timeouts so CANCEL, not the timeout, ends it. Uses a pidfile the stub writes,
-    and self-bounds ``close()`` in a worker so a cleanup deadlock fails (not hangs).
+    Drives ``backend.run()`` DIRECTLY, NOT the orchestrator: the orchestrator's
+    ``preflight()`` requires a real subscription-``claude`` CLI (absent in CI, so it
+    would honestly short-circuit to an ``error`` frame before ever spawning). The
+    orchestrator's explicit-close propagation is covered by the spy test above; THIS
+    test proves run()'s own cancel-kill on a REAL subprocess, independent of any local
+    claude install. Long timeouts so CANCEL (not the timeout) ends it; self-bounds
+    ``close()`` in a worker so a cleanup deadlock fails (not hangs).
     """
 
     pidfile = tmp_path / "child.pid"
     backend = _backend(stub_cli, tmp_path, idle=30.0, total=60.0)
-    orch = SessionOrchestrator()
-    gen = orch.stream_events(backend=backend, owner="alice", prompt=f"FAKE_CLAUDE_MODE=hang\n{pidfile}")
-    assert next(gen)["event"] == "say"  # init → child spawned, now hanging
+    gen = backend.run(prompt=f"FAKE_CLAUDE_MODE=hang\n{pidfile}", owner="alice")
+    first = next(gen)  # init → child spawned, now hanging
+    assert isinstance(first, SessionStarted)
     for _ in range(60):
         if pidfile.exists():
             break
