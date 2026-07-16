@@ -6,6 +6,10 @@
 ## <日期> · <标题>
 - 建/改了什么 + 命门  - 验收：<对抗测试 + 变异 + 全量数字>  - 下一步：<…> -->
 
+## 2026-07-16-0718 agent M5b canvas_create_node 写工具 land——no-key MCP server 增 OFFLINE-only 建节点工具(Axis F agent 全供+tool 强制信封+store L-D 双层守),跨厂商 codex FLOOR-HOLD,后端 6855/0 failed
+- 变异四门 RED-then-revert:owner-from-args/forced-PAPER→store L-D/registry-drift/keystore-import
+- 本轮并归档金融数学 b4 gap 原文+P0-P3 分解草案+3 决策(D-CANVAS-NODE-FIELDS/D-CODEGEN-BRANCH-SESSION/D-B5-AUTO-RULINGS)
+
 ## 2026-07-15-1720 系统级凭据 repr 泄露收口 land(de002c86)——3 轮跨厂商 codex 到 SOUND
 - 用户拍「收敛具体模块直到 GOAL 全收口」后,选红线安全 module。深度审计先判 **A股永不实盘 HOLDS**(8 层 choke-point·无 env bypass),顺带逮**系统性**凭据泄露:裸 @dataclass/Pydantic 的 secret 字段经默认 repr/str/%s/traceback 明文渲染。
 - 跨厂商 codex 3 轮把关(**同厂商审+我自审两次漏,codex 每轮 refute**):①系统性 scope(我只锚 api_key/api_secret 字段名·漏 listen_key 等,codex 枚举 16 候选 runtime-probe 逮全)②**P1 stale-generation**(create_listen_key 轮换后老连接 `_on_error` 携【旧】key,`_redact` 只打码当前 key 漏→经 snapshot+audit export 外流,codex rotation 探针逮 leak=True)③SOUND to land。
