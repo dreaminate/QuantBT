@@ -167,6 +167,14 @@ def gate_promotion_traceability(
             GATE_PROMOTION_TRACEABILITY, False, ("asset_ref",),
             f"RDP 描述的资产({rdp.asset_ref}) ≠ 被晋级资产({promotion.asset_ref}) → 拒（张冠李戴）",
         )
+    if str(promotion.asset_kind) != str(rdp.asset_kind):
+        # asset_kind 也纳入追溯：`_build_promotion` 对 asset_kind 做 str() coercion 且不校验合法性，
+        # 一个 dict/list asset_kind 会 str-coerce 成非空却无法匹配 RDP 的 asset_kind → 洗白晋级追溯门。
+        # 三个可追溯字段（asset_ref/asset_kind/rdp_ref）都必须与 RDP 精确一致（张冠李戴/畸形即拒）。
+        return RDPGateOutcome(
+            GATE_PROMOTION_TRACEABILITY, False, ("asset_kind",),
+            f"RDP 资产类型({rdp.asset_kind!r}) ≠ 被晋级资产类型({promotion.asset_kind!r}) → 拒（类型张冠李戴/畸形）",
+        )
     # 追溯到的 RDP 本身必须是有效交付——追到一份残缺 RDP 不算可追溯。
     inner = validate_rdp(rdp)
     if not inner.ok:

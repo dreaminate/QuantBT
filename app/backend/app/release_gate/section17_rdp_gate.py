@@ -52,15 +52,27 @@ _ALL_SATISFIED = (
 def _build_promotion(d: Mapping[str, Any]) -> PromotionClaim:
     """manifest dict → canonical PromotionClaim（faithful·字段名即 dataclass 字段名）。
 
-    PromotionClaim 三必填（asset_ref/asset_kind/rdp_ref）全走 `str(... or "")`：空/缺 → 空串（由 gate4
-    `_blank` 判缺·诚实拒），绝不 raise（构造总成功）。`asset_kind` 不在此校验合法性（那是 gate4 关注的
-    asset_ref↔rdp.asset_ref 一致性·非 kind 合法性·与 RDPManifest 不同）。
+    三个可追溯必填（asset_ref/asset_kind/rdp_ref）**要求 exact str**：缺/None → 空串（gate4 `_blank`
+    判缺·诚实拒），非 str（dict/list/int）→ **ValueError**（由 `section17_rdp_check` 捕获成 malformed·
+    fail-closed）。原 `str(... or "")` 会把 dict/list str-coerce 成非空——asset_kind 有 RDP 侧 allowlist
+    兜底、但 **asset_ref 无 allowlist**，一个畸形输入的 str-repr 恰等于合法 asset_ref 即可洗白追溯门。
     """
 
+    def _exact(key: str) -> str:
+        v = d.get(key)
+        if v is None:
+            return ""
+        if not isinstance(v, str):
+            raise ValueError(
+                f"PromotionClaim.{key} must be a string, not {type(v).__name__} "
+                "(str()-coercing a mapping/list would launder a fabricated ref past gate4 traceability)"
+            )
+        return v
+
     return PromotionClaim(
-        asset_ref=str(d.get("asset_ref") or ""),
-        asset_kind=str(d.get("asset_kind") or ""),
-        rdp_ref=str(d.get("rdp_ref") or ""),
+        asset_ref=_exact("asset_ref"),
+        asset_kind=_exact("asset_kind"),
+        rdp_ref=_exact("rdp_ref"),
         requested_stage=str(d.get("requested_stage") or ""),
         actor=str(d.get("actor") or ""),
     )
@@ -120,7 +132,15 @@ def section17_rdp_check(
             missing=("section17_rdp_promotion_malformed",),
         )
 
-    promotion = _build_promotion(promo_dict) if promo_dict is not None else None
+    try:
+        promotion = _build_promotion(promo_dict) if promo_dict is not None else None
+    except (TypeError, ValueError):
+        # 畸形 promotion 字段（非 str asset_ref/asset_kind/rdp_ref）→ fail-closed（不 uncaught 崩整链）。
+        return GateCheckResult(
+            ok=False,
+            reason="§17 RDP 的 promotion 字段畸形（asset_ref/asset_kind/rdp_ref 非字符串）—— fail-closed 视为未过",
+            missing=("section17_rdp_promotion_malformed",),
+        )
 
     # —— 晋级断言在场却无 rdp（self-promote without RDP）→ canonical gate4 判「无 RDP 可追溯」→ 拒 ——
     # 复用 gate_promotion_traceability(promotion, None)（不重写·rdp=None ⇒ outcome.passed=False）。

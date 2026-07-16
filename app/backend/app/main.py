@@ -32581,11 +32581,63 @@ def research_os_trust_summary(user=Depends(require_user_dependency)) -> dict[str
 
 
 def _rdp_tuple(value: Any) -> tuple[str, ...]:
+    # §17 RDP payload sequence fields are JSON arrays of strings. The old
+    # ``return (str(value),)`` / ``str(v) for v in value`` str-coerced ANY scalar or
+    # mapping into a non-empty ref — a bare string, a number, or a nested dict all
+    # became a fabricated "ref" that whitewashes the §17 non-empty gates (门2/门3).
+    # Reject anything that isn't a real list/tuple of strings (raised ValueError →
+    # HTTPException 422 at the caller), never fabricate a ref by stringifying.
     if value in (None, "", [], ()):
         return ()
-    if isinstance(value, (list, tuple)):
-        return tuple(str(v) for v in value)
-    return (str(value),)
+    if isinstance(value, (str, bytes, bytearray)):
+        raise ValueError(
+            "RDP sequence field must be a JSON array of strings, not a bare scalar "
+            "(a bare string would be char-split / wrapped into a fabricated ref)"
+        )
+    if not isinstance(value, (list, tuple)):
+        raise ValueError(
+            f"RDP sequence field must be a JSON array of strings, not {type(value).__name__}"
+        )
+    for v in value:
+        if not isinstance(v, str):
+            raise ValueError(
+                f"RDP sequence field elements must be strings, got {type(v).__name__} "
+                "(str()-wrapping a mapping/number would fabricate a non-empty ref)"
+            )
+    return tuple(value)
+
+
+def _rdp_str(value: Any, default: str = "") -> str:
+    # §17 RDP scalar text fields (artifact_hash / reproducibility_command /
+    # residual_attestation / …). The old ``str(raw.get(x) or default)`` str-coerced a
+    # dict/list into a truthy fake value (e.g. ``str({...})``) that satisfies the
+    # gates' non-empty text check — a whitewash on the HTTP path. Absent → default;
+    # a real string passes through (empty → default, matching ``or``); anything else
+    # (mapping/list/number) is rejected (ValueError → HTTPException 422).
+    if value is None:
+        return default
+    if not isinstance(value, str):
+        raise ValueError(
+            f"RDP text field must be a string, not {type(value).__name__} "
+            "(str()-wrapping a mapping/list would fabricate a non-empty value)"
+        )
+    return value or default
+
+
+def _rdp_opt_str(value: Any) -> str | None:
+    # §17 RDP OPTIONAL text refs (approval_ref / rollback_plan_ref / retire_plan_ref /
+    # target_runtime). Absent stays None (the "not supplied" sentinel the manifest +
+    # validators distinguish); a real string passes through; a mapping/list is rejected
+    # (ValueError → 422) rather than str-coerced into a fabricated ref that whitewashes
+    # the live-deployment safety gates.
+    if value is None:
+        return None
+    if not isinstance(value, str):
+        raise ValueError(
+            f"RDP text ref must be a string, not {type(value).__name__} "
+            "(str()-wrapping a mapping/list would fabricate a non-empty ref)"
+        )
+    return value
 
 
 @dataclass(frozen=True)
@@ -32785,7 +32837,7 @@ def _rdp_manifest_from_payload(payload: dict[str, Any]) -> RDPManifest:
         else None
     )
     return RDPManifest(
-        research_question=str(raw.get("research_question") or ""),
+        research_question=_rdp_str(raw.get("research_question"), ""),
         graph_refs=_rdp_tuple(raw.get("graph_refs")),
         data_refs=_rdp_tuple(raw.get("data_refs")),
         dataset_version_refs=_rdp_tuple(raw.get("dataset_version_refs")),
@@ -32798,9 +32850,9 @@ def _rdp_manifest_from_payload(payload: dict[str, Any]) -> RDPManifest:
         responsibility_refs=_rdp_tuple(raw.get("responsibility_refs")),
         asset_refs=_rdp_tuple(raw.get("asset_refs")),
         code_refs=_rdp_tuple(raw.get("code_refs")),
-        environment_lock_ref=str(raw.get("environment_lock_ref") or ""),
-        reproducibility_command=str(raw.get("reproducibility_command") or ""),
-        artifact_hash=str(raw.get("artifact_hash") or ""),
+        environment_lock_ref=_rdp_str(raw.get("environment_lock_ref"), ""),
+        reproducibility_command=_rdp_str(raw.get("reproducibility_command"), ""),
+        artifact_hash=_rdp_str(raw.get("artifact_hash"), ""),
         test_refs=_rdp_tuple(raw.get("test_refs")),
         run_refs=_rdp_tuple(raw.get("run_refs")),
         honest_n_refs=_rdp_tuple(raw.get("honest_n_refs")),
@@ -32812,22 +32864,22 @@ def _rdp_manifest_from_payload(payload: dict[str, Any]) -> RDPManifest:
             if raw_unverified_residuals is None
             else _rdp_tuple(raw_unverified_residuals)
         ),
-        residual_attestation=str(raw.get("residual_attestation") or ""),
-        verifier_verdict_ref=str(raw.get("verifier_verdict_ref") or ""),
+        residual_attestation=_rdp_str(raw.get("residual_attestation"), ""),
+        verifier_verdict_ref=_rdp_str(raw.get("verifier_verdict_ref"), ""),
         compiler_artifact_refs=_rdp_tuple(raw.get("compiler_artifact_refs")),
         mathematical_spine_chain_refs=_rdp_tuple(raw.get("mathematical_spine_chain_refs")),
         goal_entrypoint_coverage_refs=_rdp_tuple(raw.get("goal_entrypoint_coverage_refs")),
-        trust_release_ref=str(raw.get("trust_release_ref") or ""),
-        approval_ref=raw.get("approval_ref"),
+        trust_release_ref=_rdp_str(raw.get("trust_release_ref"), ""),
+        approval_ref=_rdp_opt_str(raw.get("approval_ref")),
         deployment_refs=_rdp_tuple(raw.get("deployment_refs")),
         monitor_refs=_rdp_tuple(raw.get("monitor_refs")),
-        rollback_plan_ref=raw.get("rollback_plan_ref"),
-        retire_plan_ref=raw.get("retire_plan_ref"),
-        target_runtime=raw.get("target_runtime") or RuntimeStatus.OFFLINE.value,
+        rollback_plan_ref=_rdp_opt_str(raw.get("rollback_plan_ref")),
+        retire_plan_ref=_rdp_opt_str(raw.get("retire_plan_ref")),
+        target_runtime=_rdp_opt_str(raw.get("target_runtime")) or RuntimeStatus.OFFLINE.value,
         llm_call_refs=_rdp_tuple(raw.get("llm_call_refs")),
         source_file_refs=_rdp_tuple(raw.get("source_file_refs")),
-        package_id=str(raw.get("package_id") or ""),
-        manifest_version=str(raw.get("manifest_version") or "rdp.v3"),
+        package_id=_rdp_str(raw.get("package_id"), ""),
+        manifest_version=_rdp_str(raw.get("manifest_version"), "rdp.v3"),
     )
 
 
@@ -33970,7 +34022,10 @@ def research_os_rdp_record_manifest(
             "manifest_version": manifest.manifest_version,
             "recorded_by": user.username,
         }
-    except ValueError as exc:
+    except (ValueError, TypeError) as exc:
+        # TypeError covers the §17 shape guards (RDPManifest._ref_sequence /
+        # DatasetVersionRef.from_dict) rejecting a malformed payload — a bad request,
+        # so surface it as 422 rather than an uncaught 500.
         raise HTTPException(status_code=422, detail=str(exc)) from exc
 
 

@@ -39,6 +39,59 @@ def _tuple(value: Any) -> tuple[Any, ...]:
     return (value,)
 
 
+def _ref_sequence(name: str, value: Any) -> tuple[str, ...]:
+    """Normalize a §17 sequence-of-**strings** field, failing closed on scalar/shape misuse.
+
+    Three distinct whitewash vectors are closed here (RULES §2 种坏门必抓 · §3 不假绿灯):
+
+    1. **bare str/bytes** — ``tuple("skill::x")`` char-splits into
+       ``('s','k','i','l','l',...)``: a non-empty tuple that fools the §17 non-empty
+       gates (门2 dataset/ingestion refs, 门3 residual) into ``ok=True`` on one malformed
+       scalar. Silently wrapping (``("skill::x",)``) fixes the split but still lets a
+       blank ``""`` slip past 门3 as a 1-element tuple. So: reject, don't coerce.
+    2. **non-list/tuple iterables** — ``tuple(dict)`` yields its keys, ``tuple(memoryview)``
+       yields ints, a generator yields whatever it produces: each mis-expands a scalar/
+       mapping into a non-empty tuple the gate reads as "many refs". Only list/tuple are
+       legitimate sequence inputs; every other container fails closed.
+    3. **non-str elements** — a tuple carrying dicts/ints (e.g. from a payload adapter that
+       wrapped a mapping) would satisfy a pure non-empty check; require every element to be
+       a ``str`` so the gate's ``isinstance(x, str) and x.strip()`` filter can do its job.
+
+    NOTE this is only for **string-ref** fields. ``dataset_versions`` holds
+    ``DatasetVersionRef``/``dict`` objects, not strings, and is normalized + shape-checked
+    separately in ``RDPManifest.__post_init__`` (it is excluded from this guard).
+    """
+
+    if isinstance(value, (str, bytes, bytearray)):
+        raise TypeError(
+            f"{name} must be a sequence of strings, not a bare {type(value).__name__} "
+            f"(char-splitting a scalar would whitewash the §17 non-empty gate)"
+        )
+    if not isinstance(value, (list, tuple)):
+        raise TypeError(
+            f"{name} must be a list/tuple of strings, not {type(value).__name__} "
+            f"(dict/generator/memoryview/set mis-expand a scalar into a non-empty tuple that whitewashes the §17 gate)"
+        )
+    result = tuple(value)
+    for elem in result:
+        if not isinstance(elem, str):
+            raise TypeError(
+                f"{name} elements must be strings, got {type(elem).__name__} "
+                f"(a non-str element bypasses the §17 gate's non-empty-string filter)"
+            )
+        if not elem.strip():
+            # A blank/whitespace-only element is a well-typed but empty "ref": 门3
+            # only checks len(), so ("",) / ("   ",) would whitewash it into a
+            # "declared residual". Zero content is expressed by an EMPTY tuple (+
+            # strict-string residual_attestation for a claimed-zero residual), never
+            # by a tuple of blanks (RULES §3 不假绿灯).
+            raise TypeError(
+                f"{name} must not contain blank/whitespace-only strings "
+                f"(a blank element whitewashes the §17 non-empty gate; use an empty tuple for zero content)"
+            )
+    return result
+
+
 def _jsonable(value: Any) -> Any:
     if isinstance(value, Enum):
         return value.value
@@ -62,6 +115,18 @@ class DatasetVersionRef:
     version: str
     manifest_sha256: str = ""
 
+    def __post_init__(self) -> None:
+        # Guard the PLAIN constructor, not just ``from_dict``: a dict/list field
+        # would otherwise reach §17 门2 as ``dv.dataset_id.strip()`` and crash with
+        # AttributeError, or fabricate a truthy canonical ref (is_resolvable=True)
+        # that whitewashes the gate. A dataset ref field is an exact string.
+        for _name in ("dataset_id", "version", "manifest_sha256"):
+            _v = getattr(self, _name)
+            if not isinstance(_v, str):
+                raise TypeError(
+                    f"DatasetVersionRef.{_name} must be a string, not {type(_v).__name__}"
+                )
+
     def to_dict(self) -> dict[str, Any]:
         return asdict(self)
 
@@ -69,10 +134,24 @@ class DatasetVersionRef:
     def from_dict(cls, data: dict[str, Any]) -> "DatasetVersionRef":
         if not isinstance(data, dict):
             raise TypeError("DatasetVersionRef must be constructed from an object")
+
+        def _field(key: str) -> str:
+            raw = data.get(key)
+            if raw is None:
+                return ""
+            if not isinstance(raw, str):
+                # str(nested dict/list/scalar) would coerce a malformed value into a
+                # truthy fake identity (is_resolvable=True) that whitewashes §17 门2.
+                # A dataset ref field is a string or absent — reject anything else.
+                raise TypeError(
+                    f"DatasetVersionRef.{key} must be a string, not {type(raw).__name__}"
+                )
+            return raw
+
         return cls(
-            dataset_id=str(data.get("dataset_id") or ""),
-            version=str(data.get("version") or ""),
-            manifest_sha256=str(data.get("manifest_sha256") or ""),
+            dataset_id=_field("dataset_id"),
+            version=_field("version"),
+            manifest_sha256=_field("manifest_sha256"),
         )
 
     @property
@@ -229,13 +308,21 @@ class RDPManifest:
             "approval_refs",
         )
         for name in tuple_fields:
+            if name == "dataset_versions":
+                # Object field (DatasetVersionRef/dict, not str): normalized + shape-checked
+                # by the DatasetVersionRef loop below, not the string-ref guard.
+                continue
             value = getattr(self, name)
             if value is not None:
-                object.__setattr__(self, name, tuple(value))
+                object.__setattr__(self, name, _ref_sequence(name, value))
         if self.unverified_residuals is not None:
-            object.__setattr__(self, "unverified_residuals", tuple(self.unverified_residuals))
+            object.__setattr__(
+                self, "unverified_residuals", _ref_sequence("unverified_residuals", self.unverified_residuals)
+            )
         if self.unverified_residual is not None:
-            object.__setattr__(self, "unverified_residual", tuple(self.unverified_residual))
+            object.__setattr__(
+                self, "unverified_residual", _ref_sequence("unverified_residual", self.unverified_residual)
+            )
 
         normalized_dataset_versions: list[DatasetVersionRef] = []
         for value in self.dataset_versions:
@@ -252,7 +339,18 @@ class RDPManifest:
         def merge(name: str, values: tuple[str, ...]) -> None:
             current = tuple(getattr(self, name) or ())
             if not current and values:
-                object.__setattr__(self, name, tuple(dict.fromkeys(str(value) for value in values if str(value))))
+                # Legacy scalar aliases (deployment_plan / monitor_plan / research_graph_ref …)
+                # are projected into canonical ref fields HERE, after the tuple-field guard has
+                # already run — so ``str(value)`` would re-inject a dict/list/int as a fabricated
+                # non-empty ref that whitewashes the §17 / live-deployment gates. An alias source
+                # is an exact string or it is rejected (RULES §2/§3 — fail closed, no coercion).
+                for value in values:
+                    if not isinstance(value, str):
+                        raise TypeError(
+                            f"{name} alias source must be a string, not {type(value).__name__} "
+                            f"(str()-coercing a scalar alias would fabricate a non-empty §17 ref)"
+                        )
+                object.__setattr__(self, name, tuple(dict.fromkeys(v for v in values if v)))
 
         if not self.research_question and self.research_proposition:
             object.__setattr__(self, "research_question", self.research_proposition)
@@ -463,7 +561,11 @@ def validate_rdp_manifest(manifest: RDPManifest, *, has_user_waiver: bool = Fals
         )
 
     def required_text(field_name: str, value: str | None) -> None:
-        if not str(value or "").strip():
+        # A non-str value (dict/list from a raw payload) would str-coerce to a
+        # non-empty string and whitewash a required-text gate — incl. the live-
+        # deployment safety fields (approval_ref / rollback_plan_ref / retire_plan_ref).
+        # A required text ref is an exact non-blank string or it is missing.
+        if not isinstance(value, str) or not value.strip():
             violations.append(RDPViolation(f"missing_{field_name}", f"{field_name} is required"))
 
     def required_list(field_name: str, value: tuple[Any, ...]) -> None:
@@ -496,9 +598,12 @@ def validate_rdp_manifest(manifest: RDPManifest, *, has_user_waiver: bool = Fals
                 "unverified_residuals must be explicitly declared",
             )
         )
-    elif not manifest.unverified_residuals and not str(
-        manifest.residual_attestation or ""
-    ).strip():
+    elif not manifest.unverified_residuals and not (
+        isinstance(manifest.residual_attestation, str)
+        and manifest.residual_attestation.strip()
+    ):
+        # A non-str residual_attestation (dict/list) would str-coerce non-empty and
+        # whitewash the zero-residual attestation gate — require an exact non-blank string.
         violations.append(
             RDPViolation(
                 "missing_residual_attestation",
@@ -515,6 +620,28 @@ def validate_rdp_manifest(manifest: RDPManifest, *, has_user_waiver: bool = Fals
         required_list("responsibility_refs", manifest.responsibility_refs)
 
     runtime = str(manifest.target_runtime.value if isinstance(manifest.target_runtime, Enum) else manifest.target_runtime)
+    # Explicit deployment-target allowlist — NOT derived from the full RuntimeStatus
+    # lifecycle enum, which also carries end-states (suspended/retired) that are not
+    # valid deployment targets: deriving from the enum would let target_runtime="suspended"
+    # skip the live-required safety gates AND reach the deployment runner.
+    _valid_runtimes = {
+        RuntimeStatus.OFFLINE.value,
+        RuntimeStatus.PAPER.value,
+        RuntimeStatus.TESTNET.value,
+        RuntimeStatus.LIVE.value,
+    }
+    if runtime not in _valid_runtimes:
+        # A non-canonical runtime — "LIVE"/"live " (case/whitespace) or a str-coerced
+        # mapping — evades the exact-match live gate below (`runtime == "live"`) while a
+        # looser downstream deployment runner may still honour it: a gate/enforcement
+        # disagreement that would run live while skipping the live-required safety gates.
+        # Require an exact RuntimeStatus value.
+        violations.append(
+            RDPViolation(
+                "invalid_target_runtime",
+                f"target_runtime must be exactly one of {sorted(_valid_runtimes)}",
+            )
+        )
     if runtime in {RuntimeStatus.PAPER.value, RuntimeStatus.TESTNET.value, RuntimeStatus.LIVE.value}:
         required_text("approval_ref", manifest.approval_ref)
     if runtime == RuntimeStatus.LIVE.value:

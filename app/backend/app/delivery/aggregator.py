@@ -288,10 +288,10 @@ def aggregate_rdp(
     if not artifact_hash_final and artifact is not None:
         artifact_hash_final = content_hash(artifact)
 
-    # ── 未验证残余：保留 None 哨兵（未声明→门3 拒）；显式 list → tuple ──────────────
-    residual_final: tuple[str, ...] | None = (
-        None if unverified_residual is None else tuple(unverified_residual)
-    )
+    # ── 未验证残余：保留 None 哨兵（未声明→门3 拒）；非 None **原样透传**，由
+    #    RDPManifest.__post_init__ 的 _ref_sequence 单一守卫校验（标量/畸形容器/非 str 元素
+    #    fail-closed）。绝不在此 `tuple()` 预拆——`tuple("标量")` 会 char-split 洗白门3。
+    residual_final: Any = unverified_residual
 
     # ── 装配字段 dict（聚合器管理项）────────────────────────────────────────────────
     fields: dict[str, Any] = {
@@ -314,7 +314,8 @@ def aggregate_rdp(
         "reproducibility_command": reproducibility_command,
         "unverified_residual": residual_final,
         "residual_attestation": residual_attestation,
-        "known_limitations": tuple(known_limitations),
+        # 原样透传 → __post_init__ 的 _ref_sequence 守卫（不在此 tuple() 预拆洗白）。
+        "known_limitations": known_limitations,
         "promotion_record": promotion_record,
     }
 
