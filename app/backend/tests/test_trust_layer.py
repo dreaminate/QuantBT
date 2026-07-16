@@ -1298,3 +1298,115 @@ def test_trust_summary_and_same_ref_writes_are_isolated_by_stable_user_id(tmp_pa
         assert restored.json()["trust_claim_total"] == 1
     finally:
         main.app.dependency_overrides.pop(require_user_dependency, None)
+
+
+# ════════════════════════════════════════════════════════════════════════════
+# C-TRUST-COERCION-FAILCLOSED · Trust 释放门同族 coercion 收口 · 对抗测试（2026-07-16）
+#
+# 同 §17 RDP class：Trust HTTP 适配器旧 `str(payload.get(x) or "")` 把 dict/list str-coerce
+# 成伪造非空 ref → 下游 validate_external_expert_review(trust_layer.py:568) 对
+# reviewer_independence_ref/reviewer_ref/release_ref/artifact_ref/review_protocol_ref 仅
+# _present(非空)检查 → 洗白**独立性机制**(dual-model 门守的正是它)。已改走 _rdp_str/_rdp_tuple。
+# ★ 变异(种坏门必抓)：把适配器内 `_rdp_str` 弱回 `str(... or "")` → dict 字段被 str-coerce 成
+#   非空 → review 洗白成 **200**(fabricated independence 落盘) → 下列 422 用例转 RED；还原→GREEN。
+# ════════════════════════════════════════════════════════════════════════════
+_TRUST_GUARD_PHRASE = "must be a string"
+
+
+def _valid_expert_review_body(**overrides):
+    review = {
+        "release_ref": "release:v1",
+        "reviewer_ref": "expert:independent_quant_reviewer",
+        "reviewer_independence_ref": "independence:expert:001",
+        "artifact_ref": "rdp_package:release:v1",
+        "review_protocol_ref": "protocol:trust_release_review:v1",
+        "verdict": "approved",
+        "evidence_refs": ["evidence:expert-notes"],
+        "signed_attestation_ref": "attestation:expert-signature:001",
+    }
+    review.update(overrides)
+    return {"external_expert_review": review}
+
+
+@pytest.mark.parametrize(
+    "field",
+    ["reviewer_independence_ref", "reviewer_ref", "release_ref", "artifact_ref", "review_protocol_ref"],
+)
+def test_expert_review_dict_scalar_field_rejected_422(tmp_path, monkeypatch, field):
+    """★ 每个非空检查的 Trust expert-review 标量 ref 传 dict → 422 归因到 _rdp_str guard
+    （非 str-coerce 成伪造非空 ref 洗白独立性/reviewer 门）。reviewer_independence_ref 是命门。"""
+
+    client, _store, _check_store, _pressure_store, _approval_store, disclosure_store = _client_with_trust_store(
+        tmp_path, monkeypatch
+    )
+    try:
+        resp = client.post(
+            "/api/research-os/trust/expert_reviews",
+            json=_valid_expert_review_body(**{field: {"fake": "ref"}}),
+        )
+        assert resp.status_code == 422, (
+            f"{field}=dict 应 422（非洗白成 200），got {resp.status_code}: {resp.text[:200]}"
+        )
+        assert _TRUST_GUARD_PHRASE in resp.text, (
+            f"{field}=dict 的 422 未归因到 _rdp_str guard（异相 422·假绿）：{resp.text[:200]}"
+        )
+        assert len(disclosure_store.external_expert_reviews(owner_user_id="u1")) == 0
+    finally:
+        main.app.dependency_overrides.pop(require_user_dependency, None)
+
+
+def test_expert_review_evidence_refs_barestr_not_charsplit(tmp_path, monkeypatch):
+    """★ evidence_refs 传 bare str → 拒（旧 tuple(str(v) for v in "foo") char-split 成 ('f','o','o')
+    伪造多重 evidence）。_rdp_tuple 拒 bare str。"""
+
+    client, *_rest, disclosure_store = _client_with_trust_store(tmp_path, monkeypatch)
+    try:
+        resp = client.post(
+            "/api/research-os/trust/expert_reviews",
+            json=_valid_expert_review_body(evidence_refs="evidence:single-string"),
+        )
+        assert resp.status_code == 422, f"bare-str evidence_refs 应 422: {resp.text[:200]}"
+        assert len(disclosure_store.external_expert_reviews(owner_user_id="u1")) == 0
+    finally:
+        main.app.dependency_overrides.pop(require_user_dependency, None)
+
+
+def test_expert_review_honest_str_still_ok(tmp_path, monkeypatch):
+    """诚实 str 全字段 → 仍 200（真路径保真·_rdp_str/_rdp_tuple 不误伤）。"""
+
+    client, _store, _check_store, _pressure_store, _approval_store, disclosure_store = _client_with_trust_store(
+        tmp_path, monkeypatch
+    )
+    try:
+        resp = client.post("/api/research-os/trust/expert_reviews", json=_valid_expert_review_body())
+        assert resp.status_code == 200, resp.text
+        assert resp.json()["review_ref"].startswith("expert_review:")
+        assert len(disclosure_store.external_expert_reviews(owner_user_id="u1")) == 1
+    finally:
+        main.app.dependency_overrides.pop(require_user_dependency, None)
+
+
+@pytest.mark.parametrize(
+    "field", ["release_ref", "check_kind", "scenario_ref", "expected_behavior_ref", "observed_behavior_ref"]
+)
+def test_release_check_dict_scalar_field_rejected_422(tmp_path, monkeypatch, field):
+    """★ Trust release-check 标量 ref 传 dict → 422 归因到 _rdp_str guard。"""
+
+    client, *_ = _client_with_trust_store(tmp_path, monkeypatch)
+    body = {
+        "release_ref": "release:v1",
+        "check_kind": "adversarial_scenario",
+        "scenario_ref": "scenario:borrow-cost-spike",
+        "expected_behavior_ref": "expected:reject",
+        "observed_behavior_ref": "observed:reject",
+        "evidence_refs": ["evidence:1"],
+        "validation_result_refs": ["vr:1"],
+        "verdict": "passed",
+    }
+    body[field] = {"fake": "ref"}
+    try:
+        resp = client.post("/api/research-os/trust/release_checks", json=body)
+        assert resp.status_code == 422, f"{field}=dict 应 422: {resp.text[:200]}"
+        assert _TRUST_GUARD_PHRASE in resp.text, f"{field}=dict 未归因 guard: {resp.text[:200]}"
+    finally:
+        main.app.dependency_overrides.pop(require_user_dependency, None)

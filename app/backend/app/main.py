@@ -32013,15 +32013,21 @@ def _external_expert_review_from_payload(payload: dict[str, Any]) -> ExternalExp
         raise HTTPException(status_code=422, detail="external_expert_review payload must be an object")
     if "source_hash" in raw:
         return external_expert_review_from_dict(raw)
+    # Trust 释放门 scalar/sequence coercion 收口（同 §17 class·复用已验证 _rdp_str/_rdp_tuple）：
+    # reviewer_independence_ref / reviewer_ref / release_ref / artifact_ref / review_protocol_ref
+    # 下游 validate_external_expert_review 仅 _present(非空)检查（trust_layer.py:568）——str(dict)
+    # 伪造非空 ref 洗白**独立性机制**（dual-model 门守的正是它）。evidence_refs/veto_reason_refs 旧
+    # `tuple(str(v) for v in ... or ())` 对 bare str char-split、对 dict 迭代键=伪造多重 ref。
+    # 全改走 helper：非 str→ValueError→端点 except (ValueError,TypeError)→422。
     return record_external_expert_review(
-        release_ref=str(raw.get("release_ref") or ""),
-        reviewer_ref=str(raw.get("reviewer_ref") or ""),
-        reviewer_independence_ref=str(raw.get("reviewer_independence_ref") or ""),
-        artifact_ref=str(raw.get("artifact_ref") or ""),
-        review_protocol_ref=str(raw.get("review_protocol_ref") or ""),
-        verdict=str(raw.get("verdict") or ""),
-        evidence_refs=tuple(str(v) for v in raw.get("evidence_refs") or ()),
-        veto_reason_refs=tuple(str(v) for v in raw.get("veto_reason_refs") or ()),
+        release_ref=_rdp_str(raw.get("release_ref")),
+        reviewer_ref=_rdp_str(raw.get("reviewer_ref")),
+        reviewer_independence_ref=_rdp_str(raw.get("reviewer_independence_ref")),
+        artifact_ref=_rdp_str(raw.get("artifact_ref")),
+        review_protocol_ref=_rdp_str(raw.get("review_protocol_ref")),
+        verdict=_rdp_str(raw.get("verdict")),
+        evidence_refs=_rdp_tuple(raw.get("evidence_refs")),
+        veto_reason_refs=_rdp_tuple(raw.get("veto_reason_refs")),
         signed_attestation_ref=raw.get("signed_attestation_ref"),
         review_ref=raw.get("review_ref"),
         silent_mock_fallback_used=bool(raw.get("silent_mock_fallback_used", False)),
@@ -32039,12 +32045,14 @@ def _external_expert_signature_payload(payload: dict[str, Any]) -> dict[str, str
     raw = payload.get("external_expert_signature") if isinstance(payload.get("external_expert_signature"), dict) else payload
     if not isinstance(raw, dict):
         raise HTTPException(status_code=422, detail="external_expert_signature payload must be an object")
+    # Trust expert-signature scalar refs：拒非 str（dict/list str-coerce 成伪造 ref/签名）
+    # →端点 except (ValueError,TypeError)→422。
     return {
-        "review_ref": str(raw.get("review_ref") or ""),
-        "identity_ref": str(raw.get("identity_ref") or ""),
-        "signature_b64": str(raw.get("signature_b64") or ""),
-        "attestation_ref": str(raw.get("attestation_ref") or ""),
-        "verified_signature_ref": str(raw.get("verified_signature_ref") or ""),
+        "review_ref": _rdp_str(raw.get("review_ref")),
+        "identity_ref": _rdp_str(raw.get("identity_ref")),
+        "signature_b64": _rdp_str(raw.get("signature_b64")),
+        "attestation_ref": _rdp_str(raw.get("attestation_ref")),
+        "verified_signature_ref": _rdp_str(raw.get("verified_signature_ref")),
     }
 
 
@@ -32407,14 +32415,15 @@ def research_os_trust_record_release_check(
     try:
         record = TRUST_RELEASE_CHECK_REGISTRY.record_check(
             record_trust_release_check(
-                release_ref=str(payload.get("release_ref") or ""),
-                check_kind=str(payload.get("check_kind") or ""),
-                scenario_ref=str(payload.get("scenario_ref") or ""),
-                expected_behavior_ref=str(payload.get("expected_behavior_ref") or ""),
-                observed_behavior_ref=str(payload.get("observed_behavior_ref") or ""),
-                evidence_refs=tuple(str(v) for v in payload.get("evidence_refs") or ()),
-                validation_result_refs=tuple(str(v) for v in payload.get("validation_result_refs") or ()),
-                verdict=str(payload.get("verdict") or "passed"),
+                # Trust release-check scalar/sequence coercion 收口（同 §17·_rdp_str/_rdp_tuple）。
+                release_ref=_rdp_str(payload.get("release_ref")),
+                check_kind=_rdp_str(payload.get("check_kind")),
+                scenario_ref=_rdp_str(payload.get("scenario_ref")),
+                expected_behavior_ref=_rdp_str(payload.get("expected_behavior_ref")),
+                observed_behavior_ref=_rdp_str(payload.get("observed_behavior_ref")),
+                evidence_refs=_rdp_tuple(payload.get("evidence_refs")),
+                validation_result_refs=_rdp_tuple(payload.get("validation_result_refs")),
+                verdict=_rdp_str(payload.get("verdict"), "passed"),
                 check_ref=payload.get("check_ref"),
                 silent_mock_fallback_used=bool(payload.get("silent_mock_fallback_used", False)),
             ),
@@ -32433,7 +32442,7 @@ def research_os_trust_record_release_check_suite(
     try:
         owner = _formal_owner_user_id(user)
         gate, checks = record_trust_release_check_suite(
-            release_ref=str(payload.get("release_ref") or ""),
+            release_ref=_rdp_str(payload.get("release_ref")),
             checks=payload.get("checks") or (),
         )
         for check in checks:
@@ -32458,11 +32467,11 @@ def research_os_trust_record_pressure_run(
     try:
         owner = _formal_owner_user_id(user)
         run, gate, checks = record_trust_pressure_run(
-            release_ref=str(payload.get("release_ref") or ""),
-            runner_mode=str(payload.get("runner_mode") or ""),
+            release_ref=_rdp_str(payload.get("release_ref")),
+            runner_mode=_rdp_str(payload.get("runner_mode")),
             scenarios=payload.get("scenarios") or (),
-            evidence_refs=tuple(str(v) for v in payload.get("evidence_refs") or ()),
-            validation_result_refs=tuple(str(v) for v in payload.get("validation_result_refs") or ()),
+            evidence_refs=_rdp_tuple(payload.get("evidence_refs")),
+            validation_result_refs=_rdp_tuple(payload.get("validation_result_refs")),
             runner_ref=payload.get("runner_ref"),
             silent_mock_fallback_used=bool(payload.get("silent_mock_fallback_used", False)),
         )
