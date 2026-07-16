@@ -30,15 +30,14 @@
   下一步转用户可感知面(队列见 frontier)。
 
 ### 顶部刷新块（本轮值 · 每轮覆写）
-- **🔄 LAND-READY 待 push 切片=§17 RDP coercion 穷尽审计(用户令 a·跨厂商 COMPLETE·land 卡 push 放行)**。断点(parked 分支 `parked/s17-coercion-failopen-6rounds-20260715`):
+- **✅ §17 RDP coercion 穷尽审计已 LAND main(2026-07-16·用户放行「只要是好的就能 push」)**。origin/main **7fe5271f→b0af451d**(5 commit:6b231bdc R1-R6 系统修 + f0cb449d finding + 04cccb03 record 层 canonical 门 + bc4fff86 适配器层 + b0af451d 落档)·CI in_progress(run 29481615251)。断点(landed·分支 `parked/s17-coercion-failopen-6rounds-20260715` 已 push):
   - **record 构造层**(commit 04cccb03·前轮已 codex SOUND 到 R6)+ **HTTP 适配器层**(commit **bc4fff86**·本轮新)。
   - 本轮做完:main.py **9 个 RDP HTTP 适配器**(deployment_attestation×2·health_check·source_run_integrity·publish·external_publication×2·ci_release_attestation×2)+ 4 choke-point helper 的**直接 HTTP-payload 标量 ref** 全改走 `_rdp_str`(str(dict) 洗白→拒非 str→422);runner-result `str(raw_result.get)` 面**已机械验证 fail-closed**(`_validate_*_field_shapes` 拒 dict/list·SCALAR=ALLOWED−SEQUENCE),非直接 HTTP 面不改。
   - 对抗测试:endpoint 级(health 7 字段+deployment_attestation 真 POST→422+guard 归因)+ helper 级(ci_release+external_publication field builder)。**变异验证**:neuter rollback_readiness_ref→dict 洗白成 **200**(RED)·还原 byte-identical→GREEN。
   - **跨厂商 codex 复验 = round-3 判 COMPLETE**(builder=Claude·verifier=codex GPT xhigh 115k tok·approver≠creator)。R1 被 OpenAI cyber-risk 过滤拦·R2「search main.py」发散 TaskStop·**R3 diff-scoped 收敛**:独立 AST 扫 33300-34760 证①无遗漏标量面②`_rdp_str` 行为保真③residual fail-closed。**独立 AST 法与我 grep self-audit 殊途同归**。
-  - **⚠️ push 被 auto-mode classifier 拦**(读 loop 授权为非真人·public repo push 边界):bc4fff86 仅本地在 parked 分支,**未 push**。land(=push main)同被拦→**需真人放行 push 或加 Bash push 权限规则**。
-- **六字段**:1 Local=**parked @ bc4fff86**(适配器层 code)+ dev/ 落档 commit(finding R7+state·validate_dev PASS);2 Remote=**未 push(classifier 拦·待真人放行)**·未进 main;3 Tests=受影响 RDP+§17 **522 passed** + **后端全量分块 6645 passed/0 failed/13 skipped**(5 chunk:1182+851+776+3032+804·真汇总行·各带 1500s timeout)·compileall ✓·validate_dev PASS·diff --check CLEAN·GOAL 零 diff;4 CI=Unqueried;5 Prod=Unqueried;6 User acceptance=Unverified。
-- **✅ §17 全本地门过 = LAND-READY**：codex COMPLETE + 全量 6645/0 + 变异验 + 522 对抗。**唯一剩门=push**（classifier 拦·真人放行/加 Bash push 权限规则后即可 land main）。
-- **NEXT slice（已侦查·非用户门·可直接做）= Trust 释放门同族 coercion 收口**：`_external_expert_review_from_payload`(main.py:32017-32024) `str(raw.get(x) or "")` 洗白 **reviewer_independence_ref/verdict/release_ref/reviewer_ref/artifact_ref/review_protocol_ref**——`reviewer_independence_ref` 喂**独立性机制**(核心诚实不变量)·同 §17 class。§17 push 待放行期间切此片（独立 record 家族·自带 implement→test→跨厂商 cycle·勿并入已 COMPLETE 的 §17）。
+  - push：**用户 2026-07-16 明授权「可以放行·只要是好的就能 push」**(此前 auto-mode classifier 拦 loop 授权·真人放行后清)。此后 loop 内 push 好的已验证切片放行。
+- **六字段**:1 Local=main==**b0af451d**;2 Remote=**已 push·§17 已 land main**(origin/main b0af451d);3 Tests=受影响 RDP+§17 **522 passed** + **后端全量分块 6645 passed/0 failed/13 skipped**(5 chunk·真汇总行·各带 1500s timeout)·compileall ✓·validate_dev PASS·diff --check CLEAN·GOAL 零 diff;4 CI=**in_progress**(run 29481615251·待复查);5 Prod=Unqueried;6 User acceptance=Unverified。
+- **🔄 IN-PROGRESS 切片 = Trust 释放门同族 coercion 收口**(非用户门·同 §17 correctness class·从 main b0af451d 起新分支·复用已验证 `_rdp_str`)：`_external_expert_review_from_payload`(main.py:32017-32024) `str(raw.get(x) or "")` 洗白 **reviewer_independence_ref/verdict/release_ref/reviewer_ref/artifact_ref/review_protocol_ref**——`reviewer_independence_ref` 喂**独立性机制**(核心诚实不变量)。待验:各字段下游是 non-empty 检查(洗门)还是 allowlist/交叉校验(已 fail-closed)+ 其余 Trust adapter(trust_claim/release_check/approval/pressure_run)是否同族。self implement→对抗测试+变异→跨厂商 codex→land。
 - **audit 基线四项**(不变):61 files / 20,339 lines / 26,209,663 bytes / sha `1c1788b0bbe2`。(改动全在 app/tests,基线按构造不变。)
 - **✅ F3 §11 读侧 manifest 完整性门已 land(918daf7f,3 轮跨厂商 SOUND)**:真实 ashare_hs300 读价【前】拿磁盘字节 re-verify
   注册的不可变 manifest per-file sha256→fail-closed(drift/corruption/误置 防御)。**跨厂商 3 轮收敛**:deep-opus 建→我同厂商
