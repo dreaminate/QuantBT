@@ -36,6 +36,39 @@ def _value(value: Any) -> str:
     return str(value or "")
 
 
+def _req_str(data: dict[str, Any], key: str, default: str = "") -> str:
+    # Trust deserializer scalar-ref hygiene (同 §17 _rdp_str·放权-calibrated 不假绿灯):
+    # the old `str(data.get(key) or default)` str-coerced a dict/list into a fabricated
+    # non-empty ref (e.g. str({...})="{'x': 1}") that then passed the downstream _present
+    # non-empty check — whitewashing honesty/independence gates. Absent → default; a real
+    # string passes; a mapping/list/number is rejected (ValueError → HTTP 422 at the
+    # endpoint's except (ValueError, TypeError)). This is reject-non-str hygiene only — it
+    # does NOT force the ref to resolve to a real registered record (that stays the user's).
+    value = data.get(key)
+    if value is None:
+        return default
+    if not isinstance(value, str):
+        raise ValueError(
+            f"trust field {key!r} must be a string, not {type(value).__name__} "
+            "(a mapping/list would fabricate a non-empty ref)"
+        )
+    return value or default
+
+
+def _opt_str(data: dict[str, Any], key: str) -> str | None:
+    # Optional Trust scalar ref: absent stays None (the "not supplied" sentinel the
+    # validators distinguish); a real string passes; a mapping/list/number is rejected.
+    value = data.get(key)
+    if value is None:
+        return None
+    if not isinstance(value, str):
+        raise ValueError(
+            f"trust field {key!r} must be a string, not {type(value).__name__} "
+            "(a mapping/list would fabricate a non-empty ref)"
+        )
+    return value
+
+
 def _present(value: str | None) -> bool:
     return bool(str(value or "").strip())
 
@@ -1560,14 +1593,14 @@ def _decision_message(decision: TrustLayerDecision) -> str:
 def trust_claim_record_from_dict(data: dict[str, Any]) -> TrustClaimRecord:
     cold_start_n = data.get("cold_start_n")
     return TrustClaimRecord(
-        claim_ref=str(data.get("claim_ref") or ""),
-        claim_label=str(data.get("claim_label") or ""),
+        claim_ref=_req_str(data, "claim_ref"),
+        claim_label=_req_str(data, "claim_label"),
         evidence_refs=_tuple(data.get("evidence_refs")),
         weakness_refs=_tuple(data.get("weakness_refs")),
         weakness_visible_by_default=_bool_value(data.get("weakness_visible_by_default"), default=True),
         cold_start_n=int(cold_start_n) if cold_start_n not in (None, "") else None,
-        pressure_context=str(data.get("pressure_context") or ""),
-        user_waiver_ref=data.get("user_waiver_ref"),
+        pressure_context=_req_str(data, "pressure_context"),
+        user_waiver_ref=_opt_str(data, "user_waiver_ref"),
         waiver_weakness_visible_by_default=_bool_value(
             data.get("waiver_weakness_visible_by_default"),
             default=True,
@@ -1579,46 +1612,46 @@ def functional_independence_disclosure_from_dict(
     data: dict[str, Any],
 ) -> FunctionalIndependenceDisclosure:
     return FunctionalIndependenceDisclosure(
-        disclosure_ref=str(data.get("disclosure_ref") or ""),
-        mode=str(data.get("mode") or ""),
+        disclosure_ref=_req_str(data, "disclosure_ref"),
+        mode=_req_str(data, "mode"),
         claims_organizational_independence=_bool_value(data.get("claims_organizational_independence")),
-        isolated_validation_ref=data.get("isolated_validation_ref"),
-        immutable_evidence_ref=data.get("immutable_evidence_ref"),
-        second_confirmation_ref=data.get("second_confirmation_ref"),
-        alternate_model_verification_ref=data.get("alternate_model_verification_ref"),
-        organization_process_ref=data.get("organization_process_ref"),
+        isolated_validation_ref=_opt_str(data, "isolated_validation_ref"),
+        immutable_evidence_ref=_opt_str(data, "immutable_evidence_ref"),
+        second_confirmation_ref=_opt_str(data, "second_confirmation_ref"),
+        alternate_model_verification_ref=_opt_str(data, "alternate_model_verification_ref"),
+        organization_process_ref=_opt_str(data, "organization_process_ref"),
     )
 
 
 def external_expert_review_from_dict(data: dict[str, Any]) -> ExternalExpertReviewRecord:
     return ExternalExpertReviewRecord(
-        review_ref=str(data.get("review_ref") or ""),
-        release_ref=str(data.get("release_ref") or ""),
-        reviewer_ref=str(data.get("reviewer_ref") or ""),
-        reviewer_independence_ref=str(data.get("reviewer_independence_ref") or ""),
-        artifact_ref=str(data.get("artifact_ref") or ""),
-        review_protocol_ref=str(data.get("review_protocol_ref") or ""),
-        verdict=str(data.get("verdict") or ""),
-        source_hash=str(data.get("source_hash") or ""),
+        review_ref=_req_str(data, "review_ref"),
+        release_ref=_req_str(data, "release_ref"),
+        reviewer_ref=_req_str(data, "reviewer_ref"),
+        reviewer_independence_ref=_req_str(data, "reviewer_independence_ref"),
+        artifact_ref=_req_str(data, "artifact_ref"),
+        review_protocol_ref=_req_str(data, "review_protocol_ref"),
+        verdict=_req_str(data, "verdict"),
+        source_hash=_req_str(data, "source_hash"),
         evidence_refs=_tuple(data.get("evidence_refs")),
         veto_reason_refs=_tuple(data.get("veto_reason_refs")),
-        signed_attestation_ref=data.get("signed_attestation_ref"),
+        signed_attestation_ref=_opt_str(data, "signed_attestation_ref"),
         silent_mock_fallback_used=_bool_value(data.get("silent_mock_fallback_used")),
     )
 
 
 def external_reviewer_identity_from_dict(data: dict[str, Any]) -> ExternalReviewerIdentityRecord:
     return ExternalReviewerIdentityRecord(
-        identity_ref=str(data.get("identity_ref") or ""),
-        reviewer_ref=str(data.get("reviewer_ref") or ""),
-        identity_provider_ref=str(data.get("identity_provider_ref") or ""),
-        public_key_ref=str(data.get("public_key_ref") or ""),
-        public_key_pem=str(data.get("public_key_pem") or ""),
-        reviewer_independence_ref=str(data.get("reviewer_independence_ref") or ""),
+        identity_ref=_req_str(data, "identity_ref"),
+        reviewer_ref=_req_str(data, "reviewer_ref"),
+        identity_provider_ref=_req_str(data, "identity_provider_ref"),
+        public_key_ref=_req_str(data, "public_key_ref"),
+        public_key_pem=_req_str(data, "public_key_pem"),
+        reviewer_independence_ref=_req_str(data, "reviewer_independence_ref"),
         evidence_refs=_tuple(data.get("evidence_refs")),
-        public_key_fingerprint=str(data.get("public_key_fingerprint") or ""),
-        status=str(data.get("status") or "active"),
-        identity_hash=str(data.get("identity_hash") or ""),
+        public_key_fingerprint=_req_str(data, "public_key_fingerprint"),
+        status=_req_str(data, "status", "active"),
+        identity_hash=_req_str(data, "identity_hash"),
     )
 
 
@@ -1641,12 +1674,12 @@ def external_expert_signature_from_dict(data: dict[str, Any]) -> ExternalExpertS
 
 def user_autonomy_record_from_dict(data: dict[str, Any]) -> UserAutonomyRecord:
     return UserAutonomyRecord(
-        choice_ref=str(data.get("choice_ref") or ""),
-        agent_recommendation_ref=data.get("agent_recommendation_ref"),
+        choice_ref=_req_str(data, "choice_ref"),
+        agent_recommendation_ref=_opt_str(data, "agent_recommendation_ref"),
         tradeoff_refs=_tuple(data.get("tradeoff_refs")),
         alternative_path_refs=_tuple(data.get("alternative_path_refs")),
-        responsibility_boundary_ref=data.get("responsibility_boundary_ref"),
-        user_final_choice_ref=data.get("user_final_choice_ref"),
+        responsibility_boundary_ref=_opt_str(data, "responsibility_boundary_ref"),
+        user_final_choice_ref=_opt_str(data, "user_final_choice_ref"),
         agent_made_final_choice=_bool_value(data.get("agent_made_final_choice")),
         system_blocked_after_user_acceptance=_bool_value(data.get("system_blocked_after_user_acceptance")),
         redline_refs=_tuple(data.get("redline_refs")),

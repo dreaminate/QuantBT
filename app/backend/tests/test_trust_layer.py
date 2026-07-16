@@ -1410,3 +1410,82 @@ def test_release_check_dict_scalar_field_rejected_422(tmp_path, monkeypatch, fie
         assert _TRUST_GUARD_PHRASE in resp.text, f"{field}=dict 未归因 guard: {resp.text[:200]}"
     finally:
         main.app.dependency_overrides.pop(require_user_dependency, None)
+
+
+# ════════════════════════════════════════════════════════════════════════════
+# C-TRUST-COERCION-FROMDICT · Trust 反序列化层(from_dict)coercion 收口 · 对抗测试(2026-07-16)
+#
+# 审计(火力全开 S1/S2)逮：①`_external_expert_review_from_payload` 的 `if "source_hash" in raw`
+# 分支(main.py)绕过 inline `_rdp_str` → 落 unhardened `external_expert_review_from_dict`；②
+# `_functional_independence_disclosure_from_payload`/`_user_autonomy`/`_external_reviewer_identity`
+# 直走 from_dict·独立性/autonomy refs `data.get()` 原样 dict → 下游 `_present`(非空)洗白独立性机制。
+# 修：from_dict 标量 ref 全走 `_req_str`/`_opt_str`(拒非 str→ValueError→端点 except→422)。
+# ★ 变异：把 from_dict 的 `_req_str`/`_opt_str` 弱回 `str(... or "")`/`data.get()` → dict 洗白成 200 → RED。
+# ════════════════════════════════════════════════════════════════════════════
+def test_expert_review_source_hash_bypass_rejects_dict_independence(tmp_path, monkeypatch):
+    """★ source_hash 分支不再绕过守卫：带 source_hash + dict reviewer_independence_ref → 422
+    （旧 bypass 洗白成 200·伪造独立 reviewer 的独立性 ref）。"""
+
+    client, *_rest, disclosure_store = _client_with_trust_store(tmp_path, monkeypatch)
+    try:
+        resp = client.post(
+            "/api/research-os/trust/expert_reviews",
+            json=_valid_expert_review_body(source_hash="h", reviewer_independence_ref={"forged": 1}),
+        )
+        assert resp.status_code == 422, f"source_hash+dict independence 应 422（非 bypass 200）: {resp.text[:200]}"
+        assert _TRUST_GUARD_PHRASE in resp.text, f"未归因到 _req_str guard: {resp.text[:200]}"
+        assert len(disclosure_store.external_expert_reviews(owner_user_id="u1")) == 0
+    finally:
+        main.app.dependency_overrides.pop(require_user_dependency, None)
+
+
+@pytest.mark.parametrize(
+    "field",
+    ["isolated_validation_ref", "immutable_evidence_ref", "second_confirmation_ref", "alternate_model_verification_ref"],
+)
+def test_independence_disclosure_rejects_dict_independence_ref(tmp_path, monkeypatch, field):
+    """★ functional-independence 的独立性 ref 传 dict → 422（旧 raw data.get() → dict 过 _present
+    洗白 dual-model 独立性门·核心诚实不变量）。"""
+
+    client, *_rest, disclosure_store = _client_with_trust_store(tmp_path, monkeypatch)
+    body = {
+        "disclosure_ref": "independence:single_user:001",
+        "mode": "single_user",
+        "claims_organizational_independence": False,
+        "isolated_validation_ref": "validation:isolated:001",
+        "immutable_evidence_ref": "artifact_hash:rdp:001",
+        "second_confirmation_ref": "confirmation:user:001",
+        "alternate_model_verification_ref": "llm_call:critic:001",
+    }
+    body[field] = {"forged": 1}
+    try:
+        resp = client.post(
+            "/api/research-os/trust/independence_disclosures",
+            json={"independence_disclosure": body},
+        )
+        assert resp.status_code == 422, f"{field}=dict 应 422（非洗白独立性）: {resp.text[:200]}"
+        assert _TRUST_GUARD_PHRASE in resp.text, f"{field}=dict 未归因 guard: {resp.text[:200]}"
+    finally:
+        main.app.dependency_overrides.pop(require_user_dependency, None)
+
+
+def test_independence_disclosure_honest_str_still_ok(tmp_path, monkeypatch):
+    """诚实 str 独立性 refs → 仍 200（真路径保真）。"""
+
+    client, *_rest = _client_with_trust_store(tmp_path, monkeypatch)
+    body = {
+        "disclosure_ref": "independence:single_user:001",
+        "mode": "single_user",
+        "claims_organizational_independence": False,
+        "isolated_validation_ref": "validation:isolated:001",
+        "immutable_evidence_ref": "artifact_hash:rdp:001",
+        "second_confirmation_ref": "confirmation:user:001",
+        "alternate_model_verification_ref": "llm_call:critic:001",
+    }
+    try:
+        resp = client.post(
+            "/api/research-os/trust/independence_disclosures", json={"independence_disclosure": body}
+        )
+        assert resp.status_code == 200, resp.text
+    finally:
+        main.app.dependency_overrides.pop(require_user_dependency, None)
