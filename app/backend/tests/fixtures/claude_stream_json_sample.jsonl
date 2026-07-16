@@ -1,0 +1,9 @@
+{"type": "system", "subtype": "hook_started", "session_id": "00000000-test-4b00-0000-000000000000"}
+{"type": "system", "subtype": "hook_response", "session_id": "00000000-test-4b00-0000-000000000000"}
+{"type": "system", "subtype": "init", "session_id": "00000000-test-4b00-0000-000000000000", "model": "claude-test", "mcp_servers": [{"name": "quantbt-agent-canvas", "status": "connected"}]}
+{"type": "assistant", "message": {"role": "assistant", "content": [{"type": "thinking", "thinking": "(internal)", "signature": "sig"}]}}
+{"type": "assistant", "message": {"role": "assistant", "content": [{"type": "tool_use", "id": "toolu_01TauX9ioMNF3NRBQ6GHcwWh", "name": "Read", "input": {"file_path": "/Users/wzy/.claude/jobs/2f1df111/tmp/marker.txt"}}]}}
+{"type": "user", "message": {"role": "user", "content": [{"type": "tool_result", "tool_use_id": "toolu_01TauX9ioMNF3NRBQ6GHcwWh", "content": "1\tQUANTBT_MARKER_LINE_42\n2\t"}]}}
+{"type": "rate_limit_event", "session_id": "00000000-test-4b00-0000-000000000000"}
+{"type": "assistant", "message": {"role": "assistant", "content": [{"type": "text", "text": "文件内容两行：\n\n1. `QUANTBT_MARKER_LINE_42`\n2. `done`"}]}}
+{"type": "result", "subtype": "success", "is_error": false, "result": "文件内容两行：\n\n1. `QUANTBT_MARKER_LINE_42`\n2. `done`", "session_id": "00000000-test-4b00-0000-000000000000", "num_turns": 2}

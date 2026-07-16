@@ -36209,6 +36209,80 @@ def agent_workbench_stream(
     return StreamingResponse(event_stream(), media_type="text/event-stream")
 
 
+# --- Embedded Claude-Code agent session stream (agent M4b) -----------------
+
+
+def _build_session_backend(*, owner: str, model: str, tier_value: str):
+    """Factory for the backend an embedded-agent session stream drives.
+
+    Returns a real ``ClaudeBackend`` (spawns headless claude, fed ONLY by the no-key
+    canvas MCP server — data/venue/money tools are never registered). Isolated as a
+    module function so tests inject a ScriptedBackend without a live subscription and
+    without spawning claude. L-C: the backend builds its spawn env by allowlist
+    (``build_spawn_env``), never ``os.environ.copy()``, so no master key / venue
+    secret is handed to the agent.
+    """
+
+    import secrets as _secrets
+    from pathlib import Path as _Path
+
+    from .agent.backends.base import PermissionTier
+    from .agent.backends.claude_backend import ClaudeBackend
+
+    try:
+        tier = PermissionTier(tier_value)
+    except ValueError:
+        tier = PermissionTier.default()
+    backend_root = _Path(__file__).resolve().parents[1]  # app/backend (holds ``app/``)
+    workspace = DATA_ROOT / "agent_workspaces" / owner
+    # A per-session canvas-scope opaque id — NOT a KeyBroker capability token; it
+    # cannot be redeemed for a venue key (see build_spawn_env docstring).
+    canvas_token = _secrets.token_hex(16)
+    return ClaudeBackend(
+        model=model,
+        workspace_dir=workspace,
+        data_root=DATA_ROOT,
+        backend_root=backend_root,
+        canvas_token=canvas_token,
+        tier=tier,
+    )
+
+
+@app.get("/api/agent/session/stream")
+def agent_session_stream(
+    q: str = Query(..., description="user prompt for the embedded agent turn"),
+    permission_mode: str = Query("acceptEdits", description="claude --permission-mode / PermissionTier"),
+    model: str = Query("claude-sonnet-4-5", description="claude model id"),
+    request_id: str | None = Query(None),
+    current=Depends(require_user_dependency),
+):
+    """SSE：驱动内嵌 Claude-Code agent 一个 turn，映射成既有 SSE 词汇（agent M4b）。
+
+    - 后端只被无钥 canvas MCP server 喂——数据/venue/动钱工具根本不注册（结构性红线）。
+    - preflight 未就绪（CLI 未装 / 未订阅登录）→ 诚实 error + done，绝不回退内部 agent。
+    - agent 的 canvas 写经 ``RESEARCH_GRAPH_STORE.refresh()`` 跨进程对下次读可见。
+    事件（event:）：say / tool_start / tool_end / done / error（与 workbench 同一前端契约）。
+    """
+
+    from .agent.session_orchestrator import SessionOrchestrator
+
+    prompt = (q or "").strip()
+    owner = _formal_owner_user_id(current)
+
+    def event_stream():
+        from .agent.workbench_stream import sse_format
+
+        if not prompt:
+            yield sse_format("error", {"error": "empty prompt"})
+            yield sse_format("done", {"reason": "error"})
+            return
+        backend = _build_session_backend(owner=owner, model=model, tier_value=permission_mode)
+        orch = SessionOrchestrator(refresh_store=RESEARCH_GRAPH_STORE.refresh)
+        yield from orch.stream_sse(backend=backend, owner=owner, prompt=prompt)
+
+    return StreamingResponse(event_stream(), media_type="text/event-stream")
+
+
 @app.post("/api/strategy/submit_candidate")
 def strategy_submit_candidate(
     payload: dict = Body(...), user=Depends(require_user_dependency)
