@@ -36212,6 +36212,46 @@ def agent_workbench_stream(
 # --- Embedded Claude-Code agent session stream (agent M4b) -----------------
 
 
+def _agent_workspace_for_owner(owner: str):
+    """Validated agent workspace dir for ``owner`` — the ``--add-dir`` sandbox root.
+
+    ``owner`` (an auth user id) is joined into ``DATA_ROOT/agent_workspaces/<owner>``
+    and handed to ``claude --add-dir`` = a real FILESYSTEM GRANT. So a hostile /
+    malformed owner (``../..``, an absolute path, an embedded separator, a planted
+    symlink leaf) must NOT let the workspace escape the ``agent_workspaces`` root
+    (agent M6b path-traversal guard, cross-vendor duet / codex B7). Two
+    shape-independent layers so neither alone is load-bearing:
+      1. categorical allowlist — ``owner`` must be ONE clean path segment on a
+         conservative charset (the real ``user-<hex>`` id passes cleanly, so no false
+         rejection; ``''`` / ``.`` / ``..`` / any ``/`` or ``\\`` / absolute / nul is
+         rejected before it ever touches the filesystem).
+      2. resolved containment — the RESOLVED workspace must live strictly under the
+         RESOLVED root via ``is_relative_to`` (NOT a string prefix, which would admit
+         the sibling ``agent_workspaces_evil``), and the leaf must not be a symlink.
+    Invalid → ``ValueError`` (the SSE route turns it into an honest error frame).
+    """
+
+    import re
+    from pathlib import Path
+
+    seg = str(owner)
+    if (
+        seg in {".", ".."}
+        or seg != Path(seg).name
+        or not re.match(r"^[A-Za-z0-9][A-Za-z0-9._-]{0,63}$", seg)
+    ):
+        raise ValueError("invalid owner identity for agent workspace")
+    root = (DATA_ROOT / "agent_workspaces").resolve()
+    workspace = root / seg
+    resolved = workspace.resolve()
+    if resolved == root or not resolved.is_relative_to(root):
+        raise ValueError("owner workspace escapes agent_workspaces root")
+    workspace.mkdir(parents=True, exist_ok=True)
+    if workspace.is_symlink():
+        raise ValueError("owner workspace must not be a symlink")
+    return workspace
+
+
 def _build_session_backend(*, owner: str, model: str, tier_value: str):
     """Factory for the backend an embedded-agent session stream drives.
 
@@ -36234,7 +36274,9 @@ def _build_session_backend(*, owner: str, model: str, tier_value: str):
     except ValueError:
         tier = PermissionTier.default()
     backend_root = _Path(__file__).resolve().parents[1]  # app/backend (holds ``app/``)
-    workspace = DATA_ROOT / "agent_workspaces" / owner
+    # M6b: validate owner→workspace so a hostile owner can't escape the sandbox root
+    # that --add-dir grants filesystem reach to (raises ValueError → honest SSE error).
+    workspace = _agent_workspace_for_owner(owner)
     # A per-session canvas-scope opaque id — NOT a KeyBroker capability token; it
     # cannot be redeemed for a venue key (see build_spawn_env docstring).
     canvas_token = _secrets.token_hex(16)
@@ -36276,7 +36318,14 @@ def agent_session_stream(
             yield sse_format("error", {"error": "empty prompt"})
             yield sse_format("done", {"reason": "error"})
             return
-        backend = _build_session_backend(owner=owner, model=model, tier_value=permission_mode)
+        try:
+            backend = _build_session_backend(owner=owner, model=model, tier_value=permission_mode)
+        except ValueError as exc:
+            # M6b: invalid owner identity (workspace path-traversal guard) → honest
+            # error frame, never a spawned agent with an escaping --add-dir grant.
+            yield sse_format("error", {"error": str(exc)})
+            yield sse_format("done", {"reason": "error"})
+            return
         orch = SessionOrchestrator(refresh_store=RESEARCH_GRAPH_STORE.refresh)
         yield from orch.stream_sse(backend=backend, owner=owner, prompt=prompt)
 

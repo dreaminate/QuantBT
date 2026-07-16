@@ -350,6 +350,30 @@ def _coerce_tool_result(content: Any) -> dict[str, Any]:
     return {"content": content}
 
 
+def _init_mcp_server_names(raw: Any) -> tuple[str, ...]:
+    """Names of the MCP servers claude reports at ``init`` (defensive on shape).
+
+    claude's ``init`` line carries ``mcp_servers``; the exact element shape is NOT
+    pinned by a committed live sample (M6b honesty boundary — do not assume one).
+    We normalize BOTH plausible shapes without asserting either: a list of dicts
+    (``{"name": ..., "status": ...}``) and a bare list of name strings. Anything
+    else → empty tuple. The M6b opt-in real-smoke asserts the resulting tuple
+    equals exactly our one no-key server — proof of ``--strict-mcp-config``.
+    """
+
+    if not isinstance(raw, list):
+        return ()
+    names: list[str] = []
+    for item in raw:
+        if isinstance(item, dict):
+            name = item.get("name")
+            if isinstance(name, str) and name:
+                names.append(name)
+        elif isinstance(item, str) and item:
+            names.append(item)
+    return tuple(names)
+
+
 def parse_claude_stream_json_lines(lines: Iterable[str]) -> Iterator[BackendEvent]:
     """Map claude ``stream-json`` stdout lines → ``BackendEvent`` stream (PURE, no I/O).
 
@@ -381,7 +405,10 @@ def parse_claude_stream_json_lines(lines: Iterable[str]) -> Iterator[BackendEven
         etype = obj.get("type")
         if etype == "system":
             if obj.get("subtype") == "init":
-                yield SessionStarted(session_id=str(obj.get("session_id", "")))
+                yield SessionStarted(
+                    session_id=str(obj.get("session_id", "")),
+                    mcp_servers=_init_mcp_server_names(obj.get("mcp_servers")),
+                )
             continue
 
         if etype == "assistant":
@@ -470,6 +497,10 @@ class ClaudeBackend:
         cli_path: str = "claude",
         python_executable: str = "python",
         secrets_path: Path | None = None,
+        idle_timeout_s: float = 300.0,
+        total_timeout_s: float = 1800.0,
+        queue_maxsize: int = 4096,
+        eof_grace_s: float = 5.0,
     ) -> None:
         self._model = model
         self._workspace_dir = Path(workspace_dir)
@@ -481,6 +512,20 @@ class ClaudeBackend:
         self._cli_path = cli_path
         self._python_executable = python_executable
         self._secrets_path = secrets_path
+        # M6b liveness bounds (user policy / 放权 — reversible defaults). idle: max
+        # seconds the CHILD may produce NO stream-json before we treat it as hung
+        # ("init then hang" bug). total: hard wall-clock backstop for the slow-drip
+        # liveness attack an idle timer alone can't catch. Injectable so tests use
+        # sub-second bounds. Measured against child output, never consumer speed.
+        self._idle_timeout_s = float(idle_timeout_s)
+        self._total_timeout_s = float(total_timeout_s)
+        # Bounded reader queue. Small values are for tests that must force the
+        # queue-full-at-EOF path; production keeps the memory-capping default.
+        self._queue_maxsize = int(queue_maxsize)
+        # Grace for the child to EXIT after it closes stdout (we already have the full
+        # output). Bounds the post-EOF ``proc.wait`` so a child that EOFs stdout but
+        # lingers cannot hang the turn — the ``finally`` then reaps it (R3 finding).
+        self._eof_grace_s = float(eof_grace_s)
 
     def preflight(self) -> BackendReadiness:
         return preflight(secrets_path=self._secrets_path)
@@ -488,14 +533,45 @@ class ClaudeBackend:
     def run(self, *, prompt: str, owner: str, **kwargs: Any) -> Iterator[BackendEvent]:
         """Spawn claude, feed the prompt on stdin, yield parsed BackendEvents.
 
+        Liveness (agent M6b): while the caller KEEPS CONSUMING, the child cannot hang
+        the turn forever. A background reader thread drains stdout into a bounded
+        queue; the generator pulls with TWO deadlines — an IDLE deadline (the child
+        produced no output for ``idle_timeout_s`` → the real "init then hang" bug) and
+        a TOTAL wall-clock cap (``total_timeout_s`` → the slow-drip attack an idle
+        timer can't catch). On either, the child is killed and an honest timeout
+        ``BackendError`` is emitted (never a silent success). The idle clock measures
+        CHILD silence, NOT consumer slowness: a slow SSE consumer leaves lines
+        buffered in the queue (a full queue backpressures the child), so ``queue.get``
+        returns immediately and never idle-trips. The reader owns the only blocking
+        ``readline`` now; killing the child hands it EOF.
+
+        HONEST BOUND (do NOT overclaim — cross-vendor R2 finding): both deadlines are
+        only checked while the consumer PULLS the next line. If the consumer stops
+        pulling ENTIRELY (e.g. an HTTP client disconnects and the ASGI server does not
+        close this generator), neither deadline is CHECKED (the check only runs inside
+        the pull), so neither timeout fires (if the consumer later resumes, the very
+        next check may immediately hit the total deadline). The child may then be
+        blocked by stdout backpressure once the queue+pipe fill — but only IF it keeps
+        writing; a silent or CPU-looping child is not throttled by us — and it is
+        reaped only by an explicit ``close()`` (SessionOrchestrator's finally) or by
+        garbage collection. So the timeout is a backstop for a hung child *under
+        active consumption*, not a guaranteed reaper for an abandoned stream, and there
+        is no bound on an abandoned child's CPU/residency until GC. Route-level
+        disconnect hardening (``request.is_disconnected`` polling) is the real fix and
+        is a registered follow-up — see dev/state.
+
         Terminal honesty: a non-zero exit with no ``Done``/``BackendError`` already
-        emitted becomes a ``BackendError`` (never a silent success). Control-flow
-        exceptions propagate; the process is always cleaned up.
+        emitted becomes a ``BackendError``. Control-flow exceptions (incl.
+        ``GeneratorExit`` on client cancel) propagate; process + thread cleanup is
+        always attempted with bounded waits (the ``finally`` kill is what a cancel
+        rides — see SessionOrchestrator's explicit ``raw.close()``).
         """
 
+        import queue
         import subprocess
         import tempfile
         import threading
+        import time
 
         self._workspace_dir.mkdir(parents=True, exist_ok=True)
         mcp_config = build_mcp_config(
@@ -530,9 +606,10 @@ class ClaudeBackend:
             stderr=stderr_file,
             text=True,
         )
+
         def _feed_stdin() -> None:
             # Write the prompt on a SEPARATE thread so a large prompt can never
-            # deadlock against the child's stdout: the main thread reads stdout
+            # deadlock against the child's stdout: the reader thread drains stdout
             # concurrently with this write (cross-vendor floor finding — a prompt
             # bigger than the pipe buffer would otherwise block the writer while
             # claude blocks writing stdout that no one is draining).
@@ -543,26 +620,128 @@ class ClaudeBackend:
             except (BrokenPipeError, ValueError, OSError):
                 pass  # child exited early / stdin already closed — stdout carries the truth
 
+        # M6b: the ONE blocking readline lives on this reader thread (off the
+        # generator), so the idle deadline measures CHILD silence not CONSUMER
+        # slowness. Bounded queue caps memory and backpressures the child when the
+        # consumer is slow (a full queue means lines ARE present → the idle get()
+        # returns at once and cannot false-trip). ``stop`` releases a reader blocked
+        # on a full ``put`` when we tear down (cancel/timeout).
+        line_queue: "queue.Queue[object]" = queue.Queue(maxsize=self._queue_maxsize)
+        _EOF = object()
+        stop = threading.Event()
+
+        def _read_stdout() -> None:
+            try:
+                for line in proc.stdout or []:
+                    while not stop.is_set():
+                        try:
+                            line_queue.put(line, timeout=0.2)
+                            break
+                        except queue.Full:
+                            continue
+                    if stop.is_set():
+                        return
+            finally:
+                # Guarantee the EOF sentinel is delivered even if the queue is FULL at
+                # child-exit (fast producer + slow consumer): block until the consumer
+                # drains a slot, or until teardown (``stop``). A dropped sentinel would
+                # make a NORMAL completion look like an idle timeout once the backlog
+                # drains (cross-vendor floor finding — codex).
+                while not stop.is_set():
+                    try:
+                        line_queue.put(_EOF, timeout=0.2)
+                        break
+                    except queue.Full:
+                        continue
+
+        # [] | ["idle"] | ["total"] — closure-visible AFTER the deadline gen returns.
+        timeout_kind: list[str] = []
+
+        def _lines_with_deadline() -> Iterator[str]:
+            deadline = time.monotonic() + self._total_timeout_s
+            while True:
+                remaining = deadline - time.monotonic()
+                if remaining <= 0:
+                    timeout_kind.append("total")
+                    return
+                try:
+                    item = line_queue.get(timeout=min(self._idle_timeout_s, remaining))
+                except queue.Empty:
+                    # A timeout here means either deadline: if we are now past the TOTAL
+                    # budget it was the total backstop; otherwise the child produced
+                    # nothing for the idle window → idle. (A slow consumer leaves items IN
+                    # the queue, so get() would have returned — never a false idle.)
+                    timeout_kind.append("total" if time.monotonic() >= deadline else "idle")
+                    return
+                if item is _EOF:
+                    return
+                # Suspended here while the consumer is slow → the idle clock is NOT
+                # running (we are not in get()); the reader keeps draining stdout.
+                yield item  # type: ignore[misc]  # non-_EOF items are always str lines
+
         writer = threading.Thread(target=_feed_stdin, daemon=True)
+        reader = threading.Thread(target=_read_stdout, daemon=True)
         saw_terminal = False
         try:
             writer.start()
-            for event in parse_claude_stream_json_lines(proc.stdout or []):
+            reader.start()
+            # ONE parser call over the line-generator so the parser keeps its
+            # tool_use_id→name correlation state across lines.
+            for event in parse_claude_stream_json_lines(_lines_with_deadline()):
                 if isinstance(event, (Done, BackendError)):
                     saw_terminal = True
                 yield event
-            returncode = proc.wait()
-            if returncode != 0 and not saw_terminal:
-                stderr_file.seek(0)
-                tail = (stderr_file.read() or "").strip()[-500:]
-                yield BackendError(
-                    message=f"claude exited {returncode}: {tail}" if tail else f"claude exited {returncode}"
-                )
+            if timeout_kind:
+                if proc.poll() is None:
+                    proc.kill()
+                if timeout_kind[0] == "idle":
+                    yield BackendError(
+                        message=f"claude timed out: no output for {self._idle_timeout_s:g}s (agent hung)"
+                    )
+                else:
+                    yield BackendError(
+                        message=f"claude exceeded {self._total_timeout_s:g}s wall-clock budget"
+                    )
+            else:
+                # stdout hit EOF → we consumed the FULL stream. A well-behaved child
+                # exits at once; but a child that closes stdout yet lingers must NOT
+                # hang this generator on an unbounded wait — bound it, then let
+                # ``finally`` kill it (cross-vendor R3 finding). The grace bound (not the
+                # full turn budget) suffices: the output is already complete.
+                try:
+                    returncode: int | None = proc.wait(timeout=self._eof_grace_s)
+                except subprocess.TimeoutExpired:
+                    returncode = None  # EOF'd but still alive → finally reaps it
+                if not saw_terminal:
+                    # No Done/BackendError was produced — an ABNORMAL end that must be an
+                    # honest error, never a silent stream_ended (cross-vendor R4 finding:
+                    # an EOF'd-but-alive child with no terminal event was being masked as
+                    # a normal completion).
+                    if returncode is None:
+                        yield BackendError(
+                            message=(
+                                "claude closed stdout with no terminal result and did "
+                                f"not exit within {self._eof_grace_s:g}s"
+                            )
+                        )
+                    elif returncode != 0:
+                        stderr_file.seek(0)
+                        tail = (stderr_file.read() or "").strip()[-500:]
+                        yield BackendError(
+                            message=f"claude exited {returncode}: {tail}" if tail else f"claude exited {returncode}"
+                        )
+                    # returncode == 0 with no terminal → the child exited cleanly but
+                    # emitted no result line; the orchestrator's stream_ended covers it.
         finally:
+            stop.set()  # release the reader if it is blocked on a full queue.put
             if proc.poll() is None:
                 proc.kill()
-                proc.wait()
+                try:
+                    proc.wait(timeout=5)
+                except subprocess.TimeoutExpired:
+                    pass  # SIGKILL'd but wait() didn't return within the bound (rare OS/scheduling pathology) — never hang cleanup
             writer.join(timeout=5)  # let the stdin feeder unwind (stdin now closed on kill)
+            reader.join(timeout=5)  # let the stdout reader unwind (stdout EOF on kill)
             for stream in (proc.stdin, proc.stdout):
                 try:
                     if stream is not None:

@@ -20,6 +20,12 @@ class SessionStarted:
     """The backend session began (maps to a leading ``say``)."""
 
     session_id: str = ""
+    mcp_servers: tuple[str, ...] = ()
+    """MCP server names claude reports connected at ``init`` (from the init line's
+    ``mcp_servers``). Surfaced so the M6b opt-in real-smoke can assert it equals
+    exactly ``("quantbt-agent-canvas",)`` — evidence that ``--strict-mcp-config``
+    really pinned only our no-key server (codex B3). Empty when absent (fixtures /
+    older streams) so every existing caller keeps working (additive, default ())."""
 
 
 @dataclass(frozen=True)
@@ -86,7 +92,13 @@ def backend_events_to_sse(events: Iterable[BackendEvent]) -> Iterator[dict[str, 
 
     for ev in events:
         if isinstance(ev, SessionStarted):
-            yield {"event": "say", "data": {"text": f"agent session started: {ev.session_id}".strip()}}
+            say_data: dict[str, Any] = {"text": f"agent session started: {ev.session_id}".strip()}
+            if ev.mcp_servers:
+                # Surface the connected MCP servers so a consumer (and the M6b real
+                # smoke, which drives this SSE path) can see exactly which servers were
+                # pinned — additive; existing consumers ignore the extra key.
+                say_data["mcp_servers"] = list(ev.mcp_servers)
+            yield {"event": "say", "data": say_data}
         elif isinstance(ev, AssistantText):
             yield {"event": "say", "data": {"text": ev.text}}
         elif isinstance(ev, ToolCall):

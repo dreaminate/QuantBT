@@ -12,7 +12,10 @@ it with a ScriptedBackend and assert the SSE frames with no subprocess.
 
 from __future__ import annotations
 
+import logging
 from typing import Any, Callable, Iterator, Protocol
+
+_log = logging.getLogger(__name__)
 
 from .backends.base import BackendReadiness
 from .backends.events import (
@@ -42,10 +45,12 @@ class SessionOrchestrator:
         self, *, refresh_store: Callable[[], None] | None = None, max_events: int = 100_000
     ) -> None:
         self._refresh = refresh_store
-        # Liveness bound (cross-vendor floor finding): a backend that streams
-        # forever without a terminal event gets cut off with an honest error, so
-        # the SSE response can never hang indefinitely. Set high enough that a
-        # normal (chunked) turn never approaches it.
+        # Event-COUNT bound (cross-vendor floor finding): a backend that streams
+        # events forever WITHOUT a terminal one is cut off with an honest error once
+        # this many events pass. This bounds event count ONLY — not wall-clock, not a
+        # zero-output hung backend, and not a stopped consumer (those are the backend's
+        # idle/total timeout, and the disconnect residual documented in stream_events).
+        # Set high enough that a normal (chunked) turn never approaches it.
         self._max_events = max_events
 
     def _with_refresh(self, events: Iterator[BackendEvent]) -> Iterator[BackendEvent]:
@@ -87,8 +92,23 @@ class SessionOrchestrator:
         # malformed backend stream are dropped, and done is never duplicated. Any
         # exception during iteration (run()/refresh() raising) becomes an honest
         # error + terminal done — never a silent crash, never a fallback.
+        #
+        # ``raw`` is the backend's OWN generator, whose ``finally`` owns the child
+        # process kill. We hold it explicitly and ``close()`` it in ``finally`` so a
+        # cancel (client disconnect → GeneratorExit propagates in, it is a
+        # BaseException so the ``except Exception`` below does NOT swallow it) or ANY
+        # early return deterministically fires run()'s cleanup. Relying on the
+        # transitive GeneratorExit → GC cascade would defer the kill whenever a
+        # lingering reference (traceback frame / cycle) keeps the wrapper generators
+        # alive, leaking a live ``claude`` + its MCP child per disconnect (agent M6b,
+        # cross-vendor duet finding).
+        # ``raw`` is created INSIDE the try so an EAGER backend whose ``run()`` raises
+        # at call time (not a lazy generator) becomes an honest error frame, not an
+        # uncaught crash to the transport (cross-vendor floor finding — codex).
+        raw = None
         try:
-            stream = self._with_refresh(backend.run(prompt=prompt, owner=owner, **run_kwargs))
+            raw = backend.run(prompt=prompt, owner=owner, **run_kwargs)
+            stream = self._with_refresh(raw)
             count = 0
             for sse in backend_events_to_sse(stream):
                 count += 1
@@ -114,6 +134,45 @@ class SessionOrchestrator:
             yield {"event": "error", "data": {"message": f"agent stream failed: {exc}"}}
             yield {"event": "done", "data": {"reason": "error"}}
             return
+        finally:
+            # Deterministic child cleanup when THIS generator is closed (explicit
+            # close, or ANY early return): closing ``raw`` throws GeneratorExit INTO
+            # run() at its yield → run()'s finally → proc.kill(). Idempotent after
+            # normal completion; guarded so a non-generator iterator (no ``close``) is
+            # a safe no-op; and best-effort so a cleanup error in ``close()`` can never
+            # leak to the transport after a terminal frame (both cross-vendor floor
+            # findings — codex).
+            #
+            # HONEST RESIDUAL (do not overclaim): this deterministic reap fires only
+            # when THIS generator is actually closed. A real HTTP client disconnect
+            # closing it depends on the ASGI server's streaming semantics — Starlette
+            # 1.1.0's sync-generator iteration does NOT force the close. And on an
+            # abandoned (never-closed) generator the idle/total timeout does NOT reap
+            # it either: the deadlines are only CHECKED while the consumer pulls a
+            # line, so a stopped consumer means no check runs and neither timeout
+            # fires. The child MAY then be blocked by stdout backpressure once our
+            # queue+pipe fill (IF it keeps writing) — but a child that goes silent or
+            # loops elsewhere is not throttled by us, so there is NO bound on child CPU
+            # or process residency here. Our reader thread keeps a low-frequency poll
+            # (retry put ~every 0.2s) until the generator is garbage-collected — GC
+            # closes it → run()'s finally sets ``stop``, kills the child, joins the
+            # reader. L-C/L-D still hold throughout (no key/venue reach). This is a
+            # pre-existing resource residual (each abandoned turn = one live-or-blocked
+            # claude + its MCP child + a 0.2s-poll reader thread until GC; NO proven
+            # cap on CPU/process accumulation before GC), not a security boundary. The
+            # idle/total timeout DOES reap the common case (a hung child while we are
+            # still consuming). Route-level disconnect hardening (is_disconnected
+            # polling) is the real fix — a registered follow-up (see dev/state).
+            if raw is not None:
+                close = getattr(raw, "close", None)
+                if callable(close):
+                    try:
+                        close()
+                    except Exception as close_exc:  # noqa: BLE001 — must not leak to transport
+                        # ...but a REAL cleanup failure (e.g. proc.kill/wait) must not be
+                        # silently lost — record it so an unreaped child is observable
+                        # (cross-vendor R2 finding — codex).
+                        _log.warning("agent backend cleanup (close) failed: %s", close_exc)
 
         # Backend ended without an explicit Done → still emit a terminal frame.
         yield {"event": "done", "data": {"reason": "stream_ended"}}
