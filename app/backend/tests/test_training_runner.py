@@ -39,7 +39,14 @@ def _panel(n: int = 360, seed: int = 0) -> pd.DataFrame:
 
 
 def _svc(tmp_path: Path) -> TrainingService:
-    return TrainingService(root=tmp_path / "training_runs", timeout=300)
+    # CI 慢/满载 runner 下起子进程的训练测试会被**饿死**（`ci.yml` 头注实证：未分块时
+    # test_training_pit_wiring 被饿死 → 才分的 5 块）。**300s 已被实证不足**：兄弟测试
+    # test_training_pit_wiring.py:230 走过 120→300→**600**，注中记「300s 仍在 22:48 慢 run 被杀,实证」。
+    # 本测试仍用当年被证不足的 300s → CI run 29564732867 backend(1) 红在
+    # `test_service_code_path_succeeds`「训练超时(300s)被终止」（本地 7086/0 内它是过的·脚本本身
+    # ~2s）。故对齐到兄弟测试的实证值 600s。**不弱化断言**（status/rows 断言原样）：真坏的训练路
+    # 仍会失败·只是 600s 才浮出。
+    return TrainingService(root=tmp_path / "training_runs", timeout=600)
 
 
 # ───────────────── run_code（全功率进程） ─────────────────
@@ -89,8 +96,8 @@ def test_codegen_ml_runs_as_process(tmp_path: Path) -> None:
     job_dir = tmp_path / "job"
     job_dir.mkdir()
     _panel().to_parquet(job_dir / "panel.parquet")
-    res = run_code(
-        code, job_dir, env_extra={"QUANTBT_PANEL_PATH": str(job_dir / "panel.parquet")}, timeout=300
+    res = run_code(  # 600s：同上·对齐 test_training_pit_wiring 的实证值（300s 在慢 CI runner 被证不足）
+        code, job_dir, env_extra={"QUANTBT_PANEL_PATH": str(job_dir / "panel.parquet")}, timeout=600
     )
     assert res.ok, res.stderr[-800:]
     assert "r2" in res.emit["oos_metrics"]
