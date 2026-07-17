@@ -28,6 +28,7 @@ from app.models.walk_forward_v2 import (
     run_walk_forward_v2,
 )
 from app.portfolio.hrp_audit import (
+    constant_shrinkage,
     is_near_singular,
     ledoit_wolf_shrinkage,
     optimize_hrp_safe,
@@ -228,8 +229,8 @@ def test_hrp_high_correlation_falls_back():
     returns = np.column_stack([base + np.random.randn(4) * 0.0001 for _ in range(n_assets)])
     symbols = [f"X{i}" for i in range(n_assets)]
     result = optimize_hrp_safe(returns, symbols, singularity_threshold=1e-4)
-    # 应该 fallback shrunk / risk_parity
-    assert result.fallback_used in ("hrp_shrunk", "risk_parity")
+    # 应该 fallback shrunk / inverse_volatility（codex floor4 #4 诚实名·原错标 risk_parity）
+    assert result.fallback_used in ("hrp_shrunk", "inverse_volatility")
     assert result.singularity_detected is True
     # 权重无 NaN
     assert all(math.isfinite(w) for w in result.weights.values())
@@ -244,7 +245,7 @@ def test_hrp_extreme_corr_99_falls_back():
     returns = np.column_stack([base.copy() for _ in range(5)])
     symbols = [f"Y{i}" for i in range(5)]
     result = optimize_hrp_safe(returns, symbols, singularity_threshold=1e-4)
-    assert result.fallback_used in ("hrp_shrunk", "risk_parity", "equal_weight")
+    assert result.fallback_used in ("hrp_shrunk", "inverse_volatility")  # 多资产不降到 equal_weight（codex floor4 #5·仅空/单资产）
     assert all(math.isfinite(w) for w in result.weights.values())
 
 
@@ -255,8 +256,8 @@ def test_hrp_single_asset_returns_100pct():
     assert result.fallback_used == "equal_weight"
 
 
-def test_hrp_diagonal_cov_equivalent_to_risk_parity():
-    """协方差是对角阵 → fallback risk_parity 结果与 inverse-vol 接近."""
+def test_hrp_diagonal_cov_equivalent_to_inverse_volatility():
+    """协方差是对角阵 → fallback inverse_volatility（反波动率·codex floor4 #4 诚实名·非真 risk parity/ERC）。"""
     np.random.seed(0)
     n_assets = 4
     vols = [0.01, 0.02, 0.03, 0.04]
@@ -284,14 +285,21 @@ def test_is_near_singular_passes_well_conditioned():
     assert math.isclose(cond, 1.0)
 
 
-def test_ledoit_wolf_shrinkage_improves_condition():
-    """对奇异矩阵 shrinkage 后 condition number 必须下降."""
+def test_constant_shrinkage_improves_condition():
+    """固定-α constant_shrinkage（原错标 ledoit_wolf_shrinkage·**非真 LW**）对奇异阵 condition 必降。
+
+    旧名 ledoit_wolf_shrinkage 降级为 DeprecationWarning shim（=constant_shrinkage·扩展不替换·出 __all__）；
+    真数据驱动 Ledoit-Wolf δ* 的 correctness 在 test_portfolio_lw_spine 独立守（不塞进本 condition 测）。"""
     v = np.array([1.0, 2.0, 3.0])
     cov = np.outer(v, v) + np.eye(3) * 0.001  # 接近奇异
-    cov_shrunk = ledoit_wolf_shrinkage(cov, shrinkage=0.3)
+    cov_shrunk = constant_shrinkage(cov, alpha=0.3)
     _, _, cond_before = is_near_singular(cov)
     _, _, cond_after = is_near_singular(cov_shrunk)
     assert cond_after < cond_before
+    # 旧错标 shim：仍可 direct import·发 DeprecationWarning·与 constant_shrinkage 等价
+    with pytest.warns(DeprecationWarning):
+        legacy = ledoit_wolf_shrinkage(cov, shrinkage=0.3)
+    assert np.allclose(legacy, cov_shrunk)
 
 
 # ============================================================
