@@ -11,10 +11,13 @@ from .capacity_sizing import (
 from .constraints import PortfolioConstraints, apply_constraints
 from .independence import independent_bet_count
 from .optimizers import (
+    ERCError,
     OptimizerKind,
     PortfolioResult,
+    equal_risk_contribution,
     equal_weight,
     hrp_weights,
+    inverse_volatility,
     mean_variance,
     optimize_portfolio,
     risk_parity,
@@ -22,6 +25,7 @@ from .optimizers import (
 
 __all__ = [
     "CapacitySizingDecision",
+    "ERCError",
     "OptimizerKind",
     "PortfolioConstraints",
     "PortfolioResult",
@@ -29,9 +33,11 @@ __all__ = [
     "SizingReason",
     "apply_constraints",
     "capacity_sizing_cap",
+    "equal_risk_contribution",
     "equal_weight",
     "hrp_weights",
     "independent_bet_count",
+    "inverse_volatility",
     "mean_variance",
     "optimize_portfolio",
     "risk_parity",

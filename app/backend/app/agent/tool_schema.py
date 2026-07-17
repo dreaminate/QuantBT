@@ -145,7 +145,11 @@ TOOL_SCHEMA: list[dict[str, Any]] = [
         "parameters": {
             "type": "object",
             "properties": {
-                "sizing": {"type": "string", "enum": ["equal_weight", "risk_parity", "equal_risk"]},
+                "sizing": {
+                    "type": "string",
+                    "enum": ["equal_weight", "risk_parity", "equal_risk"],
+                    "description": "equal_weight=等权；risk_parity=inverse-volatility 启发式(w∝1/σ·非真 ERC)；equal_risk=真 ERC 等风险贡献(long-only·不施单票上限：post-hoc 截断会破坏 RC 相等)",
+                },
                 "symbols": {"type": "array", "items": {"type": "string"}},
                 "max_pos": {"type": "number"},
                 "dd_halt": {"type": "number"},

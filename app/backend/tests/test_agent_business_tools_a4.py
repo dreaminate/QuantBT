@@ -243,6 +243,75 @@ def test_model_registry_select_is_readonly():
         "select 缺省应优先已发布版本，不选 dev"
 
 
+def test_portfolio_construct_equal_risk_uses_true_erc_uncapped():
+    """codex floor #2：sizing='equal_risk' 走真 ERC（等风险贡献·long-only），**不**施单票上限
+    （post-hoc cap 破 RC 相等），note 诚实标注——不再把 inverse-vol 冒充 equal_risk。"""
+
+    rt = _make_runtime()
+    handler = rt._tools["portfolio.construct"]  # noqa: SLF001
+    symbols = [f"S{i}" for i in range(5)]
+    out = handler(
+        "portfolio.construct", {"symbols": symbols, "sizing": "equal_risk", "max_pos": 0.05}
+    )
+    assert "error" not in out, out
+    w = out["weights"]
+    assert set(w.keys()) == set(symbols)
+    assert abs(sum(w.values()) - 1.0) < 1e-6  # 全额·未截断
+    assert all(v > 0 for v in w.values())  # long-only
+    assert max(w.values()) > 0.05  # 未被 max_pos=0.05 cap（保 ERC 不变量）
+    assert "等风险贡献" in out["note"] or "ERC" in out["note"]
+
+
+def test_portfolio_construct_risk_parity_is_inverse_vol_capped():
+    """sizing='risk_parity' = inverse-volatility 启发式（非真 ERC）·仍施单票上限。"""
+
+    rt = _make_runtime()
+    handler = rt._tools["portfolio.construct"]  # noqa: SLF001
+    symbols = [f"S{i}" for i in range(5)]
+    out = handler(
+        "portfolio.construct", {"symbols": symbols, "sizing": "risk_parity", "max_pos": 0.05}
+    )
+    assert "error" not in out
+    assert max(out["weights"].values()) <= 0.05 + 1e-9  # capped（启发式·可 cap）
+
+
+def test_portfolio_construct_discloses_synthetic_and_enforcement_state():
+    """codex floor R2 #2/#3：equal_risk 披露 covariance_source=synthetic_demo + max_position_enforced=False
+    + requested_max_position（不谎报已生效风控）；risk_parity synthetic + enforced True。"""
+
+    rt = _make_runtime()
+    handler = rt._tools["portfolio.construct"]  # noqa: SLF001
+    syms = [f"S{i}" for i in range(5)]
+    er = handler("portfolio.construct", {"symbols": syms, "sizing": "equal_risk", "max_pos": 0.05})
+    assert er["covariance_source"] == "synthetic_demo"
+    assert er["risk_limits"]["max_position_enforced"] is False
+    assert "requested_max_position" in er["risk_limits"]
+    rp = handler("portfolio.construct", {"symbols": syms, "sizing": "risk_parity", "max_pos": 0.05})
+    assert rp["covariance_source"] == "synthetic_demo"
+    assert rp["risk_limits"]["max_position_enforced"] is True
+
+
+def test_portfolio_construct_falsey_and_invalid_inputs_fail_closed():
+    """codex floor R3 #2/#3：falsey sizing / 非法 max_pos → error（不静默退等权·不把 fallback 谎报
+    requested）；仅 key 缺失才补缺省。"""
+
+    rt = _make_runtime()
+    handler = rt._tools["portfolio.construct"]  # noqa: SLF001
+    for bad_sizing in ("", None, 0, [], {}):
+        out = handler("portfolio.construct", {"symbols": ["A", "B"], "sizing": bad_sizing})
+        assert "error" in out, f"falsey sizing {bad_sizing!r} 应 fail closed"
+    # 非法 max_pos/dd_halt（含显式 None 与 bool·codex floor R4 #4）→ fail closed
+    for key in ("max_pos", "dd_halt"):
+        for bad in ("bad", -0.1, 2.0, float("nan"), None, True, False):
+            out = handler(
+                "portfolio.construct", {"symbols": ["A", "B"], "sizing": "equal_weight", key: bad}
+            )
+            assert "error" in out, f"非法 {key}={bad!r} 应 fail closed"
+    # key 缺失 → 默认（不报错）；sizing 缺失默认 equal_weight
+    ok = handler("portfolio.construct", {"symbols": ["A", "B"]})
+    assert "error" not in ok and ok["sizing"] == "equal_weight"
+
+
 def test_factor_set_compose_lineage_gate():
     """血统门：factor_set.compose 只选 QUALIFIED+，NEW 因子被拒且弱点一等呈现（R25）。"""
     rt = _make_runtime()

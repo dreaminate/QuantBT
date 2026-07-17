@@ -556,44 +556,96 @@ def register_business_tools(
 
     # ── 5. portfolio.construct：风控+组合构建（optimizers 真权重，无副作用） ──
     def _portfolio_construct(_n: str, args: dict) -> dict[str, Any]:
-        sizing = args.get("sizing") or "equal_weight"
+        # sizing 缺省【仅 key 缺失】才补 equal_weight（codex floor R3 #2：旧 `or` 让 ""/None/0/[]/{}
+        # 等 falsey 非法值也静默退等权·回显原串）；任何显式值都过白名单 fail-closed（codex R2 #6）。
+        sizing = args.get("sizing", "equal_weight")
+        if sizing not in ("equal_weight", "risk_parity", "equal_risk"):
+            return {"error": f"未知 sizing={sizing!r}（仅 equal_weight / risk_parity / equal_risk）"}
         symbols = args.get("symbols")
         if isinstance(symbols, str):
             symbols = [s.strip() for s in symbols.split(",") if s.strip()]
         if not symbols:
             symbols = ["s1", "s2", "s3", "s4"]
-        max_pos = args.get("max_pos")
-        dd_halt = args.get("dd_halt")
-        try:
-            max_pos = float(max_pos) if max_pos is not None else 0.03
-        except (TypeError, ValueError):
+        # max_pos/dd_halt：仅 key 缺失才补缺省（codex floor R4 #4：显式 None 不算缺失·bool 不当数值）；
+        # 显式 None/bool/非数值/非有限/越界 → fail-closed error（codex R3 #3：不静默换 0.03 却标 requested·谎报）。
+        if "max_pos" not in args:
             max_pos = 0.03
-        try:
-            dd_halt = float(dd_halt) if dd_halt is not None else 0.20
-        except (TypeError, ValueError):
+        else:
+            mp = args["max_pos"]
+            if mp is None or isinstance(mp, bool):
+                return {"error": f"max_pos 非法: {mp!r}（须 0<x≤1 数值）"}
+            try:
+                max_pos = float(mp)
+            except (TypeError, ValueError):
+                return {"error": f"max_pos 非数值: {mp!r}"}
+            if not (np.isfinite(max_pos) and 0.0 < max_pos <= 1.0):
+                return {"error": f"max_pos 越界（须 0<max_pos≤1）: {max_pos}"}
+        if "dd_halt" not in args:
             dd_halt = 0.20
-        from ..portfolio.optimizers import equal_weight, risk_parity
+        else:
+            dh = args["dd_halt"]
+            if dh is None or isinstance(dh, bool):
+                return {"error": f"dd_halt 非法: {dh!r}（须 0<x≤1 数值）"}
+            try:
+                dd_halt = float(dh)
+            except (TypeError, ValueError):
+                return {"error": f"dd_halt 非数值: {dh!r}"}
+            if not (np.isfinite(dd_halt) and 0.0 < dd_halt <= 1.0):
+                return {"error": f"dd_halt 越界（须 0<dd_halt≤1）: {dd_halt}"}
+        from ..portfolio.optimizers import equal_risk_contribution, equal_weight, risk_parity
 
+        import pandas as pd
+
+        note = "风控+组合已构建（真权重 + 单票上限/回撤熔断约束）。进场与否、监控由模拟台决定（D-PERM 止于模拟盘）。"
+        # covariance_source 诚实披露（codex floor R2 #2）：risk_parity/equal_risk 用 synthetic demo 协方差
+        # （60 条 IID 随机·非真标的收益·非 PIT），据实标注、绝不冒充真数据；equal_weight 不需协方差。
+        cov_source = "none"
+        # risk_limits 诚实（codex floor R2 #3）：equal_risk 不施 post-hoc cap（破 RC）→ 报 requested +
+        # enforced=False，不混进已生效风控；capped 路径 enforced=True。
+        risk_limits = {"max_position": max_pos, "drawdown_halt": dd_halt, "max_position_enforced": True}
         try:
-            if sizing in ("risk_parity", "equal_risk"):
-                import pandas as pd
-
+            if sizing == "equal_risk":
+                # 真 ERC（等风险贡献·命门绑定 spine_binding）。⚠️ 不施 post-hoc 单票上限——截断权重会破坏
+                # RC 相等（codex floor R1 #2：约束 ERC 待实现·登记 follow-on）；返回纯 long-only ERC。
                 rng = np.random.default_rng(7)
                 rets = pd.DataFrame(rng.normal(0, 0.01, size=(60, len(symbols))), columns=symbols)
-                weights = risk_parity(rets.cov())
+                weights = equal_risk_contribution(rets.cov())
+                capped = weights  # 不 cap，保等风险贡献不变量
+                cov_source = "synthetic_demo"
+                risk_limits = {
+                    "requested_max_position": max_pos,
+                    "max_position_enforced": False,  # 未施：post-hoc 截断会破坏 ERC 的 RC 相等
+                    "drawdown_halt": dd_halt,
+                }
+                note = (
+                    "真 ERC（等风险贡献·long-only 全额）已构建于 synthetic demo 协方差（非真标的收益）。"
+                    "⚠️ 未施单票上限：post-hoc 截断会破坏 RC 相等（约束 ERC 待实现）。进场/监控由模拟台决定（D-PERM）。"
+                )
             else:
-                weights = equal_weight(symbols)
+                if sizing == "risk_parity":
+                    # inverse-volatility 启发式（**非**真 ERC·见 optimizers.inverse_volatility 诚实边界）。
+                    rng = np.random.default_rng(7)
+                    rets = pd.DataFrame(rng.normal(0, 0.01, size=(60, len(symbols))), columns=symbols)
+                    weights = risk_parity(rets.cov())
+                    cov_source = "synthetic_demo"
+                    note = (
+                        "inverse-volatility 启发式（非真 ERC）已构建于 synthetic demo 协方差（非真标的收益）+ "
+                        "单票上限/回撤熔断约束。进场/监控由模拟台决定（D-PERM 止于模拟盘）。"
+                    )
+                else:
+                    weights = equal_weight(symbols)
+                # 应用单票上限（风控约束真生效，非装饰）。
+                capped = {s: min(w, max_pos) for s, w in weights.items()}
         except Exception as exc:  # noqa: BLE001
             return {"error": f"portfolio 优化失败: {type(exc).__name__}: {exc}"}
-        # 应用单票上限（风控约束真生效，非装饰）。
-        capped = {s: min(w, max_pos) for s, w in weights.items()}
         pf_id = _short_id("pf", sorted(symbols), sizing, max_pos, dd_halt)
         return {
             "portfolio_id": pf_id,
             "sizing": sizing,
             "weights": capped,
-            "risk_limits": {"max_position": max_pos, "drawdown_halt": dd_halt},
-            "note": "风控+组合已构建（真权重 + 单票上限/回撤熔断约束）。进场与否、监控由模拟台决定（D-PERM 止于模拟盘）。",
+            "covariance_source": cov_source,
+            "risk_limits": risk_limits,
+            "note": note,
         }
 
     # ── 5b. portfolio.gate（C · D-WAVE1A）：组合层多证据三角守门预览（复用单一源 gate，无副作用、不记账） ──

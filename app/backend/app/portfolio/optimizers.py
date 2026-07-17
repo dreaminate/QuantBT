@@ -1,10 +1,20 @@
 """M8 · 组合优化器。
 
 自实现：
-- equal_weight   等权
-- mean_variance  Markowitz（scipy.optimize.minimize 二次型）
-- risk_parity    各标的波动率倒数权重 + 1 步对齐
-- hrp_weights    Hierarchical Risk Parity (López de Prado 2016)
+- equal_weight          等权
+- mean_variance         Markowitz（scipy.optimize.minimize 二次型）
+- inverse_volatility    各标的波动率倒数权重（旧名 ``risk_parity``，见下）
+- equal_risk_contribution  真 ERC（等风险贡献）· 相关空间凸对数障碍 + 保正 damped Newton
+- hrp_weights           Hierarchical Risk Parity (López de Prado 2016)
+
+诚实命名（金融数学 kernel correctness 切）：历史上 ``risk_parity`` 实为 inverse-volatility
+（w ∝ 1/σ，只用对角），**仅当 Σ 对角或 N=2 时**才恰等于真 ERC（一般相关结构下 N≥3 不等）。
+故拆为两个诚实命名的函数：``inverse_volatility``（原启发式，保 ``risk_parity`` 兼容 alias）与
+``equal_risk_contribution``（真等风险贡献，Maillard-Roncalli-Teïletche 2010 / Spinu 2013）。
+真 ERC 解唯一凸问题 min_{y>0} ½yᵀRy − (1/N)Σlog y_i（R=D⁻¹ΣD⁻¹ 相关矩阵），映回 w=D⁻¹y 归一。
+数学口径经 codex/GPT-5.6-sol（授权数学决策者 D-MATH-DECIDER）跨厂商裁决：相关空间 damped
+Newton（Cholesky 解方向·Armijo 保正线搜）、fail-closed（非 SPD/不收敛/下溢即 raise，不静默钳）。
+命门绑定见 ``spine_binding.py``（独立 dense-RC 残差 oracle + 对角闭式 oracle 对账）。
 """
 
 from __future__ import annotations
@@ -18,6 +28,7 @@ from scipy.cluster.hierarchy import linkage
 from scipy.optimize import minimize
 from scipy.spatial.distance import squareform
 
+from ._erc_solver import ERCError, equal_risk_contribution
 from .constraints import PortfolioConstraints, apply_constraints
 
 
@@ -67,14 +78,29 @@ def mean_variance(
     return dict(zip(syms, weights.tolist()))
 
 
-def risk_parity(cov: pd.DataFrame) -> dict[str, float]:
-    """简化版 risk parity：权重 ∝ 1/σ，再归一化到 sum=1。"""
+def inverse_volatility(cov: pd.DataFrame) -> dict[str, float]:
+    """Inverse-volatility 权重：w ∝ 1/σ，归一化到 sum=1（只用对角，忽略相关结构）。
+
+    诚实边界：这**不是**真 risk parity。它仅当 Σ 对角（零相关）**或 N=2**（协方差交叉项在
+    贡献差里抵消）时才恰等于等风险贡献（ERC）；一般相关结构下 N≥3 通常不等（codex 数值实证：
+    某 3 资产 SPD 例 inverse-vol 的相对风险贡献 =(3/7,3/14,5/14)≠(1/3,1/3,1/3)=ERC）。要真
+    ERC 用 :func:`equal_risk_contribution`。历史名 ``risk_parity`` 保留为兼容 alias（见下）。
+
+    这是启发式（非命门绑定），沿用宽容行为：非正 σ 以 1e-9 兜底避除零。它同时充当 ERC 在
+    对角 Σ 上的**闭式独立 oracle**（见 ``spine_binding._erc_closedform_oracle``），故须与 ERC
+    solver 保持两条独立代码路径——不得把本函数并进 ERC 实现链指纹。
+    """
 
     sigma = np.sqrt(np.diag(cov.values))
     sigma = np.where(sigma <= 0, 1e-9, sigma)
     inv = 1.0 / sigma
     w = inv / inv.sum()
     return dict(zip(cov.columns.tolist(), w.tolist()))
+
+
+# 兼容 alias：历史调用点（business_tools、tool_schema "risk_parity" 枚举、optimize_portfolio
+# dispatch、test_risk_parity_inverse_sigma）继续可用；语义 = inverse-volatility（诚实，不冒充 ERC）。
+risk_parity = inverse_volatility
 
 
 def hrp_weights(cov: pd.DataFrame) -> dict[str, float]:
@@ -193,10 +219,13 @@ def optimize_portfolio(
 
 
 __all__ = [
+    "ERCError",
     "OptimizerKind",
     "PortfolioResult",
+    "equal_risk_contribution",
     "equal_weight",
     "hrp_weights",
+    "inverse_volatility",
     "mean_variance",
     "optimize_portfolio",
     "risk_parity",
