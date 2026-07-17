@@ -128,16 +128,41 @@ def test_ledoit_wolf_fail_closed():
 # ════════════════════════════ 命门 binding ═════════════════════════════════
 
 
-def test_pinned_fingerprint_matches_live_source():
-    """指纹 tripwire：改 _lw_shrinkage 链/sklearn 版本未重 pin → 本测试 RED。"""
+def test_pinned_code_fingerprint_matches_repository_chain():
+    """Commit tripwire（codex 裁 C+·`lw-code-v2`）：已审查的 LW 源 / re-export 链 / 运行时 solver 身份未漂移。
+
+    **诚实契约**：在所有受支持且能读到仓库源码的环境**无条件成立·不得 skip**——指纹已去依赖版本 →
+    **commit/source 耦合**（正确耦合）·非环境耦合。它**只**证「审查过的源与绑定身份没变」；**不**证
+    sklearn 数学正确·**不**证整个运行环境可复现（那由每环境现场跑的 oracle 对账 + config_ref
+    provenance 披露承担）。**本测试正是 CI 逮到的 defect 的回归**：旧 v1 指纹含 sklearn/numpy 版本 +
+    requirements 无上界 → 异环境 live≠pinned 必红（本机 a0e2c805 vs CI 9f08cc6b）。"""
 
     assert lwb.LW_PINNED_FINGERPRINT == lwb.lw_code_fingerprint()
 
 
 def test_lw_binding_promotes_proof_backed():
-    fp = lwb.lw_code_fingerprint()
-    decision = lwb.verify_lw_consistency(pinned_code_hash=fp, current_code_hash=fp)
+    """走**生产默认路径**（codex 裁）：不自注入 live 指纹——自注入会绕过 pinned 常量·只靠旁测间接兜底=假绿。"""
+
+    decision = lwb.verify_lw_consistency()  # 默认 = binding 用 pinned·current 用 live（真产线比对）
     assert decision.granted_label == PROOF_BACKED
+
+
+def test_code_fingerprint_is_environment_independent(monkeypatch):
+    """**CI 逮到的 defect 的直接回归**（codex 裁 C+）：指纹不得依赖 sklearn/numpy 版本。
+
+    v1 指纹哈希 `sklearn.__version__`+`numpy.__version__`，而 requirements 无上界（`numpy>=1.26`/
+    `scikit-learn>=1.5`）→ CI 全新 pip install 解析出异版本（实装 sklearn1.9.0/numpy2.5.1）→
+    live(`9f08cc6b`)≠pinned(`a0e2c805`) → pinned 测试在任何非本机环境必红。v2 只哈希源+绑定身份 →
+    版本变而指纹恒定。**若把版本串塞回指纹·本测试即 RED**（种坏门必抓）。"""
+
+    import numpy
+    import sklearn
+
+    fp0 = lwb.lw_code_fingerprint()
+    monkeypatch.setattr(sklearn, "__version__", "9.9.9-fake-ci")
+    monkeypatch.setattr(numpy, "__version__", "8.8.8-fake-ci")
+    assert lwb.lw_code_fingerprint() == fp0  # 依赖版本变 → 指纹恒定（环境无关·commit/source 耦合）
+    assert lwb.verify_lw_consistency().granted_label == PROOF_BACKED  # 异版本环境仍走通产线路径
 
 
 def test_lw_consistency_check_passes_real():
