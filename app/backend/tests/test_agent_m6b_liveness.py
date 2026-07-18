@@ -2,19 +2,25 @@
 
 Extends the M4b spawn/parse proof (``test_agent_claude_stream_parser``) with the M6b
 liveness contract: while the caller keeps consuming, a spawned claude cannot hang the
-turn (IDLE + TOTAL timeout + bounded post-EOF wait), an abnormal EOF is surfaced as an
-honest error, and a client cancel deterministically kills the child (explicit generator
-close, not GC/refcount timing). A fully-stopped consumer (HTTP disconnect without a
-close) is a documented residual — see SessionOrchestrator.stream_events. Design =
-cross-vendor duet (deep-opus ‖ codex) plus main-agent adjudication.
+turn (STARTUP + IDLE + TOTAL timeout + bounded post-EOF wait), an abnormal EOF is
+surfaced as an honest error, and a client cancel deterministically kills the child
+(explicit generator close, not GC/refcount timing). STARTUP (no startup output within
+``startup_timeout_s`` — spawned but not protocol-ready) is separate from IDLE (silence
+after the first line) so a slow-spawning child is reported "no startup output", not
+"agent hung". A fully-stopped
+consumer (HTTP disconnect without a close) is a documented residual — see
+SessionOrchestrator.stream_events. Design = cross-vendor duet plus main-agent adjudication.
 
 pytest-timeout is NOT installed, so every "does it hang?" probe SELF-BOUNDS in a
 worker thread with a bounded ``join`` — a regression fails an assertion instead of
 hanging the whole suite (project norm: 必带 timeout 兜底).
 
 Mutation contract (RULES §2 种坏门必抓):
-- Delete the idle/total deadline in ``run()`` → the hang probe's worker never returns
-  → its bounded-join assertion goes RED (does not hang the suite).
+- Delete the IDLE or TOTAL enforcement path in ``run()`` → the hang probe's worker
+  never returns → its bounded-join assertion goes RED (does not hang the suite).
+- Collapse the STARTUP budget back into IDLE (``budget = self._idle_timeout_s`` for the
+  first line) → the healthy slow-start probe is cut off, while the startup-timeout probe
+  ignores its 0.3s startup budget and reaches ``Done``; both probes go RED.
 - Revert SessionOrchestrator's ``finally: raw.close()`` to the GC-cascade → the cancel
   probe (backend retains its own generator ref, defeating the refcount cascade, then a
   full ``gc.collect()``) leaves ``proc.kill`` unfired → RED.
@@ -56,7 +62,9 @@ def stub_cli() -> str:
     return str(STUB_CLI)
 
 
-def _backend(stub: str, tmp_path: Path, *, idle: float, total: float) -> ClaudeBackend:
+def _backend(
+    stub: str, tmp_path: Path, *, idle: float, total: float, startup: float = 30.0
+) -> ClaudeBackend:
     return ClaudeBackend(
         model="claude-test",
         workspace_dir=tmp_path / "ws",
@@ -65,6 +73,7 @@ def _backend(stub: str, tmp_path: Path, *, idle: float, total: float) -> ClaudeB
         canvas_token="canvas-tok",
         cli_path=stub,
         idle_timeout_s=idle,
+        startup_timeout_s=startup,
         total_timeout_s=total,
     )
 
@@ -444,3 +453,49 @@ def test_close_exception_does_not_leak_after_terminal_done():
     names = [f["event"] for f in frames]
     assert names[-1] == "done"
     assert not any(f["event"] == "error" for f in frames)  # no spurious error from cleanup
+
+
+def test_slow_spawn_is_not_reported_as_a_hang(stub_cli, tmp_path):
+    """STARTUP and IDLE are different conditions; one clock for both is a wrong diagnosis.
+
+    Root cause of the M6b flake: the first ``get()`` runs with an empty queue while the
+    child is still spawning, so budgeting it with ``idle`` made "slow to start" and
+    "went silent" the SAME event. The prior flaky probes used sub-second idle windows;
+    this test reproduces the race deterministically with startup delay 1.0s > idle 0.2s.
+    The former production idle default was 300s, not this test setup. Unqueried: whether
+    a related startup delay occurred in production.
+
+    This probe is DETERMINISTIC where the flake was probabilistic: the stub sleeps 1.0s
+    (> idle=0.2s) before its FIRST line, then completes normally. Delete the
+    ``first_line`` startup branch in ``_lines_with_deadline`` → this goes RED.
+    """
+
+    backend = _backend(stub_cli, tmp_path, idle=0.2, total=30.0, startup=10.0)
+    t, out, err = _drain_in_worker(
+        backend.run(prompt="FAKE_CLAUDE_MODE=slow_start:1.0\nhi", owner="alice"), bound_s=20.0
+    )
+    assert not t.is_alive() and not err
+    assert isinstance(out[0], SessionStarted)
+    assert isinstance(out[-1], Done)
+    # A slow spawn must NOT be reported as a hang.
+    assert not any(isinstance(e, BackendError) for e in out), [getattr(e, "message", "") for e in out]
+
+
+def test_startup_timeout_is_reported_honestly_not_as_a_hang(stub_cli, tmp_path):
+    """A child that produces NO startup output → STARTUP error, with its own message.
+
+    The process spawned (``Popen`` succeeded) but never became protocol-ready. Reporting
+    "agent hung" for that is a false diagnosis — a hang is silence AFTER the first line.
+    Collapse the startup budget back into idle → startup=0.3 is ignored and the child
+    completes under idle=10.0, so this probe goes RED.
+    """
+
+    backend = _backend(stub_cli, tmp_path, idle=10.0, total=30.0, startup=0.3)
+    t, out, err = _drain_in_worker(
+        backend.run(prompt="FAKE_CLAUDE_MODE=slow_start:8.0\nhi", owner="alice"), bound_s=20.0
+    )
+    assert not t.is_alive() and not err
+    assert isinstance(out[-1], BackendError)
+    msg = out[-1].message
+    assert "no startup output" in msg, msg
+    assert "agent hung" not in msg, msg  # 诊断必须诚实：没产出启动输出 ≠ 挂了

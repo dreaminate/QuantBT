@@ -498,6 +498,7 @@ class ClaudeBackend:
         python_executable: str = "python",
         secrets_path: Path | None = None,
         idle_timeout_s: float = 300.0,
+        startup_timeout_s: float = 30.0,
         total_timeout_s: float = 1800.0,
         queue_maxsize: int = 4096,
         eof_grace_s: float = 5.0,
@@ -518,6 +519,15 @@ class ClaudeBackend:
         # liveness attack an idle timer alone can't catch. Injectable so tests use
         # sub-second bounds. Measured against child output, never consumer speed.
         self._idle_timeout_s = float(idle_timeout_s)
+        # startup: max seconds the child may take to produce its FIRST line. Separate
+        # from idle because they are DIFFERENT CONDITIONS that the old code conflated:
+        # the first get() runs with an empty queue while the child is still spawning, so
+        # a slow start and a hung child were the same event. The deterministic regression
+        # probe uses a 1.0s startup delay with idle=0.2s and proves that applying idle
+        # before the first line cuts off a healthy child. The former production idle
+        # default was 300s, not the sub-second test setup. Unqueried: whether a related
+        # startup delay occurred in production.
+        self._startup_timeout_s = float(startup_timeout_s)
         self._total_timeout_s = float(total_timeout_s)
         # Bounded reader queue. Small values are for tests that must force the
         # queue-full-at-EOF path; production keeps the memory-capping default.
@@ -535,22 +545,28 @@ class ClaudeBackend:
 
         Liveness (agent M6b): while the caller KEEPS CONSUMING, the child cannot hang
         the turn forever. A background reader thread drains stdout into a bounded
-        queue; the generator pulls with TWO deadlines — an IDLE deadline (the child
-        produced no output for ``idle_timeout_s`` → the real "init then hang" bug) and
-        a TOTAL wall-clock cap (``total_timeout_s`` → the slow-drip attack an idle
-        timer can't catch). On either, the child is killed and an honest timeout
-        ``BackendError`` is emitted (never a silent success). The idle clock measures
+        queue; the generator pulls with THREE deadlines — a STARTUP deadline (the child
+        produced NO startup output within ``startup_timeout_s`` — the process spawned
+        but never became protocol-ready; reported as such, NOT as a hang), an IDLE
+        deadline (no output for ``idle_timeout_s`` AFTER the first line → the real
+        "init then hang" bug), and a TOTAL wall-clock cap
+        (``total_timeout_s`` → the slow-drip attack an idle timer can't catch). Startup
+        and idle are separate because the first ``get()`` runs while the child is still
+        spawning: budgeting it with ``idle`` made "slow to start" and "went silent" the
+        same event (the reproduced root cause of the M6b flake). On any, the child is
+        killed and an honest timeout ``BackendError`` is emitted (never a silent
+        success). The idle clock measures
         CHILD silence, NOT consumer slowness: a slow SSE consumer leaves lines
         buffered in the queue (a full queue backpressures the child), so ``queue.get``
         returns immediately and never idle-trips. The reader owns the only blocking
         ``readline`` now; killing the child hands it EOF.
 
-        HONEST BOUND (do NOT overclaim — cross-vendor R2 finding): both deadlines are
-        only checked while the consumer PULLS the next line. If the consumer stops
+        HONEST BOUND (do NOT overclaim — cross-vendor R2 finding): all three deadlines
+        are only checked while the consumer PULLS the next line. If the consumer stops
         pulling ENTIRELY (e.g. an HTTP client disconnects and the ASGI server does not
-        close this generator), neither deadline is CHECKED (the check only runs inside
-        the pull), so neither timeout fires (if the consumer later resumes, the very
-        next check may immediately hit the total deadline). The child may then be
+        close this generator), none of the three deadlines is CHECKED (the check only
+        runs inside the pull), so no timeout fires (if the consumer later resumes, the
+        very next check may immediately hit the total deadline). The child may then be
         blocked by stdout backpressure once the queue+pipe fill — but only IF it keeps
         writing; a silent or CPU-looping child is not throttled by us — and it is
         reaped only by an explicit ``close()`` (SessionOrchestrator's finally) or by
@@ -654,25 +670,37 @@ class ClaudeBackend:
                     except queue.Full:
                         continue
 
-        # [] | ["idle"] | ["total"] — closure-visible AFTER the deadline gen returns.
+        # [] | ["startup"] | ["idle"] | ["total"] — closure-visible AFTER the deadline gen returns.
         timeout_kind: list[str] = []
 
         def _lines_with_deadline() -> Iterator[str]:
             deadline = time.monotonic() + self._total_timeout_s
+            # STARTUP vs IDLE are different conditions and must not share one clock.
+            # The first get() runs with an empty queue while the child is still spawning,
+            # so budgeting it with `idle` makes "slow to start" and "went silent" the SAME
+            # event — the reproduced root cause of the M6b liveness flake. Re-apply idle
+            # before the first line and the two startup regression probes go RED.
+            first_line = True
             while True:
                 remaining = deadline - time.monotonic()
                 if remaining <= 0:
                     timeout_kind.append("total")
                     return
+                budget = self._startup_timeout_s if first_line else self._idle_timeout_s
                 try:
-                    item = line_queue.get(timeout=min(self._idle_timeout_s, remaining))
+                    item = line_queue.get(timeout=min(budget, remaining))
                 except queue.Empty:
-                    # A timeout here means either deadline: if we are now past the TOTAL
-                    # budget it was the total backstop; otherwise the child produced
-                    # nothing for the idle window → idle. (A slow consumer leaves items IN
-                    # the queue, so get() would have returned — never a false idle.)
-                    timeout_kind.append("total" if time.monotonic() >= deadline else "idle")
+                    # Which deadline fired: past the TOTAL budget → total backstop;
+                    # else no startup output within startup → startup (spawned, not yet
+                    # protocol-ready); else the child produced nothing for the idle window
+                    # → idle. (A slow consumer leaves items IN the queue, so get() would
+                    # have returned — never a false idle.)
+                    if time.monotonic() >= deadline:
+                        timeout_kind.append("total")
+                    else:
+                        timeout_kind.append("startup" if first_line else "idle")
                     return
+                first_line = False
                 if item is _EOF:
                     return
                 # Suspended here while the consumer is slow → the idle clock is NOT
@@ -694,7 +722,14 @@ class ClaudeBackend:
             if timeout_kind:
                 if proc.poll() is None:
                     proc.kill()
-                if timeout_kind[0] == "idle":
+                if timeout_kind[0] == "startup":
+                    # Distinct from "hung": the child never produced a FIRST line. Saying
+                    # "agent hung" there is a wrong diagnosis (a cold-starting or slow-auth
+                    # CLI is not a hang), and honest diagnostics are the point of this gate.
+                    yield BackendError(
+                        message=f"claude produced no startup output within {self._startup_timeout_s:g}s (not protocol-ready)"
+                    )
+                elif timeout_kind[0] == "idle":
                     yield BackendError(
                         message=f"claude timed out: no output for {self._idle_timeout_s:g}s (agent hung)"
                     )

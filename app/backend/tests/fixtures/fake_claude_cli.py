@@ -38,6 +38,16 @@ def main() -> int:
         mode = first.split("=", 1)[1].strip()
         prompt = rest
 
+    # slow_start:<delay_s> — sleep BEFORE the first line, i.e. a slow-but-healthy spawn
+    # (cold start / slow auth). Every other mode emits init first, so this is the only
+    # mode that exercises the STARTUP budget as distinct from the IDLE budget. Must be
+    # checked before the init emit below — that is the whole point of the mode.
+    if mode.startswith("slow_start:"):
+        import time as _t
+
+        _t.sleep(float(mode.split(":", 1)[1]))
+        mode = "success"
+
     emit({"type": "system", "subtype": "init", "session_id": "fake-session", "model": "fake",
           "mcp_servers": [{"name": "quantbt-agent-canvas", "status": "connected"}]})
 
